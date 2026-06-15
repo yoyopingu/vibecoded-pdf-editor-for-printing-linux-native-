@@ -12,12 +12,35 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QFrame,
     QAbstractItemView, QPlainTextEdit, QScrollArea, QApplication,
-    QSizePolicy
+    QSizePolicy, QComboBox
 )
-from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
-from tools.app_state import AppState
+from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
+
+
+class _AsyncWorker(QThread):
+    """Generic background worker used by BasePanel.run_async().
+
+    Runs ``work_fn(report)`` on a worker thread — where ``report(msg)`` emits a
+    progress string — and signals the result (or exception) back to the GUI
+    thread. Replaces the per-tool QThread subclasses (OCR, N-Up, …) that all
+    hand-rolled the same progress/finished/failed plumbing.
+    """
+    progress = pyqtSignal(str)
+    done     = pyqtSignal(object)   # result of work_fn
+    error    = pyqtSignal(object)   # the raised Exception
+
+    def __init__(self, work_fn):
+        super().__init__()
+        self._work_fn = work_fn
+
+    def run(self):
+        try:
+            self.done.emit(self._work_fn(self.progress.emit))
+        except Exception as e:   # noqa: BLE001 — reported to the GUI thread
+            self.error.emit(e)
 
 
 class ToolScrollArea(QScrollArea):
@@ -73,6 +96,9 @@ class CurrentFileBar(QWidget):
         self.file_label = QLabel(tr("Keine Datei geöffnet — öffne zuerst eine PDF im Page Viewer"))
         self.file_label.setObjectName("currentFileLabel")
         self.file_label.setWordWrap(False)
+        # Don't let the (long) filename/placeholder dictate the width of the bar —
+        # otherwise it forces narrow tool sidebars far wider than they should be.
+        self.file_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.file_label, 1)
 
         self.open_btn = QPushButton(tr("Andere Datei..."))
@@ -189,6 +215,8 @@ class LogBox(QPlainTextEdit):
 class BasePanel(QWidget):
     TITLE    = "Tool"
     SUBTITLE = ""
+    # Beschriftung des Ausführen-Buttons (pro Tool überschreibbar)
+    RUN_LABEL = "  Ausführen"
     # Ob dieses Tool ein Ergebnis als neuen Tab öffnen soll
     OPENS_NEW_TAB = False
 
@@ -251,6 +279,64 @@ class BasePanel(QWidget):
         scroll.setWidget(content)
         outer.addWidget(scroll)
 
+    def build_tool_sidebar(self) -> QWidget:
+        """Standardized left sidebar for split-view tools (Crop, Grayscale,
+        N-Up). Every "sliding" sidebar is built here so they stay identical:
+        a scrollable PANEL-coloured column with title (+ subtitle), the
+        current-file bar, the tool's own controls (build_ui), the log, and the
+        action row. Sets self.file_bar / self.log / self.run_btn and returns the
+        widget to drop into the splitter.
+        """
+        panel = QWidget()
+        panel.setObjectName("toolLeftPanel")
+        panel.setStyleSheet(f"QWidget#toolLeftPanel{{background:{theme_color('PANEL')};}}")
+        self._tool_left_w = panel   # exposed for panels that re-theme dynamically
+
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(12, 12, 12, 10); lay.setSpacing(8)
+
+        title = QLabel(tr(self.TITLE))
+        tf = title.font(); tf.setPointSize(13); tf.setBold(True); title.setFont(tf)
+        lay.addWidget(title)
+        if self.SUBTITLE:
+            lay.addWidget(make_label(tr(self.SUBTITLE), dim=True))
+        lay.addWidget(make_separator())
+
+        self.file_bar = CurrentFileBar()
+        lay.addWidget(self.file_bar)
+        lay.addWidget(make_separator())
+
+        self.build_ui(lay)
+
+        # Let combo boxes shrink with the sidebar instead of demanding their
+        # widest item's full width (which used to blow the sidebar past its cap
+        # and clip the right-hand side of the controls).
+        for combo in panel.findChildren(QComboBox):
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+
+        lay.addStretch()
+        lay.addWidget(make_separator())
+
+        self.log = LogBox(tr("Log..."))
+        lay.addWidget(self.log)
+
+        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
+        self.build_action_row(btn_row)
+        lay.addLayout(btn_row)
+
+        scroll = ToolScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # AsNeeded is a safety net: if a tool's controls are still wider than the
+        # sidebar, they stay reachable via a scrollbar instead of being clipped.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet(f"QScrollArea{{background:{theme_color('PANEL')};border:none;}}")
+        scroll.setWidget(panel)
+        scroll.setMinimumWidth(340); scroll.setMaximumWidth(480)
+        return scroll
+
     # ── Override ──────────────────────────────────────────────────────────────
 
     def build_ui(self, layout: QVBoxLayout):
@@ -258,7 +344,7 @@ class BasePanel(QWidget):
 
     def build_action_row(self, row: QHBoxLayout):
         row.addStretch()
-        self.run_btn = QPushButton(tr("  Ausführen"))
+        self.run_btn = QPushButton(tr(self.RUN_LABEL))
         self.run_btn.setObjectName("actionBtn")
         self.run_btn.setMinimumWidth(120)
         self.run_btn.clicked.connect(self._safe_run)
@@ -274,13 +360,8 @@ class BasePanel(QWidget):
         raise NotImplementedError
 
     def _enter_pressed(self):
-        """Enter-Taste: Checkbox togglen wenn fokussiert, sonst Tool ausführen."""
-        from PyQt6.QtWidgets import QCheckBox
-        fw = QApplication.focusWidget()
-        if fw and fw is not self and self.isAncestorOf(fw):
-            if isinstance(fw, QCheckBox):
-                fw.setChecked(not fw.isChecked())
-                return
+        """Enter-Taste führt immer das Tool aus. (Checkboxen toggelt man mit der
+        Leertaste — Enter eine Einstellung ändern zu lassen war verwirrend.)"""
         self._safe_run()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -318,6 +399,56 @@ class BasePanel(QWidget):
             # Skip re-enabling if the action manages the button itself (e.g. async OCR)
             if hasattr(self, "run_btn") and not getattr(self, "_async_running", False):
                 self.run_btn.setEnabled(True)
+
+    def run_async(self, work_fn, on_done, *, on_error=None,
+                  on_progress=None, busy_label=None):
+        """Run heavy work off the UI thread so the window stays responsive.
+
+        ``work_fn(report)`` executes on a worker thread (``report(msg)`` posts a
+        progress line); it must touch only plain data, never Qt widgets. When it
+        returns, ``on_done(result)`` runs back on the GUI thread; failures go to
+        ``on_error(exc)`` (default: log the error). The run button is disabled
+        for the duration (optionally relabelled to ``busy_label``) and re-enabled
+        afterwards. Call this from _run_action and ``return None``.
+        """
+        if getattr(self, "_async_worker", None) is not None and self._async_worker.isRunning():
+            raise RuntimeError(tr("Vorgang läuft bereits — bitte warten."))
+
+        self._async_running = True
+        prev_label = None
+        if hasattr(self, "run_btn"):
+            self.run_btn.setEnabled(False)
+            if busy_label:
+                prev_label = self.run_btn.text()
+                self.run_btn.setText(tr(busy_label))
+
+        def _restore():
+            self._async_running = False
+            if hasattr(self, "run_btn"):
+                self.run_btn.setEnabled(True)
+                if prev_label is not None:
+                    self.run_btn.setText(prev_label)
+
+        def _progress(msg):
+            (on_progress or self.log.log)(msg)
+
+        def _done(result):
+            _restore()
+            on_done(result)
+
+        def _error(exc):
+            _restore()
+            if on_error:
+                on_error(exc)
+            else:
+                self.log.log(str(exc), error=True)
+
+        worker = _AsyncWorker(work_fn)
+        self._async_worker = worker          # keep a reference so it isn't GC'd
+        worker.progress.connect(_progress)
+        worker.done.connect(_done)
+        worker.error.connect(_error)
+        worker.start()
 
     def save_pdf(self, caption="PDF speichern als") -> str:
         import tempfile, uuid

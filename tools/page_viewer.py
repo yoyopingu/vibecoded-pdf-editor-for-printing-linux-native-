@@ -39,6 +39,15 @@ MARGIN = 12
 _pdfium_lock = threading.Lock()
 
 
+def pil_to_qpixmap(pil) -> QPixmap:
+    """Convert a PIL image to a QPixmap via an in-memory PNG. GUI thread only
+    (QPixmap must not be created off the main thread)."""
+    buf = io.BytesIO()
+    pil.save(buf, "PNG")
+    buf.seek(0)
+    return QPixmap.fromImage(QImage.fromData(buf.read()))
+
+
 # ── Thread-safe image rendering ───────────────────────────────────────────────
 # Returns QImage (NOT QPixmap) so it is safe to call from any thread.
 # QPixmap must only be created on the GUI thread.
@@ -4419,10 +4428,7 @@ class PrintDialog(QDialog):
                         printer.newPage()
                     first = False
 
-                    buf = io.BytesIO()
-                    pil.save(buf, "PNG")
-                    buf.seek(0)
-                    pm = QPixmap.fromImage(QImage.fromData(buf.read()))
+                    pm = pil_to_qpixmap(pil)
                     cx = max(0, int((target_w - pm.width())  / 2))
                     cy = max(0, int((target_h - pm.height()) / 2))
                     painter.drawPixmap(cx, cy, pm)

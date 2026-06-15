@@ -8,7 +8,7 @@ Alle Tool-Panels v3.3
 import os, io, math, subprocess, shutil
 from tools.page_viewer import (_TV, _register_themed, _pdfium_lock,
                                _ThumbnailCache, _render_queue,
-                               _ThumbTask, _ThumbSignals)
+                               _ThumbTask, _ThumbSignals, pil_to_qpixmap)
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox,
@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QScrollArea, QWidget, QSlider, QApplication, QFileDialog, QFrame,
     QSizePolicy, QSplitter
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap, QImage, QKeySequence, QShortcut
 from tools.app_state import AppState, theme_color
 from tools._base     import BasePanel, FileDropList, make_label, make_separator, LogBox, CurrentFileBar
@@ -90,6 +90,107 @@ def row2(label_text: str, w1, label2: str, w2) -> QHBoxLayout:
     h.addWidget(l1); h.addWidget(w1, 1)
     h.addWidget(l2); h.addWidget(w2, 1)
     return h
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SHARED PREVIEW PANE
+# ══════════════════════════════════════════════════════════════════════════════
+class PreviewPane(QWidget):
+    """Reusable preview area shared by tools that show a rendered PDF page
+    (Crop, N-Up, …). Owns the preview label, the zoom controls + state, the
+    Ctrl+wheel zoom, and the refresh wiring (page change / new PDF / on show /
+    on resize) — so every tool gets identical preview behaviour and a fix lands
+    in one place instead of being copy-pasted per panel.
+
+    The owning panel supplies a single render callback:
+        render_fn(avail_w:int, avail_h:int, zoom:float) -> (QPixmap | None, str)
+    Return (pixmap, info_text) to display a page, or (None, message) to show a
+    text placeholder (e.g. "no PDF open"). Exceptions are caught and shown.
+    """
+    def __init__(self, render_fn, header="Vorschau", parent=None):
+        super().__init__(parent)
+        self._render_fn = render_fn
+        self.zoom = 1.0
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6); outer.setSpacing(3)
+
+        hdr_row = QHBoxLayout()
+        hdr = QLabel(tr(header)); hdr.setObjectName("dimLabel")
+        hdr_row.addStretch(); hdr_row.addWidget(hdr); hdr_row.addStretch()
+        zoom_out_btn = QPushButton("−"); zoom_out_btn.setFixedSize(22, 22); zoom_out_btn.setObjectName("secondaryBtn")
+        self._zoom_lbl = QLabel("100%"); self._zoom_lbl.setObjectName("dimLabel")
+        self._zoom_lbl.setFixedWidth(38); self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_in_btn  = QPushButton("+");  zoom_in_btn.setFixedSize(22, 22);  zoom_in_btn.setObjectName("secondaryBtn")
+        zoom_rst_btn = QPushButton("⟳"); zoom_rst_btn.setFixedSize(22, 22); zoom_rst_btn.setObjectName("secondaryBtn")
+        hdr_row.addWidget(zoom_out_btn); hdr_row.addWidget(self._zoom_lbl)
+        hdr_row.addWidget(zoom_in_btn);  hdr_row.addWidget(zoom_rst_btn)
+        outer.addLayout(hdr_row)
+        zoom_out_btn.clicked.connect(lambda: self._set_zoom(self.zoom / 1.25))
+        zoom_in_btn.clicked.connect(lambda: self._set_zoom(self.zoom * 1.25))
+        zoom_rst_btn.clicked.connect(lambda: self._set_zoom(1.0))
+
+        self.label = QLabel()
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.label.setMouseTracking(True)
+        self.label.installEventFilter(self)
+        outer.addWidget(self.label, 1)
+
+        self.info = QLabel(""); self.info.setObjectName("dimLabel")
+        self.info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer.addWidget(self.info)
+
+        # Refresh whenever the active page or document changes.
+        AppState.get().current_page_changed.connect(lambda *_: self.refresh())
+        AppState.get().pdf_changed.connect(lambda *_: self.refresh())
+        QTimer.singleShot(400, self.refresh)
+
+    def _set_zoom(self, z):
+        self.zoom = max(0.2, min(z, 8.0))
+        self._zoom_lbl.setText(f"{int(self.zoom * 100)}%")
+        self.refresh()
+
+    def refresh(self):
+        if not self._render_fn:
+            return
+        # Only render when this tool is actually on screen. The pane subscribes
+        # to current_page_changed, which fires on every page turn in the viewer —
+        # rendering a hidden preview there would run pdfium on the GUI thread
+        # (under _pdfium_lock) on every scroll, starving the viewer's background
+        # pre-render and making scrolling stutter. showEvent refreshes it when
+        # the tool is opened, so it's always up to date when visible.
+        if not self.isVisible():
+            return
+        avail_w = max(100, self.label.width()  - 16)
+        avail_h = max(100, self.label.height() - 16)
+        try:
+            pm, info = self._render_fn(avail_w, avail_h, self.zoom)
+        except Exception as ex:
+            self.label.setText(f"Vorschau: {ex}")
+            return
+        if pm is None:
+            self.label.setText(info or "")
+            self.info.setText("")
+        else:
+            self.label.setPixmap(pm)
+            self.info.setText(info or "")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(50, self.refresh)
+
+    def eventFilter(self, obj, event):
+        if obj is self.label and event.type() == QEvent.Type.Wheel:
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                step = 1.15 if event.angleDelta().y() > 0 else (1 / 1.15)
+                self._set_zoom(self.zoom * step)
+                return True
+        return super().eventFilter(obj, event)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -277,110 +378,44 @@ class CompressPanel(BasePanel):
 class CropResizePanel(BasePanel):
     TITLE         = "Zuschneiden / Skalieren"
     SUBTITLE      = ""
+    RUN_LABEL     = "Ausfuehren"
     OPENS_NEW_TAB = True
 
     def _setup(self):
         from PyQt6.QtCore import Qt as _Qt
-        from tools._base import LogBox
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         splitter = QSplitter(_Qt.Orientation.Horizontal)
 
-        left_w = QWidget(); left_w.setMinimumWidth(220); left_w.setMaximumWidth(380)
-        left_w.setObjectName("toolLeftPanel")
-        self._tool_left_w = left_w
-        left_l = QVBoxLayout(left_w)
-        left_l.setContentsMargins(10, 12, 10, 10); left_l.setSpacing(8)
-
-        title = QLabel(tr("Zuschneiden / Skalieren"))
-        tf = title.font(); tf.setPointSize(13); tf.setBold(True); title.setFont(tf)
-        left_l.addWidget(title)
-        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setObjectName("separator"); left_l.addWidget(sep)
-
-        self.build_ui(left_l)
-        left_l.addStretch()
-
-        sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setObjectName("separator"); left_l.addWidget(sep2)
-        self.log = LogBox(); left_l.addWidget(self.log)
-
-        self.run_btn = QPushButton(tr("Ausfuehren"))
-        self.run_btn.setObjectName("actionBtn")
-        self.run_btn.clicked.connect(self._safe_run)
-        left_l.addWidget(self.run_btn)
-
-        sc  = QShortcut(QKeySequence(Qt.Key.Key_Return), self)
-        sc.activated.connect(self._enter_pressed)
-        sc2 = QShortcut(QKeySequence(Qt.Key.Key_Enter), self)
-        sc2.activated.connect(self._enter_pressed)
-
-        splitter.addWidget(left_w)
+        splitter.addWidget(self.build_tool_sidebar())
 
         self._tool_right_w = QWidget()
         self._tool_right_w.setObjectName("toolRightPanel")
         right_w = self._tool_right_w
         right_l = QVBoxLayout(right_w)
-        right_l.setContentsMargins(6, 6, 6, 6); right_l.setSpacing(3)
+        right_l.setContentsMargins(0, 0, 0, 0); right_l.setSpacing(0)
 
-        # Header row with zoom controls
-        hdr_row = QHBoxLayout()
-        hdr = QLabel(tr("Vorschau")); hdr.setObjectName("dimLabel")
-        hdr_row.addStretch()
-        hdr_row.addWidget(hdr)
-        hdr_row.addStretch()
-        zoom_out_btn = QPushButton("−"); zoom_out_btn.setFixedSize(22, 22); zoom_out_btn.setObjectName("secondaryBtn")
-        self._zoom_lbl_prev = QLabel("100%"); self._zoom_lbl_prev.setObjectName("dimLabel")
-        self._zoom_lbl_prev.setFixedWidth(38); self._zoom_lbl_prev.setAlignment(_Qt.AlignmentFlag.AlignCenter)
-        zoom_in_btn  = QPushButton("+");  zoom_in_btn.setFixedSize(22, 22);  zoom_in_btn.setObjectName("secondaryBtn")
-        zoom_rst_btn = QPushButton("⟳"); zoom_rst_btn.setFixedSize(22, 22); zoom_rst_btn.setObjectName("secondaryBtn")
-        hdr_row.addWidget(zoom_out_btn); hdr_row.addWidget(self._zoom_lbl_prev)
-        hdr_row.addWidget(zoom_in_btn);  hdr_row.addWidget(zoom_rst_btn)
-        right_l.addLayout(hdr_row)
-
-        self._preview_zoom = 1.0
-        def _zoom_in():
-            self._preview_zoom = min(self._preview_zoom * 1.25, 8.0)
-            self._zoom_lbl_prev.setText(f"{int(self._preview_zoom*100)}%"); self._update_preview()
-        def _zoom_out():
-            self._preview_zoom = max(self._preview_zoom / 1.25, 0.2)
-            self._zoom_lbl_prev.setText(f"{int(self._preview_zoom*100)}%"); self._update_preview()
-        def _zoom_rst():
-            self._preview_zoom = 1.0
-            self._zoom_lbl_prev.setText("100%"); self._update_preview()
-        zoom_in_btn.clicked.connect(_zoom_in); zoom_out_btn.clicked.connect(_zoom_out); zoom_rst_btn.clicked.connect(_zoom_rst)
-
-        self._preview = QLabel()
-        self._preview.setAlignment(_Qt.AlignmentFlag.AlignCenter)
-        self._preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._preview.setMouseTracking(True)
-        self._preview.installEventFilter(self)
-        right_l.addWidget(self._preview, 1)
-        self._preview_info = QLabel("")
-        self._preview_info.setObjectName("dimLabel")
-        self._preview_info.setAlignment(_Qt.AlignmentFlag.AlignCenter)
-        right_l.addWidget(self._preview_info)
+        # Shared preview pane — owns zoom controls, Ctrl+wheel, and the refresh
+        # wiring (page change / new PDF / on show / on resize). This panel only
+        # supplies the render callback below.
+        self._pane = PreviewPane(self._render_preview, header="Vorschau")
+        self._preview      = self._pane.label   # kept for _apply_theme()
+        self._preview_info = self._pane.info
+        right_l.addWidget(self._pane)
 
         self._tool_splitter = splitter
         _register_themed(self)
         self._apply_theme()
         splitter.addWidget(right_w)
         splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1)
+        splitter.setSizes([400, 800])
         outer.addWidget(splitter, 1)
-        QTimer.singleShot(400, self._update_preview)
 
-        # Follow the page picked in "Seiten verwalten": the panel is built once
-        # and parked in a QStackedWidget, so refresh the preview whenever the
-        # active page changes (or a new PDF is opened).
-        AppState.get().current_page_changed.connect(lambda *_: self._update_preview())
-        AppState.get().pdf_changed.connect(lambda *_: self._update_preview())
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        # Re-sync the preview to the currently selected page each time the tool
-        # becomes visible.
-        self._update_preview()
+    def _update_preview(self):
+        # Bridge for this panel's widget-value connections; the pane owns the
+        # actual render flow and calls back into _render_preview().
+        self._pane.refresh()
 
     def build_ui(self, layout):
         self._syncing = False
@@ -527,142 +562,113 @@ class CropResizePanel(BasePanel):
             return [(model.orig(uid), uid)]
         return []
 
-    def eventFilter(self, obj, event):
-        from PyQt6.QtCore import QEvent
-        if obj is self._preview and event.type() == QEvent.Type.Wheel:
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                delta = event.angleDelta().y()
-                if delta > 0:
-                    self._preview_zoom = min(self._preview_zoom * 1.15, 8.0)
-                else:
-                    self._preview_zoom = max(self._preview_zoom / 1.15, 0.2)
-                self._zoom_lbl_prev.setText(f"{int(self._preview_zoom * 100)}%")
-                self._update_preview()
-                return True
-        return super().eventFilter(obj, event)
-
-    def _update_preview(self):
+    def _render_preview(self, avail_w, avail_h, zoom):
         pdf_path = AppState.get().current_pdf
         if not pdf_path or not os.path.isfile(pdf_path):
-            self._preview.setText(tr("Keine PDF geoeffnet"))
-            self._sel_info.setText(""); return
+            self._sel_info.setText("")
+            return None, tr("Keine PDF geoeffnet")
+        import pypdfium2 as pdfium, io
+        from PyQt6.QtGui import QPainter, QPen, QColor, QBrush
+        from PyQt6.QtCore import Qt as _Qt2
+        from PIL import Image as PILImage
+
+        pages    = self._get_target_pages()
+        page_idx = pages[0][0] if pages else 0
+        n_pages  = len(pages)
+        if self.apply_all.isChecked(): self._sel_info.setText(tr("Alle Seiten"))
+        elif n_pages > 1:             self._sel_info.setText(f"{n_pages} {tr('Seiten')}")
+        else:                         self._sel_info.setText(f"{tr('Seite')} {page_idx+1}")
+
+        doc  = pdfium.PdfDocument(pdf_path)
         try:
-            import pypdfium2 as pdfium, io
-            from PyQt6.QtGui import QPainter, QPen, QColor, QBrush
-            from PyQt6.QtCore import Qt as _Qt2
-            from PIL import Image as PILImage
+            page = doc[page_idx]
+            pw   = page.get_width(); ph = page.get_height()
 
-            pages    = self._get_target_pages()
-            page_idx = pages[0][0] if pages else 0
-            n_pages  = len(pages)
-            if self.apply_all.isChecked(): self._sel_info.setText(tr("Alle Seiten"))
-            elif n_pages > 1:             self._sel_info.setText(f"{n_pages} {tr('Seiten')}")
-            else:                         self._sel_info.setText(f"{tr('Seite')} {page_idx+1}")
+            t_pt = self.ct.value()  * MM_TO_PT
+            b_pt = self.cb2.value() * MM_TO_PT
+            l_pt = self.cl2.value() * MM_TO_PT
+            r_pt = self.cr.value()  * MM_TO_PT
 
-            doc  = pdfium.PdfDocument(pdf_path)
-            try:
-                page = doc[page_idx]
-                pw   = page.get_width(); ph = page.get_height()
+            new_w = max(1., pw - l_pt - r_pt)
+            new_h = max(1., ph - t_pt - b_pt)
+            do_scale = self.scale_check.isChecked()
 
-                t_pt = self.ct.value()  * MM_TO_PT
-                b_pt = self.cb2.value() * MM_TO_PT
-                l_pt = self.cl2.value() * MM_TO_PT
-                r_pt = self.cr.value()  * MM_TO_PT
+            cs_fit    = min(avail_w / new_w, avail_h / new_h) * zoom
+            cs_orig   = min(avail_w / pw,    avail_h / ph)    * zoom
+            cs_render = max(cs_fit, cs_orig)
+            cs        = cs_fit
 
-                new_w = max(1., pw - l_pt - r_pt)
-                new_h = max(1., ph - t_pt - b_pt)
-                do_scale = self.scale_check.isChecked()
+            cw_px = max(1, int(new_w * cs))
+            ch_px = max(1, int(new_h * cs))
 
-                zoom    = getattr(self, '_preview_zoom', 1.0)
-                avail_w = max(100, self._preview.width()  - 16)
-                avail_h = max(100, self._preview.height() - 16)
+            with _pdfium_lock:
+                bm  = page.render(scale=cs_render)
+                pil = bm.to_pil()
+        finally:
+            doc.close()
+        if cs_render > cs * 1.01:
+            target_w = max(1, int(pw * cs))
+            target_h = max(1, int(ph * cs))
+            pil = pil.resize((target_w, target_h), PILImage.LANCZOS)
 
-                cs_fit    = min(avail_w / new_w, avail_h / new_h) * zoom
-                cs_orig   = min(avail_w / pw,    avail_h / ph)    * zoom
-                cs_render = max(cs_fit, cs_orig)
-                cs        = cs_fit
+        changed = any([t_pt, b_pt, l_pt, r_pt])
 
-                cw_px = max(1, int(new_w * cs))
-                ch_px = max(1, int(new_h * cs))
+        gw = max(1, int(pw * cs));  gh = max(1, int(ph * cs))
+        g_page_x = int(-l_pt * cs); g_page_y = int(-t_pt * cs)
 
-                with _pdfium_lock:
-                    bm  = page.render(scale=cs_render)
-                    pil = bm.to_pil()
-            finally:
-                doc.close()
-            if cs_render > cs * 1.01:
-                target_w = max(1, int(pw * cs))
-                target_h = max(1, int(ph * cs))
-                pil = pil.resize((target_w, target_h), PILImage.LANCZOS)
+        min_x = min(0, g_page_x); min_y = min(0, g_page_y)
+        max_x = max(cw_px, g_page_x + gw); max_y = max(ch_px, g_page_y + gh)
+        shift_x = -min_x; shift_y = -min_y
+        canvas_w = max(1, max_x - min_x); canvas_h = max(1, max_y - min_y)
 
-            changed = any([t_pt, b_pt, l_pt, r_pt])
+        rx = shift_x;          ry = shift_y
+        gx = g_page_x + shift_x; gy = g_page_y + shift_y
 
-            gw = max(1, int(pw * cs));  gh = max(1, int(ph * cs))
-            g_page_x = int(-l_pt * cs); g_page_y = int(-t_pt * cs)
+        result = QPixmap(canvas_w, canvas_h)
+        result.fill(QColor("#1a2a40"))
+        painter = QPainter(result)
 
-            min_x = min(0, g_page_x); min_y = min(0, g_page_y)
-            max_x = max(cw_px, g_page_x + gw); max_y = max(ch_px, g_page_y + gh)
-            shift_x = -min_x; shift_y = -min_y
-            canvas_w = max(1, max_x - min_x); canvas_h = max(1, max_y - min_y)
+        def draw_ghost():
+            painter.setPen(_Qt2.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(100, 140, 220, 45)))
+            painter.drawRect(gx, gy, gw - 1, gh - 1)
+            ghost_pen = QPen(QColor(120, 160, 255, 200), 1)
+            ghost_pen.setStyle(_Qt2.PenStyle.DashLine)
+            painter.setPen(ghost_pen)
+            painter.setBrush(_Qt2.BrushStyle.NoBrush)
+            painter.drawRect(gx, gy, gw - 1, gh - 1)
 
-            rx = shift_x;          ry = shift_y
-            gx = g_page_x + shift_x; gy = g_page_y + shift_y
+        if do_scale:
+            keep = self.keep_ratio.isChecked()
+            pm  = pil_to_qpixmap(pil)
+            ar  = Qt.AspectRatioMode.KeepAspectRatio if keep else Qt.AspectRatioMode.IgnoreAspectRatio
+            pm_s = pm.scaled(cw_px, ch_px, ar, Qt.TransformationMode.SmoothTransformation)
+            draw_x = rx + (cw_px - pm_s.width())  // 2
+            draw_y = ry + (ch_px - pm_s.height()) // 2
+            painter.drawPixmap(draw_x, draw_y, pm_s)
+            painter.setPen(QPen(QColor("#e94560"), 2))
+            painter.setBrush(_Qt2.BrushStyle.NoBrush)
+            painter.drawRect(draw_x, draw_y, pm_s.width()-1, pm_s.height()-1)
+            if changed: draw_ghost()
+        else:
+            src_x = max(0, int(l_pt * cs)); src_y = max(0, int(t_pt * cs))
+            src_w = min(max(1, int(new_w * cs)), pil.width  - src_x)
+            src_h = min(max(1, int(new_h * cs)), pil.height - src_y)
+            dst_x = rx + max(0, int(-l_pt * cs))
+            dst_y = ry + max(0, int(-t_pt * cs))
+            pm  = pil_to_qpixmap(pil)
+            painter.drawPixmap(dst_x, dst_y, src_w, src_h, pm, src_x, src_y, src_w, src_h)
+            painter.setPen(QPen(QColor("#e94560"), 2))
+            painter.setBrush(_Qt2.BrushStyle.NoBrush)
+            painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
+            if changed: draw_ghost()
 
-            result = QPixmap(canvas_w, canvas_h)
-            result.fill(QColor("#1a2a40"))
-            painter = QPainter(result)
+        painter.end()
 
-            def draw_ghost():
-                painter.setPen(_Qt2.PenStyle.NoPen)
-                painter.setBrush(QBrush(QColor(100, 140, 220, 45)))
-                painter.drawRect(gx, gy, gw - 1, gh - 1)
-                ghost_pen = QPen(QColor(120, 160, 255, 200), 1)
-                ghost_pen.setStyle(_Qt2.PenStyle.DashLine)
-                painter.setPen(ghost_pen)
-                painter.setBrush(_Qt2.BrushStyle.NoBrush)
-                painter.drawRect(gx, gy, gw - 1, gh - 1)
-
-            if do_scale:
-                keep = self.keep_ratio.isChecked()
-                buf = io.BytesIO(); pil.save(buf, "PNG"); buf.seek(0)
-                pm  = QPixmap.fromImage(QImage.fromData(buf.read()))
-                ar  = Qt.AspectRatioMode.KeepAspectRatio if keep else Qt.AspectRatioMode.IgnoreAspectRatio
-                pm_s = pm.scaled(cw_px, ch_px, ar, Qt.TransformationMode.SmoothTransformation)
-                draw_x = rx + (cw_px - pm_s.width())  // 2
-                draw_y = ry + (ch_px - pm_s.height()) // 2
-                painter.drawPixmap(draw_x, draw_y, pm_s)
-                painter.setPen(QPen(QColor("#e94560"), 2))
-                painter.setBrush(_Qt2.BrushStyle.NoBrush)
-                painter.drawRect(draw_x, draw_y, pm_s.width()-1, pm_s.height()-1)
-                if changed: draw_ghost()
-            else:
-                src_x = max(0, int(l_pt * cs)); src_y = max(0, int(t_pt * cs))
-                src_w = min(max(1, int(new_w * cs)), pil.width  - src_x)
-                src_h = min(max(1, int(new_h * cs)), pil.height - src_y)
-                dst_x = rx + max(0, int(-l_pt * cs))
-                dst_y = ry + max(0, int(-t_pt * cs))
-                buf = io.BytesIO(); pil.save(buf, "PNG"); buf.seek(0)
-                pm  = QPixmap.fromImage(QImage.fromData(buf.read()))
-                painter.drawPixmap(dst_x, dst_y, src_w, src_h, pm, src_x, src_y, src_w, src_h)
-                painter.setPen(QPen(QColor("#e94560"), 2))
-                painter.setBrush(_Qt2.BrushStyle.NoBrush)
-                painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
-                if changed: draw_ghost()
-
-            painter.end()
-            self._preview.setPixmap(result)
-
-            parts = [f"{pw/MM_TO_PT:.0f}x{ph/MM_TO_PT:.0f}mm"]
-            if any([t_pt, b_pt, l_pt, r_pt]):
-                parts.append(f"{new_w/MM_TO_PT:.0f}x{new_h/MM_TO_PT:.0f}mm")
-            self._preview_info.setText(" -> ".join(parts))
-
-        except Exception as ex:
-            self._preview.setText(f"Vorschau: {ex}")
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        QTimer.singleShot(50, self._update_preview)
+        parts = [f"{pw/MM_TO_PT:.0f}x{ph/MM_TO_PT:.0f}mm"]
+        if any([t_pt, b_pt, l_pt, r_pt]):
+            parts.append(f"{new_w/MM_TO_PT:.0f}x{new_h/MM_TO_PT:.0f}mm")
+        return result, " -> ".join(parts)
 
     def _run_action(self):
         import pikepdf as _pik
@@ -887,41 +893,8 @@ class GrayscalePanel(BasePanel):
         splitter.setHandleWidth(4)
         splitter.setStyleSheet(f"QSplitter::handle{{background:{theme_color('LINE')};}}")
 
-        # ── Left: settings ────────────────────────────────────────────────
-        left_w = QWidget()
-        left_w.setMinimumWidth(240); left_w.setMaximumWidth(340)
-        left_w.setStyleSheet(f"background:{theme_color('PANEL')};")
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        left_scroll.setStyleSheet(f"QScrollArea{{background:{theme_color('PANEL')};border:none;}}")
-        left_scroll.setWidget(left_w)
-
-        left_layout = QVBoxLayout(left_w)
-        left_layout.setContentsMargins(12, 12, 12, 10); left_layout.setSpacing(8)
-
-        title_lbl = QLabel(tr(self.TITLE))
-        tf = title_lbl.font(); tf.setPointSize(13); tf.setBold(True); title_lbl.setFont(tf)
-        left_layout.addWidget(title_lbl)
-        left_layout.addWidget(make_separator())
-
-        self.file_bar = CurrentFileBar()
-        left_layout.addWidget(self.file_bar)
-        left_layout.addWidget(make_separator())
-
-        self.build_ui(left_layout)
-        left_layout.addStretch()
-        left_layout.addWidget(make_separator())
-
-        self.log = LogBox(tr("Log..."))
-        left_layout.addWidget(self.log)
-
-        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
-        self.build_action_row(btn_row)
-        left_layout.addLayout(btn_row)
-
-        splitter.addWidget(left_scroll)
+        # ── Left: shared standardized sidebar ─────────────────────────────
+        splitter.addWidget(self.build_tool_sidebar())
 
         # ── Right: preview grid ───────────────────────────────────────────
         right_w = QWidget()
@@ -977,7 +950,7 @@ class GrayscalePanel(BasePanel):
         right_layout.addWidget(status_bar)
 
         splitter.addWidget(right_w)
-        splitter.setSizes([280, 800])
+        splitter.setSizes([400, 800])
         outer.addWidget(splitter)
 
     def eventFilter(self, obj, e):
@@ -1601,61 +1574,45 @@ class FormsPanel(BasePanel):
 # ══════════════════════════════════════════════════════════════════════════════
 # OCR
 # ══════════════════════════════════════════════════════════════════════════════
-class _OcrWorker(QThread):
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(str, str)   # (out_path, summary)
-    failed   = pyqtSignal(str)
+def _run_ocr(src, out, lang, deskew, skip, report):
+    """Run OCR on a worker thread (via BasePanel.run_async). Returns
+    (out_path, summary); raises on failure."""
+    if shutil.which("ocrmypdf"):
+        report("Starte ocrmypdf …")
+        cmd = ["ocrmypdf", "--language", lang, "--output-type", "pdfa"]
+        if deskew: cmd.append("--deskew")
+        if skip:   cmd.append("--skip-text")
+        cmd += [src, out]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if r.returncode not in (0, 6):
+            raise RuntimeError(r.stderr.strip() or r.stdout.strip())
+        return out, f"OCR abgeschlossen ({lang})"
 
-    def __init__(self, src, out, lang, deskew, skip):
-        super().__init__()
-        self.src=src; self.out=out; self.lang=lang
-        self.deskew=deskew; self.skip=skip
+    if shutil.which("tesseract"):
+        from pdf2image import convert_from_path
+        import pytesseract
+        report("Rendere Seiten …")
+        images = convert_from_path(src, dpi=300)
+        txt = ""
+        for i, img in enumerate(images):
+            report(f"OCR Seite {i+1} / {len(images)} …")
+            txt += f"--- Seite {i+1} ---\n"
+            txt += pytesseract.image_to_string(img, lang=lang) + "\n\n"
+        out_txt = os.path.splitext(out)[0] + ".txt"
+        with open(out_txt, "w", encoding="utf-8") as f:
+            f.write(txt)
+        return out_txt, f"OCR abgeschlossen — Text gespeichert ({lang})"
 
-    def run(self):
-        try:
-            if shutil.which("ocrmypdf"):
-                self.progress.emit("Starte ocrmypdf …")
-                cmd=["ocrmypdf","--language",self.lang,"--output-type","pdfa"]
-                if self.deskew: cmd.append("--deskew")
-                if self.skip:   cmd.append("--skip-text")
-                cmd+=[self.src, self.out]
-                r=subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-                if r.returncode not in (0, 6):
-                    self.failed.emit(r.stderr.strip() or r.stdout.strip()); return
-                self.finished.emit(self.out, f"OCR abgeschlossen ({self.lang})")
-
-            elif shutil.which("tesseract"):
-                from pdf2image import convert_from_path
-                import pytesseract
-                self.progress.emit("Rendere Seiten …")
-                images = convert_from_path(self.src, dpi=300)
-                txt = ""
-                for i, img in enumerate(images):
-                    self.progress.emit(f"OCR Seite {i+1} / {len(images)} …")
-                    txt += f"--- Seite {i+1} ---\n"
-                    txt += pytesseract.image_to_string(img, lang=self.lang) + "\n\n"
-                out_txt = os.path.splitext(self.out)[0] + ".txt"
-                with open(out_txt, "w", encoding="utf-8") as f:
-                    f.write(txt)
-                self.finished.emit(out_txt, f"OCR abgeschlossen — Text gespeichert ({self.lang})")
-            else:
-                self.failed.emit(
-                    "Kein OCR-Programm gefunden.\n"
-                    "Installation:  pip install ocrmypdf --break-system-packages\n"
-                    "           oder:  sudo pacman -S tesseract tesseract-data-deu")
-        except Exception as e:
-            self.failed.emit(str(e))
+    raise RuntimeError(
+        "Kein OCR-Programm gefunden.\n"
+        "Installation:  pip install ocrmypdf --break-system-packages\n"
+        "           oder:  sudo pacman -S tesseract tesseract-data-deu")
 
 
 class OcrPanel(BasePanel):
     TITLE         = "OCR -- Texterkennung"
     SUBTITLE      = "Gescannte PDFs durchsuchbar machen."
     OPENS_NEW_TAB = True
-
-    def __init__(self, parent=None):
-        self._worker = None
-        self._async_running = False
-        super().__init__(parent)
 
     def build_ui(self, layout):
         has_ocr  = shutil.which("ocrmypdf") is not None
@@ -1679,49 +1636,38 @@ class OcrPanel(BasePanel):
         layout.addWidget(self.progress_lbl)
 
     def _run_action(self):
-        # Wird von _safe_run aufgerufen — wir starten nur den Worker
-        # und geben sofort zurück (kein Blockieren)
+        # Prep on the UI thread, then hand the work to the shared run_async().
         src  = self.require_pdf()
         out  = self.save_pdf("OCR-PDF speichern als")
         if not out: raise ValueError("Kein Ausgabepfad.")
-
-        if self._worker and self._worker.isRunning():
-            raise RuntimeError("OCR läuft bereits — bitte warten.")
-
-        self._worker = _OcrWorker(
-            src, out,
-            lang   = self.lang.currentData(),
-            deskew = self.deskew.isChecked(),
-            skip   = self.skip.isChecked(),
-        )
-        self._worker.progress.connect(self._on_progress)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.failed.connect(self._on_failed)
-        self._worker.start()
-
-        self._async_running = True
+        lang   = self.lang.currentData()
+        deskew = self.deskew.isChecked()
+        skip   = self.skip.isChecked()
         self.progress_lbl.setText("OCR läuft …")
+        self.run_async(
+            lambda report: _run_ocr(src, out, lang, deskew, skip, report),
+            on_done=self._ocr_done,
+            on_error=self._ocr_failed,
+            on_progress=self._ocr_progress,
+        )
         return None
 
-    def _on_progress(self, msg):
+    def _ocr_progress(self, msg):
         self.progress_lbl.setText(msg)
         self.log.log(msg)
 
-    def _on_finished(self, out_path, summary):
-        self._async_running = False
+    def _ocr_done(self, result):
+        out_path, summary = result
         self.progress_lbl.setText("Fertig.")
         self.log.log(summary)
-        self.run_btn.setEnabled(True)
         if out_path.endswith(".txt"):
             self.log.log(f"Text gespeichert: {out_path}")
         else:
             self.open_result(out_path, "OCR")
 
-    def _on_failed(self, msg):
-        self._async_running = False
+    def _ocr_failed(self, exc):
         self.progress_lbl.setText("Fehler.")
-        self.log.log(msg, error=True)
-        self.run_btn.setEnabled(True)
+        self.log.log(str(exc), error=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2044,74 +1990,62 @@ def _fmt(b):
 # ══════════════════════════════════════════════════════════════════════════════
 # N-UP LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
-class _NUpWorker(QThread):
-    """Builds the N-Up PDF off the UI thread so large/heavy documents don't
-    freeze the window. Mirrors the _OcrWorker / ConvertWorker pattern: only
-    plain data crosses the thread boundary (paths, page-index list, numeric
-    layout params) — all pypdf objects are created and used inside run()."""
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(str, str)   # (out_path, summary)
-    failed   = pyqtSignal(str)
+def _build_nup(src, out, src_pages, params, rotate_src, n_slot, report):
+    """Build the N-Up PDF on a worker thread (via BasePanel.run_async).
 
-    def __init__(self, src, out, src_pages, params, rotate_src, n_slot):
-        super().__init__()
-        self.src = src; self.out = out
-        self.src_pages = src_pages
-        self.params = params
-        self.rotate_src = rotate_src
-        self.n_slot = n_slot
-
-    def run(self):
-        try:
-            from pypdf import PdfReader, PdfWriter, Transformation
-            (out_w, out_h, mt, mb, ml, mr, gh, gv,
-             slot_w, slot_h, cols, rows) = self.params
-            reader = PdfReader(self.src)
-            writer = PdfWriter()
-            src_pages = self.src_pages
-            n_slot   = self.n_slot
-            n_sheets = math.ceil(len(src_pages) / n_slot)
-            placed   = 0
-            for sheet_i in range(n_sheets):
-                self.progress.emit(f"{tr('Blatt')} {sheet_i+1} / {n_sheets} …")
-                sheet = writer.add_blank_page(out_w, out_h)
-                for slot_i in range(n_slot):
-                    page_i = sheet_i * n_slot + slot_i
-                    if page_i >= len(src_pages): break
-                    src_pi = src_pages[page_i]
-                    if src_pi is None: continue
-                    src_page = _normalized_page(reader.pages[src_pi])
-                    pw = float(src_page.mediabox.width); ph = float(src_page.mediabox.height)
-                    if self.rotate_src:
-                        src_page = _normalized_page(src_page.rotate(90))
-                        pw, ph = float(src_page.mediabox.width), float(src_page.mediabox.height)
-                    scale = min(slot_w / pw, slot_h / ph)
-                    scaled_w = pw * scale; scaled_h = ph * scale
-                    col_i = slot_i % cols; row_i = slot_i // cols
-                    slot_x = ml + col_i * (slot_w + gh)
-                    slot_y = out_h - mt - (row_i + 1) * slot_h - row_i * gv
-                    tx = slot_x + (slot_w - scaled_w) / 2
-                    ty = slot_y + (slot_h - scaled_h) / 2
-                    sheet.merge_transformed_page(src_page,
-                        Transformation().scale(scale, scale).translate(tx=tx, ty=ty), over=True)
-                    placed += 1
-            self.progress.emit(tr("Schreibe Datei …"))
-            writer.write(self.out)
-            self.finished.emit(
-                self.out,
-                f"Fertig. {placed} Seiten auf {n_sheets} Blatt ({cols}×{rows}).")
-        except Exception as e:
-            self.failed.emit(str(e))
+    Uses pikepdf/qpdf's ``add_overlay`` to place each source page into its slot.
+    This is dramatically faster than pypdf's ``merge_transformed_page`` on
+    vector-heavy pages (which parses + decompresses every content stream — ~30s
+    and a 10× larger output for a dense 4-page file vs ~0.5s here) and keeps the
+    source content compressed. ``add_overlay`` scales each page to fit its slot
+    rectangle, preserving aspect ratio and centring it — matching the old
+    behaviour. Only plain data crosses the thread boundary."""
+    from pikepdf import Pdf, Page, Rectangle
+    (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
+    src_doc = Pdf.open(src)
+    out_doc = Pdf.new()
+    # Rotate each *unique* used page once (rotating in the loop would double-rotate
+    # a page that appears in several slots, e.g. single-page-repeat mode).
+    if rotate_src:
+        for upi in {p for p in src_pages if p is not None}:
+            Page(src_doc.pages[upi]).rotate(90, relative=True)
+    n_sheets = math.ceil(len(src_pages) / n_slot)
+    placed   = 0
+    for sheet_i in range(n_sheets):
+        report(f"{tr('Blatt')} {sheet_i+1} / {n_sheets} …")
+        sheet = Page(out_doc.add_blank_page(page_size=(out_w, out_h)))
+        for slot_i in range(n_slot):
+            page_i = sheet_i * n_slot + slot_i
+            if page_i >= len(src_pages): break
+            src_pi = src_pages[page_i]
+            if src_pi is None: continue
+            col_i = slot_i % cols; row_i = slot_i // cols
+            slot_x = ml + col_i * (slot_w + gh)
+            slot_y = out_h - mt - (row_i + 1) * slot_h - row_i * gv
+            sheet.add_overlay(Page(src_doc.pages[src_pi]),
+                              Rectangle(slot_x, slot_y, slot_x + slot_w, slot_y + slot_h))
+            placed += 1
+    report(tr("Schreibe Datei …"))
+    out_doc.save(out)
+    return out, f"Fertig. {placed} Seiten auf {n_sheets} Blatt ({cols}×{rows})."
 
 
 class NUpPanel(BasePanel):
     TITLE         = "N-Up Layout"
     SUBTITLE      = "Mehrere Seiten auf einem Blatt — mit Rand- und Abstandssteuerung."
+    RUN_LABEL     = "N-Up erstellen"
     OPENS_NEW_TAB = True
 
     def __init__(self, parent=None):
-        self._worker = None
-        self._async_running = False
+        # Shared-render state: the preview pulls page images from the same
+        # _ThumbnailCache / _render_queue the "Seiten verwalten" view uses, so a
+        # page rendered for one is reused by the other and the render happens off
+        # the GUI thread (opening the tool no longer blocks on a synchronous
+        # render of a big page).
+        self._dims_cache    = {}     # (path, page_idx) -> (clamped_idx, pw, ph)
+        self._thumb_pending = None   # (path, page_idx, render_w) in flight
+        self._thumb_signals = _ThumbSignals()
+        self._thumb_signals.ready.connect(lambda *_: self._pane.refresh())
         super().__init__(parent)
 
     def _setup(self):
@@ -2122,106 +2056,27 @@ class NUpPanel(BasePanel):
         splitter = QSplitter(_Qt.Orientation.Horizontal)
         splitter.setStyleSheet(f"QSplitter::handle{{background:{theme_color('LINE')};width:2px;}}")
 
-        left_w = QWidget()
-        left_w.setMinimumWidth(380)
-        left_w.setStyleSheet(f"background:{theme_color('PANEL')};")
-        left_scroll_nup = QScrollArea()
-        left_scroll_nup.setWidgetResizable(True)
-        left_scroll_nup.setFrameShape(QFrame.Shape.NoFrame)
-        left_scroll_nup.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        left_scroll_nup.setStyleSheet(f"QScrollArea{{background:{theme_color('PANEL')};border:none;}}")
-        left_scroll_nup.setWidget(left_w)
-        left_scroll_nup.setMinimumWidth(380)
-        left_l = QVBoxLayout(left_w)
-        left_l.setContentsMargins(10, 12, 10, 10); left_l.setSpacing(8)
-
-        title_lbl = QLabel(tr("N-Up Layout"))
-        tf = title_lbl.font(); tf.setPointSize(13); tf.setBold(True); title_lbl.setFont(tf)
-        left_l.addWidget(title_lbl)
-        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setObjectName("separator"); left_l.addWidget(sep)
-
-        self.build_ui(left_l)
-        left_l.addStretch()
-
-        sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setObjectName("separator"); left_l.addWidget(sep2)
-        self.log = LogBox(tr("Log...")); left_l.addWidget(self.log)
-
-        self.run_btn = QPushButton(tr("N-Up erstellen"))
-        self.run_btn.setObjectName("actionBtn")
-        self.run_btn.clicked.connect(self._safe_run)
-        left_l.addWidget(self.run_btn)
-
-        sc  = QShortcut(QKeySequence(Qt.Key.Key_Return), self)
-        sc.activated.connect(self._enter_pressed)
-        sc2 = QShortcut(QKeySequence(Qt.Key.Key_Enter), self)
-        sc2.activated.connect(self._enter_pressed)
-
-        splitter.addWidget(left_scroll_nup)
+        splitter.addWidget(self.build_tool_sidebar())
 
         right_w = QWidget(); right_w.setStyleSheet(f"background:{theme_color('BG')};")
         right_l = QVBoxLayout(right_w)
-        right_l.setContentsMargins(6, 6, 6, 6); right_l.setSpacing(3)
+        right_l.setContentsMargins(0, 0, 0, 0); right_l.setSpacing(0)
 
-        hdr_row = QHBoxLayout()
-        hdr = QLabel(tr("Vorschau (erstes Blatt)")); hdr.setObjectName("dimLabel")
-        hdr_row.addStretch(); hdr_row.addWidget(hdr); hdr_row.addStretch()
-        zoom_out_btn = QPushButton("−"); zoom_out_btn.setFixedSize(22, 22); zoom_out_btn.setObjectName("secondaryBtn")
-        self._zoom_lbl = QLabel("100%"); self._zoom_lbl.setObjectName("dimLabel")
-        self._zoom_lbl.setFixedWidth(38); self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zoom_in_btn  = QPushButton("+"); zoom_in_btn.setFixedSize(22, 22); zoom_in_btn.setObjectName("secondaryBtn")
-        zoom_rst_btn = QPushButton("⟳"); zoom_rst_btn.setFixedSize(22, 22); zoom_rst_btn.setObjectName("secondaryBtn")
-        hdr_row.addWidget(zoom_out_btn); hdr_row.addWidget(self._zoom_lbl)
-        hdr_row.addWidget(zoom_in_btn); hdr_row.addWidget(zoom_rst_btn)
-        right_l.addLayout(hdr_row)
-
-        self._preview_zoom = 1.0
-        def _zi(): self._preview_zoom = min(self._preview_zoom * 1.25, 8.0); self._zoom_lbl.setText(f"{int(self._preview_zoom*100)}%"); self._update_preview()
-        def _zo(): self._preview_zoom = max(self._preview_zoom / 1.25, 0.2); self._zoom_lbl.setText(f"{int(self._preview_zoom*100)}%"); self._update_preview()
-        def _zr(): self._preview_zoom = 1.0; self._zoom_lbl.setText("100%"); self._update_preview()
-        zoom_in_btn.clicked.connect(_zi); zoom_out_btn.clicked.connect(_zo); zoom_rst_btn.clicked.connect(_zr)
-
-        self._preview = QLabel()
-        self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # Shared preview pane (zoom, Ctrl+wheel, page/pdf/show/resize refresh).
+        self._pane = PreviewPane(self._render_preview, header="Vorschau (erstes Blatt)")
+        self._preview      = self._pane.label
+        self._preview_info = self._pane.info
         self._preview.setStyleSheet(f"background:{theme_color('BG')};")
-        self._preview.installEventFilter(self)
-        right_l.addWidget(self._preview, 1)
-
-        self._preview_info = QLabel("")
-        self._preview_info.setObjectName("dimLabel")
-        self._preview_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        right_l.addWidget(self._preview_info)
+        right_l.addWidget(self._pane)
 
         splitter.addWidget(right_w)
         splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1)
         splitter.setSizes([400, 700])
         outer.addWidget(splitter, 1)
-        QTimer.singleShot(400, self._update_preview)
 
-        # Keep the "current page" preview in sync with "Seiten verwalten".
-        AppState.get().current_page_changed.connect(lambda *_: self._update_preview())
-        AppState.get().pdf_changed.connect(lambda *_: self._update_preview())
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._update_preview()
-
-    def eventFilter(self, obj, event):
-        from PyQt6.QtCore import QEvent
-        if obj is self._preview and event.type() == QEvent.Type.Wheel:
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                delta = event.angleDelta().y()
-                self._preview_zoom = min(self._preview_zoom * 1.15, 8.0) if delta > 0 else max(self._preview_zoom / 1.15, 0.2)
-                self._zoom_lbl.setText(f"{int(self._preview_zoom * 100)}%")
-                self._update_preview()
-                return True
-        return super().eventFilter(obj, event)
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        QTimer.singleShot(50, self._update_preview)
+    def _update_preview(self):
+        # Bridge for this panel's widget-value connections.
+        self._pane.refresh()
 
     def build_ui(self, layout):
         def mm_spin(val=0):
@@ -2328,81 +2183,110 @@ class NUpPanel(BasePanel):
         slot_h = max(1.0, (out_h - mt - mb - gv * (rows-1)) / rows)
         return out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows
 
-    def _update_preview(self):
-        pdf_path = AppState.get().current_pdf
-        if not pdf_path or not os.path.isfile(pdf_path):
-            self._preview.setText(tr("Keine PDF geöffnet")); return
-        try:
-            import pypdfium2 as pdfium
-            from PyQt6.QtGui import QPainter, QPen, QColor, QBrush as _QB
-            doc  = pdfium.PdfDocument(pdf_path)
+    def _page_dims(self, pdf_path):
+        """Return (clamped_page_idx, page_w_pt, page_h_pt) for the representative
+        page (the one picked in "Seiten verwalten"). Only reads page dimensions
+        from pdfium (no rasterisation), so it's cheap even for huge files; cached
+        per page so repeated previews (zoom etc.) don't reopen the document."""
+        idx = max(0, AppState.get().current_page)
+        key = (pdf_path, idx)
+        if key in self._dims_cache:
+            return self._dims_cache[key]
+        import pypdfium2 as pdfium
+        with _pdfium_lock:
+            doc = pdfium.PdfDocument(pdf_path)
             try:
-                n = len(doc)
-                src_idx = self.src_combo.currentIndex()
-                page_idx = min(AppState.get().current_page, n-1) if src_idx == 1 else 0
-                page = doc[page_idx]
-                src_pw = page.get_width(); src_ph = page.get_height()
-                if self.rotate_src.isChecked(): src_pw, src_ph = src_ph, src_pw
-                out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows = \
-                    self._get_layout_params(src_pw, src_ph)
-                zoom = getattr(self, '_preview_zoom', 1.0)
-                avail_w = max(100, self._preview.width()  - 16)
-                avail_h = max(100, self._preview.height() - 16)
-                cs = min(avail_w / out_w, avail_h / out_h) * zoom
-                canvas_w = max(1, int(out_w * cs)); canvas_h = max(1, int(out_h * cs))
-                render_scale = max(cs, min(avail_w / src_pw, avail_h / src_ph) * zoom)
-                with _pdfium_lock:
-                    bm = page.render(scale=render_scale)
-                    pil_src = bm.to_pil()
+                i = min(idx, len(doc) - 1)
+                pg = doc[i]
+                res = (i, pg.get_width(), pg.get_height())
             finally:
                 doc.close()
-            if self.rotate_src.isChecked(): pil_src = pil_src.rotate(90, expand=True)
-            result = QPixmap(canvas_w, canvas_h); result.fill(QColor("#1a2a40"))
-            painter = QPainter(result)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setBrush(_QB(QColor("#f5f5f5"))); painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(0, 0, canvas_w - 1, canvas_h - 1)
-            buf = io.BytesIO(); pil_src.save(buf, "PNG"); buf.seek(0)
-            src_pm = QPixmap.fromImage(QImage.fromData(buf.read()))
-            for row_i in range(rows):
-                for col_i in range(cols):
-                    sx = int((ml + col_i * (slot_w + gh)) * cs)
-                    sy = int((mt + row_i * (slot_h + gv)) * cs)
-                    sw = max(1, int(slot_w * cs)); sh = max(1, int(slot_h * cs))
-                    painter.setBrush(_QB(QColor(200, 210, 230, 60)))
-                    painter.setPen(QPen(QColor(120, 140, 180, 120), 1))
-                    painter.drawRect(sx, sy, sw, sh)
-                    scale   = min(slot_w / src_pw, slot_h / src_ph)
-                    scaled_w = max(1, int(src_pw * scale * cs))
-                    scaled_h = max(1, int(src_ph * scale * cs))
-                    off_x = sx + (sw - scaled_w) // 2; off_y = sy + (sh - scaled_h) // 2
-                    pm_s = src_pm.scaled(scaled_w, scaled_h,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation)
-                    painter.drawPixmap(off_x, off_y, pm_s)
-                    painter.setBrush(Qt.BrushStyle.NoBrush)
-                    painter.setPen(QPen(QColor("#e94560"), 1))
-                    painter.drawRect(off_x, off_y, pm_s.width()-1, pm_s.height()-1)
-            painter.setPen(QPen(QColor(120, 160, 255, 180), 1))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(0, 0, canvas_w-1, canvas_h-1)
-            painter.end()
-            self._preview.setPixmap(result)
-            self._preview_info.setText(
-                f"{out_w/MM_TO_PT:.0f}×{out_h/MM_TO_PT:.0f} mm  |  {cols}×{rows} = {cols*rows} Slots")
-        except Exception as ex:
-            self._preview.setText(f"Vorschau: {ex}")
+        self._dims_cache[key] = res
+        return res
+
+    def _page_image(self, pdf_path, page_idx, render_w):
+        """Fetch a rendered image of the page from the SHARED thumbnail cache
+        (the same one "Seiten verwalten" fills). Returns immediately with any
+        cached image — or None — and submits a render on the shared queue
+        (off the GUI thread) so a missing/low-res page gets a crisp render and
+        refreshes the preview when ready. Reuses renders across both tools."""
+        exact = _ThumbnailCache.get((pdf_path, page_idx, 0, render_w))
+        if exact is not None:
+            return exact
+        pending = (pdf_path, page_idx, render_w)
+        if pending != self._thumb_pending:
+            self._thumb_pending = pending
+            _render_queue.submit(
+                _ThumbTask(0, 0, pdf_path, page_idx, 0, render_w, self._thumb_signals), 1)
+        # Show any other cached size for this page meanwhile (e.g. a manage-view
+        # thumbnail), scaled — so the layout appears instantly instead of blank.
+        return _ThumbnailCache.get_any(pdf_path, page_idx, 0)
+
+    def _render_preview(self, avail_w, avail_h, zoom):
+        from PyQt6.QtGui import QPainter, QPen, QColor, QBrush as _QB, QTransform
+        pdf_path = AppState.get().current_pdf
+        if not pdf_path or not os.path.isfile(pdf_path):
+            return None, tr("Keine PDF geöffnet")
+        page_idx, pw0, ph0 = self._page_dims(pdf_path)
+        rot = self.rotate_src.isChecked()
+        src_pw, src_ph = (ph0, pw0) if rot else (pw0, ph0)
+        out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows = \
+            self._get_layout_params(src_pw, src_ph)
+        cs = min(avail_w / out_w, avail_h / out_h) * zoom
+        canvas_w = max(1, int(out_w * cs)); canvas_h = max(1, int(out_h * cs))
+
+        # Request the page image at roughly slot resolution from the shared cache.
+        render_w = max(80, ((int(min(slot_w, src_pw) * cs) // 50) + 1) * 50)
+        img = self._page_image(pdf_path, page_idx, render_w)
+        src_pm = None
+        if img is not None:
+            src_pm = QPixmap.fromImage(img)
+            if rot:
+                src_pm = src_pm.transformed(QTransform().rotate(90),
+                                            Qt.TransformationMode.SmoothTransformation)
+
+        result = QPixmap(canvas_w, canvas_h); result.fill(QColor("#1a2a40"))
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(_QB(QColor("#f5f5f5"))); painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRect(0, 0, canvas_w - 1, canvas_h - 1)
+        for row_i in range(rows):
+            for col_i in range(cols):
+                sx = int((ml + col_i * (slot_w + gh)) * cs)
+                sy = int((mt + row_i * (slot_h + gv)) * cs)
+                sw = max(1, int(slot_w * cs)); sh = max(1, int(slot_h * cs))
+                painter.setBrush(_QB(QColor(200, 210, 230, 60)))
+                painter.setPen(QPen(QColor(120, 140, 180, 120), 1))
+                painter.drawRect(sx, sy, sw, sh)
+                if src_pm is None:
+                    continue
+                scale   = min(slot_w / src_pw, slot_h / src_ph)
+                scaled_w = max(1, int(src_pw * scale * cs))
+                scaled_h = max(1, int(src_ph * scale * cs))
+                off_x = sx + (sw - scaled_w) // 2; off_y = sy + (sh - scaled_h) // 2
+                pm_s = src_pm.scaled(scaled_w, scaled_h,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
+                painter.drawPixmap(off_x, off_y, pm_s)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor("#e94560"), 1))
+                painter.drawRect(off_x, off_y, pm_s.width()-1, pm_s.height()-1)
+        painter.setPen(QPen(QColor(120, 160, 255, 180), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(0, 0, canvas_w-1, canvas_h-1)
+        painter.end()
+        info = f"{out_w/MM_TO_PT:.0f}×{out_h/MM_TO_PT:.0f} mm  |  {cols}×{rows} = {cols*rows} Slots"
+        if src_pm is None:
+            info += "  ·  " + tr("rendert …")
+        return result, info
 
     def _run_action(self):
         # Prepare on the UI thread (cheap: reads widget values + first page size),
-        # then hand the heavy merge loop to a worker so big PDFs don't freeze the
-        # window. Mirrors the OCR panel's async pattern.
+        # then hand the heavy merge loop to a worker via the shared run_async().
         from pypdf import PdfReader
         src_path = self.require_pdf()
         out_path = self.save_pdf(tr("N-Up PDF speichern als"))
         if not out_path: raise ValueError(tr("Kein Ausgabepfad."))
-        if self._worker and self._worker.isRunning():
-            raise RuntimeError(tr("N-Up läuft bereits — bitte warten."))
         reader  = PdfReader(src_path); n_total = len(reader.pages)
         cols = self.cols.value(); rows = self.rows.value(); n_slot = cols * rows
         src_idx = self.src_combo.currentIndex()
@@ -2424,29 +2308,16 @@ class NUpPanel(BasePanel):
         if self.blank_fill.isChecked():
             while len(src_pages) % n_slot: src_pages.append(None)
 
-        self._worker = _NUpWorker(src_path, out_path, src_pages, params,
-                                  self.rotate_src.isChecked(), n_slot)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.failed.connect(self._on_failed)
-        self._worker.start()
-        self._async_running = True
-        self.run_btn.setText(tr("N-Up läuft …"))
-        self.log.log(tr("N-Up läuft …"))
+        rotate = self.rotate_src.isChecked()
+        self.run_async(
+            lambda report: _build_nup(src_path, out_path, src_pages, params,
+                                      rotate, n_slot, report),
+            on_done=self._nup_done,
+            busy_label="N-Up läuft …",
+        )
         return None
 
-    def _on_progress(self, msg):
-        self.log.log(msg)
-
-    def _on_finished(self, out_path, summary):
-        self._async_running = False
-        self.run_btn.setText(tr("N-Up erstellen"))
-        self.run_btn.setEnabled(True)
+    def _nup_done(self, result):
+        out_path, summary = result
         self.log.log(summary)
         self.open_result(out_path, "N-Up")
-
-    def _on_failed(self, msg):
-        self._async_running = False
-        self.run_btn.setText(tr("N-Up erstellen"))
-        self.run_btn.setEnabled(True)
-        self.log.log(msg, error=True)
