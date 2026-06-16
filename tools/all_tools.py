@@ -968,6 +968,47 @@ class ImgPdfPanel(BasePanel):
 # ══════════════════════════════════════════════════════════════════════════════
 # GRAYSCALE
 # ══════════════════════════════════════════════════════════════════════════════
+def _grey_vector(gs_bin, src, out, selected, n_pages, report):
+    """Convert the `selected` page indices to greyscale LOSSLESSLY and
+    VECTOR-BASED with Ghostscript (pdfwrite + ColorConversionStrategy=Gray):
+    text stays text, vectors stay vectors, every colour space (RGB/CMYK/ICC/
+    spot) is mapped to DeviceGray, and images keep full resolution (no
+    downsampling). Pages NOT selected are copied through unchanged. Runs on a
+    worker thread (only paths/ints cross the boundary). Returns (out, summary)."""
+    import subprocess, tempfile, os, pikepdf
+    report(tr("Ghostscript: Graustufen-Konvertierung …"))
+    fd, grey_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+    try:
+        cmd = [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
+               "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
+               "-dCompatibilityLevel=1.5", "-dAutoRotatePages=/None",
+               "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
+               "-dDownsampleMonoImages=false",
+               "-o", grey_tmp, src]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        if r.returncode != 0 or not os.path.exists(grey_tmp) or os.path.getsize(grey_tmp) == 0:
+            raise RuntimeError((r.stderr or r.stdout or "Ghostscript-Fehler").strip()[:400])
+
+        report(tr("Seiten zusammenstellen …"))
+        src_pdf  = pikepdf.open(src)
+        grey_pdf = pikepdf.open(grey_tmp)
+        try:
+            out_pdf = pikepdf.Pdf.new(); n_conv = 0
+            for i in range(n_pages):
+                if i in selected and i < len(grey_pdf.pages):
+                    out_pdf.pages.append(grey_pdf.pages[i]); n_conv += 1
+                else:
+                    out_pdf.pages.append(src_pdf.pages[i])   # keep original exactly
+            out_pdf.save(out)
+        finally:
+            src_pdf.close(); grey_pdf.close()
+        return out, (f"{n_conv} {tr('Seite(n) konvertiert (vektorbasiert)')}, "
+                     f"{n_pages - n_conv} {tr('unveraendert')}")
+    finally:
+        try: os.remove(grey_tmp)
+        except OSError: pass
+
+
 class GrayscalePanel(BasePanel):
     TITLE         = "Graustufen-Konvertierung"
     SUBTITLE      = "Visuell graue Seiten in echtes DeviceGray umwandeln."
@@ -1384,60 +1425,25 @@ class GrayscalePanel(BasePanel):
         out = self.save_pdf(tr("Graustufen-PDF speichern als"))
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
 
-        import pikepdf
-        import pypdfium2 as pdfium
-
-        RENDER_SCALE = 150 / 72
+        gs = shutil.which("gs") or shutil.which("gswin64c") or shutil.which("gswin32c")
+        if not gs:
+            raise RuntimeError(tr(
+                "Ghostscript (gs) nicht gefunden — für verlustfreie, vektorbasierte "
+                "Graustufen erforderlich. Bitte 'ghostscript' installieren."))
         n_pages = len(self._page_data)
+        sel = set(pages_to_convert)
+        # Vector-preserving conversion runs off the UI thread.
+        self.run_async(
+            lambda report: _grey_vector(gs, src, out, sel, n_pages, report),
+            on_done=self._grey_done,
+            busy_label="Graustufen …",
+        )
+        return None
 
-        doc = pdfium.PdfDocument(src)
-        src_pdf = pikepdf.open(src)
-        try:
-            out_pdf = pikepdf.Pdf.new()
-            n_conv = 0
-
-            for i in range(n_pages):
-                QApplication.processEvents()
-                if i not in pages_to_convert:
-                    out_pdf.pages.append(src_pdf.pages[i])
-                    continue
-
-                with _pdfium_lock:
-                    bm = doc[i].render(scale=RENDER_SCALE)
-                    pil_img = bm.to_pil()
-
-                img = pil_img.convert('L')
-                img_w, img_h = img.size
-                pt_w = img_w / RENDER_SCALE
-                pt_h = img_h / RENDER_SCALE
-
-                raw = img.tobytes()
-                img_xobj = pikepdf.Stream(out_pdf, raw)
-                img_xobj['/Subtype']         = pikepdf.Name('/Image')
-                img_xobj['/Width']           = img_w
-                img_xobj['/Height']          = img_h
-                img_xobj['/ColorSpace']      = pikepdf.Name('/DeviceGray')
-                img_xobj['/BitsPerComponent']= 8
-
-                content = f'q {pt_w:.4f} 0 0 {pt_h:.4f} 0 0 cm /Im0 Do Q\n'.encode()
-                page = pikepdf.Dictionary(
-                    Type=pikepdf.Name('/Page'),
-                    MediaBox=pikepdf.Array([0, 0, pikepdf.Real(pt_w), pikepdf.Real(pt_h)]),
-                    Resources=pikepdf.Dictionary(
-                        XObject=pikepdf.Dictionary(Im0=img_xobj)
-                    ),
-                    Contents=pikepdf.Stream(out_pdf, content),
-                )
-                out_pdf.pages.append(pikepdf.Page(page))
-                n_conv += 1
-
-            out_pdf.save(out)
-        finally:
-            src_pdf.close()
-            doc.close()
-
-        self.open_result(out, "Graustufen")
-        return f"{n_conv} {tr('Seite(n) konvertiert')}, {n_pages - n_conv} {tr('unveraendert')}"
+    def _grey_done(self, result):
+        out_path, msg = result
+        self.log.log(msg)
+        self.open_result(out_path, "Graustufen")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2186,11 +2192,17 @@ class NUpPanel(BasePanel):
         # page rendered for one is reused by the other and the render happens off
         # the GUI thread (opening the tool no longer blocks on a synchronous
         # render of a big page).
-        self._dims_cache    = {}     # (path, page_idx) -> (clamped_idx, pw, ph)
-        self._thumb_pending = None   # (path, page_idx, render_w) in flight
+        self._dims_cache    = {}     # (path, page_idx) -> (clamped_idx, pw, ph, n)
+        self._thumb_pending = set()  # {(path, page_idx, rot, render_w)} in flight
         self._thumb_signals = _ThumbSignals()
-        self._thumb_signals.ready.connect(lambda *_: self._pane.refresh())
+        self._thumb_signals.ready.connect(self._on_thumb_ready)
         super().__init__(parent)
+
+    def _on_thumb_ready(self, *_):
+        # A requested page image arrived; clear the in-flight set so any pages
+        # still missing get re-requested, then redraw.
+        self._thumb_pending.clear()
+        self._pane.refresh()
 
     def _setup(self):
         from PyQt6.QtCore import Qt as _Qt
@@ -2239,15 +2251,9 @@ class NUpPanel(BasePanel):
         sb = QGroupBox(tr("QUELLSEITEN")); sl = QVBoxLayout(sb)
         self.src_combo = QComboBox()
         self.src_combo.addItems([tr("Alle Seiten der Reihe nach"),
-                                  tr("Nur aktuelle Seite (wiederholt)"),
-                                  tr("Seitenbereich:")])
-        self.src_combo.currentIndexChanged.connect(self._on_src_changed)
+                                  tr("Jede Seite wiederholt (ein Blatt je Seite)")])
         self.src_combo.currentIndexChanged.connect(self._update_preview)
         sl.addLayout(r(tr("Quelle:"), self.src_combo))
-        self.src_range = QLineEdit(); self.src_range.setPlaceholderText(tr("z.B.  1-3, 5"))
-        self.src_range.setEnabled(False)
-        self.src_range.textChanged.connect(self._update_preview)
-        sl.addLayout(r(tr("Bereich:"), self.src_range))
         layout.addWidget(sb)
 
         gb = QGroupBox(tr("RASTER")); gl = QVBoxLayout(gb)
@@ -2304,22 +2310,6 @@ class NUpPanel(BasePanel):
         al.addWidget(self.crop_marks)
         layout.addWidget(ab)
 
-    def _on_src_changed(self, idx):
-        self.src_range.setEnabled(idx == 2)
-
-    def _parse_range(self, text, n_pages):
-        pages = []
-        for part in text.split(","):
-            part = part.strip()
-            if "-" in part:
-                a, b = part.split("-", 1)
-                try: pages.extend(range(int(a.strip())-1, int(b.strip())))
-                except ValueError: pass
-            elif part:
-                try: pages.append(int(part)-1)
-                except ValueError: pass
-        return [p for p in pages if 0 <= p < n_pages]
-
     def _get_layout_params(self, src_pw, src_ph):
         PT   = MM_TO_PT
         cols = self.cols.value(); rows = self.rows.value()
@@ -2338,10 +2328,10 @@ class NUpPanel(BasePanel):
         return out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows
 
     def _page_dims(self, pdf_path):
-        """Return (clamped_page_idx, page_w_pt, page_h_pt) for the representative
-        page (the one picked in "Seiten verwalten"). Only reads page dimensions
-        from pdfium (no rasterisation), so it's cheap even for huge files; cached
-        per page so repeated previews (zoom etc.) don't reopen the document."""
+        """Return (clamped_page_idx, page_w_pt, page_h_pt, n_pages) for the
+        representative page (the one picked in "Seiten verwalten"). Only reads
+        page dimensions from pdfium (no rasterisation), so it's cheap even for
+        huge files; cached per page so repeated previews don't reopen the doc."""
         idx = max(0, AppState.get().current_page)
         key = (pdf_path, idx)
         if key in self._dims_cache:
@@ -2350,9 +2340,10 @@ class NUpPanel(BasePanel):
         with _pdfium_lock:
             doc = pdfium.PdfDocument(pdf_path)
             try:
-                i = min(idx, len(doc) - 1)
+                n = len(doc)
+                i = min(idx, n - 1)
                 pg = doc[i]
-                res = (i, pg.get_width(), pg.get_height())
+                res = (i, pg.get_width(), pg.get_height(), n)
             finally:
                 doc.close()
         self._dims_cache[key] = res
@@ -2364,12 +2355,12 @@ class NUpPanel(BasePanel):
         cached image — or None — and submits a render on the shared queue
         (off the GUI thread) so a missing/low-res page gets a crisp render and
         refreshes the preview when ready. Reuses renders across both tools."""
-        exact = _ThumbnailCache.get((pdf_path, page_idx, 0, render_w))
+        key = (pdf_path, page_idx, 0, render_w)
+        exact = _ThumbnailCache.get(key)
         if exact is not None:
             return exact
-        pending = (pdf_path, page_idx, render_w)
-        if pending != self._thumb_pending:
-            self._thumb_pending = pending
+        if key not in self._thumb_pending:
+            self._thumb_pending.add(key)
             _render_queue.submit(
                 _ThumbTask(0, 0, pdf_path, page_idx, 0, render_w, self._thumb_signals), 1)
         # Show any other cached size for this page meanwhile (e.g. a manage-view
@@ -2381,16 +2372,30 @@ class NUpPanel(BasePanel):
         pdf_path = AppState.get().current_pdf
         if not pdf_path or not os.path.isfile(pdf_path):
             return None, tr("Keine PDF geöffnet")
-        page_idx, src_pw, src_ph = self._page_dims(pdf_path)
+        page_idx, src_pw, src_ph, n_total = self._page_dims(pdf_path)
         out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows = \
             self._get_layout_params(src_pw, src_ph)
         cs = min(avail_w / out_w, avail_h / out_h) * zoom
         canvas_w = max(1, int(out_w * cs)); canvas_h = max(1, int(out_h * cs))
 
-        # Request the page image at roughly slot resolution from the shared cache.
+        # Which page goes in each slot — this is what differs between the two
+        # source modes: sequential packs consecutive pages, "repeat" puts the
+        # same page in every slot.
+        sequential = self.src_combo.currentIndex() == 0
+        n_slot = cols * rows
+        if sequential:
+            slot_pages = [(page_idx + s if page_idx + s < n_total else None)
+                          for s in range(n_slot)]
+        else:
+            slot_pages = [page_idx] * n_slot
+
+        # Fetch each needed page image from the shared cache (async if missing).
         render_w = max(80, ((int(min(slot_w, src_pw) * cs) // 50) + 1) * 50)
-        img = self._page_image(pdf_path, page_idx, render_w)
-        src_pm = QPixmap.fromImage(img) if img is not None else None
+        pm_by_page = {}; any_pending = False
+        for pg in {p for p in slot_pages if p is not None}:
+            img = self._page_image(pdf_path, pg, render_w)
+            if img is None: any_pending = True
+            pm_by_page[pg] = QPixmap.fromImage(img) if img is not None else None
 
         result = QPixmap(canvas_w, canvas_h); result.fill(QColor("#1a2a40"))
         painter = QPainter(result)
@@ -2405,6 +2410,8 @@ class NUpPanel(BasePanel):
                 painter.setBrush(_QB(QColor(200, 210, 230, 60)))
                 painter.setPen(QPen(QColor(120, 140, 180, 120), 1))
                 painter.drawRect(sx, sy, sw, sh)
+                pg = slot_pages[row_i * cols + col_i]
+                src_pm = pm_by_page.get(pg) if pg is not None else None
                 if src_pm is None:
                     continue
                 scale   = min(slot_w / src_pw, slot_h / src_ph)
@@ -2429,7 +2436,7 @@ class NUpPanel(BasePanel):
         painter.drawRect(0, 0, canvas_w-1, canvas_h-1)
         painter.end()
         info = f"{out_w/MM_TO_PT:.0f}×{out_h/MM_TO_PT:.0f} mm  |  {cols}×{rows} = {cols*rows} Slots"
-        if src_pm is None:
+        if any_pending:
             info += "  ·  " + tr("rendert …")
         return result, info
 
@@ -2442,22 +2449,19 @@ class NUpPanel(BasePanel):
         if not out_path: raise ValueError(tr("Kein Ausgabepfad."))
         reader  = PdfReader(src_path); n_total = len(reader.pages)
         cols = self.cols.value(); rows = self.rows.value(); n_slot = cols * rows
-        src_idx = self.src_combo.currentIndex()
-        if src_idx == 0:
-            src_pages = list(range(n_total))
-        elif src_idx == 1:
-            cur = AppState.get().current_page
-            src_pages = [cur if cur < n_total else 0]
+        if self.src_combo.currentIndex() == 1:
+            # Each page repeated to fill its own sheet (n_slot copies per page).
+            src_pages = [p for p in range(n_total) for _ in range(n_slot)]
         else:
-            src_pages = self._parse_range(self.src_range.text(), n_total)
-            if not src_pages: raise ValueError(tr("Kein gültiger Seitenbereich."))
+            # All pages, packed sequentially across the slots.
+            src_pages = list(range(n_total))
         sp = reader.pages[src_pages[0]]
         src_pw = float(sp.mediabox.width); src_ph = float(sp.mediabox.height)
         params = self._get_layout_params(src_pw, src_ph)
         slot_w, slot_h = params[8], params[9]
         if slot_w <= 0 or slot_h <= 0:
             raise ValueError(tr("Abstände zu groß — kein Platz für Inhalt."))
-        if len(src_pages) == 1: src_pages = src_pages * n_slot
+        if len(src_pages) == 1: src_pages = src_pages * n_slot   # single-page doc → fill the sheet
         if self.blank_fill.isChecked():
             while len(src_pages) % n_slot: src_pages.append(None)
 
