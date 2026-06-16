@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox,
     QListWidget, QListWidgetItem, QRadioButton, QTextEdit,
     QScrollArea, QWidget, QSlider, QApplication, QFileDialog, QFrame,
-    QSizePolicy, QSplitter
+    QSizePolicy, QSplitter, QGridLayout
 )
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap, QImage, QKeySequence, QShortcut
@@ -65,16 +65,18 @@ def _normalized_page(src_page):
     return p
 
 
-def row(label_text: str, widget, stretch=1) -> QHBoxLayout:
+def row(label_text: str, widget, stretch=1, label_w: int = LABEL_W) -> QHBoxLayout:
     """
     Garantiert sichtbares Label + Eingabefeld.
     setFixedWidth wird von Qt immer respektiert — kein Abschneiden.
+    label_w kann verkleinert werden, wenn die Beschriftungen kurz sind (z.B. in
+    schmalen Tool-Seitenleisten), damit das Eingabefeld nicht eingequetscht wird.
     """
     h = QHBoxLayout()
     h.setSpacing(12)
     lbl = QLabel(label_text)
     lbl.setWordWrap(True)
-    lbl.setFixedWidth(LABEL_W)
+    lbl.setFixedWidth(label_w)
     lbl.setObjectName("dimLabel")
     h.addWidget(lbl)
     h.addWidget(widget, stretch)
@@ -437,8 +439,34 @@ class CropResizePanel(BasePanel):
         self.fmt_combo = QComboBox()
         self.fmt_combo.addItem(tr("— Kein —"))
         self.fmt_combo.addItems(list(PAPER_SIZES_PT.keys()))
-        self.fmt_combo.currentIndexChanged.connect(self._set_format)
+        self.fmt_combo.addItem(tr("Benutzerdefiniert (mm)"))
+        self.fmt_combo.currentIndexChanged.connect(self._apply_format)
         fg.addWidget(self.fmt_combo)
+
+        # Custom width × height (mm) — only shown for "Benutzerdefiniert".
+        def cust(default):
+            s = QDoubleSpinBox(); s.setRange(10, 2000); s.setSuffix(" mm")
+            s.setDecimals(1); s.setFixedWidth(90)
+            s.setValue(default)                       # set BEFORE connecting
+            s.valueChanged.connect(self._apply_format)
+            return s
+        self.custom_w = cust(210.0)
+        self.custom_h = cust(297.0)
+        self._custom_row = QHBoxLayout(); self._custom_row.setSpacing(4)
+        cw_lbl = QLabel(tr("B")); cw_lbl.setObjectName("dimLabel")
+        ch_lbl = QLabel(tr("H")); ch_lbl.setObjectName("dimLabel")
+        self._custom_row.addWidget(cw_lbl); self._custom_row.addWidget(self.custom_w)
+        self._custom_row.addWidget(ch_lbl); self._custom_row.addWidget(self.custom_h)
+        self._custom_row.addStretch()
+        self._custom_w_lbl, self._custom_h_lbl = cw_lbl, ch_lbl
+        fg.addLayout(self._custom_row)
+
+        # What the chosen format does: resize the page, or only add cut marks.
+        self.fmt_action = QComboBox()
+        self.fmt_action.addItems([tr("Auf Format zuschneiden / skalieren"),
+                                  tr("Nur Schnittmarken setzen")])
+        self.fmt_action.currentIndexChanged.connect(self._apply_format)
+        fg.addWidget(self.fmt_action)
         layout.addWidget(fmt_grp)
 
         # ── Randfelder ───────────────────────────────────────────────
@@ -479,6 +507,7 @@ class CropResizePanel(BasePanel):
         self._sel_info.setObjectName("dimLabel")
         self._sel_info.setWordWrap(True)
         layout.addWidget(self._sel_info)
+        self._update_custom_visibility()
 
     def _apply_theme(self):
         t = _TV
@@ -503,10 +532,11 @@ class CropResizePanel(BasePanel):
         self._syncing = True
         for w in [self.ct, self.cb2, self.cl2, self.cr]: w.setValue(0.0)
         self._syncing = False
-        # Formatauswahl zurücksetzen ohne _set_format auszulösen
+        # Formatauswahl zurücksetzen ohne _apply_format auszulösen
         self.fmt_combo.blockSignals(True)
         self.fmt_combo.setCurrentIndex(0)
         self.fmt_combo.blockSignals(False)
+        self._update_custom_visibility()
         self._update_preview()
 
     def _sync_values(self, val):
@@ -515,12 +545,43 @@ class CropResizePanel(BasePanel):
         for w in [self.ct, self.cb2, self.cl2, self.cr]: w.setValue(val)
         self._syncing = False
 
-    def _set_format(self):
-        """Setzt Randwerte sofort wenn Format gewählt wird."""
-        target = PAPER_SIZES_PT.get(self.fmt_combo.currentText())
-        if not target:
-            self._reset_values()
-            return
+    def _marks_only(self):
+        """True when the Format should only add cut marks, not resize the page."""
+        return self.fmt_action.currentIndex() == 1
+
+    def _target_size_pt(self):
+        """Chosen target size (w_pt, h_pt) from the Format dropdown, or None for
+        '— Kein —'. Custom uses the mm spin boxes."""
+        txt = self.fmt_combo.currentText()
+        if txt == tr("Benutzerdefiniert (mm)"):
+            return self.custom_w.value() * MM_TO_PT, self.custom_h.value() * MM_TO_PT
+        return PAPER_SIZES_PT.get(txt)
+
+    def _update_custom_visibility(self):
+        show = self.fmt_combo.currentText() == tr("Benutzerdefiniert (mm)")
+        for w in (self.custom_w, self.custom_h, self._custom_w_lbl, self._custom_h_lbl):
+            w.setVisible(show)
+
+    def _zero_margins(self):
+        self._syncing = True
+        for w in [self.ct, self.cb2, self.cl2, self.cr]:
+            w.blockSignals(True); w.setValue(0.0); w.blockSignals(False)
+        self._syncing = False
+
+    def _apply_format(self):
+        """React to Format / custom-size / action changes."""
+        self._update_custom_visibility()
+        size = self._target_size_pt()
+        if size is None or self._marks_only():
+            # 'Kein', or marks-only: leave the page uncropped. In marks-only mode
+            # the chosen size is used purely to draw cut marks (see preview/output).
+            self._zero_margins()
+            self._update_preview()
+        else:
+            self._set_margins_for_size(*size)
+
+    def _set_margins_for_size(self, tw, th):
+        """Set the four crop margins so the page is cropped/extended to (tw, th)."""
         pdf_path = AppState.get().current_pdf
         if not pdf_path or not os.path.isfile(pdf_path):
             return
@@ -531,21 +592,16 @@ class CropResizePanel(BasePanel):
             doc  = pdfium.PdfDocument(pdf_path)
             try:
                 page = doc[page_idx]
-                pw   = page.get_width()
-                ph   = page.get_height()
+                pw   = page.get_width(); ph = page.get_height()
             finally:
                 doc.close()
-            tw, th = target
             # Exakte Differenz — kein Runden damit Zielformat stimmt
             diff_w_mm = (pw - tw) / MM_TO_PT / 2
             diff_h_mm = (ph - th) / MM_TO_PT / 2
-            # Alle vier Werte setzen ohne zwischendurch Preview auszulösen
             for w in [self.ct, self.cb2, self.cl2, self.cr]:
                 w.blockSignals(True)
-            self.cl2.setValue(diff_w_mm)
-            self.cr.setValue(diff_w_mm)
-            self.ct.setValue(diff_h_mm)
-            self.cb2.setValue(diff_h_mm)
+            self.cl2.setValue(diff_w_mm); self.cr.setValue(diff_w_mm)
+            self.ct.setValue(diff_h_mm);  self.cb2.setValue(diff_h_mm)
             for w in [self.ct, self.cb2, self.cl2, self.cr]:
                 w.blockSignals(False)
             self._update_preview()
@@ -663,10 +719,24 @@ class CropResizePanel(BasePanel):
             painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
             if changed: draw_ghost()
 
+        # Cut-marks-only mode: leave the page as-is and draw crop marks at the
+        # chosen size, centred on the page (same marks as the N-Up tool).
+        marks_size = self._target_size_pt() if self._marks_only() else None
+        if marks_size:
+            tw, th = marks_size
+            mx0 = (pw - tw) / 2; my0 = (ph - th) / 2
+            rect = (mx0, my0, mx0 + tw, my0 + th)
+            painter.setPen(QPen(QColor("#000000"), 1)); painter.setBrush(_Qt2.BrushStyle.NoBrush)
+            for a, b, c, d in _crop_mark_segments([rect]):
+                painter.drawLine(int(rx + a * cs), int(ry + (ph - b) * cs),
+                                 int(rx + c * cs), int(ry + (ph - d) * cs))
+
         painter.end()
 
         parts = [f"{pw/MM_TO_PT:.0f}x{ph/MM_TO_PT:.0f}mm"]
-        if any([t_pt, b_pt, l_pt, r_pt]):
+        if marks_size:
+            parts.append(f"✂ {marks_size[0]/MM_TO_PT:.0f}x{marks_size[1]/MM_TO_PT:.0f}mm")
+        elif any([t_pt, b_pt, l_pt, r_pt]):
             parts.append(f"{new_w/MM_TO_PT:.0f}x{new_h/MM_TO_PT:.0f}mm")
         return result, " -> ".join(parts)
 
@@ -683,6 +753,25 @@ class CropResizePanel(BasePanel):
             target_pages = self._get_target_pages()
             if not target_pages: raise ValueError("Keine Seiten ausgewaehlt.")
             target_origs = {orig for orig, _ in target_pages}
+
+        # Cut-marks-only mode: don't resize the page — just stamp crop marks at
+        # the chosen size, centred on each page (shares the N-Up marks helper).
+        marks_size = self._target_size_pt() if self._marks_only() else None
+        if marks_size:
+            tw, th = marks_size
+            pdf = _pik.open(src_path); n_changed = 0
+            for i, page in enumerate(pdf.pages):
+                if i not in target_origs: continue
+                mb = page.mediabox
+                ox, oy = float(mb[0]), float(mb[1])
+                pw = float(mb[2]) - ox; ph = float(mb[3]) - oy
+                x0 = ox + (pw - tw) / 2; y0 = oy + (ph - th) / 2
+                ops = _crop_marks_content_stream([(x0, y0, x0 + tw, y0 + th)])
+                page.contents_add(_pik.Stream(pdf, ops))
+                n_changed += 1
+            pdf.save(out)
+            self.open_result(out, os.path.basename(out))
+            return f"Schnittmarken auf {n_changed} Seite(n) gesetzt ({tw/MM_TO_PT:.0f}×{th/MM_TO_PT:.0f} mm)."
 
         t_mm = self.ct.value();  b_mm = self.cb2.value()
         l_mm = self.cl2.value(); r_mm = self.cr.value()
@@ -1990,7 +2079,65 @@ def _fmt(b):
 # ══════════════════════════════════════════════════════════════════════════════
 # N-UP LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
-def _build_nup(src, out, src_pages, params, rotate_src, n_slot, report):
+def _nup_slot_rects(params, n_slot):
+    """The (x0, y0, x1, y1) rectangle (PDF points, origin bottom-left) of every
+    slot on a sheet — shared by the renderer, the preview and the crop marks so
+    they always agree."""
+    (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
+    rects = []
+    for slot_i in range(n_slot):
+        col_i = slot_i % cols; row_i = slot_i // cols
+        x0 = ml + col_i * (slot_w + gh)
+        y0 = out_h - mt - (row_i + 1) * slot_h - row_i * gv
+        rects.append((x0, y0, x0 + slot_w, y0 + slot_h))
+    return rects
+
+
+def _crop_mark_segments(rects, length=7.0, gap=2.0):
+    """L-shaped crop/cut marks at each rectangle corner: two short line segments
+    per corner, offset outward from the trim by `gap` and `length` long (PDF
+    points). Returns a flat list of (x0, y0, x1, y1) line segments. Shared by the
+    N-Up grid marks and the Crop tool's size marks."""
+    segs = []
+    for (x0, y0, x1, y1) in rects:
+        # Corner marks (L-shaped: a horizontal + a vertical tick at each corner).
+        for cx, cy, dx, dy in ((x0, y0, -1, -1), (x1, y0, 1, -1),
+                               (x0, y1, -1, 1), (x1, y1, 1, 1)):
+            segs.append((cx + dx * gap, cy, cx + dx * (gap + length), cy))  # horizontal
+            segs.append((cx, cy + dy * gap, cx, cy + dy * (gap + length)))  # vertical
+        # Centre marks: on each side, TWO short lines that run ALONG the edge
+        # (in the outer margin). Each sits ~2/3 of the way from the page centre
+        # toward its corner — so the two marks are closer to the corner marks
+        # than to each other, with a wide clear gap in the middle.
+        mx = (x0 + x1) / 2; my = (y0 + y1) / 2
+        off_x = (x1 - x0) / 2 * (2.0 / 3.0)   # mark centre offset from the side midpoint
+        off_y = (y1 - y0) / 2 * (2.0 / 3.0)
+        hl = length / 2.0                     # half the mark length
+        # Top & bottom edges → horizontal segments near each corner.
+        for yy, dy in ((y1, 1), (y0, -1)):
+            oy = yy + dy * gap
+            for sx in (mx - off_x, mx + off_x):
+                segs.append((sx - hl, oy, sx + hl, oy))
+        # Left & right edges → vertical segments near each corner.
+        for xx, dx in ((x0, -1), (x1, 1)):
+            ox = xx + dx * gap
+            for sy in (my - off_y, my + off_y):
+                segs.append((ox, sy - hl, ox, sy + hl))
+    return segs
+
+
+def _crop_marks_content_stream(rects, length=7.0, gap=2.0):
+    """Build a PDF content stream (bytes) that strokes crop marks for `rects`
+    as thin black lines. Appended to a page via `page.contents_add(Stream(...))`.
+    Used by both N-Up and the Crop tool so the marks are identical everywhere."""
+    ops = ["q", "0 0 0 RG", "0.5 w"]
+    for (a, b, c, d) in _crop_mark_segments(rects, length, gap):
+        ops.append(f"{a:.2f} {b:.2f} m {c:.2f} {d:.2f} l S")
+    ops.append("Q")
+    return ("\n".join(ops)).encode("latin-1")
+
+
+def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False):
     """Build the N-Up PDF on a worker thread (via BasePanel.run_async).
 
     Uses pikepdf/qpdf's ``add_overlay`` to place each source page into its slot.
@@ -1998,17 +2145,15 @@ def _build_nup(src, out, src_pages, params, rotate_src, n_slot, report):
     vector-heavy pages (which parses + decompresses every content stream — ~30s
     and a 10× larger output for a dense 4-page file vs ~0.5s here) and keeps the
     source content compressed. ``add_overlay`` scales each page to fit its slot
-    rectangle, preserving aspect ratio and centring it — matching the old
-    behaviour. Only plain data crosses the thread boundary."""
-    from pikepdf import Pdf, Page, Rectangle
+    rectangle, preserving aspect ratio and centring it. Only plain data crosses
+    the thread boundary."""
+    from pikepdf import Pdf, Page, Rectangle, Stream
     (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
     src_doc = Pdf.open(src)
     out_doc = Pdf.new()
-    # Rotate each *unique* used page once (rotating in the loop would double-rotate
-    # a page that appears in several slots, e.g. single-page-repeat mode).
-    if rotate_src:
-        for upi in {p for p in src_pages if p is not None}:
-            Page(src_doc.pages[upi]).rotate(90, relative=True)
+    rects = _nup_slot_rects(params, n_slot)
+    # Pre-build the crop-marks content stream once (same grid on every sheet).
+    mark_ops = _crop_marks_content_stream(rects) if crop_marks else None
     n_sheets = math.ceil(len(src_pages) / n_slot)
     placed   = 0
     for sheet_i in range(n_sheets):
@@ -2019,12 +2164,11 @@ def _build_nup(src, out, src_pages, params, rotate_src, n_slot, report):
             if page_i >= len(src_pages): break
             src_pi = src_pages[page_i]
             if src_pi is None: continue
-            col_i = slot_i % cols; row_i = slot_i // cols
-            slot_x = ml + col_i * (slot_w + gh)
-            slot_y = out_h - mt - (row_i + 1) * slot_h - row_i * gv
-            sheet.add_overlay(Page(src_doc.pages[src_pi]),
-                              Rectangle(slot_x, slot_y, slot_x + slot_w, slot_y + slot_h))
+            x0, y0, x1, y1 = rects[slot_i]
+            sheet.add_overlay(Page(src_doc.pages[src_pi]), Rectangle(x0, y0, x1, y1))
             placed += 1
+        if mark_ops is not None:
+            sheet.contents_add(Stream(out_doc, mark_ops))
     report(tr("Schreibe Datei …"))
     out_doc.save(out)
     return out, f"Fertig. {placed} Seiten auf {n_sheets} Blatt ({cols}×{rows})."
@@ -2086,6 +2230,12 @@ class NUpPanel(BasePanel):
             s.valueChanged.connect(self._update_preview)
             return s
 
+        # N-Up's labels are short, so use a narrow label column — otherwise the
+        # global 220px label width squeezes the fields and the sidebar looks
+        # cramped.
+        def r(label, widget):
+            return row(label, widget, label_w=92)
+
         sb = QGroupBox(tr("QUELLSEITEN")); sl = QVBoxLayout(sb)
         self.src_combo = QComboBox()
         self.src_combo.addItems([tr("Alle Seiten der Reihe nach"),
@@ -2093,20 +2243,18 @@ class NUpPanel(BasePanel):
                                   tr("Seitenbereich:")])
         self.src_combo.currentIndexChanged.connect(self._on_src_changed)
         self.src_combo.currentIndexChanged.connect(self._update_preview)
-        sl.addLayout(row(tr("Quelle:"), self.src_combo))
+        sl.addLayout(r(tr("Quelle:"), self.src_combo))
         self.src_range = QLineEdit(); self.src_range.setPlaceholderText(tr("z.B.  1-3, 5"))
         self.src_range.setEnabled(False)
         self.src_range.textChanged.connect(self._update_preview)
-        sl.addLayout(row(tr("Bereich:"), self.src_range))
+        sl.addLayout(r(tr("Bereich:"), self.src_range))
         layout.addWidget(sb)
 
         gb = QGroupBox(tr("RASTER")); gl = QVBoxLayout(gb)
         self.cols = QSpinBox(); self.cols.setRange(1, 10); self.cols.setValue(2); self.cols.valueChanged.connect(self._update_preview)
         self.rows = QSpinBox(); self.rows.setRange(1, 10); self.rows.setValue(2); self.rows.valueChanged.connect(self._update_preview)
-        gl.addLayout(row(tr("Spalten:"), self.cols))
-        gl.addLayout(row(tr("Zeilen:"), self.rows))
-        self.rotate_src = QCheckBox(tr("Quellseite um 90° drehen")); self.rotate_src.toggled.connect(self._update_preview)
-        gl.addWidget(self.rotate_src)
+        gl.addLayout(r(tr("Spalten:"), self.cols))
+        gl.addLayout(r(tr("Zeilen:"), self.rows))
         self.blank_fill = QCheckBox(tr("Fehlende Positionen mit Leerseiten auffüllen")); self.blank_fill.setChecked(True)
         gl.addWidget(self.blank_fill)
         layout.addWidget(gb)
@@ -2117,7 +2265,7 @@ class NUpPanel(BasePanel):
                                 tr("DIN A5  (148 × 210 mm)"), tr("Letter  (216 × 279 mm)"),
                                 tr("Wie Quellseite × Raster  (automatisch)")])
         self.out_fmt.currentIndexChanged.connect(self._update_preview)
-        ol.addLayout(row(tr("Format:"), self.out_fmt))
+        ol.addLayout(r(tr("Format:"), self.out_fmt))
         self.landscape = QCheckBox(tr("Querformat")); self.landscape.toggled.connect(self._update_preview)
         ol.addWidget(self.landscape)
         layout.addWidget(ob)
@@ -2126,12 +2274,17 @@ class NUpPanel(BasePanel):
         self.margin_t = mm_spin(5); self.margin_b = mm_spin(5)
         self.margin_l = mm_spin(5); self.margin_r = mm_spin(5)
         self.gap_h    = mm_spin(3); self.gap_v    = mm_spin(3)
-        al.addLayout(row(tr("Rand oben:"),   self.margin_t))
-        al.addLayout(row(tr("Rand unten:"),  self.margin_b))
-        al.addLayout(row(tr("Rand links:"),  self.margin_l))
-        al.addLayout(row(tr("Rand rechts:"), self.margin_r))
-        al.addLayout(row(tr("Abstand H:"),   self.gap_h))
-        al.addLayout(row(tr("Abstand V:"),   self.gap_v))
+        # Compact 2-column grid (short labels) instead of six full-width rows —
+        # keeps the whole sidebar visible without scrolling.
+        grid = QGridLayout(); grid.setHorizontalSpacing(8); grid.setVerticalSpacing(4)
+        def cell(rr, cc, text, w):
+            lb = QLabel(text); lb.setObjectName("dimLabel")
+            grid.addWidget(lb, rr, cc); grid.addWidget(w, rr, cc + 1)
+        cell(0, 0, tr("Rand oben"),  self.margin_t); cell(0, 2, tr("unten"),  self.margin_b)
+        cell(1, 0, tr("Rand links"), self.margin_l); cell(1, 2, tr("rechts"), self.margin_r)
+        cell(2, 0, tr("Abstand H"),  self.gap_h);    cell(2, 2, tr("V"),      self.gap_v)
+        grid.setColumnStretch(1, 1); grid.setColumnStretch(3, 1)
+        al.addLayout(grid)
         self._sync_margins = QCheckBox(tr("Alle Ränder gleich"))
         self._sync_gaps    = QCheckBox(tr("Beide Abstände gleich"))
         def _sync_m(v):
@@ -2146,6 +2299,9 @@ class NUpPanel(BasePanel):
         self.margin_t.valueChanged.connect(_sync_m)
         self.gap_h.valueChanged.connect(_sync_g)
         al.addWidget(self._sync_margins); al.addWidget(self._sync_gaps)
+        self.crop_marks = QCheckBox(tr("Schnittmarken hinzufügen"))
+        self.crop_marks.toggled.connect(self._update_preview)
+        al.addWidget(self.crop_marks)
         layout.addWidget(ab)
 
     def _on_src_changed(self, idx):
@@ -2170,9 +2326,7 @@ class NUpPanel(BasePanel):
         fmt_idx = self.out_fmt.currentIndex()
         fmt_map = {0:(210*PT,297*PT), 1:(297*PT,420*PT), 2:(148*PT,210*PT), 3:(216*PT,279*PT)}
         if fmt_idx == 4:
-            pw, ph = src_pw, src_ph
-            if self.rotate_src.isChecked(): pw, ph = ph, pw
-            out_w, out_h = pw * cols, ph * rows
+            out_w, out_h = src_pw * cols, src_ph * rows
         else:
             out_w, out_h = fmt_map[fmt_idx]
         if self.landscape.isChecked(): out_w, out_h = out_h, out_w
@@ -2223,13 +2377,11 @@ class NUpPanel(BasePanel):
         return _ThumbnailCache.get_any(pdf_path, page_idx, 0)
 
     def _render_preview(self, avail_w, avail_h, zoom):
-        from PyQt6.QtGui import QPainter, QPen, QColor, QBrush as _QB, QTransform
+        from PyQt6.QtGui import QPainter, QPen, QColor, QBrush as _QB
         pdf_path = AppState.get().current_pdf
         if not pdf_path or not os.path.isfile(pdf_path):
             return None, tr("Keine PDF geöffnet")
-        page_idx, pw0, ph0 = self._page_dims(pdf_path)
-        rot = self.rotate_src.isChecked()
-        src_pw, src_ph = (ph0, pw0) if rot else (pw0, ph0)
+        page_idx, src_pw, src_ph = self._page_dims(pdf_path)
         out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows = \
             self._get_layout_params(src_pw, src_ph)
         cs = min(avail_w / out_w, avail_h / out_h) * zoom
@@ -2238,12 +2390,7 @@ class NUpPanel(BasePanel):
         # Request the page image at roughly slot resolution from the shared cache.
         render_w = max(80, ((int(min(slot_w, src_pw) * cs) // 50) + 1) * 50)
         img = self._page_image(pdf_path, page_idx, render_w)
-        src_pm = None
-        if img is not None:
-            src_pm = QPixmap.fromImage(img)
-            if rot:
-                src_pm = src_pm.transformed(QTransform().rotate(90),
-                                            Qt.TransformationMode.SmoothTransformation)
+        src_pm = QPixmap.fromImage(img) if img is not None else None
 
         result = QPixmap(canvas_w, canvas_h); result.fill(QColor("#1a2a40"))
         painter = QPainter(result)
@@ -2271,6 +2418,12 @@ class NUpPanel(BasePanel):
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.setPen(QPen(QColor("#e94560"), 1))
                 painter.drawRect(off_x, off_y, pm_s.width()-1, pm_s.height()-1)
+        if self.crop_marks.isChecked():
+            params_t = (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows)
+            painter.setPen(QPen(QColor("#000000"), 1)); painter.setBrush(Qt.BrushStyle.NoBrush)
+            for a, b, c, d in _crop_mark_segments(_nup_slot_rects(params_t, cols * rows)):
+                painter.drawLine(int(a * cs), int((out_h - b) * cs),
+                                 int(c * cs), int((out_h - d) * cs))
         painter.setPen(QPen(QColor(120, 160, 255, 180), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(0, 0, canvas_w-1, canvas_h-1)
@@ -2308,10 +2461,10 @@ class NUpPanel(BasePanel):
         if self.blank_fill.isChecked():
             while len(src_pages) % n_slot: src_pages.append(None)
 
-        rotate = self.rotate_src.isChecked()
+        crop = self.crop_marks.isChecked()
         self.run_async(
             lambda report: _build_nup(src_path, out_path, src_pages, params,
-                                      rotate, n_slot, report),
+                                      n_slot, report, crop_marks=crop),
             on_done=self._nup_done,
             busy_label="N-Up läuft …",
         )

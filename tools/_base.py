@@ -282,10 +282,11 @@ class BasePanel(QWidget):
     def build_tool_sidebar(self) -> QWidget:
         """Standardized left sidebar for split-view tools (Crop, Grayscale,
         N-Up). Every "sliding" sidebar is built here so they stay identical:
-        a scrollable PANEL-coloured column with title (+ subtitle), the
-        current-file bar, the tool's own controls (build_ui), the log, and the
-        action row. Sets self.file_bar / self.log / self.run_btn and returns the
-        widget to drop into the splitter.
+        a scrollable PANEL-coloured column with title, the current-file bar, the
+        tool's own controls (build_ui), the log, and the action row. Sets
+        self.file_bar / self.log / self.run_btn and returns the widget to drop
+        into the splitter. Kept vertically compact so the whole sidebar fits
+        without scrolling on typical screens.
         """
         panel = QWidget()
         panel.setObjectName("toolLeftPanel")
@@ -293,13 +294,11 @@ class BasePanel(QWidget):
         self._tool_left_w = panel   # exposed for panels that re-theme dynamically
 
         lay = QVBoxLayout(panel)
-        lay.setContentsMargins(12, 12, 12, 10); lay.setSpacing(8)
+        lay.setContentsMargins(12, 10, 12, 10); lay.setSpacing(6)
 
         title = QLabel(tr(self.TITLE))
         tf = title.font(); tf.setPointSize(13); tf.setBold(True); title.setFont(tf)
         lay.addWidget(title)
-        if self.SUBTITLE:
-            lay.addWidget(make_label(tr(self.SUBTITLE), dim=True))
         lay.addWidget(make_separator())
 
         self.file_bar = CurrentFileBar()
@@ -320,6 +319,7 @@ class BasePanel(QWidget):
         lay.addWidget(make_separator())
 
         self.log = LogBox(tr("Log..."))
+        self.log.setMaximumHeight(80)   # compact in the sidebar
         lay.addWidget(self.log)
 
         btn_row = QHBoxLayout(); btn_row.setSpacing(8)
@@ -377,6 +377,19 @@ class BasePanel(QWidget):
             raise ValueError(
                 "Keine PDF geöffnet.\n"
                 "Öffne zuerst eine PDF im Page Viewer (linke Seite).")
+        # Central guard: password-protected PDFs can't be processed and otherwise
+        # surface as cryptic library errors (PasswordError / FileNotDecryptedError
+        # / PdfiumError) in each tool. Give one clear message instead.
+        try:
+            from pypdf import PdfReader
+            if PdfReader(path, strict=False).is_encrypted:
+                raise ValueError(
+                    "Diese PDF ist passwortgeschützt.\n"
+                    "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen.")
+        except ValueError:
+            raise
+        except Exception:
+            pass   # unreadable for another reason — let the tool surface that itself
         return path
 
     def open_result(self, path: str, title: str = ""):
@@ -392,7 +405,12 @@ class BasePanel(QWidget):
             msg = self._run_action()
             if msg is not None:
                 self.log.log(msg or "Fertig.")
+        except (ValueError, RuntimeError) as e:
+            # Intentional, user-facing errors (no PDF, encrypted, bad input …):
+            # show just the message, not a scary traceback.
+            self.log.log(str(e), error=True)
         except Exception as e:
+            # Unexpected error = likely a bug: keep the traceback for diagnosis.
             self.log.log(str(e), error=True)
             self.log.log(traceback.format_exc(), error=True)
         finally:
