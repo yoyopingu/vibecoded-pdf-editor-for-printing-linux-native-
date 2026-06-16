@@ -317,11 +317,10 @@ class _RenderQueue:
             self._cond.notify()
 
     def cancel_queued(self, min_priority: int):
-        """Cancel all not-yet-started tasks at >= min_priority."""
+        """Cancel all not-yet-started tasks at >= min_priority and remove them from the queue."""
         with self._cond:
-            for _, _, t in self._heap:
-                if getattr(t, '_priority', 99) >= min_priority:
-                    t.cancel()
+            self._heap = [(p, s, t) for p, s, t in self._heap
+                          if getattr(t, '_priority', 99) < min_priority]
 
     def _loop(self):
         while True:
@@ -1540,6 +1539,8 @@ class SinglePageView(QWidget):
                     cs_names.add("/DeviceRGB")
                 if _re.search(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[kK]\b', text):
                     cs_names.add("/DeviceCMYK")
+                if _re.search(r'[\d.]+\s+[gG]\b', text):
+                    cs_names.add("/DeviceGray")
             except Exception:
                 pass
             has_rgb  = bool(cs_names & {"/DeviceRGB", "/CalRGB", "/ICCBased"})
@@ -1881,6 +1882,7 @@ class PageGrid(QWidget):
             for t in self._thumb_tasks:
                 t.cancel()
             self._thumb_tasks.clear()
+            _render_queue.cancel_queued(1)
             self._thumb_gen += 1
             gen = self._thumb_gen
 
@@ -2220,11 +2222,14 @@ class PageGrid(QWidget):
         e.acceptProposedAction()
 
         if text.startswith("copy_multi:"):
-            self.handle_drop(int(text.split(":")[1]), to_pos, multi=True, copy=True)
+            try: self.handle_drop(int(text.split(":")[1]), to_pos, multi=True, copy=True)
+            except (ValueError, IndexError): return
         elif text.startswith("copy:"):
-            self.handle_drop(int(text.split(":")[1]), to_pos, copy=True)
+            try: self.handle_drop(int(text.split(":")[1]), to_pos, copy=True)
+            except (ValueError, IndexError): return
         elif text.startswith("multi:"):
-            self.handle_drop(int(text.split(":")[1]), to_pos, multi=True)
+            try: self.handle_drop(int(text.split(":")[1]), to_pos, multi=True)
+            except (ValueError, IndexError): return
         else:
             try: from_pos = int(text)
             except: return
@@ -2686,7 +2691,7 @@ class ManagePanel(QWidget):
             from pypdf import PdfReader, PdfWriter
             readers = {}
             def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p)
+                if p not in readers: readers[p] = PdfReader(p, strict=False)
                 return readers[p]
             writer = PdfWriter()
             for uid in self.model.order:
@@ -2711,7 +2716,7 @@ class ManagePanel(QWidget):
             from pypdf import PdfReader, PdfWriter
             readers = {}
             def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p)
+                if p not in readers: readers[p] = PdfReader(p, strict=False)
                 return readers[p]
             writer = PdfWriter(); n = 0
             for uid in self.model.order:
@@ -2785,7 +2790,7 @@ class ManagePanel(QWidget):
             writer = PdfWriter()
             readers = {}
             def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p)
+                if p not in readers: readers[p] = PdfReader(p, strict=False)
                 return readers[p]
             for i, uid in enumerate(self.model.order):
                 if i == insert_at:
@@ -2832,12 +2837,12 @@ class ManagePanel(QWidget):
             writer  = PdfWriter()
             readers = {}
             def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p)
+                if p not in readers: readers[p] = PdfReader(p, strict=False)
                 return readers[p]
             for i, uid in enumerate(self.model.order):
                 if i == insert_at:
                     for p in paths:
-                        for page in PdfReader(p).pages:
+                        for page in PdfReader(p, strict=False).pages:
                             writer.add_page(page)
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
                 page = _rdr(src_path).pages[orig]
@@ -2848,13 +2853,13 @@ class ManagePanel(QWidget):
             # Falls insert_at am Ende
             if insert_at >= len(self.model.order):
                 for p in paths:
-                    for page in PdfReader(p).pages:
+                    for page in PdfReader(p, strict=False).pages:
                         writer.add_page(page)
 
             tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
             with open(tmp, "wb") as f: writer.write(f)
             AppState.get().result_ready.emit(tmp, "Zusammengefuehrt")
-            n_pages = sum(len(PdfReader(p).pages) for p in paths)
+            n_pages = sum(len(PdfReader(p, strict=False).pages) for p in paths)
             pos_txt = f"nach Seite {insert_at}" if insert_at < len(self.model.order) else "am Ende"
             self.status.setText(f"OK: {n_pages} Seite(n) {pos_txt} eingefuegt")
         except Exception as e:
@@ -2873,7 +2878,7 @@ class ManagePanel(QWidget):
         try:
             readers = {}
             def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p)
+                if p not in readers: readers[p] = PdfReader(p, strict=False)
                 return readers[p]
             writer = PdfWriter()
             for uid in self.model.order:
@@ -2898,7 +2903,7 @@ class ManagePanel(QWidget):
         try:
             readers = {}
             def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p)
+                if p not in readers: readers[p] = PdfReader(p, strict=False)
                 return readers[p]
             stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
             # If pages are selected only split those, otherwise split all in model order
@@ -2927,7 +2932,7 @@ class ManagePanel(QWidget):
         try:
             readers = {}
             def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p)
+                if p not in readers: readers[p] = PdfReader(p, strict=False)
                 return readers[p]
             stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
             uids = ([uid for uid in self.model.order if uid in self.model.selected]
@@ -2960,7 +2965,7 @@ class ManagePanel(QWidget):
         try:
             readers = {}
             def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p)
+                if p not in readers: readers[p] = PdfReader(p, strict=False)
                 return readers[p]
             stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
             uid_list = list(self.model.order)
@@ -3634,7 +3639,7 @@ class PrintDialog(QDialog):
             import subprocess
             try:
                 result = subprocess.run(
-                    ["lpstat", "-a"], capture_output=True, text=True)
+                    ["lpstat", "-a"], capture_output=True, text=True, timeout=15)
                 for line in result.stdout.splitlines():
                     parts = line.split()
                     if parts:
@@ -4548,7 +4553,7 @@ class PdfTab(QWidget):
         from pypdf import PdfReader, PdfWriter
         readers = {}
         def _rdr(p):
-            if p not in readers: readers[p] = PdfReader(p)
+            if p not in readers: readers[p] = PdfReader(p, strict=False)
             return readers[p]
         writer = PdfWriter()
         for uid in self.model.order:
@@ -4820,7 +4825,7 @@ class FileGrid(QWidget):
         to = self._pos_from_point(e.position().toPoint())
         self._drop_indicator = -1; self.update()
         try: self.handle_drop(int(e.mimeData().text()), to)
-        except: pass
+        except (ValueError, IndexError): pass
         e.acceptProposedAction()
 
     def remove_selected(self):
@@ -5462,6 +5467,10 @@ class PageViewerPanel(QWidget):
         self.tabs_changed.emit()
 
     def _close_tab(self, idx):
+        w = self.tabs.widget(idx)
+        if isinstance(w, PdfTab):
+            _ThumbnailCache.evict_tab(w.pdf_path)
+            _FullPageCache.evict_tab(w.pdf_path)
         self.tabs.removeTab(idx)
         self.tabs_changed.emit()
 
@@ -5506,6 +5515,8 @@ class PageViewerPanel(QWidget):
             if wi >= 0:
                 self.tabs.removeTab(wi)
             self._update_toolbar()
+            try: shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            except Exception: pass
 
         widget.merge_confirmed.connect(_on_confirmed)
         widget.cancelled.connect(_on_cancelled)
@@ -5539,7 +5550,7 @@ class PageViewerPanel(QWidget):
                 from pypdf import PdfWriter, PdfReader
                 writer = PdfWriter()
                 for path in valid:
-                    for page in PdfReader(path).pages:
+                    for page in PdfReader(path, strict=False).pages:
                         writer.add_page(page)
                 out = os.path.join(self._tmp_dir, "zusammengefuehrt.pdf")
                 with open(out, "wb") as f:
@@ -5593,6 +5604,8 @@ class PageViewerPanel(QWidget):
             # Tab-Pfad aktualisieren und Tab umbenennen
             tab.pdf_path = path
             tab.single.pdf_path = path
+            tab.model.foreign_src = {uid: (path, orig)
+                                     for uid, (old_path, orig) in tab.model.foreign_src.items()}
             idx  = self.tabs.indexOf(tab)
             name = os.path.basename(path)
             disp = name if len(name) <= 22 else name[:19] + "..."
@@ -5625,7 +5638,7 @@ class PageViewerPanel(QWidget):
         for i in range(self.tabs.count()):
             tab = self.tabs.widget(i)
             if isinstance(tab, PdfTab) and tab is not active_widget:
-                for t in tab.single._prerender_tasks:
+                for t in list(tab.single._prerender_tasks):
                     t.cancel()
                 tab.single._prerender_tasks.clear()
                 # Evict full-page renders for this tab, keeping only its current page

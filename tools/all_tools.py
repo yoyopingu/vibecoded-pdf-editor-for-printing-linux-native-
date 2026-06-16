@@ -240,6 +240,14 @@ class MergeSplitPanel(BasePanel):
         if paths: self.merge_list.add_files(paths)
 
     def _do_merge(self):
+        if getattr(self, '_merging', False): return
+        self._merging = True
+        try:
+            self._do_merge_impl()
+        finally:
+            self._merging = False
+
+    def _do_merge_impl(self):
         from pypdf import PdfWriter, PdfReader
         paths = self.merge_list.get_paths()
         if not paths: self.log.log("Mindestens eine PDF hinzufuegen.", error=True); return
@@ -249,13 +257,21 @@ class MergeSplitPanel(BasePanel):
         try:
             writer = PdfWriter()
             for p in paths:
-                for page in PdfReader(p).pages: writer.add_page(page)
+                for page in PdfReader(p, strict=False).pages: writer.add_page(page)
             with open(out, "wb") as f: writer.write(f)
             self.log.log(f"{len(paths)} Dateien zusammengefuehrt")
             self.open_result(out, "Zusammengefuehrt")
         except Exception as e: self.log.log(str(e), error=True)
 
     def _do_split(self):
+        if getattr(self, '_splitting', False): return
+        self._splitting = True
+        try:
+            self._do_split_impl()
+        finally:
+            self._splitting = False
+
+    def _do_split_impl(self):
         from pypdf import PdfReader, PdfWriter
         try: src = self.require_pdf()
         except ValueError as e: self.log.log(str(e), error=True); return
@@ -365,8 +381,10 @@ class CompressPanel(BasePanel):
         else:
             import pikepdf
             pdf = pikepdf.open(src)
-            pdf.save(out, compress_streams=True, recompress_flate=True)
-            pdf.close()
+            try:
+                pdf.save(out, compress_streams=True, recompress_flate=True)
+            finally:
+                pdf.close()
 
         size_after = os.path.getsize(out)
         ratio = (1 - size_after / size_before) * 100 if size_before else 0
@@ -873,7 +891,7 @@ class PageNumbersPanel(BasePanel):
         reader = PdfReader(src); writer = PdfWriter()
         n=len(reader.pages); skip=self.skip_spin.value()
         start=self.start_spin.value(); fs=self.font_spin.value()
-        margin=self.margin_spin.value(); pos=self.pos.currentText()
+        margin=self.margin_spin.value(); pos_idx=self.pos.currentIndex()
         prefix=self.prefix.text(); suffix=self.suffix.text()
         for i, page in enumerate(reader.pages):
             if i < skip: writer.add_page(page); continue
@@ -883,11 +901,17 @@ class PageNumbersPanel(BasePanel):
             packet = io.BytesIO()
             c = rl_canvas.Canvas(packet, pagesize=(pw,ph))
             c.setFont("Helvetica", fs)
-            y = margin if "Unten" in pos else ph-margin-fs
-            x = pw/2 if "Mitte" in pos else (margin if "Links" in pos else pw-margin)
-            if "Mitte" in pos: c.drawCentredString(x,y,label)
-            elif "Links" in pos: c.drawString(x,y,label)
-            else: c.drawRightString(x,y,label)
+            # position by index: 0=Mitte/Unten, 1=Links/Unten, 2=Rechts/Unten,
+            #                    3=Mitte/Oben,  4=Links/Oben,  5=Rechts/Oben
+            bottom = pos_idx < 3
+            h_mode = pos_idx % 3   # 0=center, 1=left, 2=right
+            y = margin if bottom else ph - margin - fs
+            if h_mode == 0:
+                x = pw / 2; c.drawCentredString(x, y, label)
+            elif h_mode == 1:
+                x = margin; c.drawString(x, y, label)
+            else:
+                x = pw - margin; c.drawRightString(x, y, label)
             c.save(); packet.seek(0)
             from pypdf import PdfReader as PR
             page.merge_page(PR(packet).pages[0]); writer.add_page(page)
@@ -953,13 +977,17 @@ class ImgPdfPanel(BasePanel):
         self.log.clear_log(); QApplication.processEvents()
         try:
             from pdf2image import convert_from_path
+            from pypdf import PdfReader
             fmt=self.fmt.currentText().lower(); ext={"jpeg":"jpg"}.get(fmt,fmt)
-            pages=convert_from_path(src, dpi=self.dpi.value())
+            n_pages = len(PdfReader(src).pages)
             stem=os.path.splitext(os.path.basename(src))[0]
-            for i,img in enumerate(pages,1):
+            for i in range(0, n_pages, 10):
                 QApplication.processEvents()
-                img.save(os.path.join(out_dir,f"{stem}_s{i:03d}.{ext}"),fmt.upper())
-            self.log.log(f"{len(pages)} Bilder exportiert")
+                end = min(i+10, n_pages)
+                pages=convert_from_path(src, dpi=self.dpi.value(), first_page=i+1, last_page=end)
+                for j, img in enumerate(pages):
+                    img.save(os.path.join(out_dir, f"{stem}_s{i+j+1:03d}.{ext}"), fmt.upper())
+            self.log.log(f"{n_pages} Bilder exportiert")
         except Exception as e: self.log.log(str(e), error=True)
 
     def _run_action(self): pass
@@ -1140,6 +1168,8 @@ class GrayscalePanel(BasePanel):
         self._manual_skip  = set()
         self._last_click   = None
         self._already_grey = set()
+        self._scanned_path = ""
+        self._scanning     = False
         # Shared thumbnail pipeline — same cache as PageGrid, same render queue
         self._grey_thumb_gen  = 0
         self._grey_thumb_sigs = _ThumbSignals()
@@ -1200,7 +1230,7 @@ class GrayscalePanel(BasePanel):
 
     def showEvent(self, e):
         super().showEvent(e)
-        if not self._page_data:
+        if self._scanned_path != self.current_pdf() or not self._page_data:
             QTimer.singleShot(200, self._scan)
 
     def _reclassify(self):
@@ -1349,8 +1379,11 @@ class GrayscalePanel(BasePanel):
         self._status_total.setText(f"{tr('Gesamt')}: {n_total}")
 
     def _scan(self):
+        if self._scanning:
+            return
+        self._scanning = True
         try: src = self.require_pdf()
-        except ValueError as e: self.log.log(str(e), error=True); return
+        except ValueError as e: self.log.log(str(e), error=True); self._scanning = False; return
         self.log.clear_log()
         self._page_data.clear(); self._grey_pages.clear()
         self._manual_sel.clear(); self._manual_skip.clear(); self._last_click = None
@@ -1409,11 +1442,13 @@ class GrayscalePanel(BasePanel):
             except Exception: pass
             self._update_preview_borders()
             self._load_preview_pixmaps_async(src)
+            self._scanned_path = src
         except Exception as e: self.log.log(str(e), error=True)
+        self._scanning = False
 
     def _run_action(self):
         src = self.require_pdf()
-        if not self._page_data:
+        if self._scanned_path != src or not self._page_data:
             self._scan()
         if not self._page_data:
             raise ValueError(tr("Bitte zuerst eine PDF öffnen."))
@@ -1787,6 +1822,15 @@ class PreflightPanel(BasePanel):
         self.report.setPlaceholderText(tr("Pruefung starten...")); layout.addWidget(self.report)
 
     def _run_action(self):
+        if getattr(self, '_preflighting', False):
+            raise RuntimeError(tr("Pruefung laeuft bereits — bitte warten."))
+        self._preflighting = True
+        try:
+            return self._do_preflight()
+        finally:
+            self._preflighting = False
+
+    def _do_preflight(self):
         src=self.require_pdf()
         from pypdf import PdfReader; import pypdfium2 as pdfium
         reader=PdfReader(src); doc=pdfium.PdfDocument(src)
@@ -1859,7 +1903,7 @@ class LayersPanel(BasePanel):
             for ref in oc.get_object().get("/OCGs",ArrayObject()):
                 obj=ref.get_object(); name=str(obj.get("/Name","(unbenannt)"))
                 cb=QCheckBox("  "+name); cb.setChecked(True)
-                self.cb_layout.addWidget(cb); self._cbs.append((ref,cb))
+                self.cb_layout.addWidget(cb); self._cbs.append((ref.idnum, cb))
             self.log.log(f"{len(self._cbs)} Ebene(n) gefunden.")
         except Exception as e: self.log.log(str(e),error=True)
 
@@ -1870,16 +1914,40 @@ class LayersPanel(BasePanel):
         src=self.require_pdf()
         out=self.save_pdf("PDF speichern als")
         if not out: raise ValueError("Kein Ausgabepfad.")
+        from pypdf import PdfReader, PdfWriter
+        from pypdf.generic import ArrayObject, NameObject
+        reader = PdfReader(src)
+        writer = PdfWriter(); writer.append(reader)
+        if self._cbs:
+            root = writer.trailer["/Root"]
+            oc = root.get("/OCProperties")
+            if oc:
+                oc_obj = oc.get_object()
+                checked = {idnum for idnum, cb in self._cbs if cb.isChecked()}
+                on_arr  = ArrayObject()
+                off_arr = ArrayObject()
+                for ref in oc_obj.get("/OCGs", ArrayObject()):
+                    if ref.idnum in checked:
+                        on_arr.append(ref)
+                    else:
+                        off_arr.append(ref)
+                oc_obj[NameObject("/ON")] = on_arr
+                if off_arr:
+                    oc_obj[NameObject("/OFF")] = off_arr
+        with open(out, "wb") as f: writer.write(f)
         if self.flatten.isChecked() and shutil.which("gs"):
-            cmd=["gs","-sDEVICE=pdfwrite","-dCompatibilityLevel=1.5",
-                 "-dNOPAUSE","-dBATCH","-dQUIET",f"-sOutputFile={out}",src]
-            r=subprocess.run(cmd,capture_output=True,text=True,timeout=300)
-            if r.returncode!=0: raise RuntimeError(r.stderr.strip())
-        else:
-            from pypdf import PdfReader,PdfWriter
-            writer=PdfWriter(); writer.append(PdfReader(src))
-            with open(out,"wb") as f: writer.write(f)
-        self.open_result(out,"Ebenen reduziert")
+            import tempfile
+            fd, flat = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+            try:
+                cmd=["gs","-sDEVICE=pdfwrite","-dCompatibilityLevel=1.5",
+                     "-dNOPAUSE","-dBATCH","-dQUIET",f"-sOutputFile={flat}",out]
+                r=subprocess.run(cmd,capture_output=True,text=True,timeout=300)
+                if r.returncode!=0: raise RuntimeError(r.stderr.strip())
+                os.replace(flat, out)
+            finally:
+                try: os.remove(flat)
+                except OSError: pass
+        self.open_result(out,"Ebenen verarbeitet")
         return "Ebenen verarbeitet"
 
 
@@ -1983,6 +2051,8 @@ class ColourProfilePanel(BasePanel):
                             found.add("/DeviceCMYK")
                         if re.search(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+r[gG]\b', text):
                             found.add("/DeviceRGB")
+                        if re.search(r'[\d.]+\s+[gG]\b', text):
+                            found.add("/DeviceGray")
                     except Exception: pass
             n_pages = len(pdf.pages)
             pdf.close()
@@ -2169,7 +2239,7 @@ def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False):
             page_i = sheet_i * n_slot + slot_i
             if page_i >= len(src_pages): break
             src_pi = src_pages[page_i]
-            if src_pi is None: continue
+            if src_pi is None or src_pi >= len(src_doc.pages): continue
             x0, y0, x1, y1 = rects[slot_i]
             sheet.add_overlay(Page(src_doc.pages[src_pi]), Rectangle(x0, y0, x1, y1))
             placed += 1

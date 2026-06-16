@@ -322,6 +322,12 @@ class MultiOpenDialog(QDialog):
         self.setModal(True)
         self._build()
 
+    def done(self, result_code):
+        """Clean up temp directory on close."""
+        try: shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        except Exception: pass
+        super().done(result_code)
+
     def _build(self):
         from tools.page_viewer import _TV
         lay = QVBoxLayout(self)
