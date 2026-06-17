@@ -280,7 +280,7 @@ class MergeSplitPanel(BasePanel):
         if not out_dir: return
         self.log.clear_log(); QApplication.processEvents()
         try:
-            reader = PdfReader(src); stem = os.path.splitext(os.path.basename(src))[0]
+            reader = PdfReader(src, strict=False); stem = os.path.splitext(os.path.basename(src))[0]
             n = len(reader.pages); saved = []
             if self.radio_each.isChecked():
                 for i, page in enumerate(reader.pages):
@@ -637,12 +637,32 @@ class CropResizePanel(BasePanel):
             return [(model.orig(uid), uid)]
         return []
 
+    def _base_page(self, pdf_path, page_idx):
+        """Render the page once at a fixed base resolution and cache it; returns
+        (base_pil, page_w_pt, page_h_pt). pdfium runs only when the page or
+        document actually changes — never on resize/zoom/margin edits."""
+        key = (pdf_path, page_idx)
+        cache = getattr(self, "_base_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1], cache[2], cache[3]
+        import pypdfium2 as pdfium
+        with _pdfium_lock:
+            doc = pdfium.PdfDocument(pdf_path)
+            try:
+                page = doc[page_idx]
+                pw = page.get_width(); ph = page.get_height()
+                base_scale = 1400.0 / max(pw, ph, 1.0)   # fixed preview resolution
+                base_pil = page.render(scale=base_scale).to_pil()
+            finally:
+                doc.close()
+        self._base_cache = (key, base_pil, pw, ph)
+        return base_pil, pw, ph
+
     def _render_preview(self, avail_w, avail_h, zoom):
         pdf_path = AppState.get().current_pdf
         if not pdf_path or not os.path.isfile(pdf_path):
             self._sel_info.setText("")
             return None, tr("Keine PDF geoeffnet")
-        import pypdfium2 as pdfium, io
         from PyQt6.QtCore import Qt as _Qt2
         from PIL import Image as PILImage
 
@@ -653,37 +673,28 @@ class CropResizePanel(BasePanel):
         elif n_pages > 1:             self._sel_info.setText(f"{n_pages} {tr('Seiten')}")
         else:                         self._sel_info.setText(f"{tr('Seite')} {page_idx+1}")
 
-        doc  = pdfium.PdfDocument(pdf_path)
-        try:
-            page = doc[page_idx]
-            pw   = page.get_width(); ph = page.get_height()
+        # Render the page ONCE at a fixed base resolution (cached per page). Every
+        # resize / zoom / margin / format change then only re-scales this cached
+        # image (cheap) instead of re-rendering via pdfium — that re-render is what
+        # made dragging the sidebar and editing the custom size hang on big PDFs.
+        base_pil, pw, ph = self._base_page(pdf_path, page_idx)
 
-            t_pt = self.ct.value()  * MM_TO_PT
-            b_pt = self.cb2.value() * MM_TO_PT
-            l_pt = self.cl2.value() * MM_TO_PT
-            r_pt = self.cr.value()  * MM_TO_PT
+        t_pt = self.ct.value()  * MM_TO_PT
+        b_pt = self.cb2.value() * MM_TO_PT
+        l_pt = self.cl2.value() * MM_TO_PT
+        r_pt = self.cr.value()  * MM_TO_PT
 
-            new_w = max(1., pw - l_pt - r_pt)
-            new_h = max(1., ph - t_pt - b_pt)
-            do_scale = self.scale_check.isChecked()
+        new_w = max(1., pw - l_pt - r_pt)
+        new_h = max(1., ph - t_pt - b_pt)
+        do_scale = self.scale_check.isChecked()
 
-            cs_fit    = min(avail_w / new_w, avail_h / new_h) * zoom
-            cs_orig   = min(avail_w / pw,    avail_h / ph)    * zoom
-            cs_render = max(cs_fit, cs_orig)
-            cs        = cs_fit
+        cs = min(avail_w / new_w, avail_h / new_h) * zoom
+        cw_px = max(1, int(new_w * cs))
+        ch_px = max(1, int(new_h * cs))
 
-            cw_px = max(1, int(new_w * cs))
-            ch_px = max(1, int(new_h * cs))
-
-            with _pdfium_lock:
-                bm  = page.render(scale=cs_render)
-                pil = bm.to_pil()
-        finally:
-            doc.close()
-        if cs_render > cs * 1.01:
-            target_w = max(1, int(pw * cs))
-            target_h = max(1, int(ph * cs))
-            pil = pil.resize((target_w, target_h), PILImage.LANCZOS)
+        target_w = max(1, int(pw * cs)); target_h = max(1, int(ph * cs))
+        pil = (base_pil if base_pil.size == (target_w, target_h)
+               else base_pil.resize((target_w, target_h), PILImage.LANCZOS))
 
         changed = any([t_pt, b_pt, l_pt, r_pt])
 
@@ -766,7 +777,7 @@ class CropResizePanel(BasePanel):
 
         if self.apply_all.isChecked():
             from pypdf import PdfReader as _PR
-            target_origs = set(range(len(_PR(src_path).pages)))
+            target_origs = set(range(len(_PR(src_path, strict=False).pages)))
         else:
             target_pages = self._get_target_pages()
             if not target_pages: raise ValueError("Keine Seiten ausgewaehlt.")
@@ -888,7 +899,7 @@ class PageNumbersPanel(BasePanel):
         if not out: raise ValueError("Kein Ausgabepfad.")
         from pypdf import PdfReader, PdfWriter
         from reportlab.pdfgen import canvas as rl_canvas
-        reader = PdfReader(src); writer = PdfWriter()
+        reader = PdfReader(src, strict=False); writer = PdfWriter()
         n=len(reader.pages); skip=self.skip_spin.value()
         start=self.start_spin.value(); fs=self.font_spin.value()
         margin=self.margin_spin.value(); pos_idx=self.pos.currentIndex()
@@ -979,7 +990,7 @@ class ImgPdfPanel(BasePanel):
             from pdf2image import convert_from_path
             from pypdf import PdfReader
             fmt=self.fmt.currentText().lower(); ext={"jpeg":"jpg"}.get(fmt,fmt)
-            n_pages = len(PdfReader(src).pages)
+            n_pages = len(PdfReader(src, strict=False).pages)
             stem=os.path.splitext(os.path.basename(src))[0]
             for i in range(0, n_pages, 10):
                 QApplication.processEvents()
@@ -1537,7 +1548,7 @@ class ImposePanel(BasePanel):
         out = self.save_pdf(tr("Ausgeschossene PDF speichern als"))
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
 
-        reader = PdfReader(src)
+        reader = PdfReader(src, strict=False)
         pages  = list(reader.pages)
         n_orig = len(pages)
         target_w, target_h = self._get_target_size(pages)
@@ -1667,7 +1678,7 @@ class FormsPanel(BasePanel):
                 item.widget().deleteLater()
         try:
             from pypdf import PdfReader
-            fields=PdfReader(src).get_fields()
+            fields=PdfReader(src, strict=False).get_fields()
             if not fields: self.log.log("Keine Formularfelder gefunden."); return
             for name,field in fields.items():
                 ft=field.get("/FT",""); val=field.get("/V","")
@@ -1685,7 +1696,7 @@ class FormsPanel(BasePanel):
         out=self.save_pdf("Ausgefuelltes Formular speichern als")
         if not out: raise ValueError("Kein Ausgabepfad.")
         from pypdf import PdfReader, PdfWriter
-        reader=PdfReader(src); writer=PdfWriter(); writer.append(reader)
+        reader=PdfReader(src, strict=False); writer=PdfWriter(); writer.append(reader)
         data={name: ("/Yes" if (isinstance(w,QCheckBox) and w.isChecked()) else
                      "/Off" if isinstance(w,QCheckBox) else w.text())
               for name,w in self._fields.items()}
@@ -1830,7 +1841,7 @@ class PreflightPanel(BasePanel):
     def _do_preflight(self):
         src=self.require_pdf()
         from pypdf import PdfReader; import pypdfium2 as pdfium
-        reader=PdfReader(src); doc=pdfium.PdfDocument(src)
+        reader=PdfReader(src, strict=False); doc=pdfium.PdfDocument(src)
         try:
             n=len(reader.pages); issues=[]; oks=[]
             if self.chk_enc.isChecked():
@@ -1894,7 +1905,7 @@ class LayersPanel(BasePanel):
         self._cbs.clear()
         try:
             from pypdf import PdfReader; from pypdf.generic import ArrayObject
-            reader=PdfReader(src); root=reader.trailer["/Root"]; oc=root.get("/OCProperties")
+            reader=PdfReader(src, strict=False); root=reader.trailer["/Root"]; oc=root.get("/OCProperties")
             if not oc: self.no_layers.setVisible(True); self.log.log("Keine Ebenen gefunden."); return
             self.no_layers.setVisible(False)
             for ref in oc.get_object().get("/OCGs",ArrayObject()):
@@ -1913,7 +1924,7 @@ class LayersPanel(BasePanel):
         if not out: raise ValueError("Kein Ausgabepfad.")
         from pypdf import PdfReader, PdfWriter
         from pypdf.generic import ArrayObject, NameObject
-        reader = PdfReader(src)
+        reader = PdfReader(src, strict=False)
         writer = PdfWriter(); writer.append(reader)
         if self._cbs:
             root = writer.trailer["/Root"]
@@ -1956,6 +1967,23 @@ class ColourProfilePanel(BasePanel):
     SUBTITLE      = "ICC-Profile pruefen und in CMYK umwandeln."
     OPENS_NEW_TAB = True
 
+    # (label incl. real profile name + paper/use-case, candidate .icc filenames).
+    # The generic option needs no ICC file; the named ones use the matching .icc
+    # via Ghostscript when present (drop them in ~/.local/share/copyshop_pdf_suite/icc/).
+    CMYK_PROFILES = [
+        ("Standard (generisch) — universell, ohne ICC-Datei", None),
+        ("ISO Coated v2 (FOGRA39) — gestrichenes Papier, EU-Offset-Standard",
+            ("ISOcoated_v2_eci.icc", "ISOcoated_v2_300_eci.icc")),
+        ("PSO Coated v3 (FOGRA51) — modernes gestrichenes Papier, Premium-Offset",
+            ("PSOcoated_v3.icc",)),
+        ("PSO Uncoated v3 (FOGRA52) — ungestrichenes/Naturpapier, Bücher & Briefbögen",
+            ("PSOuncoated_v3_FOGRA52.icc", "PSO_Uncoated_ISO12647_eci.icc")),
+        ("U.S. Web Coated (SWOP) v2 — US-Rollenoffset, Magazine (gestrichen)",
+            ("USWebCoatedSWOP.icc",)),
+        ("Coated GRACoL 2006 — US-Bogenoffset, hochwertiges gestrichenes Papier",
+            ("GRACoL2006_Coated1v2.icc", "CGATS21_CRPC6.icc")),
+    ]
+
     def build_ui(self, layout):
         ib=QPushButton(tr("  Farbprofil pruefen")); ib.setObjectName("secondaryBtn")
         ib.clicked.connect(self._inspect); layout.addWidget(ib)
@@ -1966,26 +1994,35 @@ class ColourProfilePanel(BasePanel):
         cl.addWidget(make_label(tr(
             "Konvertiert via Ghostscript nach DeviceCMYK. "
             "Qualitaetsstufe: Prepress (hoechste Qualitaet, alle Fonts eingebettet)."), dim=True))
+        self.profile_combo = QComboBox()
+        for label, cands in self.CMYK_PROFILES:
+            self.profile_combo.addItem(tr(label), cands)
+        cl.addLayout(row(tr("CMYK-Profil:"), self.profile_combo))
+        cl.addWidget(make_label(tr(
+            "Benannte Profile nutzen die passende .icc-Datei aus "
+            "~/.local/share/copyshop_pdf_suite/icc/ — fehlt sie, wird generisch "
+            "konvertiert."), dim=True))
         gs_ok = bool(shutil.which("gs"))
         status = tr("✓  Ghostscript verfuegbar") if gs_ok else tr("✗  Ghostscript fehlt  →  sudo pacman -S ghostscript")
         cl.addWidget(make_label(status, dim=True))
         layout.addWidget(cb)
 
-    def _find_icc(self):
-        """Sucht das FOGRA39-ICC-Profil. Gibt Pfad zurück oder None."""
-        import glob
-        candidates = [
-            # Von install.sh installiert
-            os.path.expanduser("~/.local/share/copyshop_pdf_suite/icc/ISOcoated_v2_eci.icc"),
-            os.path.expanduser("~/.local/share/copyshop_pdf_suite/icc/ISOcoated_v2_300_eci.icc"),
-            # System-Pfade
-            "/usr/share/color/icc/ISOcoated_v2_eci.icc",
-            "/usr/share/color/icc/colord/ISOcoated_v2_eci.icc",
+    def _resolve_icc(self, candidates):
+        """Return the path to the first available .icc among `candidates`
+        (searching the app icc dir + common system dirs), or None."""
+        if not candidates:
+            return None
+        dirs = [
+            os.path.expanduser("~/.local/share/copyshop_pdf_suite/icc/"),
+            "/usr/share/color/icc/",
+            "/usr/share/color/icc/colord/",
         ]
-        # Alle .icc-Dateien im icc-Verzeichnis der App
-        app_icc = os.path.expanduser("~/.local/share/copyshop_pdf_suite/icc/")
-        candidates += glob.glob(os.path.join(app_icc, "*.icc"))
-        return next((p for p in candidates if os.path.isfile(p)), None)
+        for name in candidates:
+            for d in dirs:
+                p = os.path.join(d, name)
+                if os.path.isfile(p):
+                    return p
+        return None
 
     def _inspect(self):
         try: src=self.require_pdf()
@@ -2094,6 +2131,11 @@ class ColourProfilePanel(BasePanel):
         # -dEncodeColorImages=false / -dEncodeGrayImages=false verhindert
         # Neukomprimierung und Qualitätsverlust bei Bildern.
         # -dPDFSETTINGS=/prepress: höchste Qualität, Fonts eingebettet.
+        # Selected CMYK target profile (None = generic). Use its .icc if present.
+        candidates = self.profile_combo.currentData()
+        icc = self._resolve_icc(candidates)
+        prof_label = self.profile_combo.currentText().split(" — ")[0]
+
         cmd = [
             "gs",
             "-o", out,
@@ -2105,8 +2147,10 @@ class ColourProfilePanel(BasePanel):
             "-sProcessColorModel=DeviceCMYK",
             "-sColorConversionStrategy=CMYK",
             "-sColorConversionStrategyForImages=CMYK",
-            src,
         ]
+        if icc:
+            cmd.append(f"-sOutputICCProfile={icc}")   # convert to this named CMYK space
+        cmd.append(src)
 
         r = sp.run(cmd, capture_output=True, text=True, timeout=300)
 
@@ -2139,8 +2183,17 @@ class ColourProfilePanel(BasePanel):
         except Exception:
             verify = "(Verifikation nicht möglich)"
 
+        if icc:
+            prof_note = f"Profil: {prof_label}  ({os.path.basename(icc)})"
+        elif candidates:
+            prof_note = (f"⚠  Profil '{prof_label}' nicht installiert — generische "
+                         f"CMYK-Konvertierung verwendet.\n"
+                         f"   .icc-Datei nach ~/.local/share/copyshop_pdf_suite/icc/ legen.")
+        else:
+            prof_note = "Profil: Standard (generisch)"
+
         self.open_result(out, "CMYK konvertiert")
-        return f"Konvertierung abgeschlossen.\n{verify}"
+        return f"Konvertierung abgeschlossen.\n{prof_note}\n{verify}"
 
 
 def _fmt(b):
@@ -2457,7 +2510,10 @@ class NUpPanel(BasePanel):
             slot_pages = [page_idx] * n_slot
 
         # Fetch each needed page image from the shared cache (async if missing).
-        render_w = max(80, ((int(min(slot_w, src_pw) * cs) // 50) + 1) * 50)
+        # Width is fixed to the slot's point size (independent of the display
+        # scale), so dragging the sidebar / zooming reuses the cached render
+        # instead of triggering a fresh one each time.
+        render_w = max(120, min(800, int(min(slot_w, src_pw))))
         pm_by_page = {}; any_pending = False
         for pg in {p for p in slot_pages if p is not None}:
             img = self._page_image(pdf_path, pg, render_w)
@@ -2514,7 +2570,7 @@ class NUpPanel(BasePanel):
         src_path = self.require_pdf()
         out_path = self.save_pdf(tr("N-Up PDF speichern als"))
         if not out_path: raise ValueError(tr("Kein Ausgabepfad."))
-        reader  = PdfReader(src_path); n_total = len(reader.pages)
+        reader  = PdfReader(src_path, strict=False); n_total = len(reader.pages)
         cols = self.cols.value(); rows = self.rows.value(); n_slot = cols * rows
         if self.src_combo.currentIndex() == 1:
             # Each page repeated to fill its own sheet (n_slot copies per page).

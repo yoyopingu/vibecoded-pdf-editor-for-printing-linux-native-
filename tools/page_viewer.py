@@ -2742,7 +2742,7 @@ class ManagePanel(QWidget):
             from pypdf import PdfReader, PdfWriter
             import tempfile
             self._save_history()
-            reader = PdfReader(self.pdf_path)
+            reader = PdfReader(self.pdf_path, strict=False)
             pw = float(reader.pages[0].mediabox.width)
             ph = float(reader.pages[0].mediabox.height)
             if self.model.selected:
@@ -2776,7 +2776,7 @@ class ManagePanel(QWidget):
             from pypdf import PdfReader, PdfWriter
             self._save_history()
             import tempfile
-            reader_ins = PdfReader(path)
+            reader_ins = PdfReader(path, strict=False)
             n_ins = len(reader_ins.pages)
             if self.model.selected:
                 positions = [i for i, u in enumerate(self.model.order)
@@ -3016,7 +3016,7 @@ class ManagePanel(QWidget):
         readers = {}   # cache: path → PdfReader
         def get_reader(path):
             if path not in readers:
-                readers[path] = PdfReader(path)
+                readers[path] = PdfReader(path, strict=False)
             return readers[path]
         writer = PdfWriter()
         for uid in self.model.order:
@@ -4478,7 +4478,7 @@ class PdfTab(QWidget):
     def _load(self):
         try:
             from pypdf import PdfReader
-            n = len(PdfReader(self.pdf_path).pages)
+            n = len(PdfReader(self.pdf_path, strict=False).pages)
             self.model = PageModel(n)
             self.single.load(self.pdf_path, self.model)
             AppState.get().page_model   = self.model
@@ -5006,7 +5006,7 @@ class MergeOrderWidget(QWidget):
         if ext == ".pdf":
             try:
                 from pypdf import PdfReader
-                self._inf_pages.setText(f"Seiten: {len(PdfReader(path).pages)}")
+                self._inf_pages.setText(f"Seiten: {len(PdfReader(path, strict=False).pages)}")
             except Exception: self._inf_pages.setText("Seiten: ?")
         else:
             self._inf_pages.setText("Seiten: nach Konvertierung")

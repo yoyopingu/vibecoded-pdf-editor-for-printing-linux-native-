@@ -247,6 +247,20 @@ def test_greyscale_vector():
     return "ok"
 
 
+def test_cmyk_profiles():
+    if not shutil.which("gs"):
+        return "SKIP (no ghostscript)"
+    _open(FX["color"])
+    p = T.ColourProfilePanel()
+    assert p.profile_combo.count() >= 5, "expected several CMYK profile options"
+    o = os.path.join(_TMP, "cmyk.pdf")
+    p.save_pdf = lambda *a, **k: o; p.open_result = lambda *a, **k: None
+    p.profile_combo.setCurrentIndex(1)          # a named profile (falls back if .icc absent)
+    p._run_action()
+    assert len(PdfReader(o).pages) >= 1, "CMYK conversion produced no valid output"
+    return "ok"
+
+
 def test_output_validity():
     """Every tool (incl. the multi-button Merge / Image→PDF and the transformers)
     must produce a valid, openable PDF — guards against silent corruption."""
