@@ -17,7 +17,8 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QSplitter, QGridLayout
 )
 from PyQt6.QtCore import Qt, QTimer, QEvent
-from PyQt6.QtGui import QPixmap, QImage, QKeySequence, QShortcut
+from PyQt6.QtGui import (QPixmap, QImage, QKeySequence, QShortcut,
+                         QPainter, QPen, QColor, QBrush)
 from tools.app_state import AppState, theme_color
 from tools._base     import BasePanel, FileDropList, make_label, make_separator, LogBox, CurrentFileBar
 from tools.i18n      import tr
@@ -642,7 +643,6 @@ class CropResizePanel(BasePanel):
             self._sel_info.setText("")
             return None, tr("Keine PDF geoeffnet")
         import pypdfium2 as pdfium, io
-        from PyQt6.QtGui import QPainter, QPen, QColor, QBrush
         from PyQt6.QtCore import Qt as _Qt2
         from PIL import Image as PILImage
 
@@ -1112,7 +1112,6 @@ class GrayscalePanel(BasePanel):
         outer.addWidget(splitter)
 
     def eventFilter(self, obj, e):
-        from PyQt6.QtCore import QEvent
         if (hasattr(self, '_preview_scroll') and
                 obj is self._preview_scroll.viewport() and
                 e.type() == QEvent.Type.Wheel):
@@ -1246,7 +1245,6 @@ class GrayscalePanel(BasePanel):
                      f"{len(self._page_data)-len(self._grey_pages)} {tr('bleiben unveraendert')}")
 
     def _build_preview(self, n_pages):
-        from PyQt6.QtWidgets import QGridLayout
         container = QWidget()
         container.setStyleSheet(f"background:{theme_color('BG')};")
         self._preview_scroll.setWidget(container)
@@ -1277,7 +1275,6 @@ class GrayscalePanel(BasePanel):
     def _relayout_preview(self):
         container = self._preview_scroll.widget()
         if not container or not self._preview_cards: return
-        from PyQt6.QtWidgets import QGridLayout
         CARD_W = self._card_w; GAP = 8; MARGIN = 10
         vp_w = self._preview_scroll.viewport().width() or 600
         cols = max(2, (vp_w - 2*MARGIN + GAP) // (CARD_W + 12 + GAP))
@@ -2438,7 +2435,7 @@ class NUpPanel(BasePanel):
         return _ThumbnailCache.get_any(pdf_path, page_idx, 0)
 
     def _render_preview(self, avail_w, avail_h, zoom):
-        from PyQt6.QtGui import QPainter, QPen, QColor, QBrush as _QB
+        from PyQt6.QtGui import QBrush as _QB
         pdf_path = AppState.get().current_pdf
         if not pdf_path or not os.path.isfile(pdf_path):
             return None, tr("Keine PDF geöffnet")

@@ -2232,7 +2232,7 @@ class PageGrid(QWidget):
             except (ValueError, IndexError): return
         else:
             try: from_pos = int(text)
-            except: return
+            except Exception: return
             self.handle_drop(from_pos, to_pos)
 
     # Public
@@ -5002,12 +5002,12 @@ class MergeOrderWidget(QWidget):
         self._inf_name.setText(os.path.basename(path))
         self._inf_type.setText(f"Typ: {self.FILE_KINDS.get(ext, ext.upper().lstrip('.'))}")
         try: self._inf_size.setText(f"Groesse: {os.path.getsize(path)/1024:.0f} KB")
-        except: self._inf_size.setText("")
+        except Exception: self._inf_size.setText("")
         if ext == ".pdf":
             try:
                 from pypdf import PdfReader
                 self._inf_pages.setText(f"Seiten: {len(PdfReader(path).pages)}")
-            except: self._inf_pages.setText("Seiten: ?")
+            except Exception: self._inf_pages.setText("Seiten: ?")
         else:
             self._inf_pages.setText("Seiten: nach Konvertierung")
         paths = self._grid.get_paths()
