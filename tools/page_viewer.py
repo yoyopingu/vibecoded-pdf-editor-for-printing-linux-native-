@@ -3463,6 +3463,7 @@ class PrintDialog(QDialog):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.pdf_path = pdf_path
         self.model    = model
+        self._progress = None       # transfer-progress popup while a job spools
         self.setWindowTitle("Drucken")
         self.setMinimumSize(820, 540)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -3722,7 +3723,7 @@ class PrintDialog(QDialog):
         outer.addWidget(bottom)
 
         # Deliver print-job results from the worker thread to the GUI thread.
-        self._print_status.connect(self.status_lbl.setText)
+        self._print_status.connect(self._on_print_status)
         self._print_finished.connect(self._finish)
         self._print_failed.connect(self._on_print_failed)
         self._print_qt_send.connect(lambda a: self._qt_send_to_printer(*a))
@@ -3869,8 +3870,7 @@ class PrintDialog(QDialog):
         self.printer_combo.blockSignals(False)
 
         self.printer_combo.currentIndexChanged.connect(self._on_printer_changed)
-        self._on_printer_changed()
-        self._detect_pdf_paper()
+        self._on_printer_changed()   # applies the printer's own defaults
 
     # Fallback paper list used when printer reports no supported sizes
     _FALLBACK_PAPERS = [
@@ -3892,6 +3892,18 @@ class PrintDialog(QDialog):
             info = QPrinterInfo.printerInfo(printer_name) if have_info else None
             valid = info is not None and not info.isNull()
 
+            _qt_to_lp = {
+                QPageSize.PageSizeId.A4:        "A4",
+                QPageSize.PageSizeId.A3:        "A3",
+                QPageSize.PageSizeId.A5:        "A5",
+                QPageSize.PageSizeId.Letter:    "Letter",
+                QPageSize.PageSizeId.Legal:     "Legal",
+                QPageSize.PageSizeId.B4:        "B4",
+                QPageSize.PageSizeId.B5:        "B5",
+                QPageSize.PageSizeId.Executive: "Executive",
+                QPageSize.PageSizeId.Folio:     "Folio",
+            }
+
             # ── Paper sizes ───────────────────────────────────────────────────
             prev_paper = self.paper_combo.currentData()
             self.paper_combo.blockSignals(True)
@@ -3902,17 +3914,6 @@ class PrintDialog(QDialog):
                 try:
                     supported = info.supportedPageSizes()
                     if supported:
-                        _qt_to_lp = {
-                            QPageSize.PageSizeId.A4:        "A4",
-                            QPageSize.PageSizeId.A3:        "A3",
-                            QPageSize.PageSizeId.A5:        "A5",
-                            QPageSize.PageSizeId.Letter:    "Letter",
-                            QPageSize.PageSizeId.Legal:     "Legal",
-                            QPageSize.PageSizeId.B4:        "B4",
-                            QPageSize.PageSizeId.B5:        "B5",
-                            QPageSize.PageSizeId.Executive: "Executive",
-                            QPageSize.PageSizeId.Folio:     "Folio",
-                        }
                         seen = set()
                         for ps in supported:
                             key = _qt_to_lp.get(ps.id(), ps.name())
@@ -3930,8 +3931,17 @@ class PrintDialog(QDialog):
                 for label, key in self._FALLBACK_PAPERS:
                     self.paper_combo.addItem(label, key)
 
-            if prev_paper:
-                idx = self.paper_combo.findData(prev_paper)
+            # Default to the printer's OWN default page size (fall back to the
+            # previously selected paper, then the first entry).
+            default_paper = None
+            if valid:
+                try:
+                    default_paper = _qt_to_lp.get(info.defaultPageSize().id())
+                except Exception:
+                    pass
+            target_paper = default_paper or prev_paper
+            if target_paper:
+                idx = self.paper_combo.findData(target_paper)
                 if idx >= 0:
                     self.paper_combo.setCurrentIndex(idx)
             self.paper_combo.blockSignals(False)
@@ -3944,12 +3954,17 @@ class PrintDialog(QDialog):
                 except AttributeError:
                     can_duplex = True
                 self.duplex_check.setEnabled(can_duplex)
-                if not can_duplex:
-                    self.duplex_check.setChecked(False)
-                    self.duplex_check.setToolTip(
-                        "Dieser Drucker unterstützt kein Duplex-Drucken.")
-                else:
-                    self.duplex_check.setToolTip("")
+                # Default to the printer's OWN duplex default.
+                default_duplex = False
+                try:
+                    default_duplex = (info.defaultDuplexMode()
+                                      != QPrinter.DuplexMode.DuplexNone)
+                except Exception:
+                    pass
+                self.duplex_check.setChecked(can_duplex and default_duplex)
+                self.duplex_check.setToolTip(
+                    "" if can_duplex
+                    else "Dieser Drucker unterstützt kein Duplex-Drucken.")
             else:
                 # Generic/unknown printer — re-enable so user can try
                 self.duplex_check.setEnabled(True)
@@ -3966,14 +3981,22 @@ class PrintDialog(QDialog):
                     except AttributeError:
                         can_color = True
                 self.color_combo.setEnabled(can_color)
+                # Default to the printer's OWN colour default (e.g. a queue set
+                # to monochrome opens in Graustufen; the user can still switch).
+                default_gray = False
+                try:
+                    default_gray = (info.defaultColorMode()
+                                    == QPrinter.ColorMode.GrayScale)
+                except Exception:
+                    pass
+                self.color_combo.blockSignals(True)
+                self.color_combo.setCurrentIndex(
+                    0 if (can_color and not default_gray) else 1)
+                self.color_combo.blockSignals(False)
                 self.colorconv_combo.setEnabled(
                     can_color and self.color_combo.currentIndex() == 0)
-                if not can_color:
-                    self.color_combo.setCurrentIndex(1)
-                    self.color_combo.setToolTip(
-                        "Dieser Drucker druckt nur in Graustufen.")
-                else:
-                    self.color_combo.setToolTip("")
+                self.color_combo.setToolTip(
+                    "" if can_color else "Dieser Drucker druckt nur in Graustufen.")
             else:
                 self.color_combo.setEnabled(True)
                 self.color_combo.setToolTip("")
@@ -4176,6 +4199,19 @@ class PrintDialog(QDialog):
         self.status_lbl.setText(
             f"Sende {n} Seite(n) an »{self.printer_combo.currentText()}«…")
         self._set_printing(True)
+
+        # Progress popup — shows the transfer stages as they happen.
+        from PyQt6.QtWidgets import QProgressDialog
+        self._progress = QProgressDialog(
+            "Druckauftrag wird vorbereitet…", "", 0, 100, self)
+        self._progress.setWindowTitle("Drucken")
+        self._progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._progress.setCancelButton(None)       # a spooling job can't be cancelled
+        self._progress.setMinimumDuration(0)
+        self._progress.setAutoClose(False)
+        self._progress.setAutoReset(False)
+        self._progress.setValue(8)
+        self._progress.show()
         QApplication.processEvents()
 
         # ── Query printer DPI on GUI thread — QPrinter must not be used from ──
@@ -4246,9 +4282,38 @@ class PrintDialog(QDialog):
 
         threading.Thread(target=_bg, daemon=True).start()
 
-    def _on_print_failed(self, msg):
+    def _progress_pct(self, msg):
+        """Map a status message to an approximate transfer-progress percentage."""
+        import re
+        m = re.search(r'Seite\s+(\d+)\s*/\s*(\d+)', msg)
+        if m:   # per-page rendering (Qt fallback) gives a real fraction
+            x, tot = int(m.group(1)), max(1, int(m.group(2)))
+            return 15 + int(60 * x / tot)
+        low = msg.lower()
+        if "zusammenstellen" in low:                    return 20
+        if "ghostscript" in low or "normalisierung" in low: return 50
+        if "sende an drucker" in low:                   return 85
+        if "fallback" in low or "render" in low:        return 30
+        return None
+
+    def _on_print_status(self, msg):
         self.status_lbl.setText(msg)
-        self._set_printing(False)
+        if self._progress is not None:
+            self._progress.setLabelText(msg)
+            pct = self._progress_pct(msg)
+            if pct is not None:
+                # Only ever advance the bar, never jump backwards.
+                self._progress.setValue(max(self._progress.value(), pct))
+
+    def _close_progress(self):
+        if self._progress is not None:
+            self._progress.close()
+            self._progress = None
+
+    def _on_print_failed(self, msg):
+        self._close_progress()
+        self.status_lbl.setText(msg)
+        self._set_printing(False)   # keep the dialog open so the user can retry
 
     def _finish(self, pages, copies, skipped):
         total = len(pages) * copies
@@ -4257,8 +4322,15 @@ class PrintDialog(QDialog):
         if skipped:
             msg += f"  (Übersprungen: S. {skipped})"
         self.status_lbl.setText(msg)
-        self._set_printing(False)
-        QTimer.singleShot(2500, self.close)
+        if self._progress is not None:
+            self._progress.setLabelText("Fertig — an Drucker gesendet.")
+            self._progress.setValue(100)
+        # Briefly show 100 %, then close the popup AND the print dialog.
+        QTimer.singleShot(600, self._after_print_close)
+
+    def _after_print_close(self):
+        self._close_progress()
+        self.accept()
 
     def _recenter_on_paper(self, src_path, dest_path, paper_w_pt, paper_h_pt):
         """Enlarge every page's media box to the full physical sheet size and
