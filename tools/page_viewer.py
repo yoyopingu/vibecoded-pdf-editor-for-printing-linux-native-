@@ -3488,19 +3488,7 @@ class PrintDialog(QDialog):
         rl.addWidget(_sec("DRUCKER"))
         self.printer_combo = QComboBox()
         self._hw_margin_mm = 3.0
-        printer_row = QHBoxLayout()
-        printer_row.setContentsMargins(0, 0, 0, 0)
-        printer_row.setSpacing(6)
-        printer_row.addWidget(self.printer_combo, 1)
-        self._props_btn = QPushButton("Eigenschaften…")
-        self._props_btn.setObjectName("secondaryBtn")
-        self._props_btn.setToolTip(
-            "Öffnet den treiberspezifischen Eigenschaftsdialog des Druckers.\n"
-            "Hier können druckerspezifische Optionen wie Papierquelle, Qualität,\n"
-            "Heftung oder Farbprofil eingestellt werden.")
-        self._props_btn.clicked.connect(self._open_printer_properties)
-        printer_row.addWidget(self._props_btn)
-        rl.addLayout(printer_row)
+        rl.addWidget(self.printer_combo)
         rl.addWidget(_sep())
 
         # ── SEITEN ───────────────────────────────────────────────────────────
@@ -3736,97 +3724,6 @@ class PrintDialog(QDialog):
         self.printer_combo.currentIndexChanged.connect(self._on_printer_changed)
         self._on_printer_changed()
         self._detect_pdf_paper()
-
-    def _open_printer_properties(self):
-        """Opens the driver-specific printer properties dialog via Qt's QPrintDialog.
-
-        QPrintDialog includes a 'Properties' button that invokes the system's native
-        printer driver UI — the same one Acrobat shows.  We pre-configure the QPrinter
-        from our current dialog state and read back any changes afterwards.
-        """
-        try:
-            from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo, QPrintDialog
-            from PyQt6.QtGui import QPageLayout
-
-            printer_name = self.printer_combo.currentData()
-            if not printer_name or printer_name == "none":
-                return
-
-            # Build a QPrinter that mirrors what the user has selected so far
-            if printer_name != "lp":
-                info = QPrinterInfo.printerInfo(printer_name)
-                printer = (QPrinter(info, QPrinter.PrinterMode.HighResolution)
-                           if not info.isNull()
-                           else QPrinter(QPrinter.PrinterMode.HighResolution))
-            else:
-                printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-
-            # Mirror current dialog state into the QPrinter so the driver dialog
-            # opens with matching settings
-            printer.setCopyCount(self.copies_spin.value())
-            printer.setCollateCopies(self.collate_check.isChecked())
-            if self.duplex_check.isChecked():
-                printer.setDuplex(QPrinter.DuplexMode.DuplexLongSide)
-            if self.color_combo.currentIndex() == 1:
-                printer.setColorMode(QPrinter.ColorMode.GrayScale)
-
-            paper_key = self.paper_combo.currentData() or "A4"
-            _lp_to_qt = {
-                "A4": QPrinter.PageSize.A4,   "A3": QPrinter.PageSize.A3,
-                "A5": QPrinter.PageSize.A5,   "Letter": QPrinter.PageSize.Letter,
-                "Legal": QPrinter.PageSize.Legal, "B4": QPrinter.PageSize.B4,
-                "B5": QPrinter.PageSize.B5,
-            }
-            printer.setPageSize(_lp_to_qt.get(paper_key, QPrinter.PageSize.A4))
-
-            orient_idx = self.orient_combo.currentIndex()
-            if orient_idx == 1:
-                printer.setPageOrientation(QPageLayout.Orientation.Portrait)
-            elif orient_idx == 2:
-                printer.setPageOrientation(QPageLayout.Orientation.Landscape)
-
-            # Open Qt's print dialog — it provides the "Properties" button that
-            # calls into the system's native printer driver UI
-            dlg = QPrintDialog(printer, self)
-            dlg.setWindowTitle(f"Druckereigenschaften — {self.printer_combo.currentText()}")
-            if dlg.exec():
-                # Read back settings the user may have changed inside the driver dialog
-                self.copies_spin.setValue(printer.copyCount())
-                self.collate_check.setChecked(printer.collateCopies())
-                self.duplex_check.setChecked(
-                    printer.duplex() != QPrinter.DuplexMode.DuplexNone)
-                if printer.colorMode() == QPrinter.ColorMode.GrayScale:
-                    self.color_combo.setCurrentIndex(1)
-                # Read back page size
-                size_id = printer.pageLayout().pageSize().id()
-                from PyQt6.QtGui import QPageSize
-                _qt_to_lp = {
-                    QPageSize.PageSizeId.A4:     "A4",
-                    QPageSize.PageSizeId.A3:     "A3",
-                    QPageSize.PageSizeId.A5:     "A5",
-                    QPageSize.PageSizeId.Letter: "Letter",
-                    QPageSize.PageSizeId.Legal:  "Legal",
-                    QPageSize.PageSizeId.B4:     "B4",
-                    QPageSize.PageSizeId.B5:     "B5",
-                }
-                lp_key = _qt_to_lp.get(size_id)
-                if lp_key:
-                    idx = self.paper_combo.findData(lp_key)
-                    if idx >= 0:
-                        self.paper_combo.setCurrentIndex(idx)
-                # Read back orientation
-                orient = printer.pageLayout().orientation()
-                if orient == QPageLayout.Orientation.Portrait:
-                    self.orient_combo.setCurrentIndex(1)
-                elif orient == QPageLayout.Orientation.Landscape:
-                    self.orient_combo.setCurrentIndex(2)
-
-        except ImportError:
-            self.status_lbl.setText(
-                "Qt PrintSupport nicht verfügbar — "
-                "Druckereigenschaften können nicht geöffnet werden.")
-        except Exception as e:
-            self.status_lbl.setText(f"Fehler beim Öffnen der Druckereigenschaften: {e}")
 
     # Fallback paper list used when printer reports no supported sizes
     _FALLBACK_PAPERS = [
@@ -4091,7 +3988,7 @@ class PrintDialog(QDialog):
                   self.color_combo, self.colorconv_combo,
                   self.collate_check, self.duplex_check,
                   self.radio_all, self.radio_current, self.radio_range,
-                  self.range_edit, self._props_btn]:
+                  self.range_edit]:
             w.setEnabled(not busy)
         for btn in self.findChildren(QPushButton):
             btn.setEnabled(not busy)
