@@ -1060,60 +1060,58 @@ class GrayscalePanel(BasePanel):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(4)
-        splitter.setStyleSheet(f"QSplitter::handle{{background:{theme_color('LINE')};}}")
+        self._tool_splitter = splitter
 
         # ── Left: shared standardized sidebar ─────────────────────────────
         splitter.addWidget(self.build_tool_sidebar())
 
         # ── Right: preview grid ───────────────────────────────────────────
-        right_w = QWidget()
-        right_w.setStyleSheet(f"background:{theme_color('BG')};")
+        right_w = QWidget(); right_w.setObjectName("toolRightPanel")
+        self._tool_right_w = right_w
         right_layout = QVBoxLayout(right_w)
         right_layout.setContentsMargins(0, 0, 0, 0); right_layout.setSpacing(0)
 
         zoom_bar = QWidget(); zoom_bar.setFixedHeight(32)
-        zoom_bar.setStyleSheet(f"background:{theme_color('SIDE')};border-bottom:1px solid {theme_color('LINE')};")
+        self._gs_zoombar = zoom_bar
         zbl = QHBoxLayout(zoom_bar); zbl.setContentsMargins(8, 0, 8, 0); zbl.setSpacing(4)
+        self._gs_legend_lbls = []
         for color, text in [("#3a8a3a", tr("Grün = konvertiert")),
                              ("#2176ae", tr("Blau = erzwungen")),
                              ("#e67e22", tr("Orange = übersprungen")),
                              ("#c0392b", tr("Rot = Farbe"))]:
             dot = QLabel("■"); dot.setStyleSheet(f"color:{color};font-size:13px;background:transparent;")
-            lbl = QLabel(text); lbl.setStyleSheet(f"color:{theme_color('DIM')};font-size:11px;background:transparent;")
+            lbl = QLabel(text)
+            self._gs_legend_lbls.append(lbl)
             zbl.addWidget(dot); zbl.addWidget(lbl); zbl.addSpacing(6)
         zbl.addStretch()
         self._card_w = 90
         self._preview_cards = []
+        self._gs_zoombtns = []
         for txt, fn in [("−", self._zoom_out), ("fit", self._zoom_reset), ("+", self._zoom_in)]:
             zb = QPushButton(txt); zb.setFixedSize(32, 22)
-            zb.setStyleSheet(
-                f"QPushButton{{background:{theme_color('PANEL')};color:{theme_color('TEXT')};"
-                f"border:1px solid {theme_color('LINE')};border-radius:3px;font-size:11px;padding:0;}}"
-                f"QPushButton:hover{{background:{theme_color('HOVER')};}}")
+            self._gs_zoombtns.append(zb)
             zb.clicked.connect(fn); zbl.addWidget(zb)
         right_layout.addWidget(zoom_bar)
 
         self._preview_scroll = QScrollArea()
         self._preview_scroll.setWidgetResizable(True)
         self._preview_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._preview_scroll.setStyleSheet(f"QScrollArea{{background:{theme_color('BG')};border:none;}}")
         self._preview_scroll.wheelEvent = self._preview_wheel
         self._preview_scroll.viewport().installEventFilter(self)
 
         placeholder = QLabel(tr("← PDF öffnen um Vorschau zu laden"))
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setStyleSheet(f"color:{theme_color('LINE')};font-size:14px;background:{theme_color('BG')};")
+        self._gs_placeholder = placeholder
         self._preview_scroll.setWidget(placeholder)
         right_layout.addWidget(self._preview_scroll, 1)
 
         status_bar = QWidget(); status_bar.setFixedHeight(28)
-        status_bar.setStyleSheet(f"background:{theme_color('SIDE')};border-top:1px solid {theme_color('LINE')};")
+        self._gs_statusbar = status_bar
         sbl = QHBoxLayout(status_bar); sbl.setContentsMargins(12, 0, 12, 0); sbl.setSpacing(20)
         self._status_sw    = QLabel(f"🖤  {tr('SW')}: —")
         self._status_color = QLabel(f"🎨  {tr('Farbe')}: —")
         self._status_total = QLabel(f"{tr('Gesamt')}: —")
         for lbl in [self._status_sw, self._status_color, self._status_total]:
-            lbl.setStyleSheet(f"color:{theme_color('DIM')};font-size:11px;background:transparent;")
             sbl.addWidget(lbl)
         sbl.addStretch()
         right_layout.addWidget(status_bar)
@@ -1121,6 +1119,41 @@ class GrayscalePanel(BasePanel):
         splitter.addWidget(right_w)
         splitter.setSizes([400, 800])
         outer.addWidget(splitter)
+
+        # Follow light/dark theme switches (see NUpPanel._apply_theme).
+        _register_themed(self)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        t = _TV
+        self._tool_left_w.setStyleSheet(
+            f"QWidget#toolLeftPanel{{background:{t['panel_bg']};}}")
+        self._tool_right_w.setStyleSheet(
+            f"QWidget#toolRightPanel{{background:{t['viewer_bg']};}}")
+        self._tool_splitter.setStyleSheet(
+            f"QSplitter::handle{{background:{t['splitter']};}}")
+        self._gs_zoombar.setStyleSheet(
+            f"background:{t['sidebar_bg']};border-bottom:1px solid {t['border']};")
+        self._gs_statusbar.setStyleSheet(
+            f"background:{t['sidebar_bg']};border-top:1px solid {t['border']};")
+        self._preview_scroll.setStyleSheet(
+            f"QScrollArea{{background:{t['viewer_bg']};border:none;}}")
+        for zb in self._gs_zoombtns:
+            zb.setStyleSheet(
+                f"QPushButton{{background:{t['panel_bg']};color:{t['text']};"
+                f"border:1px solid {t['border']};border-radius:3px;font-size:11px;padding:0;}}"
+                f"QPushButton:hover{{background:{t['hover']};}}")
+        for lbl in (self._gs_legend_lbls +
+                    [self._status_sw, self._status_color, self._status_total]):
+            lbl.setStyleSheet(
+                f"color:{t['dim']};font-size:11px;background:transparent;")
+        ph = getattr(self, '_gs_placeholder', None)
+        if ph is not None:
+            try:
+                ph.setStyleSheet(
+                    f"color:{t['dim']};font-size:14px;background:{t['viewer_bg']};")
+            except RuntimeError:
+                self._gs_placeholder = None   # replaced by cards after a PDF loads
 
     def eventFilter(self, obj, e):
         if (hasattr(self, '_preview_scroll') and
@@ -2330,11 +2363,12 @@ class NUpPanel(BasePanel):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         splitter = QSplitter(_Qt.Orientation.Horizontal)
-        splitter.setStyleSheet(f"QSplitter::handle{{background:{theme_color('LINE')};width:2px;}}")
+        self._tool_splitter = splitter
 
         splitter.addWidget(self.build_tool_sidebar())
 
-        right_w = QWidget(); right_w.setStyleSheet(f"background:{theme_color('BG')};")
+        right_w = QWidget(); right_w.setObjectName("toolRightPanel")
+        self._tool_right_w = right_w
         right_l = QVBoxLayout(right_w)
         right_l.setContentsMargins(0, 0, 0, 0); right_l.setSpacing(0)
 
@@ -2342,13 +2376,27 @@ class NUpPanel(BasePanel):
         self._pane = PreviewPane(self._render_preview, header="Vorschau (erstes Blatt)")
         self._preview      = self._pane.label
         self._preview_info = self._pane.info
-        self._preview.setStyleSheet(f"background:{theme_color('BG')};")
         right_l.addWidget(self._pane)
 
         splitter.addWidget(right_w)
         splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1)
         splitter.setSizes([400, 700])
         outer.addWidget(splitter, 1)
+
+        # Register so the sidebar/preview follow light/dark theme switches
+        # (built-once theme_color() strings would otherwise stay dark).
+        _register_themed(self)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        t = _TV
+        self._tool_left_w.setStyleSheet(
+            f"QWidget#toolLeftPanel{{background:{t['panel_bg']};}}")
+        self._tool_right_w.setStyleSheet(
+            f"QWidget#toolRightPanel{{background:{t['viewer_bg']};}}")
+        self._preview.setStyleSheet(f"background:{t['card_bg']};")
+        self._tool_splitter.setStyleSheet(
+            f"QSplitter::handle{{background:{t['splitter']};width:2px;}}")
 
     def _update_preview(self):
         # Bridge for this panel's widget-value connections.

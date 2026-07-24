@@ -1507,42 +1507,73 @@ class SinglePageView(QWidget):
             pdf = self._pikepdf_doc
             page = pdf.pages[page_idx]
             cs_names = set()
-            res = page.get("/Resources")
-            if res:
-                cs_d = res.get("/ColorSpace")
-                if cs_d and isinstance(cs_d, pikepdf.Dictionary):
-                    for v in cs_d.values():
-                        try:
-                            cs_names.add(str(v[0]) if isinstance(v, pikepdf.Array) else str(v))
-                        except Exception:
-                            pass
-                xobj = res.get("/XObject")
-                if xobj and isinstance(xobj, pikepdf.Dictionary):
-                    for v in xobj.values():
-                        try:
-                            if v.get("/Subtype") == pikepdf.Name("/Image"):
-                                cs = v.get("/ColorSpace")
-                                if cs:
-                                    cs_names.add(str(cs[0]) if isinstance(cs, pikepdf.Array) else str(cs))
-                        except Exception:
-                            pass
-            try:
-                contents = page.get("/Contents")
-                stream = b""
-                if isinstance(contents, pikepdf.Array):
-                    for c in contents:
-                        stream += bytes(c.read_bytes())
-                elif contents:
-                    stream = bytes(contents.read_bytes())
-                text = stream.decode("latin-1", errors="replace")
-                if _re.search(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+r[gG]\b', text):
-                    cs_names.add("/DeviceRGB")
-                if _re.search(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[kK]\b', text):
-                    cs_names.add("/DeviceCMYK")
-                if _re.search(r'[\d.]+\s+[gG]\b', text):
-                    cs_names.add("/DeviceGray")
-            except Exception:
-                pass
+
+            # Regexes for content-stream colour operators (fill + stroke).
+            _re_rgb  = _re.compile(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+(?:rg|RG)\b')
+            _re_cmyk = _re.compile(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[kK]\b')
+            _re_gray = _re.compile(r'(?:^|[^\d.])[\d.]+\s+[gG]\b')
+
+            def _content_bytes(obj):
+                # A page keeps its stream(s) in /Contents; a Form XObject *is* the
+                # stream, so read it directly.
+                if "/Contents" in obj:
+                    contents = obj.get("/Contents")
+                    data = b""
+                    if isinstance(contents, pikepdf.Array):
+                        for c in contents:
+                            try: data += bytes(c.read_bytes())
+                            except Exception: pass
+                    elif contents is not None:
+                        try: data = bytes(contents.read_bytes())
+                        except Exception: pass
+                    return data
+                try:
+                    return bytes(obj.read_bytes())
+                except Exception:
+                    return b""
+
+            def _scan(obj, depth, seen):
+                # Recurse through Form XObjects so nested content (e.g. N-Up,
+                # stamps, merged pages) is inspected too — otherwise the page's
+                # own stream is just "/Fm0 Do" and no colour is ever found.
+                if depth > 8:
+                    return
+                res = obj.get("/Resources")
+                if res is not None:
+                    cs_d = res.get("/ColorSpace")
+                    if isinstance(cs_d, pikepdf.Dictionary):
+                        for v in cs_d.values():
+                            try:
+                                cs_names.add(str(v[0]) if isinstance(v, pikepdf.Array) else str(v))
+                            except Exception:
+                                pass
+                    xobj = res.get("/XObject")
+                    if isinstance(xobj, pikepdf.Dictionary):
+                        for v in xobj.values():
+                            try:
+                                sub = v.get("/Subtype")
+                                if sub == pikepdf.Name("/Image"):
+                                    cs = v.get("/ColorSpace")
+                                    if cs is not None:
+                                        cs_names.add(str(cs[0]) if isinstance(cs, pikepdf.Array) else str(cs))
+                                elif sub == pikepdf.Name("/Form"):
+                                    try:    key = v.objgen
+                                    except Exception: key = id(v)
+                                    if key not in seen:
+                                        seen.add(key)
+                                        _scan(v, depth + 1, seen)
+                            except Exception:
+                                pass
+                try:
+                    text = _content_bytes(obj).decode("latin-1", errors="replace")
+                    if _re_rgb.search(text):  cs_names.add("/DeviceRGB")
+                    if _re_cmyk.search(text): cs_names.add("/DeviceCMYK")
+                    if _re_gray.search(text): cs_names.add("/DeviceGray")
+                except Exception:
+                    pass
+
+            _scan(page, 0, set())
+
             has_rgb  = bool(cs_names & {"/DeviceRGB", "/CalRGB", "/ICCBased"})
             has_cmyk = "/DeviceCMYK" in cs_names
             has_gray = bool(cs_names & {"/DeviceGray", "/CalGray"})
