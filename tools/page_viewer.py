@@ -3050,6 +3050,12 @@ class ManagePanel(QWidget):
 class _PrintPreview(QWidget):
     """Left-side print preview panel — mirrors Acrobat's layout preview."""
 
+    # Delivers a finished background render to the GUI thread. A signal is
+    # auto-queued across threads; the previous QTimer.singleShot(0, …) was
+    # created ON the render thread, which has no event loop, so it never fired
+    # and the preview stayed blank forever.
+    _render_ready = pyqtSignal(int, object, float, float)
+
     # Physical paper sizes in mm  (width × height in portrait)
     _PAPER_MM = {
         "A4":        (210.0, 297.0), "A3":     (297.0, 420.0),
@@ -3061,6 +3067,7 @@ class _PrintPreview(QWidget):
 
     def __init__(self, pdf_path, model, parent=None):
         super().__init__(parent)
+        self._render_ready.connect(self._on_render_done)
         self._pdf_path  = pdf_path
         self._model     = model
         self._current   = 0
@@ -3202,14 +3209,13 @@ class _PrintPreview(QWidget):
                 buf = io.BytesIO()
                 pil.save(buf, "PNG")
                 data = buf.getvalue()
-                def _deliver():
-                    obj = self_ref()
-                    if obj is not None:
-                        try:
-                            obj._on_render_done(snap, data, pw_pt, ph_pt)
-                        except RuntimeError:
-                            pass   # widget was deleted
-                QTimer.singleShot(0, _deliver)
+                obj = self_ref()
+                if obj is not None:
+                    try:
+                        # Auto-queued to the GUI thread (widget lives there).
+                        obj._render_ready.emit(snap, data, pw_pt, ph_pt)
+                    except RuntimeError:
+                        pass   # widget was deleted
             except Exception:
                 pass
         threading.Thread(target=_bg, daemon=True).start()
@@ -3387,6 +3393,13 @@ class PrintDialog(QDialog):
             QLineEdit, QCheckBox, QLabel, QPushButton,
             QVBoxLayout, QHBoxLayout, QFrame, QScrollArea, QWidget
         )
+
+        # Solid themed background. Without this the dialog inherits the system
+        # palette; on a light desktop the transparent settings pane then shows
+        # light, and the (light) theme text/labels become invisible — the
+        # "invisible hitboxes". Painting the panel colour keeps text readable
+        # regardless of the OS theme.
+        self.setStyleSheet(f"QDialog{{background:{_TV['panel_bg']};}}")
 
         # ── Layout helpers ────────────────────────────────────────────────────
         def _sep():
