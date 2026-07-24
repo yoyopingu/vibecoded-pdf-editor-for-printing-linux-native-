@@ -3363,11 +3363,17 @@ class _PrintPreview(QWidget):
         QTimer.singleShot(0, self._redraw)
 
 
+_PRINTER_LIST_CACHE = None   # (names:list[str], default:str) — filled on first enumerate
+
+
 class PrintDialog(QDialog):
     """
     Vollstaendiger Druckdialog mit allen gaengigen Optionen.
     Verwendet Qt QPrinter wenn verfuegbar, sonst Ghostscript/lp als Fallback.
     """
+
+    # Delivers the async-enumerated printer list to the GUI thread.
+    _printers_loaded = pyqtSignal(list, str)
 
     # Exact paper dimensions in points (portrait baseline, ISO 216)
     _PAPER_PTS = {
@@ -3450,11 +3456,18 @@ class PrintDialog(QDialog):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("background:transparent;border:none;")
+        # Scope to QScrollArea — a bare "border:none;" here cascades to every
+        # child widget and strips the comboboxes'/buttons' own borders, making
+        # them look like plain text ("invisible" clickable controls).
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
         root.addWidget(scroll, 1)
 
         right = QWidget()
-        right.setStyleSheet("background:transparent;")
+        right.setObjectName("printSettingsPane")
+        # Scope to this widget only, so the transparent background does not
+        # cascade onto the child controls.
+        right.setStyleSheet(
+            "QWidget#printSettingsPane{background:transparent;}")
         scroll.setWidget(right)
         rl = QVBoxLayout(right)
         rl.setContentsMargins(18, 14, 18, 14)
@@ -3637,39 +3650,88 @@ class PrintDialog(QDialog):
         self.orient_combo.currentIndexChanged.connect(self._sync_preview)
 
     def _load_printers(self):
-        """Laedt verfuegbare Drucker und verbindet Aenderungssignal."""
-        self.printer_combo.clear()
-        try:
-            from PyQt6.QtPrintSupport import QPrinterInfo
-            printers = QPrinterInfo.availablePrinters()
-            for p in printers:
-                self.printer_combo.addItem(p.printerName(), p.printerName())
-            if not printers:
-                self.printer_combo.addItem("Standard-Drucker (lp)", "lp")
-        except ImportError:
-            import subprocess
-            try:
-                result = subprocess.run(
-                    ["lpstat", "-a"], capture_output=True, text=True, timeout=15)
-                for line in result.stdout.splitlines():
-                    parts = line.split()
-                    if parts:
-                        self.printer_combo.addItem(parts[0], parts[0])
-            except Exception:
-                self.printer_combo.addItem("Standard-Drucker (lp)", "lp")
+        """Populate the printer combo.
 
+        Enumerating printers via CUPS (QPrinterInfo.availablePrinters() or
+        `lpstat -e`) takes ~1–2 s — doing it during construction froze the whole
+        dialog before it appeared. Instead the dialog opens instantly with a
+        placeholder and the list is fetched in a background thread (subprocess —
+        safe off the GUI thread, unlike Qt's print classes). The result is
+        cached for the session so subsequent opens are instant.
+        """
+        self.printer_combo.clear()
+
+        # Session cache → instant repeat opens
+        if _PRINTER_LIST_CACHE is not None:
+            names, default = _PRINTER_LIST_CACHE
+            self._apply_printer_list(names, default)
+            return
+
+        # First open: show a placeholder, fetch the list off-thread
+        self.printer_combo.addItem("Drucker werden geladen…", "none")
+        self.printer_combo.setEnabled(False)
+        self._printers_loaded.connect(self._apply_printer_list)
+
+        import threading, weakref
+        self_ref = weakref.ref(self)
+
+        def _bg():
+            names, default = [], ""
+            try:
+                import subprocess
+                r = subprocess.run(["lpstat", "-e"],
+                                   capture_output=True, text=True, timeout=15)
+                names = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+            except Exception:
+                pass
+            if not names:
+                # Fallback to Qt enumeration if lpstat is unavailable
+                try:
+                    from PyQt6.QtPrintSupport import QPrinterInfo
+                    names = list(QPrinterInfo.availablePrinterNames())
+                except Exception:
+                    pass
+            try:
+                import subprocess
+                r = subprocess.run(["lpstat", "-d"],
+                                   capture_output=True, text=True, timeout=10)
+                out = r.stdout.strip()
+                if ":" in out:
+                    cand = out.split(":", 1)[1].strip()
+                    if cand in names:
+                        default = cand
+            except Exception:
+                pass
+            obj = self_ref()
+            if obj is not None:
+                try:
+                    obj._printers_loaded.emit(names, default)
+                except RuntimeError:
+                    pass   # dialog closed
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _apply_printer_list(self, names, default):
+        """Populate the combo from an enumerated printer list (GUI thread)."""
+        global _PRINTER_LIST_CACHE
+        _PRINTER_LIST_CACHE = (list(names), default)
+
+        try:
+            self.printer_combo.currentIndexChanged.disconnect(self._on_printer_changed)
+        except TypeError:
+            pass   # not connected yet
+
+        self.printer_combo.blockSignals(True)
+        self.printer_combo.clear()
+        self.printer_combo.setEnabled(True)
+        for nm in names:
+            self.printer_combo.addItem(nm, nm)
         if self.printer_combo.count() == 0:
             self.printer_combo.addItem("Kein Drucker gefunden", "none")
-
-        # Pre-select the system default printer before connecting the signal
-        try:
-            from PyQt6.QtPrintSupport import QPrinterInfo
-            default_name = QPrinterInfo.defaultPrinter().printerName()
-            idx = self.printer_combo.findData(default_name)
+        if default:
+            idx = self.printer_combo.findData(default)
             if idx >= 0:
                 self.printer_combo.setCurrentIndex(idx)
-        except Exception:
-            pass
+        self.printer_combo.blockSignals(False)
 
         self.printer_combo.currentIndexChanged.connect(self._on_printer_changed)
         self._on_printer_changed()
