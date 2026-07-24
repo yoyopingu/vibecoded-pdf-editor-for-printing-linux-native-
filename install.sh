@@ -9,7 +9,18 @@
 #
 #  Ausführen mit:  bash install.sh
 # ================================================================
+
+# Muss mit bash laufen (nicht sh/dash): wir nutzen [[ ]], Arrays, pipefail …
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "Dieses Skript benötigt bash. Bitte ausführen mit:  bash install.sh" >&2
+    exit 1
+fi
+
 set -euo pipefail
+
+# Nie stillschweigend abbrechen: bei einem unerwarteten Fehler die Zeile und
+# den Exit-Code melden, statt einfach kommentarlos auszusteigen.
+trap 's=$?; printf "\n  \033[0;31m✗\033[0m  Installer in Zeile %s abgebrochen (Exit-Code %s).\n     Bitte die Ausgabe direkt darüber prüfen.\n" "$LINENO" "$s" >&2' ERR
 
 # ── Farben & Ausgabe ─────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -44,7 +55,9 @@ echo ""
 # ── Update-Erkennung ─────────────────────────────────────────────
 if [ -f "$INSTALL_DIR/main.py" ]; then
     echo -e "  ${YELLOW}CopyShop PDF Suite ist bereits installiert.${NC}"
-    read -rp "  Jetzt aktualisieren / neu installieren? [J/n] " REPLY
+    # "|| REPLY=J": ohne interaktives Terminal (z. B. aus dem Dateimanager
+    # gestartet) liefert read EOF und würde unter 'set -e' sonst still abbrechen.
+    read -rp "  Jetzt aktualisieren / neu installieren? [J/n] " REPLY || REPLY="J"
     REPLY="${REPLY:-J}"
     [[ "$REPLY" =~ ^[JjYy]$ ]] || { echo "  Abgebrochen."; exit 0; }
     echo ""
@@ -438,7 +451,7 @@ echo -e "  Datei öffnen: ${BOLD}copyshop-pdf datei.pdf${NC}"
 echo -e "  Entfernen:    ${BOLD}bash uninstall.sh${NC}"
 echo ""
 
-read -rp "  Jetzt starten? [J/n] " REPLY
+read -rp "  Jetzt starten? [J/n] " REPLY || REPLY="J"
 REPLY="${REPLY:-J}"
 if [[ "$REPLY" =~ ^[JjYy]$ ]]; then
     info "Starte CopyShop PDF Suite..."
