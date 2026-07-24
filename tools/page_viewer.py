@@ -3564,7 +3564,6 @@ class PrintDialog(QDialog):
         copies_row.addWidget(self.copies_spin)
         self.collate_check = QCheckBox("Sortieren  (1,2,3 / 1,2,3)")
         self.collate_check.setChecked(True)
-        self.collate_check.setWordWrap(True)
         copies_row.addWidget(self.collate_check)
         copies_row.addStretch()
         out.addLayout(copies_row, 0, 1)
@@ -3590,7 +3589,6 @@ class PrintDialog(QDialog):
             lambda i: self.colorconv_combo.setEnabled(i == 0))
 
         self.duplex_check = QCheckBox("Beidseitig drucken  (Duplex)")
-        self.duplex_check.setWordWrap(True)
         out.addWidget(self.duplex_check, 3, 0, 1, 2)
 
         rl.addLayout(out)
@@ -3868,8 +3866,8 @@ class PrintDialog(QDialog):
                 try:
                     tmp = QPrinter(info, QPrinter.PrinterMode.ScreenResolution)
                     layout    = tmp.pageLayout()
-                    paper_r   = layout.fullRectMM()
-                    page_r    = layout.paintRectMM()
+                    paper_r   = layout.fullRect(QPageLayout.Unit.Millimeter)
+                    page_r    = layout.paintRect(QPageLayout.Unit.Millimeter)
                     margin = min(
                         abs(page_r.left()    - paper_r.left()),
                         abs(page_r.top()     - paper_r.top()),
