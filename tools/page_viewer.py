@@ -3442,6 +3442,14 @@ class PrintDialog(QDialog):
     # Delivers the async-enumerated printer list to the GUI thread.
     _printers_loaded = pyqtSignal(list, str)
 
+    # Print-job results delivered from the worker thread to the GUI thread.
+    # (A background thread has no event loop, so QTimer.singleShot never fires
+    # there — signals are auto-queued to the GUI thread instead.)
+    _print_status   = pyqtSignal(str)
+    _print_finished = pyqtSignal(object, int, object)   # pages, copies, skipped
+    _print_failed   = pyqtSignal(str)
+    _print_qt_send  = pyqtSignal(object)                # packed args tuple
+
     # Exact paper dimensions in points (portrait baseline, ISO 216)
     _PAPER_PTS = {
         "A4":        (595.28, 841.89),  "A3":     (841.89, 1190.55),
@@ -3500,10 +3508,16 @@ class PrintDialog(QDialog):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return l
 
-        # ── Root layout: preview | divider | settings ──────────────────────
-        root = QHBoxLayout(self)
+        # ── Dialog layout: [ preview | divider | settings ] on top, a pinned
+        #    action bar at the bottom that is ALWAYS visible (outside the scroll
+        #    area, so the Print button never gets clipped on short screens).
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        root = QHBoxLayout()
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        outer.addLayout(root, 1)
 
         # Left: preview panel
         self._preview = _PrintPreview(self.pdf_path, self.model, self)
@@ -3675,15 +3689,24 @@ class PrintDialog(QDialog):
         rl.addLayout(out)
         rl.addStretch(1)
 
-        # Status
+        # ── Pinned action bar (status + buttons), always visible ────────────
+        # Lives in the dialog's vertical layout, OUTSIDE the scroll area, so the
+        # Print button is never clipped when the settings don't fit the height.
+        bottom = QWidget()
+        bottom.setObjectName("printActionBar")
+        bottom.setStyleSheet(
+            f"QWidget#printActionBar{{background:{_TV['panel_bg']};"
+            f"border-top:1px solid {_TV['border']};}}")
+        bl = QVBoxLayout(bottom)
+        bl.setContentsMargins(18, 8, 18, 10); bl.setSpacing(6)
+
         self.status_lbl = QLabel("")
         self.status_lbl.setObjectName("dimLabel")
         self.status_lbl.setWordWrap(True)
-        rl.addWidget(self.status_lbl)
+        bl.addWidget(self.status_lbl)
 
-        # ── Buttons ───────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 8, 0, 0)
+        btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.addStretch()
         cancel_btn = QPushButton("Abbrechen")
         cancel_btn.setObjectName("secondaryBtn")
@@ -3694,7 +3717,15 @@ class PrintDialog(QDialog):
         print_btn.setMinimumWidth(110)
         print_btn.clicked.connect(self._do_print)
         btn_row.addWidget(print_btn)
-        rl.addLayout(btn_row)
+        bl.addLayout(btn_row)
+
+        outer.addWidget(bottom)
+
+        # Deliver print-job results from the worker thread to the GUI thread.
+        self._print_status.connect(self.status_lbl.setText)
+        self._print_finished.connect(self._finish)
+        self._print_failed.connect(self._on_print_failed)
+        self._print_qt_send.connect(lambda a: self._qt_send_to_printer(*a))
 
         # All widgets created — populate printers (triggers _on_printer_changed)
         self._load_printers()
@@ -4171,7 +4202,7 @@ class PrintDialog(QDialog):
             obj = self_ref()
             if obj is not None:
                 try:
-                    QTimer.singleShot(0, lambda: obj.status_lbl.setText(msg))
+                    obj._print_status.emit(msg)   # queued to the GUI thread
                 except RuntimeError:
                     pass
 
@@ -4187,8 +4218,7 @@ class PrintDialog(QDialog):
                         orient_idx, hw_margin_mm, _report)
                     obj = self_ref()
                     if obj is not None:
-                        QTimer.singleShot(0, lambda: obj._finish(
-                            pages_to_print, copies, skipped))
+                        obj._print_finished.emit(pages_to_print, copies, skipped)
                     return
                 except Exception as e:
                     errors.append(f"GS/lp: {e}")
@@ -4205,12 +4235,12 @@ class PrintDialog(QDialog):
                 msg = "Druckfehler:\n" + "\n".join(errors)
                 obj = self_ref()
                 if obj is not None:
-                    QTimer.singleShot(0, lambda: obj._on_print_failed(msg))
+                    obj._print_failed.emit(msg)
                 return
 
             obj = self_ref()
             if obj is not None:
-                QTimer.singleShot(0, lambda: obj._qt_send_to_printer(
+                obj._print_qt_send.emit((
                     rendered, skipped, pages_to_print, copies, grayscale,
                     collate, duplex, printer_name, paper_key, orient_idx))
 
@@ -4311,24 +4341,23 @@ class PrintDialog(QDialog):
             report(f"Seiten zusammenstellen… ({len(pages)})")
             skipped = self._write_subset_pdf(pages, sub_tmp)
             print_src = sub_tmp
+            cups_fit  = (scale_idx == 0)   # used by both the GS + lp branches
 
             if shutil.which("gs"):
                 norm_fd, norm_tmp = tempfile.mkstemp(suffix="_norm.pdf")
                 os.close(norm_fd)
                 report("Ghostscript: Normalisierung und Skalierung…")
 
-                # ── Fit target: printable area vs. full sheet ─────────────────
-                # For "Fit"/"Shrink" the content is fitted to the printable area
-                # (paper minus the printer's unprintable hardware margin) exactly
-                # as the on-screen preview shows it — never to the full sheet,
-                # which would push ~hw_margin_mm of content into the region the
-                # printer cannot physically mark.  A re-centre pass (below) then
-                # places that page in the middle of a full-size sheet.
-                # For "100 %" and for borderless printers (margin ≈ 0) the media
-                # stays full-size and no re-centring is needed.
+                # ── Scaling strategy ──────────────────────────────────────────
+                # "Fit" (scale_idx 0) is delegated to CUPS/pdftopdf, which scales
+                # each page to the driver's REAL imageable area — the printer's
+                # actual margins, exactly like Acrobat's "Fit to Printable Area"
+                # (and it adapts per printer). GS just normalises at natural size.
+                # "Shrink" (scale_idx 2) pre-fits to our printable-area estimate
+                # and re-centres it; "100 %" (scale_idx 1) prints 1:1 on full media.
                 margin_pt = (0.0 if hw_margin_mm < 0.5
                              else hw_margin_mm * 72.0 / 25.4)
-                fit_to_printable = scale_idx in (0, 2) and margin_pt > 0.0
+                fit_to_printable = (scale_idx == 2) and margin_pt > 0.0
                 if fit_to_printable:
                     media_w = max(1.0, pw_pt - 2.0 * margin_pt)
                     media_h = max(1.0, ph_pt - 2.0 * margin_pt)
@@ -4344,15 +4373,18 @@ class PrintDialog(QDialog):
                     "-dSubsetFonts=true",
                     "-dCompressFonts=true",
                     "-dDetectDuplicateImages=true",
-                    # Fix output media to the fit target (printable area or sheet)
-                    f"-dDEVICEWIDTHPOINTS={media_w}",
-                    f"-dDEVICEHEIGHTPOINTS={media_h}",
-                    "-dFIXEDMEDIA",
                 ]
+                if not cups_fit:
+                    # Fix output media to the fit target (printable area or sheet).
+                    gs_cmd += [
+                        f"-dDEVICEWIDTHPOINTS={media_w}",
+                        f"-dDEVICEHEIGHTPOINTS={media_h}",
+                        "-dFIXEDMEDIA",
+                    ]
 
                 # Scaling policy
-                if scale_idx == 0:      # Fit — scale up or down to fill the target
-                    gs_cmd.append("-dPDFFitPage")
+                if cups_fit:
+                    pass                # CUPS fits to the imageable area (see lp -o)
                 elif scale_idx == 2:    # Shrink only — fit if ANY page exceeds target
                     try:
                         import pypdfium2 as pdfium
@@ -4420,8 +4452,11 @@ class PrintDialog(QDialog):
                 cmd += ["-d", printer_name]
             cmd += ["-n", str(copies)]
 
-            # GS already sized the PDF perfectly — tell CUPS not to rescale
-            if print_src in (norm_tmp, recenter_tmp) and not printable_unrecentered:
+            # Scaling: "Fit" → let CUPS fit to the driver's imageable area;
+            # everything else was already sized exactly by GS (+ re-centre).
+            if cups_fit:
+                cmd += ["-o", "fit-to-page"]
+            elif print_src in (norm_tmp, recenter_tmp) and not printable_unrecentered:
                 cmd += ["-o", "print-scaling=none"]
             elif printable_unrecentered:
                 # Re-centre failed: page is printable-area sized — let CUPS fit it
@@ -4430,7 +4465,7 @@ class PrintDialog(QDialog):
             else:
                 # GS unavailable — let CUPS handle scaling
                 if scale_idx == 0:
-                    cmd += ["-o", "print-scaling=fit"]
+                    cmd += ["-o", "fit-to-page"]
                 elif scale_idx == 1:
                     cmd += ["-o", "print-scaling=none"]
                 else:
@@ -4443,8 +4478,16 @@ class PrintDialog(QDialog):
 
             if duplex:
                 cmd += ["-o", "sides=two-sided-long-edge"]
+            # Force the colour mode explicitly so this job overrides the
+            # printer's system-wide default (e.g. a queue whose default is
+            # monochrome must still print in colour when the user picks "Farbe").
+            # print-color-mode is the driver-independent IPP attribute;
+            # ColorModel=Gray is kept as a fallback for older PPD-only drivers.
             if grayscale:
-                cmd += ["-o", "ColorModel=Gray"]
+                cmd += ["-o", "print-color-mode=monochrome",
+                        "-o", "ColorModel=Gray"]
+            else:
+                cmd += ["-o", "print-color-mode=color"]
 
             # Collation via standard IPP multiple-document-handling attribute
             if copies > 1:
@@ -4738,6 +4781,10 @@ class FileCard(QFrame):
     """Thumbnail-Karte für eine Datei — wie PageCard aber für Dateien."""
     clicked  = pyqtSignal(int)   # display_pos
     move_req = pyqtSignal(int, int)  # from_pos, to_pos
+    # Thumbnail render results, delivered from the worker thread to the GUI
+    # thread (QTimer.singleShot never fires off a thread with no event loop).
+    _preview_ready  = pyqtSignal(object)   # PNG bytes
+    _preview_failed = pyqtSignal(str)      # file extension
 
     FILE_ICONS = {
         ".pdf":"📄",".jpg":"🖼",".jpeg":"🖼",".png":"🖼",
@@ -4775,6 +4822,8 @@ class FileCard(QFrame):
         self.lbl.setStyleSheet(f"color:{_TV['dim']};font-size:9px;background:transparent;")
         lay.addWidget(self.lbl)
 
+        self._preview_ready.connect(self._set_preview_data)
+        self._preview_failed.connect(self._set_preview_icon)
         self._load_preview()
         self._update_style()
 
@@ -4795,9 +4844,11 @@ class FileCard(QFrame):
                         doc.close()
                     buf = io.BytesIO(); pil.save(buf, "PNG")
                     data = buf.getvalue()
-                    QTimer.singleShot(0, lambda: self._set_preview_data(data))
+                    try:    self._preview_ready.emit(data)
+                    except RuntimeError: pass   # card was removed
                 except Exception:
-                    QTimer.singleShot(0, lambda: self._set_preview_icon(ext))
+                    try:    self._preview_failed.emit(ext)
+                    except RuntimeError: pass
             threading.Thread(target=_bg, daemon=True).start()
             return
 
