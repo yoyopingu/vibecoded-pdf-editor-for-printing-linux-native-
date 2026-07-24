@@ -4098,7 +4098,7 @@ class PrintDialog(QDialog):
                     skipped = self._print_via_gs(
                         pages_to_print, copies, grayscale, collate, duplex,
                         colorconv, printer_name, scale_idx, paper_key,
-                        orient_idx, _report)
+                        orient_idx, hw_margin_mm, _report)
                     obj = self_ref()
                     if obj is not None:
                         QTimer.singleShot(0, lambda: obj._finish(
@@ -4144,14 +4144,51 @@ class PrintDialog(QDialog):
         self._set_printing(False)
         QTimer.singleShot(2500, self.close)
 
+    def _recenter_on_paper(self, src_path, dest_path, paper_w_pt, paper_h_pt):
+        """Enlarge every page's media box to the full physical sheet size and
+        centre the existing (already-scaled) content on it.
+
+        Ghostscript fits the content to the *printable area* (media set to
+        paper − hardware margins).  This step places that printable-area page,
+        unscaled, in the exact centre of a full-size sheet so the printer driver
+        receives correctly-sized media and does not rescale — the on-screen
+        preview and the physical print then agree.  The GS output is already
+        normalised (upright, /Rotate cleared, media box at the origin), so a
+        plain translate + media-box resize is safe here.
+        """
+        from pypdf import PdfReader, PdfWriter, Transformation
+        from pypdf.generic import RectangleObject
+        reader = PdfReader(src_path, strict=False)
+        writer = PdfWriter()
+        for page in reader.pages:
+            box = page.mediabox
+            x0 = float(box.left);   y0 = float(box.bottom)
+            w0 = float(box.width);  h0 = float(box.height)
+            tx = (paper_w_pt - w0) / 2.0 - x0
+            ty = (paper_h_pt - h0) / 2.0 - y0
+            page.add_transformation(Transformation().translate(tx, ty))
+            full = RectangleObject([0, 0, paper_w_pt, paper_h_pt])
+            page.mediabox = full
+            page.cropbox  = full
+            writer.add_page(page)
+        if not writer.pages:
+            raise RuntimeError("Re-centre: keine Seiten.")
+        with open(dest_path, "wb") as f:
+            writer.write(f)
+
     def _print_via_gs(self, pages, copies, grayscale, collate, duplex,
                       colorconv, printer_name, scale_idx, paper_key,
-                      orient_idx, report):
+                      orient_idx, hw_margin_mm, report):
         """Full-quality print via Ghostscript + CUPS/lp.
 
         GS normalises, embeds fonts, applies colour conversion AND pre-scales the
         output to exactly the target paper dimensions.  lp then receives a
         correctly-sized PDF and is told print-scaling=none — no double-scaling.
+
+        For "Fit" and "Shrink" the content is fitted to the *printable area*
+        (paper minus the printer's unprintable hardware margin), matching the
+        on-screen preview exactly, then re-centred on a full-size sheet so the
+        printer never clips content or rescales.
         """
         import subprocess, shutil, tempfile, os
 
@@ -4182,6 +4219,8 @@ class PrintDialog(QDialog):
         sub_fd, sub_tmp = tempfile.mkstemp(suffix="_sub.pdf")
         os.close(sub_fd)
         norm_tmp = None
+        recenter_tmp = None
+        printable_unrecentered = False
         try:
             report(f"Seiten zusammenstellen… ({len(pages)})")
             skipped = self._write_subset_pdf(pages, sub_tmp)
@@ -4192,6 +4231,24 @@ class PrintDialog(QDialog):
                 os.close(norm_fd)
                 report("Ghostscript: Normalisierung und Skalierung…")
 
+                # ── Fit target: printable area vs. full sheet ─────────────────
+                # For "Fit"/"Shrink" the content is fitted to the printable area
+                # (paper minus the printer's unprintable hardware margin) exactly
+                # as the on-screen preview shows it — never to the full sheet,
+                # which would push ~hw_margin_mm of content into the region the
+                # printer cannot physically mark.  A re-centre pass (below) then
+                # places that page in the middle of a full-size sheet.
+                # For "100 %" and for borderless printers (margin ≈ 0) the media
+                # stays full-size and no re-centring is needed.
+                margin_pt = (0.0 if hw_margin_mm < 0.5
+                             else hw_margin_mm * 72.0 / 25.4)
+                fit_to_printable = scale_idx in (0, 2) and margin_pt > 0.0
+                if fit_to_printable:
+                    media_w = max(1.0, pw_pt - 2.0 * margin_pt)
+                    media_h = max(1.0, ph_pt - 2.0 * margin_pt)
+                else:
+                    media_w, media_h = pw_pt, ph_pt
+
                 gs_cmd = [
                     "gs", "-dBATCH", "-dNOPAUSE", "-dQUIET",
                     "-sDEVICE=pdfwrite",
@@ -4201,16 +4258,16 @@ class PrintDialog(QDialog):
                     "-dSubsetFonts=true",
                     "-dCompressFonts=true",
                     "-dDetectDuplicateImages=true",
-                    # Fix output media to the exact target paper size (in points)
-                    f"-dDEVICEWIDTHPOINTS={pw_pt}",
-                    f"-dDEVICEHEIGHTPOINTS={ph_pt}",
+                    # Fix output media to the fit target (printable area or sheet)
+                    f"-dDEVICEWIDTHPOINTS={media_w}",
+                    f"-dDEVICEHEIGHTPOINTS={media_h}",
                     "-dFIXEDMEDIA",
                 ]
 
                 # Scaling policy
-                if scale_idx == 0:      # Fit — scale up or down to fill paper
+                if scale_idx == 0:      # Fit — scale up or down to fill the target
                     gs_cmd.append("-dPDFFitPage")
-                elif scale_idx == 2:    # Shrink only — fit if ANY page is larger than paper
+                elif scale_idx == 2:    # Shrink only — fit if ANY page exceeds target
                     try:
                         import pypdfium2 as pdfium
                         needs_fit = False
@@ -4219,7 +4276,7 @@ class PrintDialog(QDialog):
                             try:
                                 for pi in range(len(doc)):
                                     pg = doc[pi]
-                                    if pg.get_width() > pw_pt + 1 or pg.get_height() > ph_pt + 1:
+                                    if pg.get_width() > media_w + 1 or pg.get_height() > media_h + 1:
                                         needs_fit = True
                                         break
                             finally:
@@ -4248,6 +4305,23 @@ class PrintDialog(QDialog):
                 r = subprocess.run(gs_cmd, capture_output=True, text=True, timeout=240)
                 if r.returncode == 0 and os.path.getsize(norm_tmp) > 100:
                     print_src = norm_tmp
+                    # Re-centre the printable-area page on a full-size sheet so
+                    # CUPS receives correctly-sized media and never rescales.
+                    if fit_to_printable:
+                        try:
+                            rec_fd, recenter_tmp = tempfile.mkstemp(suffix="_ctr.pdf")
+                            os.close(rec_fd)
+                            self._recenter_on_paper(norm_tmp, recenter_tmp,
+                                                    pw_pt, ph_pt)
+                            if os.path.getsize(recenter_tmp) > 100:
+                                print_src = recenter_tmp
+                            else:
+                                printable_unrecentered = True
+                        except Exception:
+                            import logging
+                            logging.warning("Re-centre step failed; letting CUPS "
+                                            "fit to printable area", exc_info=True)
+                            printable_unrecentered = True
                 else:
                     import logging
                     logging.warning("GS normalization failed (rc=%d): %s",
@@ -4261,8 +4335,12 @@ class PrintDialog(QDialog):
             cmd += ["-n", str(copies)]
 
             # GS already sized the PDF perfectly — tell CUPS not to rescale
-            if print_src == norm_tmp:
+            if print_src in (norm_tmp, recenter_tmp) and not printable_unrecentered:
                 cmd += ["-o", "print-scaling=none"]
+            elif printable_unrecentered:
+                # Re-centre failed: page is printable-area sized — let CUPS fit it
+                # to the imageable area (single scaling, centred, no clipping).
+                cmd += ["-o", "print-scaling=fit"]
             else:
                 # GS unavailable — let CUPS handle scaling
                 if scale_idx == 0:
@@ -4299,7 +4377,7 @@ class PrintDialog(QDialog):
             return skipped
 
         finally:
-            for f in [sub_tmp, norm_tmp]:
+            for f in [sub_tmp, norm_tmp, recenter_tmp]:
                 if f:
                     try: os.unlink(f)
                     except Exception: pass

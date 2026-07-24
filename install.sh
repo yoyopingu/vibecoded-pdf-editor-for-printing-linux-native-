@@ -99,7 +99,11 @@ install_missing_arch() {
     done
     if [ "${#missing[@]}" -gt 0 ]; then
         info "Installiere: ${missing[*]}"
-        sudo pacman -Sy --needed --noconfirm "${missing[@]}"
+        # -Syu, NICHT -Sy: ein reines "-Sy" (Datenbank aktualisieren ohne
+        # System-Upgrade) erzeugt auf Arch einen "partial upgrade" und kann
+        # durch nicht zusammenpassende Bibliotheken das System beschädigen.
+        # -Syu hält die Pakete konsistent.
+        sudo pacman -Syu --needed --noconfirm "${missing[@]}"
     fi
     for p in "${pkgs[@]}"; do ok "$p"; done
 }
