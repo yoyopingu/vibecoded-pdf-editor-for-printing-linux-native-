@@ -2265,6 +2265,9 @@ class ManageShortcutFilter(QObject):
         self.panel = manage_panel
 
     def eventFilter(self, obj, event):
+        # Never intercept while a modal dialog is open — its widgets own the keys.
+        if QApplication.activeModalWidget() is not None:
+            return False
         t = event.type()
         # Claim ShortcutOverride so widgets don't eat our Ctrl combos.
         # MUST use accept()+return False (not return True) so Qt still dispatches
@@ -3070,7 +3073,11 @@ class _PrintPreview(QWidget):
         self._render_ready.connect(self._on_render_done)
         self._pdf_path  = pdf_path
         self._model     = model
-        self._current   = 0
+        # Subset of page positions (into model.order) the preview walks through.
+        # Mirrors the dialog's page selection (all / current / range).
+        self._pages     = list(range(len(model.order)))
+        self._current   = 0        # index into self._pages
+        self._render_token = 0     # bumped each render; stale deliveries dropped
         self._pixmap    = None      # rendered page image
         self._page_w_pt = 595.0     # PDF page dimensions in points
         self._page_h_pt = 842.0
@@ -3158,19 +3165,49 @@ class _PrintPreview(QWidget):
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
+    def set_pages(self, positions):
+        """Restrict the preview to a subset of page positions (the print
+        selection: all / current page / range). Jumps to the first page of the
+        new selection."""
+        positions = list(positions) if positions else list(range(len(self._model.order)))
+        if positions == self._pages:
+            return
+        self._pages   = positions
+        self._current = 0
+        self._render_page()
+
     def _prev_page(self):
         if self._current > 0:
             self._current -= 1
             self._render_page()
 
     def _next_page(self):
-        if self._current < len(self._model.order) - 1:
+        if self._current < len(self._pages) - 1:
             self._current += 1
             self._render_page()
 
     def _render_page(self):
-        n = len(self._model.order)
-        self._page_lbl.setText(f"Seite {self._current + 1} / {n}")
+        self._render_token += 1
+        token = self._render_token
+        n     = len(self._pages)
+        total = len(self._model.order)
+        if n == 0:
+            self._page_lbl.setText("—")
+            self._prev_btn.setEnabled(False)
+            self._next_btn.setEnabled(False)
+            self._pixmap = None
+            self._redraw()
+            return
+        if self._current >= n:
+            self._current = n - 1
+        pos = self._pages[self._current]        # position into model.order
+        # Show the real page number (of the whole document) plus position in the
+        # selection when a subset is being printed.
+        if n == total:
+            self._page_lbl.setText(f"Seite {pos + 1} / {total}")
+        else:
+            self._page_lbl.setText(
+                f"Seite {pos + 1}   ({self._current + 1} / {n} ausgewählt)")
         self._prev_btn.setEnabled(self._current > 0)
         self._next_btn.setEnabled(self._current < n - 1)
         self._pixmap    = None
@@ -3178,10 +3215,9 @@ class _PrintPreview(QWidget):
         self._page_h_pt = 842.0
         self._redraw()   # show blank immediately while loading
 
-        snap = self._current
-        if snap >= len(self._model.order):
+        if pos >= total:
             return
-        uid      = self._model.order[snap]
+        uid      = self._model.order[pos]
         src_path, orig = self._model.page_source(uid, self._pdf_path)
         rot      = self._model.get_rotation(uid)
 
@@ -3213,16 +3249,16 @@ class _PrintPreview(QWidget):
                 if obj is not None:
                     try:
                         # Auto-queued to the GUI thread (widget lives there).
-                        obj._render_ready.emit(snap, data, pw_pt, ph_pt)
+                        obj._render_ready.emit(token, data, pw_pt, ph_pt)
                     except RuntimeError:
                         pass   # widget was deleted
             except Exception:
                 pass
         threading.Thread(target=_bg, daemon=True).start()
 
-    def _on_render_done(self, snap, data, pw_pt, ph_pt):
-        if snap != self._current:
-            return   # page changed while rendering — discard stale result
+    def _on_render_done(self, token, data, pw_pt, ph_pt):
+        if token != self._render_token:
+            return   # selection/page changed while rendering — discard stale result
         pm = QPixmap()
         pm.loadFromData(data)
         self._pixmap    = pm
@@ -3636,6 +3672,55 @@ class PrintDialog(QDialog):
         self.scale_combo.currentIndexChanged.connect(self._sync_preview)
         self.paper_combo.currentIndexChanged.connect(self._sync_preview)
         self.orient_combo.currentIndexChanged.connect(self._sync_preview)
+
+        # Preview follows the page selection (all / current page / range)
+        self.radio_all.toggled.connect(self._sync_preview_pages)
+        self.radio_current.toggled.connect(self._sync_preview_pages)
+        self.radio_range.toggled.connect(self._sync_preview_pages)
+        self.range_edit.textChanged.connect(self._sync_preview_pages)
+        self._sync_preview_pages()
+
+    def _preview_pages(self):
+        """Page positions the preview should show for the current selection.
+
+        Quiet counterpart to _get_pages() — never touches the status label.
+        Returns a list of 0-based positions, or None if the range is currently
+        incomplete/invalid (caller then leaves the preview unchanged).
+        """
+        n = len(self.model.order)
+        if self.radio_current.isChecked():
+            parent = self.parent()
+            while parent and not isinstance(parent, PdfTab):
+                parent = parent.parent()
+            if parent and hasattr(parent, 'single'):
+                return [parent.single._current]
+            return [0]
+        if self.radio_range.isChecked():
+            text = self.range_edit.text().strip()
+            if not text:
+                return list(range(n))
+            pages = []
+            try:
+                for part in text.split(","):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    if "-" in part:
+                        a, b = part.split("-", 1)
+                        lo, hi = int(a.strip()), int(b.strip())
+                        pages.extend(range(lo - 1, hi))
+                    else:
+                        pages.append(int(part) - 1)
+            except ValueError:
+                return None
+            pages = [p for p in sorted(set(pages)) if 0 <= p < n]
+            return pages or None
+        return list(range(n))   # "Alle Seiten"
+
+    def _sync_preview_pages(self):
+        pages = self._preview_pages()
+        if pages:   # None/empty → leave the current preview in place
+            self._preview.set_pages(pages)
 
     def _load_printers(self):
         """Populate the printer combo.
@@ -5097,6 +5182,12 @@ class _ViewerKeyFilter(QObject):
         self._vp = viewer_panel
 
     def eventFilter(self, obj, event):
+        # Stand down entirely while a modal dialog (print dialog, settings, file
+        # picker, message box) is open, so its own widgets get Tab/Escape/zoom
+        # keys for normal focus traversal instead of us hijacking them for the
+        # background viewer.
+        if QApplication.activeModalWidget() is not None:
+            return False
         t = event.type()
         # ShortcutOverride: Qt fragt Widget ob es die Taste übernehmen will.
         # event.accept() tells Qt "send this as KeyPress, not as shortcut".
