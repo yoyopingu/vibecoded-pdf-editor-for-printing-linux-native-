@@ -435,6 +435,7 @@ echo -e "  Terminal:     ${BOLD}copyshop-pdf${NC}"
 echo -e "  App-Menü:     Office → CopyShop PDF Suite"
 echo -e "  Desktop:      Doppelklick auf das Icon"
 echo -e "  Datei öffnen: ${BOLD}copyshop-pdf datei.pdf${NC}"
+echo -e "  Entfernen:    ${BOLD}bash uninstall.sh${NC}"
 echo ""
 
 read -rp "  Jetzt starten? [J/n] " REPLY

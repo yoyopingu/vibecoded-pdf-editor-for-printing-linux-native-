@@ -23,11 +23,32 @@ Abhängigkeiten (Ubuntu/Debian):
 
 import sys, os, traceback, logging
 
-logging.basicConfig(
-    filename=os.path.expanduser("~/copyshop_crash.log"),
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)s %(message)s"
-)
+# Keep the log inside the app's data directory (the same folder the installer
+# uses) so everything stays contained in one place and is removed together by
+# uninstall.sh — instead of dumping copyshop_crash.log into the user's $HOME.
+# Falls back to the system temp dir if that location is not writable, so
+# logging setup can never block startup.
+def _init_log_file():
+    data_dir = os.path.join(
+        os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")),
+        "copyshop_pdf_suite")
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        return os.path.join(data_dir, "copyshop.log")
+    except Exception:
+        import tempfile
+        return os.path.join(tempfile.gettempdir(), "copyshop.log")
+
+try:
+    logging.basicConfig(
+        filename=_init_log_file(),
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)s %(message)s"
+    )
+except Exception:
+    # Last resort: never let logging configuration crash the app.
+    logging.basicConfig(level=logging.DEBUG,
+                        format="%(asctime)s %(levelname)s %(message)s")
 
 def _excepthook(exc_type, exc_value, exc_tb):
     msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
