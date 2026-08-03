@@ -65,6 +65,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal, QPoint
 from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction
+try:
+    # Imported here, not lazily: loading this extension module later — once the
+    # render threads are running — can segfault inside the import machinery.
+    from PyQt6.QtNetwork import QLocalServer, QLocalSocket
+except ImportError:                       # QtNetwork not installed
+    QLocalServer = QLocalSocket = None
 
 from tools.i18n          import tr, get_language, load_language, set_language
 from tools.app_state     import AppState
@@ -280,28 +286,82 @@ QPushButton#secondaryBtn {{
     border: 1px solid {_IBD}; border-radius: 6px;
     padding: 6px 14px; min-height: 28px;
 }}
+/* Small square icon buttons (the zoom −/+/⟳ above a preview). They are fixed to
+   22×22, where secondaryBtn's padding pushes the glyph clean out of the box —
+   they rendered as three empty rectangles. */
+QPushButton#iconBtn {{
+    background: {_IB}; color: {_TEXT};
+    border: 1px solid {_IBD}; border-radius: 4px;
+    padding: 0px; min-height: 0px; min-width: 0px;
+    font-size: 13px;
+}}
+QPushButton#iconBtn:hover {{ background: {_HOVER}; border-color: {ACC}; }}
+QPushButton#iconBtn:pressed {{ background: {_SEL}; }}
 QPushButton#secondaryBtn:hover {{ background: {_HOVER}; border-color: {ACC}; }}
 QPushButton#secondaryBtn:pressed {{ background: {_SEL}; }}
 
 /* ── Input fields ───────────────────────────────────────── */
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+QLineEdit {{
     background: {_IB}; color: {_TEXT};
     border: 1px solid {_IBD}; border-radius: 5px;
     padding: 5px 10px; min-height: 28px;
     selection-background-color: {_SEL};
 }}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+QLineEdit:focus {{
     border: 2px solid {ACC};
     padding: 4px 9px;
 }}
-QComboBox::drop-down {{ border: none; width: 22px; }}
+/* Combo boxes get their height from min-height, NEVER from vertical padding:
+   Qt sizes the drop-down list from the combo's content height, so padding here
+   made every popup exactly one row too short — a two-option dropdown had to be
+   scrolled to reach the second option. */
+QComboBox {{
+    background: {_IB}; color: {_TEXT};
+    border: 1px solid {_IBD}; border-radius: 5px;
+    padding: 0px 10px; min-height: 38px;
+    selection-background-color: {_SEL};
+}}
+QComboBox:focus {{
+    border: 2px solid {ACC};
+    padding: 0px 9px;
+}}
+/* No ::drop-down override here: giving it `border:none` and no arrow image left
+   every combo box looking like a plain text field, with nothing to show it can
+   be opened. Without the rule the style draws its own arrow. */
 QComboBox QAbstractItemView {{
     background: {_IB}; color: {_TEXT};
     selection-background-color: {_SEL};
     border: 1px solid {_IBD};
     border-radius: 5px;
     padding: 4px;
+    outline: none;
 }}
+/* The popup rows need an explicit height, otherwise they collapse to the bare
+   text height and the list becomes a cramped sliver. */
+QComboBox QAbstractItemView::item {{
+    min-height: 26px;
+    padding: 2px 8px;
+    border-radius: 3px;
+}}
+QComboBox QAbstractItemView::item:selected {{ background: {_SEL}; color: {_TEXT}; }}
+
+/* Spin boxes are styled separately from the fields above: as soon as their
+   padding/min-height came from that shared rule, Qt took over drawing the
+   up/down sub-controls and rendered them as two blank slivers with no arrows.
+   Colours + an explicit button width keep the theme AND the real arrows. */
+QSpinBox, QDoubleSpinBox {{
+    background: {_IB}; color: {_TEXT};
+    border: 1px solid {_IBD}; border-radius: 5px;
+    padding-left: 10px; min-height: 36px;
+    selection-background-color: {_SEL};
+}}
+QSpinBox:focus, QDoubleSpinBox:focus {{ border: 2px solid {ACC}; }}
+/* Width only — nothing else. Any paint property here (a background, even a
+   transparent one) makes the stylesheet engine draw the buttons itself, and it
+   has no arrow to draw: they came out as two blank slivers you could barely
+   hit. With just a width the style keeps drawing its own arrows. */
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {{ width: 20px; }}
 
 /* ── Lists & views ──────────────────────────────────────── */
 QListWidget, QListView, QTreeView, QTableView {{
@@ -721,7 +781,7 @@ class TitleBar(QWidget):
         layout.setSpacing(0)
 
         # App title
-        title = QLabel("CopyShop PDF Suite")
+        title = QLabel(tr("CopyShop PDF Suite"))
         title.setObjectName("titleBarLabel")
         layout.addWidget(title)
 
@@ -741,7 +801,7 @@ class TitleBar(QWidget):
         ]:
             btn = QPushButton(symbol)
             btn.setObjectName("titleBarBtn")
-            btn.setToolTip(tip)
+            btn.setToolTip(tr(tip))
             btn.setFixedSize(42, 42)
             btn.clicked.connect(slot)
             layout.addWidget(btn)
@@ -781,12 +841,12 @@ class TitleBar(QWidget):
 
         # Sprache submenu
         menu_lang = menu_settings.addMenu(tr("Sprache"))
-        act_de = QAction("Deutsch", self)
+        act_de = QAction(tr("Deutsch"), self)
         act_de.setCheckable(True)
         act_de.setChecked(get_language() == "de")
         act_de.triggered.connect(lambda: self._win._set_language("de"))
         menu_lang.addAction(act_de)
-        act_en = QAction("English", self)
+        act_en = QAction(tr("English"), self)
         act_en.setCheckable(True)
         act_en.setChecked(get_language() == "en")
         act_en.triggered.connect(lambda: self._win._set_language("en"))
@@ -833,7 +893,7 @@ class TitleBar(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self, open_file=None, open_files=None):
         super().__init__()
-        self.setWindowTitle("CopyShop PDF Suite")
+        self.setWindowTitle(tr("CopyShop PDF Suite"))
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setMinimumSize(1000, 640)
         self.resize(1280, 760)
@@ -844,6 +904,25 @@ class MainWindow(QMainWindow):
         elif open_files:
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(100, lambda: self._open_multi(open_files))
+
+    def open_paths(self, paths):
+        """Open files in THIS window — one file becomes a tab, several go through
+        the open/merge chooser. Called when another launch forwards its files to
+        the running instance (see _listen_for_open_requests)."""
+        paths = [p for p in paths if os.path.isfile(p)]
+        if not paths:
+            return
+        self._raise_to_front()
+        if len(paths) == 1:
+            self._switch(0)
+            self.viewer.open_file(paths[0])
+        else:
+            self._open_multi(paths)
+
+    def _raise_to_front(self):
+        if self.isMinimized():
+            self.showNormal()
+        self.show(); self.raise_(); self.activateWindow()
 
     def _open_multi(self, files):
         from tools.multi_open import MultiOpenDialog
@@ -938,7 +1017,7 @@ class MainWindow(QMainWindow):
         # ── Version am unteren Rand ───────────────────────────────────────────
         sb.addStretch()
 
-        ver = QLabel("v3.0  —  open source")
+        ver = QLabel(tr("v3.0  —  open source"))
         ver.setObjectName("dimLabel"); ver.setContentsMargins(14, 0, 0, 8)
         sb.addWidget(ver)
 
@@ -967,14 +1046,14 @@ class MainWindow(QMainWindow):
 
     def _open_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "PDF öffnen", "", "PDF Dateien (*.pdf)")
+            self, tr("PDF öffnen"), "", tr("PDF Dateien (*.pdf)"))
         if path:
             self._switch(0)
             self.viewer.open_file(path)
 
     def _open_multi_dialog(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Mehrere PDFs öffnen", "", "PDF Dateien (*.pdf)")
+            self, tr("Mehrere PDFs öffnen"), "", tr("PDF Dateien (*.pdf)"))
         if paths:
             if len(paths) == 1:
                 self._switch(0)
@@ -1009,24 +1088,109 @@ class MainWindow(QMainWindow):
         GeneralDialog(self).exec()
 
     def _apply_theme(self, theme: str):
-        QApplication.instance().setStyleSheet(
-            LIGHT_STYLE if theme == "light" else STYLE
-        )
-        from tools.page_viewer import set_viewer_theme
-        set_viewer_theme(theme)
-        import tools.app_state as _as
-        if theme == "light":
-            _as.THEME.update({
-                "BG": "#edf1f7", "SIDE": "#d8e8f8", "PANEL": "#ffffff",
-                "ACC": "#e94560", "TEXT": "#0d1a28", "DIM": "#556070",
-                "HOVER": "#d4e4f8", "LINE": "#c0d0e4",
-            })
-        else:
-            _as.THEME.update({
-                "BG": "#151520", "SIDE": "#0e2d58", "PANEL": "#1c2340",
-                "ACC": "#e94560", "TEXT": "#e8eaf0", "DIM": "#7a8699",
-                "HOVER": "#1e4d82", "LINE": "#1e3354",
-            })
+        apply_theme_globally(theme)
+
+
+_THEME_COLOURS = {
+    "light": {"BG": "#edf1f7", "SIDE": "#d8e8f8", "PANEL": "#ffffff",
+              "ACC": "#e94560", "TEXT": "#0d1a28", "DIM": "#556070",
+              "HOVER": "#d4e4f8", "LINE": "#c0d0e4"},
+    "dark":  {"BG": "#151520", "SIDE": "#0e2d58", "PANEL": "#1c2340",
+              "ACC": "#e94560", "TEXT": "#e8eaf0", "DIM": "#7a8699",
+              "HOVER": "#1e4d82", "LINE": "#1e3354"},
+}
+
+
+def apply_theme_globally(theme: str):
+    """Push `theme` into every place that holds colours: the app stylesheet, the
+    viewer palette (_TV, which re-styles the registered panels) and
+    app_state.THEME.
+
+    Startup used to set only the first two, so on a light-mode launch every
+    widget styled through theme_color() kept the dark defaults — the Greyscale
+    preview area most visibly."""
+    QApplication.instance().setStyleSheet(LIGHT_STYLE if theme == "light" else STYLE)
+    import tools.app_state as _as
+    _as.THEME.update(_THEME_COLOURS["light" if theme == "light" else "dark"])
+    from tools.page_viewer import set_viewer_theme
+    set_viewer_theme(theme)          # last: it re-runs every panel's _apply_theme
+
+
+_IPC_KEY = "copyshop_pdf_suite_single_instance"
+
+
+def _forward_to_running_instance(paths) -> bool:
+    """If the app is already running, hand the files to that instance and return
+    True — opening a PDF from the file manager should add a tab to the window
+    that is already open, not start a second copy of the app."""
+    if QLocalSocket is None:
+        return False
+    sock = QLocalSocket()
+    sock.connectToServer(_IPC_KEY)
+    if not sock.waitForConnected(300):
+        return False
+    # Always terminated by a newline so the receiver can tell "no files, just
+    # raise the window" from a half-delivered message.
+    sock.write(("\n".join(paths) + "\n").encode("utf-8"))
+    # Make sure the bytes have actually left this process before the socket is
+    # dropped: this call is immediately followed by the launcher exiting, and an
+    # unflushed message means the file never opens in the running instance.
+    # (waitForBytesWritten reports False when flush already sent everything, so
+    # ask bytesToWrite instead of trusting its return value.)
+    sock.flush()
+    if sock.bytesToWrite():
+        sock.waitForBytesWritten(2000)
+    sock.disconnectFromServer()
+    if sock.state() != QLocalSocket.LocalSocketState.UnconnectedState:
+        sock.waitForDisconnected(1000)
+    return True
+
+
+def _listen_for_open_requests(win):
+    """Serve the other end of the above: every later launch delivers its file
+    list here and we open it in this window."""
+    if QLocalServer is None:
+        return None
+
+    def _on_connection():
+        # Drain every queued connection: two launches in quick succession (e.g.
+        # double-clicking two PDFs) can land before this handler runs, and
+        # taking only one per signal silently dropped the other file.
+        while server.hasPendingConnections():
+            _serve(server.nextPendingConnection())
+
+    def _serve(conn):
+        if conn is None: return
+        buf = bytearray()
+
+        def _read():
+            # The sender terminates its list with a newline; without buffering
+            # until then, a list split across packets would be parsed as two
+            # messages and the path straddling the split would be lost.
+            buf.extend(bytes(conn.readAll()))
+            if not buf.endswith(b"\n"):
+                return
+            data = bytes(buf).decode("utf-8", "replace"); buf.clear()
+            win._raise_to_front()
+            paths = [p for p in data.split("\n") if p and os.path.isfile(p)]
+            if paths:
+                win.open_paths(paths)
+            conn.disconnectFromServer()
+
+        conn.readyRead.connect(_read)
+        # Let Qt reap the socket on its own event loop — deleting it while the
+        # server is torn down mid-signal can take the process with it.
+        conn.disconnected.connect(conn.deleteLater)
+        if conn.bytesAvailable():
+            _read()      # data that arrived before readyRead was connected
+
+    # A crashed instance leaves the socket file behind; removeServer clears it.
+    QLocalServer.removeServer(_IPC_KEY)
+    server = QLocalServer()
+    server.newConnection.connect(_on_connection)
+    server.listen(_IPC_KEY)
+    win._ipc_server = server          # keep it alive with the window
+    return server
 
 
 def main():
@@ -1034,15 +1198,23 @@ def main():
     app.setApplicationName("CopyShop PDF Suite")
     app.setStyle("Fusion")
 
+    # Hand the files to an already-running instance and quit, before building
+    # any UI. With no files this just raises the existing window — the app is
+    # tab-based, so a second launch should never mean a second window.
+    _cli_files = [a for a in sys.argv[1:] if os.path.isfile(a)]
+    try:
+        if _forward_to_running_instance(_cli_files):
+            return
+    except Exception:
+        pass   # no running instance reachable — carry on and open normally
+
     load_language()   # must be after QApplication — QSettings needs it
 
     # Apply persisted settings before building the window
     s = AppSettings.get()
-    app.setStyleSheet(LIGHT_STYLE if s.theme() == "light" else STYLE)
+    apply_theme_globally(s.theme())
 
-    from tools.page_viewer import apply_performance_settings, set_viewer_theme
-    if s.theme() == "light":
-        set_viewer_theme("light")
+    from tools.page_viewer import apply_performance_settings
     apply_performance_settings(
         prerender        = s.prerender(),
         render_threads   = s.render_threads(),
@@ -1077,7 +1249,7 @@ def main():
     p.end()
     app.setWindowIcon(QIcon(icon_pm))
 
-    args = [a for a in sys.argv[1:] if os.path.isfile(a)]
+    args = _cli_files
 
     # Reopen last file if the setting is enabled and no file was passed on CLI
     if not args and s.reopen_last() and s.last_file() and os.path.isfile(s.last_file()):
@@ -1090,6 +1262,10 @@ def main():
         win = MainWindow()
 
     win.show()
+    try:
+        _listen_for_open_requests(win)
+    except Exception:
+        pass   # QtNetwork unavailable — the app still works, just not shared
     sys.exit(app.exec())
 
 

@@ -31,6 +31,41 @@ GAP    = 10
 MARGIN = 12
 
 
+def _positions_to_str(positions):
+    """[1,2,3,5,6,9] → '1-3, 5-6, 9'. Shared by the page manager and the merge
+    view so their selection fields read identically."""
+    if not positions: return ""
+    ranges = []; start = end = positions[0]
+    for p in positions[1:]:
+        if p == end + 1:
+            end = p
+        else:
+            ranges.append(f"{start}-{end}" if start != end else str(start))
+            start = end = p
+    ranges.append(f"{start}-{end}" if start != end else str(start))
+    return ", ".join(ranges)
+
+
+def _parse_positions(text, n):
+    """'1, 3, 5-8' → {0, 2, 4, 5, 6, 7} clamped to n items. Empty set when the
+    text holds nothing usable (the caller then leaves the selection alone)."""
+    out = set()
+    for part in (text or "").split(","):
+        part = part.strip()
+        if not part: continue
+        try:
+            if "-" in part:
+                a, b = part.split("-", 1)
+                for i in range(int(a.strip())-1, int(b.strip())):
+                    if 0 <= i < n: out.add(i)
+            else:
+                i = int(part) - 1
+                if 0 <= i < n: out.add(i)
+        except ValueError:
+            pass
+    return out
+
+
 # ── Global pypdfium2 serialisation lock ──────────────────────────────────────
 # libpdfium's FreeType font cache is NOT thread-safe: concurrent calls to
 # FPDF_LoadPage from different threads corrupt the heap.  All pypdfium2
@@ -677,10 +712,10 @@ class PdfPageCanvas(QWidget):
     def contextMenuEvent(self, e):
         menu = QMenu(self)
         sel  = self._selected_text()
-        cp   = menu.addAction("Kopieren")
+        cp   = menu.addAction(tr("Kopieren"))
         cp.setEnabled(bool(sel))
         cp.triggered.connect(self._copy)
-        sa = menu.addAction("Alles auswählen")
+        sa = menu.addAction(tr("Alles auswählen"))
         sa.triggered.connect(self._select_all)
         menu.exec(e.globalPos())
 
@@ -859,11 +894,11 @@ class PageModel:
 
     def selected_info(self):
         positions = [i+1 for i, u in enumerate(self.order) if u in self.selected]
-        if not positions: return "Keine Seiten ausgewaehlt"
-        if len(positions) == 1: return f"Seite {positions[0]}"
+        if not positions: return tr("Keine Seiten ausgewaehlt")
+        if len(positions) == 1: return tr('Seite {p0}').format(p0=positions[0])
         if len(positions) <= 6:
-            return f"{len(positions)} Seiten: {', '.join(str(p) for p in positions)}"
-        return f"{len(positions)} Seiten ausgewaehlt"
+            return tr('{p0} Seiten: {p1}').format(p0=len(positions), p1=', '.join((str(p) for p in positions)))
+        return tr('{p0} Seiten ausgewaehlt').format(p0=len(positions))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -959,11 +994,11 @@ class SinglePageView(QWidget):
         il.setContentsMargins(12, 0, 12, 0)
         il.setSpacing(20)
 
-        self._size_lbl = QLabel("Masse: —")
+        self._size_lbl = QLabel(tr("Masse: —"))
         self._size_lbl.setObjectName("dimLabel")
         il.addWidget(self._size_lbl)
 
-        self._color_lbl = QLabel("Farbprofil: —")
+        self._color_lbl = QLabel(tr("Farbprofil: —"))
         self._color_lbl.setObjectName("dimLabel")
         il.addWidget(self._color_lbl)
 
@@ -1424,7 +1459,7 @@ class SinglePageView(QWidget):
         if page_w_pt > 0 and page_h_pt > 0:
             mm_w = page_w_pt / 72 * 25.4
             mm_h = page_h_pt / 72 * 25.4
-            self._size_lbl.setText(f"Masse: {mm_w:.0f} × {mm_h:.0f} mm")
+            self._size_lbl.setText(tr('Masse: {p0:.0f} × {p1:.0f} mm').format(p0=mm_w, p1=mm_h))
             try:
                 win = self.window().windowHandle()
                 screen = (win.screen() if win and win.screen()
@@ -1485,9 +1520,9 @@ class SinglePageView(QWidget):
             uid = self.model.order[self._current]
             src_path, orig = self.model.page_source(uid, self.pdf_path)
             cs = self._detect_colorspace(src_path, orig)
-            self._color_lbl.setText(f"Farbprofil: {cs}")
+            self._color_lbl.setText(tr('Farbprofil: {p0}').format(p0=cs))
         except Exception:
-            self._color_lbl.setText("Farbprofil: —")
+            self._color_lbl.setText(tr("Farbprofil: —"))
 
     def _detect_colorspace(self, pdf_path, page_idx):
         cache_key = (pdf_path, page_idx)
@@ -1679,7 +1714,7 @@ class SinglePageView(QWidget):
         from PyQt6.QtWidgets import QInputDialog
         n = len(self.model.order)
         page, ok = QInputDialog.getInt(
-            self, "Gehe zu Seite", f"Seite (1 – {n}):",
+            self, tr("Gehe zu Seite"), tr('Seite (1 – {p0}):').format(p0=n),
             self._current + 1, 1, n)
         if ok:
             self.go_to(page)
@@ -1726,8 +1761,11 @@ class PageCard(QFrame):
         num_size = max(9, min(13, card_w // 10))
         self.num = QLabel(str(display_pos + 1))
         self.num.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # border:none — QLabel is a QFrame, so without it the label picks up the
+        # selected card's 2px accent border and gets a box of its own.
         self.num.setStyleSheet(
-            f"color:{_TV['dim']};font-size:{num_size}px;background:transparent;")
+            f"color:{_TV['dim']};font-size:{num_size}px;"
+            "background:transparent;border:none;")
         layout.addWidget(self.num)
         self._update_style()
 
@@ -1813,7 +1851,7 @@ class PageCard(QFrame):
             from PyQt6.QtGui import QPainter as _P, QFont as _F
             p = _P(pm); p.setPen(QColor("#eaeaea"))
             f = _F(); f.setPointSize(11); f.setBold(True); p.setFont(f)
-            label = f"+{n_sel} Seiten" if ctrl else f"{n_sel} Seiten"
+            label = tr('+{p0} Seiten').format(p0=n_sel) if ctrl else tr('{p0} Seiten').format(p0=n_sel)
             p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, label)
             p.end()
             drag.setPixmap(pm)
@@ -2552,56 +2590,18 @@ class ManagePanel(QWidget):
         self.sel_edit.setText(self._positions_to_str(positions))
         self.sel_edit.blockSignals(False)
 
-    @staticmethod
-    def _positions_to_str(positions):
-        """Wandelt [1,2,3,5,6,9] → '1-3, 5-6, 9' um."""
-        if not positions: return ""
-        ranges = []; start = end = positions[0]
-        for p in positions[1:]:
-            if p == end + 1:
-                end = p
-            else:
-                ranges.append(f"{start}-{end}" if start != end else str(start))
-                start = end = p
-        ranges.append(f"{start}-{end}" if start != end else str(start))
-        return ", ".join(ranges)
+    _positions_to_str = staticmethod(_positions_to_str)
 
     def _apply_sel_edit(self):
         """Parst den Eingabetext und setzt Auswahl — nur bei Enter."""
-        text = self.sel_edit.text().strip()
-        if not text:
-            # Leeres Feld → Auswahl unverändert lassen, Feld neu befüllen
-            self.update_info()
-            return
-        n = len(self.model.order)
-        new_selected = set()
-        valid = False
-        for part in text.split(","):
-            part = part.strip()
-            if not part: continue
-            try:
-                if "-" in part:
-                    a, b = part.split("-", 1)
-                    for i in range(int(a.strip())-1, int(b.strip())):
-                        if 0 <= i < n:
-                            new_selected.add(self.model.order[i])
-                            valid = True
-                else:
-                    i = int(part) - 1
-                    if 0 <= i < n:
-                        new_selected.add(self.model.order[i])
-                        valid = True
-            except ValueError:
-                pass
-        if valid:
-            self.model.selected = new_selected
+        positions = _parse_positions(self.sel_edit.text(), len(self.model.order))
+        if positions:
+            self.model.selected = {self.model.order[i] for i in positions}
             self.grid._update_selection()
             self.grid.selection_changed.emit()
-            # Feld auf kompakte Darstellung normalisieren
-            self.update_info()
-        else:
-            # Ungültige Eingabe → Feld zurücksetzen, Auswahl bleibt
-            self.update_info()
+        # Feld immer auf die kompakte Darstellung normalisieren (auch bei
+        # ungültiger Eingabe — die Auswahl bleibt dann unverändert).
+        self.update_info()
 
     def _snapshot(self):
         return (
@@ -2635,15 +2635,15 @@ class ManagePanel(QWidget):
 
     def _delete(self):
         if not self.model.selected:
-            self.status.setText("Zuerst Seiten auswaehlen."); return
+            self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
         self._save_history()
         n = len(self.model.selected)
         self.grid.delete_selected()
-        self.status.setText(f"{n} Seite(n) geloescht.  Strg+Z = Rueckgaengig.")
+        self.status.setText(tr('{p0} Seite(n) geloescht.  Strg+Z = Rueckgaengig.').format(p0=n))
 
     def _copy(self):
         if not self.model.selected:
-            self.status.setText("Zuerst Seiten auswaehlen."); return
+            self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
         # Store (pdf_path, orig_page_idx, rotation) in shared cross-tab clipboard
         ManagePanel._shared_clipboard = []
         for u in self.model.order:
@@ -2653,21 +2653,21 @@ class ManagePanel(QWidget):
                 ManagePanel._shared_clipboard.append((path, orig, rot))
         n = len(ManagePanel._shared_clipboard)
         self.status.setText(
-            f"{n} Seite(n) kopiert.  Strg+V = Einfuegen (auch in anderen Tabs).")
+            tr('{p0} Seite(n) kopiert.  Strg+V = Einfuegen (auch in anderen Tabs).').format(p0=n))
 
     def _cut(self):
         if not self.model.selected:
-            self.status.setText("Zuerst Seiten auswaehlen."); return
+            self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
         self._copy()
         self._save_history()
         n = len(self.model.selected)
         self.grid.delete_selected()
         self.status.setText(
-            f"{n} Seite(n) ausgeschnitten.  Strg+V = Einfuegen.")
+            tr('{p0} Seite(n) ausgeschnitten.  Strg+V = Einfuegen.').format(p0=n))
 
     def _paste(self):
         if not ManagePanel._shared_clipboard:
-            self.status.setText("Nichts zum Einfuegen.  Zuerst Strg+C."); return
+            self.status.setText(tr("Nichts zum Einfuegen.  Zuerst Strg+C.")); return
         self._save_history()
         if self.model.selected:
             positions = [i for i, u in enumerate(self.model.order)
@@ -2689,25 +2689,25 @@ class ManagePanel(QWidget):
             self.model.order.insert(insert_at + i, new_uid)
         self.grid._rebuild(); self.grid.order_changed.emit()
         n = len(ManagePanel._shared_clipboard)
-        self.status.setText(f"{n} Seite(n) eingefuegt.")
+        self.status.setText(tr('{p0} Seite(n) eingefuegt.').format(p0=n))
 
     def _undo(self):
         if not self._history:
-            self.status.setText("Nichts zum Rueckgaengig."); return
+            self.status.setText(tr("Nichts zum Rueckgaengig.")); return
         self._redo_stack.append(self._snapshot())
         self._cap_redo()
         self._restore_snapshot(self._history.pop())
         self.grid._rebuild(); self.grid.order_changed.emit()
-        self.status.setText("Rueckgaengig.  Strg+Y = Wiederholen.")
+        self.status.setText(tr("Rueckgaengig.  Strg+Y = Wiederholen."))
 
     def _redo(self):
         if not self._redo_stack:
-            self.status.setText("Nichts zum Wiederholen."); return
+            self.status.setText(tr("Nichts zum Wiederholen.")); return
         self._history.append(self._snapshot())
         if len(self._history) > 50: self._history.pop(0)
         self._restore_snapshot(self._redo_stack.pop())
         self.grid._rebuild(); self.grid.order_changed.emit()
-        self.status.setText("Wiederholt.")
+        self.status.setText(tr("Wiederholt."))
 
     def _zoom_grid(self, direction):
         """direction: +1=rein, -1=raus, 0=reset"""
@@ -2717,9 +2717,9 @@ class ManagePanel(QWidget):
 
     def _extract(self):
         if not self.model.selected:
-            self.status.setText("Zuerst Seiten auswaehlen."); return
+            self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Extrahieren als", "", "PDF (*.pdf)")
+            self, tr("Extrahieren als"), "", tr("PDF (*.pdf)"))
         if not path: return
         try:
             from pypdf import PdfReader, PdfWriter
@@ -2737,14 +2737,14 @@ class ManagePanel(QWidget):
                     writer.add_page(page)
             with open(path, "wb") as f: writer.write(f)
             AppState.get().open_result(path, "Extrahiert")
-            self.status.setText(f"{len(self.model.selected)} Seite(n) extrahiert.")
+            self.status.setText(tr('{p0} Seite(n) extrahiert.').format(p0=len(self.model.selected)))
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _open_as_tab(self):
         """Ausgewählte Seiten als neue temporäre PDF in neuem Tab öffnen."""
         if not self.model.selected:
-            self.status.setText("Zuerst Seiten auswaehlen."); return
+            self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
         try:
             import tempfile
             from pypdf import PdfReader, PdfWriter
@@ -2767,9 +2767,9 @@ class ManagePanel(QWidget):
             with open(tmp.name, "wb") as f: writer.write(f)
             stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
             AppState.get().open_result(tmp.name, f"{stem} [{n}S]")
-            self.status.setText(f"{n} Seite(n) als neuer Tab geoeffnet.")
+            self.status.setText(tr('{p0} Seite(n) als neuer Tab geoeffnet.').format(p0=n))
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _insert_blank(self):
         try:
@@ -2798,13 +2798,13 @@ class ManagePanel(QWidget):
             self.model.order.insert(insert_at, new_uid)
             self.grid.pdf_path = tmp; self.pdf_path = tmp
             self.grid._rebuild(); self.grid.order_changed.emit()
-            self.status.setText("Leere Seite eingefuegt.")
+            self.status.setText(tr("Leere Seite eingefuegt."))
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _insert_from_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "PDF einfuegen", "", "PDF (*.pdf)")
+            self, tr("PDF einfuegen"), "", tr("PDF (*.pdf)"))
         if not path: return
         try:
             from pypdf import PdfReader, PdfWriter
@@ -2845,9 +2845,9 @@ class ManagePanel(QWidget):
             self.model.selected.clear()
             self.grid.pdf_path = tmp; self.pdf_path = tmp
             self.grid._rebuild(); self.grid.order_changed.emit()
-            self.status.setText(f"{n_ins} Seite(n) eingefuegt.")
+            self.status.setText(tr('{p0} Seite(n) eingefuegt.').format(p0=n_ins))
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     # ── Zusammenführen ──────────────────────────────────────────────────────
     def _merge(self):
@@ -2855,7 +2855,7 @@ class ManagePanel(QWidget):
         from pypdf import PdfReader, PdfWriter
         import tempfile
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "PDFs einfuegen", "", "PDF Dateien (*.pdf)")
+            self, tr("PDFs einfuegen"), "", tr("PDF Dateien (*.pdf)"))
         if not paths: return
         try:
             self._save_history()
@@ -2892,12 +2892,12 @@ class ManagePanel(QWidget):
 
             tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
             with open(tmp, "wb") as f: writer.write(f)
-            AppState.get().result_ready.emit(tmp, "Zusammengefuehrt")
+            AppState.get().result_ready.emit(tmp, tr("Zusammengefuehrt"))
             n_pages = sum(len(PdfReader(p, strict=False).pages) for p in paths)
-            pos_txt = f"nach Seite {insert_at}" if insert_at < len(self.model.order) else "am Ende"
-            self.status.setText(f"OK: {n_pages} Seite(n) {pos_txt} eingefuegt")
+            pos_txt = tr('nach Seite {p0}').format(p0=insert_at) if insert_at < len(self.model.order) else tr("am Ende")
+            self.status.setText(tr('OK: {p0} Seite(n) {p1} eingefuegt').format(p0=n_pages, p1=pos_txt))
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     # ── Trennen ──────────────────────────────────────────────────────────────
     def _split_selection(self):
@@ -2907,7 +2907,7 @@ class ManagePanel(QWidget):
         if not self.model.selected:
             self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
         path, _ = QFileDialog.getSaveFileName(
-            self, tr("Auswahl speichern als"), "", "PDF (*.pdf)")
+            self, tr("Auswahl speichern als"), "", tr("PDF (*.pdf)"))
         if not path: return
         try:
             readers = {}
@@ -2927,7 +2927,7 @@ class ManagePanel(QWidget):
             self.status.setText(f"OK: {n} {tr('Seite(n) gespeichert.')}")
             AppState.get().open_result(path, os.path.basename(path))
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _split_each(self):
         from PyQt6.QtWidgets import QFileDialog
@@ -2953,7 +2953,7 @@ class ManagePanel(QWidget):
                 with open(p, "wb") as f: w.write(f)
             self.status.setText(f"OK: {len(uids)} {tr('Dateien erstellt')}")
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _split_n(self):
         from PyQt6.QtWidgets import QFileDialog, QInputDialog
@@ -2984,7 +2984,7 @@ class ManagePanel(QWidget):
                 with open(p, "wb") as f: w.write(f)
             self.status.setText(f"OK: {chunk} {tr('Dateien erstellt')}")
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _split_ranges(self):
         from PyQt6.QtWidgets import QFileDialog, QInputDialog
@@ -3025,24 +3025,24 @@ class ManagePanel(QWidget):
                 with open(path, "wb") as f: w.write(f)
             self.status.setText(f"OK: {len(groups)} {tr('Dateien erstellt')}")
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
 
     def _save(self):
         try:
             self.status.setText(self._do_save(self.pdf_path))
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _save_as(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "Speichern als", "", "PDF (*.pdf)")
+            self, tr("Speichern als"), "", tr("PDF (*.pdf)"))
         if not path: return
         try:
             self.status.setText(self._do_save(path))
             AppState.get().open_result(path, os.path.basename(path))
         except Exception as e:
-            self.status.setText(f"Fehler: {e}")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _do_save(self, out_path):
         import tempfile
@@ -3074,7 +3074,7 @@ class ManagePanel(QWidget):
             try: os.unlink(tmp_path)
             except Exception: pass
             raise
-        return f"Gespeichert: {n} Seiten"
+        return tr('Gespeichert: {p0} Seiten').format(p0=n)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3127,7 +3127,7 @@ class _PrintPreview(QWidget):
         lyt.setContentsMargins(10, 14, 10, 10)
         lyt.setSpacing(4)
 
-        hdr = QLabel("VORSCHAU")
+        hdr = QLabel(tr("VORSCHAU"))
         hdr.setStyleSheet(
             f"font-size:10px;font-weight:bold;letter-spacing:1px;"
             f"color:{_TV['dim']};background:transparent;")
@@ -3146,7 +3146,7 @@ class _PrintPreview(QWidget):
         lyt.addWidget(self._info_lbl)
 
         # Clip warning (shown only when 100% overflows printable area)
-        self._clip_lbl = QLabel("⚠ Inhalt wird beschnitten")
+        self._clip_lbl = QLabel(tr("⚠ Inhalt wird beschnitten"))
         self._clip_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._clip_lbl.setStyleSheet(
             f"font-size:10px;font-weight:bold;"
@@ -3161,7 +3161,7 @@ class _PrintPreview(QWidget):
         self._prev_btn.setFixedSize(28, 28)
         self._prev_btn.setObjectName("secondaryBtn")
         self._prev_btn.clicked.connect(self._prev_page)
-        self._page_lbl = QLabel("Seite 1 / 1")
+        self._page_lbl = QLabel(tr("Seite 1 / 1"))
         self._page_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._page_lbl.setStyleSheet(
             f"font-size:10px;color:{_TV['dim']};background:transparent;")
@@ -3235,10 +3235,10 @@ class _PrintPreview(QWidget):
         # Show the real page number (of the whole document) plus position in the
         # selection when a subset is being printed.
         if n == total:
-            self._page_lbl.setText(f"Seite {pos + 1} / {total}")
+            self._page_lbl.setText(tr('Seite {p0} / {p1}').format(p0=pos + 1, p1=total))
         else:
             self._page_lbl.setText(
-                f"Seite {pos + 1}   ({self._current + 1} / {n} ausgewählt)")
+                tr('Seite {p0}   ({p1} / {p2} ausgewählt)').format(p0=pos + 1, p1=self._current + 1, p2=n))
         self._prev_btn.setEnabled(self._current > 0)
         self._next_btn.setEnabled(self._current < n - 1)
         self._pixmap    = None
@@ -3464,7 +3464,7 @@ class PrintDialog(QDialog):
         self.pdf_path = pdf_path
         self.model    = model
         self._progress = None       # transfer-progress popup while a job spools
-        self.setWindowTitle("Drucken")
+        self.setWindowTitle(tr("Drucken"))
         self.setMinimumSize(820, 540)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._setup()
@@ -3567,17 +3567,17 @@ class PrintDialog(QDialog):
         rl.addWidget(_sep())
 
         # ── DRUCKER ──────────────────────────────────────────────────────────
-        rl.addWidget(_sec("DRUCKER"))
+        rl.addWidget(_sec(tr("DRUCKER")))
         self.printer_combo = QComboBox()
         self._hw_margin_mm = 3.0
         rl.addWidget(self.printer_combo)
         rl.addWidget(_sep())
 
         # ── SEITEN ───────────────────────────────────────────────────────────
-        rl.addWidget(_sec("SEITEN"))
-        self.radio_all     = QRadioButton(f"Alle Seiten  (1 – {n})")
-        self.radio_current = QRadioButton("Aktuelle Seite")
-        self.radio_range   = QRadioButton("Seitenbereich:")
+        rl.addWidget(_sec(tr("SEITEN")))
+        self.radio_all     = QRadioButton(tr("Alle Seiten  (1 – {n})").format(n=n))
+        self.radio_current = QRadioButton(tr("Aktuelle Seite"))
+        self.radio_range   = QRadioButton(tr("Seitenbereich:"))
         self.radio_all.setChecked(True)
         rl.addWidget(self.radio_all)
         rl.addWidget(self.radio_current)
@@ -3587,7 +3587,7 @@ class PrintDialog(QDialog):
         range_row.setSpacing(6)
         range_row.addWidget(self.radio_range)
         self.range_edit = QLineEdit()
-        self.range_edit.setPlaceholderText("z.B.  1-3, 5, 7-9")
+        self.range_edit.setPlaceholderText(tr("z.B.  1-3, 5, 7-9"))
         self.range_edit.setFixedWidth(160)
         self.range_edit.setEnabled(False)
         self.radio_range.toggled.connect(self.range_edit.setEnabled)
@@ -3597,28 +3597,28 @@ class PrintDialog(QDialog):
         rl.addWidget(_sep())
 
         # ── SEITENHANDHABUNG ─────────────────────────────────────────────────
-        rl.addWidget(_sec("SEITENHANDHABUNG"))
+        rl.addWidget(_sec(tr("SEITENHANDHABUNG")))
         pg = QGridLayout()
         pg.setHorizontalSpacing(8)
         pg.setVerticalSpacing(6)
         pg.setColumnMinimumWidth(0, 145)
         pg.setColumnStretch(1, 1)
 
-        pg.addWidget(_lbl("Skalierung:"), 0, 0)
+        pg.addWidget(_lbl(tr("Skalierung:")), 0, 0)
         self.scale_combo = QComboBox()
         self.scale_combo.addItems([
-            "An Seite anpassen",
-            "Originalgrösse  (100%)",
-            "Auf bedruckbaren Bereich verkleinern",
+            tr("An Seite anpassen"),
+            tr("Originalgrösse  (100%)"),
+            tr("Auf bedruckbaren Bereich verkleinern"),
         ])
         self.scale_combo.setItemData(
-            0, "Skaliert hoch und runter — Seite füllt den Druckbereich vollständig (Acrobat: Fit Page)",
+            0, tr("Skaliert hoch und runter — Seite füllt den Druckbereich vollständig (Acrobat: Fit Page)"),
             Qt.ItemDataRole.ToolTipRole)
         self.scale_combo.setItemData(
-            1, "Druckt in Originalgrösse — Inhalt kann am Rand beschnitten werden",
+            1, tr("Druckt in Originalgrösse — Inhalt kann am Rand beschnitten werden"),
             Qt.ItemDataRole.ToolTipRole)
         self.scale_combo.setItemData(
-            2, "Verkleinert nur wenn nötig, vergrössert nie (Acrobat: Shrink to Printable Area)",
+            2, tr("Verkleinert nur wenn nötig, vergrössert nie (Acrobat: Shrink to Printable Area)"),
             Qt.ItemDataRole.ToolTipRole)
         pg.addWidget(self.scale_combo, 0, 1)
 
@@ -3629,12 +3629,13 @@ class PrintDialog(QDialog):
         self._margin_lbl.setMinimumHeight(28)
         pg.addWidget(self._margin_lbl, 1, 0, 1, 2)
 
-        pg.addWidget(_lbl("Ausrichtung:"), 2, 0)
+        pg.addWidget(_lbl(tr("Ausrichtung:")), 2, 0)
         self.orient_combo = QComboBox()
-        self.orient_combo.addItems(["Automatisch", "Hochformat", "Querformat"])
+        self.orient_combo.addItems(
+            [tr("Automatisch"), tr("Hochformat"), tr("Querformat")])
         pg.addWidget(self.orient_combo, 2, 1)
 
-        pg.addWidget(_lbl("Papier:"), 3, 0)
+        pg.addWidget(_lbl(tr("Papier:")), 3, 0)
         self.paper_combo = QComboBox()
         pg.addWidget(self.paper_combo, 3, 1)
 
@@ -3642,14 +3643,14 @@ class PrintDialog(QDialog):
         rl.addWidget(_sep())
 
         # ── AUSGABE ──────────────────────────────────────────────────────────
-        rl.addWidget(_sec("AUSGABE"))
+        rl.addWidget(_sec(tr("AUSGABE")))
         out = QGridLayout()
         out.setHorizontalSpacing(8)
         out.setVerticalSpacing(6)
         out.setColumnMinimumWidth(0, 145)
         out.setColumnStretch(1, 1)
 
-        out.addWidget(_lbl("Kopien:"), 0, 0)
+        out.addWidget(_lbl(tr("Kopien:")), 0, 0)
         copies_row = QHBoxLayout()
         copies_row.setContentsMargins(0, 0, 0, 0)
         copies_row.setSpacing(8)
@@ -3658,34 +3659,53 @@ class PrintDialog(QDialog):
         self.copies_spin.setValue(1)
         self.copies_spin.setFixedWidth(60)
         copies_row.addWidget(self.copies_spin)
-        self.collate_check = QCheckBox("Sortieren  (1,2,3 / 1,2,3)")
+        self.collate_check = QCheckBox(tr("Sortieren  (1,2,3 / 1,2,3)"))
         self.collate_check.setChecked(True)
         copies_row.addWidget(self.collate_check)
         copies_row.addStretch()
         out.addLayout(copies_row, 0, 1)
 
-        out.addWidget(_lbl("Farbe:"), 1, 0)
+        out.addWidget(_lbl(tr("Farbe:")), 1, 0)
         self.color_combo = QComboBox()
-        self.color_combo.addItems(["Farbe", "Graustufen"])
+        self.color_combo.addItems([tr("Farbe"), tr("Graustufen")])
         out.addWidget(self.color_combo, 1, 1)
 
-        out.addWidget(_lbl("Farbkonvertierung:"), 2, 0)
+        out.addWidget(_lbl(tr("Farbkonvertierung:")), 2, 0)
         self.colorconv_combo = QComboBox()
         self.colorconv_combo.addItems([
-            "Unverändert",
-            "→ CMYK  (für CMYK-Drucker)",
-            "→ sRGB  (für RGB-Drucker)",
+            tr("Unverändert"),
+            tr("→ CMYK  (für CMYK-Drucker)"),
+            tr("→ sRGB  (für RGB-Drucker)"),
         ])
         self.colorconv_combo.setToolTip(
-            "Unverändert: Druckertreiber entscheidet (empfohlen mit ICC-Profilen)\n"
-            "→ CMYK: Vor dem Druck in CMYK umrechnen\n"
-            "→ sRGB: Vor dem Druck in sRGB umrechnen")
+            tr("Unverändert: Druckertreiber entscheidet (empfohlen mit ICC-Profilen)\n"
+               "→ CMYK: Vor dem Druck in CMYK umrechnen\n"
+               "→ sRGB: Vor dem Druck in sRGB umrechnen"))
         out.addWidget(self.colorconv_combo, 2, 1)
         self.color_combo.currentIndexChanged.connect(
             lambda i: self.colorconv_combo.setEnabled(i == 0))
 
-        self.duplex_check = QCheckBox("Beidseitig drucken  (Duplex)")
-        out.addWidget(self.duplex_check, 3, 0, 1, 2)
+        duplex_row = QHBoxLayout()
+        duplex_row.setContentsMargins(0, 0, 0, 0)
+        duplex_row.setSpacing(8)
+        self.duplex_check = QCheckBox(tr("Beidseitig drucken  (Duplex)"))
+        duplex_row.addWidget(self.duplex_check)
+        # Binding edge: long edge (book, back upright) vs short edge (notepad,
+        # back rotated 180°). Only meaningful when duplex is on.
+        self.duplex_edge_combo = QComboBox()
+        self.duplex_edge_combo.addItem(tr("Lange Seite (Buch)"),       "long")
+        self.duplex_edge_combo.addItem(tr("Kurze Seite (Notizblock)"), "short")
+        self.duplex_edge_combo.setToolTip(
+            tr("Lange Seite: Rückseite steht gleich herum wie die Vorderseite "
+               "(Bindung an der langen Kante, wie ein Buch).\n"
+               "Kurze Seite: Rückseite ist um 180° gedreht "
+               "(Bindung an der kurzen Kante, wie ein Notizblock)."))
+        self.duplex_edge_combo.setEnabled(False)
+        # Edge selection only applies when duplex is enabled.
+        self.duplex_check.toggled.connect(self.duplex_edge_combo.setEnabled)
+        duplex_row.addWidget(self.duplex_edge_combo)
+        duplex_row.addStretch()
+        out.addLayout(duplex_row, 3, 0, 1, 2)
 
         rl.addLayout(out)
         rl.addStretch(1)
@@ -3709,11 +3729,11 @@ class PrintDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.addStretch()
-        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn = QPushButton(tr("Abbrechen"))
         cancel_btn.setObjectName("secondaryBtn")
         cancel_btn.clicked.connect(self.close)
         btn_row.addWidget(cancel_btn)
-        print_btn = QPushButton("  Drucken  ")
+        print_btn = QPushButton(tr("  Drucken  "))
         print_btn.setObjectName("actionBtn")
         print_btn.setMinimumWidth(110)
         print_btn.clicked.connect(self._do_print)
@@ -3804,7 +3824,7 @@ class PrintDialog(QDialog):
             return
 
         # First open: show a placeholder, fetch the list off-thread
-        self.printer_combo.addItem("Drucker werden geladen…", "none")
+        self.printer_combo.addItem(tr("Drucker werden geladen…"), "none")
         self.printer_combo.setEnabled(False)
         self._printers_loaded.connect(self._apply_printer_list)
 
@@ -3862,7 +3882,7 @@ class PrintDialog(QDialog):
         for nm in names:
             self.printer_combo.addItem(nm, nm)
         if self.printer_combo.count() == 0:
-            self.printer_combo.addItem("Kein Drucker gefunden", "none")
+            self.printer_combo.addItem(tr("Kein Drucker gefunden"), "none")
         if default:
             idx = self.printer_combo.findData(default)
             if idx >= 0:
@@ -3947,28 +3967,32 @@ class PrintDialog(QDialog):
             self.paper_combo.blockSignals(False)
 
             # ── Duplex ────────────────────────────────────────────────────────
+            # Qt's supportedDuplexModes()/defaultDuplexMode() is UNRELIABLE for
+            # driverless/IPP printers on Linux/CUPS — it reports DuplexNone even
+            # for printers that clearly duplex (verified: Brother HL-L5210DN,
+            # EPSON ET-8500). The real job is spooled via lp/CUPS (not QPrinter),
+            # and CUPS applies the sides= option regardless, so gating the
+            # checkbox on this query wrongly greyed it out (the "cosmetic" bug).
+            # Keep the control ALWAYS enabled; use the query only for a default.
+            self.duplex_check.setEnabled(True)
+            self.duplex_check.setToolTip("")
+            default_duplex, edge = False, "long"
             if valid:
                 try:
-                    modes = info.supportedDuplexModes()
-                    can_duplex = any(m != QPrinter.DuplexMode.DuplexNone for m in modes)
-                except AttributeError:
-                    can_duplex = True
-                self.duplex_check.setEnabled(can_duplex)
-                # Default to the printer's OWN duplex default.
-                default_duplex = False
-                try:
-                    default_duplex = (info.defaultDuplexMode()
-                                      != QPrinter.DuplexMode.DuplexNone)
+                    dm = info.defaultDuplexMode()
+                    default_duplex = (dm != QPrinter.DuplexMode.DuplexNone)
+                    if dm == QPrinter.DuplexMode.DuplexShortSide:
+                        edge = "short"
                 except Exception:
                     pass
-                self.duplex_check.setChecked(can_duplex and default_duplex)
-                self.duplex_check.setToolTip(
-                    "" if can_duplex
-                    else "Dieser Drucker unterstützt kein Duplex-Drucken.")
-            else:
-                # Generic/unknown printer — re-enable so user can try
-                self.duplex_check.setEnabled(True)
-                self.duplex_check.setToolTip("")
+            self.duplex_check.setChecked(default_duplex)
+            ei = self.duplex_edge_combo.findData(edge)
+            if ei >= 0:
+                self.duplex_edge_combo.setCurrentIndex(ei)
+            # Explicitly sync the edge combo to the checkbox — setChecked() only
+            # emits toggled() when the state actually changes, so an unchanged
+            # (still-unchecked) checkbox would otherwise leave the combo stale.
+            self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
 
             # ── Color ─────────────────────────────────────────────────────────
             if valid:
@@ -3996,7 +4020,7 @@ class PrintDialog(QDialog):
                 self.colorconv_combo.setEnabled(
                     can_color and self.color_combo.currentIndex() == 0)
                 self.color_combo.setToolTip(
-                    "" if can_color else "Dieser Drucker druckt nur in Graustufen.")
+                    "" if can_color else tr("Dieser Drucker druckt nur in Graustufen."))
             else:
                 self.color_combo.setEnabled(True)
                 self.color_combo.setToolTip("")
@@ -4032,13 +4056,13 @@ class PrintDialog(QDialog):
         """Updates the info label below the scale combo to reflect hardware margins."""
         m = self._hw_margin_mm
         if m < 0.5:
-            text = "Randloser Druck — bei gleichem Seitenformat keine Skalierung"
-            tip  = ("Dieser Drucker unterstützt randlosen Druck (full-bleed). "
-                    "'An Seite anpassen' ändert eine A4-Seite auf A4-Papier nicht.")
+            text = tr("Randloser Druck — bei gleichem Seitenformat keine Skalierung")
+            tip  = tr("Dieser Drucker unterstützt randlosen Druck (full-bleed). "
+                      "'An Seite anpassen' ändert eine A4-Seite auf A4-Papier nicht.")
         else:
-            text = f"Druckrand: ca. {m:.1f} mm  (roter Rahmen in Vorschau)"
-            tip  = (f"Ca. {m:.1f} mm Hardware-Rand kann nicht bedruckt werden. "
-                    f"'An Seite anpassen' verkleinert den Inhalt auf den bedruckbaren Bereich.")
+            text = tr("Druckrand: ca. {m:.1f} mm  (roter Rahmen in Vorschau)").format(m=m)
+            tip  = tr("Ca. {m:.1f} mm Hardware-Rand kann nicht bedruckt werden. "
+                      "'An Seite anpassen' verkleinert den Inhalt auf den bedruckbaren Bereich.").format(m=m)
         self._margin_lbl.setText(text)
         self._margin_lbl.setToolTip(tip)
         self.scale_combo.setToolTip(tip)
@@ -4111,11 +4135,12 @@ class PrintDialog(QDialog):
                         pages.append(p - 1)
             except ValueError:
                 self.status_lbl.setText(
-                    f"Ungültiger Seitenbereich — bitte Zahlen zwischen 1 und {n} eingeben.")
+                    tr("Ungültiger Seitenbereich — bitte Zahlen zwischen 1 und {n} eingeben.").format(n=n))
                 return None
             pages = [p for p in sorted(set(pages)) if 0 <= p < n]
             if not pages:
-                self.status_lbl.setText(f"Kein gültiger Seitenbereich für {n}-seitige Datei.")
+                self.status_lbl.setText(
+                    tr("Kein gültiger Seitenbereich für {n}-seitige Datei.").format(n=n))
                 return None
             return pages
 
@@ -4142,7 +4167,7 @@ class PrintDialog(QDialog):
                 except Exception:
                     skipped.append(pos + 1)
             if not writer.pages:
-                raise RuntimeError("Keine Seiten konnten gelesen werden (Datei beschädigt?).")
+                raise RuntimeError(tr("Keine Seiten konnten gelesen werden (Datei beschädigt?)."))
             with open(dest_path, "wb") as f:
                 writer.write(f)
         finally:
@@ -4156,24 +4181,28 @@ class PrintDialog(QDialog):
         for w in [self.printer_combo, self.copies_spin,
                   self.scale_combo, self.paper_combo, self.orient_combo,
                   self.color_combo, self.colorconv_combo,
-                  self.collate_check, self.duplex_check,
+                  self.collate_check, self.duplex_check, self.duplex_edge_combo,
                   self.radio_all, self.radio_current, self.radio_range,
                   self.range_edit]:
             w.setEnabled(not busy)
         for btn in self.findChildren(QPushButton):
             btn.setEnabled(not busy)
+        # The edge selector is only usable while duplex is on — re-sync it to
+        # the checkbox after a job so it doesn't stay enabled when duplex is off.
+        if not busy:
+            self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
 
     def _do_print(self):
         pages_to_print = self._get_pages()
         if pages_to_print is None:
             return
         if not pages_to_print:
-            self.status_lbl.setText("Keine Seiten ausgewählt.")
+            self.status_lbl.setText(tr("Keine Seiten ausgewählt."))
             return
 
         printer_name = self.printer_combo.currentData()
         if printer_name == "none":
-            self.status_lbl.setText("Kein Drucker verfügbar.")
+            self.status_lbl.setText(tr("Kein Drucker verfügbar."))
             return
 
         copies    = self.copies_spin.value()
@@ -4181,6 +4210,7 @@ class PrintDialog(QDialog):
         colorconv = self.colorconv_combo.currentIndex()
         collate   = self.collate_check.isChecked()
         duplex    = self.duplex_check.isChecked()
+        duplex_edge = self.duplex_edge_combo.currentData() or "long"
         scale_idx  = self.scale_combo.currentIndex()
         paper_key  = self.paper_combo.currentData() or "A4"
         orient_idx = self.orient_combo.currentIndex()
@@ -4189,22 +4219,23 @@ class PrintDialog(QDialog):
             from pypdf import PdfReader
             if PdfReader(self.pdf_path, strict=False).is_encrypted:
                 self.status_lbl.setText(
-                    "Fehler: PDF ist passwortgeschützt — "
-                    "bitte zuerst entsperren.")
+                    tr("Fehler: PDF ist passwortgeschützt — "
+                       "bitte zuerst entsperren."))
                 return
         except Exception:
             pass
 
         n = len(pages_to_print)
         self.status_lbl.setText(
-            f"Sende {n} Seite(n) an »{self.printer_combo.currentText()}«…")
+            tr("Sende {n} Seite(n) an »{name}«…").format(
+                n=n, name=self.printer_combo.currentText()))
         self._set_printing(True)
 
         # Progress popup — shows the transfer stages as they happen.
         from PyQt6.QtWidgets import QProgressDialog
         self._progress = QProgressDialog(
-            "Druckauftrag wird vorbereitet…", "", 0, 100, self)
-        self._progress.setWindowTitle("Drucken")
+            tr("Druckauftrag wird vorbereitet…"), "", 0, 100, self)
+        self._progress.setWindowTitle(tr("Drucken"))
         self._progress.setWindowModality(Qt.WindowModality.WindowModal)
         self._progress.setCancelButton(None)       # a spooling job can't be cancelled
         self._progress.setMinimumDuration(0)
@@ -4250,15 +4281,15 @@ class PrintDialog(QDialog):
                 try:
                     skipped = self._print_via_gs(
                         pages_to_print, copies, grayscale, collate, duplex,
-                        colorconv, printer_name, scale_idx, paper_key,
-                        orient_idx, hw_margin_mm, _report)
+                        duplex_edge, colorconv, printer_name, scale_idx,
+                        paper_key, orient_idx, hw_margin_mm, _report)
                     obj = self_ref()
                     if obj is not None:
                         obj._print_finished.emit(pages_to_print, copies, skipped)
                     return
                 except Exception as e:
                     errors.append(f"GS/lp: {e}")
-                    _report(f"GS-Pfad fehlgeschlagen — Versuche Qt-Fallback…")
+                    _report(tr("GS-Pfad fehlgeschlagen — Versuche Qt-Fallback…"))
 
             # ── Fallback: Qt rasteriser ───────────────────────────────────────
             # Pre-render pages in background (pdfium, no QPrinter); draw on GUI thread.
@@ -4268,7 +4299,7 @@ class PrintDialog(QDialog):
                     paper_key, qt_dpi, hw_margin_mm, _report)
             except Exception as e:
                 errors.append(f"Qt render: {e}")
-                msg = "Druckfehler:\n" + "\n".join(errors)
+                msg = tr("Druckfehler:") + "\n" + "\n".join(errors)
                 obj = self_ref()
                 if obj is not None:
                     obj._print_failed.emit(msg)
@@ -4278,22 +4309,28 @@ class PrintDialog(QDialog):
             if obj is not None:
                 obj._print_qt_send.emit((
                     rendered, skipped, pages_to_print, copies, grayscale,
-                    collate, duplex, printer_name, paper_key, orient_idx))
+                    collate, duplex, duplex_edge, printer_name, paper_key,
+                    orient_idx))
 
         threading.Thread(target=_bg, daemon=True).start()
 
     def _progress_pct(self, msg):
-        """Map a status message to an approximate transfer-progress percentage."""
+        """Map a status message to an approximate transfer-progress percentage.
+
+        Matches on language-independent tokens (the ``x / y`` fraction) and on
+        both the German and English keyword stems, so translated status text
+        still advances the progress bar correctly.
+        """
         import re
-        m = re.search(r'Seite\s+(\d+)\s*/\s*(\d+)', msg)
+        m = re.search(r'(\d+)\s*/\s*(\d+)', msg)   # "Seite x / y" / "page x / y"
         if m:   # per-page rendering (Qt fallback) gives a real fraction
             x, tot = int(m.group(1)), max(1, int(m.group(2)))
             return 15 + int(60 * x / tot)
         low = msg.lower()
-        if "zusammenstellen" in low:                    return 20
-        if "ghostscript" in low or "normalisierung" in low: return 50
-        if "sende an drucker" in low:                   return 85
-        if "fallback" in low or "render" in low:        return 30
+        if "zusammenstellen" in low or "collecting" in low:  return 20
+        if "ghostscript" in low or "normalis" in low:        return 50
+        if "sende an drucker" in low or "sending to printer" in low: return 85
+        if "fallback" in low or "render" in low:             return 30
         return None
 
     def _on_print_status(self, msg):
@@ -4317,13 +4354,14 @@ class PrintDialog(QDialog):
 
     def _finish(self, pages, copies, skipped):
         total = len(pages) * copies
-        msg = (f"Druckauftrag gesendet: "
-               f"{len(pages)} Seite(n) × {copies} Kopie(n) = {total} Blatt.")
+        msg = tr("Druckauftrag gesendet: "
+                 "{pages} Seite(n) × {copies} Kopie(n) = {total} Blatt.").format(
+                     pages=len(pages), copies=copies, total=total)
         if skipped:
-            msg += f"  (Übersprungen: S. {skipped})"
+            msg += tr("  (Übersprungen: S. {skipped})").format(skipped=skipped)
         self.status_lbl.setText(msg)
         if self._progress is not None:
-            self._progress.setLabelText("Fertig — an Drucker gesendet.")
+            self._progress.setLabelText(tr("Fertig — an Drucker gesendet."))
             self._progress.setValue(100)
         # Briefly show 100 %, then close the popup AND the print dialog.
         QTimer.singleShot(600, self._after_print_close)
@@ -4360,13 +4398,13 @@ class PrintDialog(QDialog):
             page.cropbox  = full
             writer.add_page(page)
         if not writer.pages:
-            raise RuntimeError("Re-centre: keine Seiten.")
+            raise RuntimeError(tr("Re-centre: keine Seiten."))
         with open(dest_path, "wb") as f:
             writer.write(f)
 
     def _print_via_gs(self, pages, copies, grayscale, collate, duplex,
-                      colorconv, printer_name, scale_idx, paper_key,
-                      orient_idx, hw_margin_mm, report):
+                      duplex_edge, colorconv, printer_name, scale_idx,
+                      paper_key, orient_idx, hw_margin_mm, report):
         """Full-quality print via Ghostscript + CUPS/lp.
 
         GS normalises, embeds fonts, applies colour conversion AND pre-scales the
@@ -4410,7 +4448,7 @@ class PrintDialog(QDialog):
         recenter_tmp = None
         printable_unrecentered = False
         try:
-            report(f"Seiten zusammenstellen… ({len(pages)})")
+            report(tr("Seiten zusammenstellen… ({count})").format(count=len(pages)))
             skipped = self._write_subset_pdf(pages, sub_tmp)
             print_src = sub_tmp
             cups_fit  = (scale_idx == 0)   # used by both the GS + lp branches
@@ -4418,7 +4456,7 @@ class PrintDialog(QDialog):
             if shutil.which("gs"):
                 norm_fd, norm_tmp = tempfile.mkstemp(suffix="_norm.pdf")
                 os.close(norm_fd)
-                report("Ghostscript: Normalisierung und Skalierung…")
+                report(tr("Ghostscript: Normalisierung und Skalierung…"))
 
                 # ── Scaling strategy ──────────────────────────────────────────
                 # "Fit" (scale_idx 0) is delegated to CUPS/pdftopdf, which scales
@@ -4518,7 +4556,7 @@ class PrintDialog(QDialog):
                                     r.returncode, r.stderr[:300])
 
             # Spool via lp/CUPS
-            report("Sende an Drucker…")
+            report(tr("Sende an Drucker…"))
             cmd = ["lp"]
             if printer_name and printer_name not in ("lp", "none"):
                 cmd += ["-d", printer_name]
@@ -4549,7 +4587,20 @@ class PrintDialog(QDialog):
                 cmd += ["-o", "orientation-requested=4"]
 
             if duplex:
-                cmd += ["-o", "sides=two-sided-long-edge"]
+                # Emit BOTH the IPP attribute AND the PPD driver keyword.
+                # Driverless/IPP queues (e.g. the Xerox) honour `sides`; the
+                # EPSON/Brother-style PPD filters read the `Duplex` keyword and
+                # otherwise fall back to the queue's stored default — which is
+                # what made portrait backs come out tumbled (short edge) even
+                # though we asked for long edge. Both values are synonyms, and
+                # CUPS ignores whichever the driver doesn't understand, so
+                # sending both is safe and forces the correct binding edge.
+                if duplex_edge == "short":
+                    cmd += ["-o", "sides=two-sided-short-edge",
+                            "-o", "Duplex=DuplexTumble"]
+                else:
+                    cmd += ["-o", "sides=two-sided-long-edge",
+                            "-o", "Duplex=DuplexNoTumble"]
             # Force the colour mode explicitly so this job overrides the
             # printer's system-wide default (e.g. a queue whose default is
             # monochrome must still print in colour when the user picks "Farbe").
@@ -4611,7 +4662,7 @@ class PrintDialog(QDialog):
 
         try:
             for i, pos in enumerate(pages):
-                report(f"Rendere Seite {i + 1} / {len(pages)}…")
+                report(tr("Rendere Seite {i} / {total}…").format(i=i + 1, total=len(pages)))
                 uid = self.model.order[pos]
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
                 rot = self.model.get_rotation(uid)
@@ -4663,11 +4714,11 @@ class PrintDialog(QDialog):
                 except Exception: pass
 
         if not rendered:
-            raise RuntimeError("Keine Seiten konnten gerendert werden.")
+            raise RuntimeError(tr("Keine Seiten konnten gerendert werden."))
         return rendered, skipped
 
     def _qt_send_to_printer(self, rendered, skipped, pages, copies, grayscale,
-                             collate, duplex, printer_name,
+                             collate, duplex, duplex_edge, printer_name,
                              paper_key, orient_idx):
         """Draw pre-rendered images to QPrinter.  MUST run on the GUI thread."""
         from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
@@ -4683,7 +4734,9 @@ class PrintDialog(QDialog):
             printer.setCopyCount(copies)
             printer.setCollateCopies(collate)
             if duplex:
-                printer.setDuplex(QPrinter.DuplexMode.DuplexLongSide)
+                printer.setDuplex(
+                    QPrinter.DuplexMode.DuplexShortSide if duplex_edge == "short"
+                    else QPrinter.DuplexMode.DuplexLongSide)
             if grayscale:
                 printer.setColorMode(QPrinter.ColorMode.GrayScale)
 
@@ -4702,7 +4755,7 @@ class PrintDialog(QDialog):
 
             painter = QPainter()
             if not painter.begin(printer):
-                raise RuntimeError("QPainter konnte nicht gestartet werden.")
+                raise RuntimeError(tr("QPainter konnte nicht gestartet werden."))
             try:
                 first = True
                 for pil, page_orient, target_w, target_h in rendered:
@@ -4722,7 +4775,7 @@ class PrintDialog(QDialog):
             self._finish(pages, copies, skipped)
 
         except Exception as e:
-            self._on_print_failed(f"Qt-Druckfehler: {e}")
+            self._on_print_failed(tr("Qt-Druckfehler: {e}").format(e=e))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4828,7 +4881,7 @@ class PdfTab(QWidget):
         return len(self.model.order) if self.model else 0
 
     def save_to(self, out_path):
-        if not self.model: raise ValueError("Keine PDF geladen.")
+        if not self.model: raise ValueError(tr("Keine PDF geladen."))
         from pypdf import PdfReader, PdfWriter
         readers = {}
         def _rdr(p):
@@ -4842,7 +4895,7 @@ class PdfTab(QWidget):
             if rot: page.rotate(rot)
             writer.add_page(page)
         with open(out_path, "wb") as f: writer.write(f)
-        return f"Gespeichert: {len(self.model.order)} Seiten -> {out_path}"
+        return tr('Gespeichert: {p0} Seiten -> {p1}').format(p0=len(self.model.order), p1=out_path)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4850,13 +4903,11 @@ class PdfTab(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class FileCard(QFrame):
-    """Thumbnail-Karte für eine Datei — wie PageCard aber für Dateien."""
-    clicked  = pyqtSignal(int)   # display_pos
-    move_req = pyqtSignal(int, int)  # from_pos, to_pos
-    # Thumbnail render results, delivered from the worker thread to the GUI
-    # thread (QTimer.singleShot never fires off a thread with no event loop).
-    _preview_ready  = pyqtSignal(object)   # PNG bytes
-    _preview_failed = pyqtSignal(str)      # file extension
+    """Thumbnail card for one file. Deliberately a near-copy of PageCard: the
+    merge view is the page-manager view for files, so cards must have the same
+    size, the same selected/unselected look, the same Ctrl-click handling and
+    the same multi-drag pixmap."""
+    clicked = pyqtSignal(int)
 
     FILE_ICONS = {
         ".pdf":"📄",".jpg":"🖼",".jpeg":"🖼",".png":"🖼",
@@ -4866,176 +4917,302 @@ class FileCard(QFrame):
         ".odp":"📊",".rtf":"📝",".pages":"📝"
     }
 
-    def __init__(self, pos, path, parent=None):
+    def __init__(self, pos, path, pixmap=None, parent=None,
+                 card_w=CARD_W, card_h=CARD_H):
         super().__init__(parent)
-        self.pos  = pos
-        self.path = path
-        self._selected = False
-        self._drag_pos = None
-        self.setFixedSize(CARD_W+16, CARD_H+36)
-        self.setAcceptDrops(True)
+        self.pos         = pos
+        self.display_pos = pos       # same attribute name PageCard uses
+        self.path        = path
+        self._card_w     = card_w
+        self._card_h     = card_h
+        self.setFixedSize(card_w+16, card_h+28)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._selected           = False
+        self._drag_pos           = None
+        self._pending_ctrl_click = False
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(4,4,4,2); lay.setSpacing(2)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 2)
+        layout.setSpacing(2)
 
         self.img = QLabel()
-        self.img.setFixedSize(CARD_W, CARD_H)
+        self.img.setFixedSize(card_w, card_h)
         self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.img.setStyleSheet(
-            f"border:1px solid {_TV['input_brd']};background:{_TV['card_bg']};border-radius:2px;")
-        lay.addWidget(self.img)
+            f"border:1px solid {_TV['border']};background:{_TV['card_bg']};border-radius:2px;")
+        if pixmap is not None:
+            self.set_pixmap(pixmap)
+        layout.addWidget(self.img)
 
-        name = os.path.basename(path)
-        short = name if len(name)<=14 else name[:11]+"..."
-        self.lbl = QLabel(short)
-        self.lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl.setWordWrap(True)
-        self.lbl.setStyleSheet(f"color:{_TV['dim']};font-size:9px;background:transparent;")
-        lay.addWidget(self.lbl)
+        num_size = max(9, min(13, card_w // 10))
+        self.num = QLabel()
+        self.num.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.num.setStyleSheet(
+            f"color:{_TV['dim']};font-size:{num_size}px;"
+            "background:transparent;border:none;")
+        layout.addWidget(self.num)
+        self._set_label(num_size)
+        self.setToolTip(path)
 
-        self._preview_ready.connect(self._set_preview_data)
-        self._preview_failed.connect(self._set_preview_icon)
-        self._load_preview()
+        if pixmap is None:
+            self._load_local_preview()
         self._update_style()
 
-    def _load_preview(self):
-        """Load the first-page thumbnail in a background thread to avoid blocking the GUI."""
-        ext  = os.path.splitext(self.path)[1].lower()
-        path = self.path
+    def _set_label(self, num_size):
+        """"<n>  <name>", elided to the card width — the position matters for the
+        merge order, the name for telling the files apart."""
+        from PyQt6.QtGui import QFontMetrics
+        f = self.num.font(); f.setPixelSize(num_size); self.num.setFont(f)
+        text = f"{self.pos + 1}  {os.path.basename(self.path)}"
+        self.num.setText(QFontMetrics(f).elidedText(
+            text, Qt.TextElideMode.ElideMiddle, self._card_w))
 
+    def set_pixmap(self, pm):
+        if pm is None or pm.isNull(): return
+        self.img.setPixmap(pm.scaled(
+            self._card_w, self._card_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+
+    def set_image(self, image: QImage):
+        """Called from the GUI thread with a freshly rendered QImage (same entry
+        point as PageCard, so the shared render queue can drive both)."""
+        self.set_pixmap(QPixmap.fromImage(image))
+
+    def _load_local_preview(self):
+        """Non-PDF files: images render from disk, everything else gets its icon.
+        PDF thumbnails come from the shared render queue via FileGrid."""
+        ext = os.path.splitext(self.path)[1].lower()
         if ext == ".pdf":
-            import threading
-            def _bg():
-                try:
-                    import pypdfium2 as pdfium, io
-                    with _pdfium_lock:
-                        doc = pdfium.PdfDocument(path)
-                        bm  = doc[0].render(scale=0.5)
-                        pil = bm.to_pil()
-                        doc.close()
-                    buf = io.BytesIO(); pil.save(buf, "PNG")
-                    data = buf.getvalue()
-                    try:    self._preview_ready.emit(data)
-                    except RuntimeError: pass   # card was removed
-                except Exception:
-                    try:    self._preview_failed.emit(ext)
-                    except RuntimeError: pass
-            threading.Thread(target=_bg, daemon=True).start()
             return
-
         try:
-            if ext in (".jpg",".jpeg",".png",".tif",".tiff",".bmp",".webp"):
-                pm = QPixmap(self.path)
+            if ext in (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"):
+                self.set_pixmap(QPixmap(self.path))
             else:
-                # Für Office-Dateien: Icon-Text
-                icon = self.FILE_ICONS.get(ext, "📄")
-                pm = QPixmap(CARD_W, CARD_H)
-                pm.fill(QColor("#1a2a40"))
-                from PyQt6.QtGui import QPainter, QFont as _F
-                p = QPainter(pm)
-                f = _F(); f.setPointSize(32); p.setFont(f)
-                p.setPen(QColor("#eaeaea"))
-                p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, icon)
-                p.end()
-            pm = pm.scaled(CARD_W, CARD_H,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            self.img.setPixmap(pm)
+                self._set_preview_icon(ext)
         except Exception:
             self._set_preview_icon(ext)
-
-    def _set_preview_data(self, data):
-        from PyQt6.QtGui import QImage
-        pm = QPixmap.fromImage(QImage.fromData(data))
-        pm = pm.scaled(CARD_W, CARD_H,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation)
-        if not self.img.isHidden():
-            self.img.setPixmap(pm)
 
     def _set_preview_icon(self, ext):
         icon = self.FILE_ICONS.get(ext, "📄")
         self.img.setText(icon)
         self.img.setStyleSheet(
-            f"border:1px solid {_TV['input_brd']};background:{_TV['card_bg']};"
-                f"border-radius:2px;font-size:32px;")
-
-    def _update_style(self):
-        col = _TV['acc'] if self._selected else _TV['card_bg']
-        self.setStyleSheet(
-            f"FileCard{{background:{col}22;border:2px solid {col};"
-            f"border-radius:4px;}}")
+            f"border:1px solid {_TV['border']};background:{_TV['card_bg']};"
+            f"border-radius:2px;font-size:{max(18, self._card_w // 3)}px;")
 
     def set_selected(self, sel):
-        self._selected = sel; self._update_style()
+        self._selected = sel
+        self._update_style()
+
+    def _update_style(self):
+        if self._selected:
+            self.setStyleSheet(
+                f"QFrame{{background:{_TV['sel_bg']};border:2px solid {_TV['acc']};border-radius:5px;}}")
+        else:
+            self.setStyleSheet(
+                "QFrame{background:transparent;border:2px solid transparent;"
+                "border-radius:5px;}")
 
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = e.position().toPoint()
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        self._drag_pos = e.position().toPoint()
+        ctrl = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier)
+        # Ctrl+click on a selected card: defer, so a following drag keeps the
+        # whole selection (exactly what PageCard does).
+        if ctrl and self._selected:
+            self._pending_ctrl_click = True
+        else:
+            self._pending_ctrl_click = False
+            self.clicked.emit(self.pos)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._pending_ctrl_click:
+            self._pending_ctrl_click = False
             self.clicked.emit(self.pos)
 
     def mouseMoveEvent(self, e):
         if not (e.buttons() & Qt.MouseButton.LeftButton): return
         if self._drag_pos is None: return
         if (e.position().toPoint()-self._drag_pos).manhattanLength() < 12: return
+        self._pending_ctrl_click = False
+
+        grid = self.parent()
+        while grid and not isinstance(grid, FileGrid):
+            grid = grid.parent()
+        if not self._selected:
+            self.clicked.emit(self.pos)
+        is_multi = bool(grid and self._selected and len(grid._selected) > 1)
+
         drag = QDrag(self)
-        mime = QMimeData(); mime.setText(str(self.pos))
+        mime = QMimeData()
+        mime.setText(f"multi:{self.pos}" if is_multi else str(self.pos))
         drag.setMimeData(mime)
-        pm = QPixmap(self.size()); self.render(pm)
+        if is_multi and grid:
+            pm = QPixmap(self.size()); pm.fill(QColor("#1e3a5a"))
+            from PyQt6.QtGui import QPainter as _P, QFont as _F
+            p = _P(pm); p.setPen(QColor("#eaeaea"))
+            f = _F(); f.setPointSize(11); f.setBold(True); p.setFont(f)
+            p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter,
+                       tr('{p0} Dateien').format(p0=len(grid._selected)))
+            p.end()
+        else:
+            pm = QPixmap(self.size()); self.render(pm)
         drag.setPixmap(pm); drag.setHotSpot(e.position().toPoint())
         drag.exec(Qt.DropAction.MoveAction)
 
-    def dragEnterEvent(self, e):
-        if e.mimeData().hasText(): e.acceptProposedAction()
-
-    def dropEvent(self, e):
-        if e.mimeData().hasText():
-            grid = self.parent()
-            while grid and not isinstance(grid, FileGrid):
-                grid = grid.parent()
-            if grid:
-                to = grid._drop_indicator if grid._drop_indicator >= 0 else self.pos
-                grid.handle_drop(int(e.mimeData().text()), to)
-            e.acceptProposedAction()
-
 
 class FileGrid(QWidget):
-    """Grid von FileCards — wie PageGrid aber für Dateien."""
+    """Grid of FileCards — the file-level twin of PageGrid: same zoom, same
+    Ctrl/Shift selection, same drag & drop, and PDF thumbnails come off the same
+    shared render queue instead of a thread per card."""
     order_changed     = pyqtSignal()
-    selection_changed = pyqtSignal(int)   # pos des gewaehlten Elements
+    selection_changed = pyqtSignal(int)   # pos of the card that was clicked
 
     def __init__(self, paths, parent=None):
         super().__init__(parent)
-        self._paths = list(paths)
-        self._cards = []
-        self._selected = set()
-        self._last_selected = -1
+        self._paths          = list(paths)
+        self._cards          = []
+        self._selected       = set()
+        self._last_selected  = -1
+        self._last_click_pos = None       # for Shift+click ranges
         self._drop_indicator = -1
+        self._card_w         = CARD_W
+        self._card_h         = CARD_H
+        self._thumb_gen      = 0
+        self._thumb_tasks    = []
+        self._thumb_signals  = _ThumbSignals()
+        self._thumb_signals.ready.connect(self._on_thumb_ready)
+        self._scroll_connected = False
         self.setAcceptDrops(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._rebuild()
         _register_themed(self)
 
     def _apply_theme(self):
         self._rebuild()
 
-    def _rebuild(self):
-        for c in self._cards: c.deleteLater()
-        self._cards = []
-        for i, path in enumerate(self._paths):
-            card = FileCard(i, path, self)
-            card.clicked.connect(self._on_click)
-            card.set_selected(i in self._selected)
-            self._cards.append(card)
-        self._relayout()
+    # ── zoom (same steps and limits as PageGrid) ──────────────────────────────
+    def zoom_in(self):
+        step = 20 if self._card_w < 300 else 40 if self._card_w < 600 else 80
+        self._card_w = min(1400, self._card_w + step)
+        self._card_h = int(self._card_w * (CARD_H / CARD_W))
+        self._rebuild()
 
+    def zoom_out(self):
+        step = 20 if self._card_w <= 300 else 40 if self._card_w <= 600 else 80
+        self._card_w = max(60, self._card_w - step)
+        self._card_h = int(self._card_w * (CARD_H / CARD_W))
+        self._rebuild()
+
+    def zoom_reset(self):
+        self._card_w = CARD_W; self._card_h = CARD_H
+        self._rebuild()
+
+    def wheelEvent(self, e):
+        if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.zoom_in() if e.angleDelta().y() > 0 else self.zoom_out()
+            e.accept()
+        else:
+            e.ignore()
+
+    def _render_w(self):
+        return max(self._card_w * 2, 200)
+
+    def _rebuild(self):
+        if getattr(self, "_rebuilding", False):
+            return
+        self._rebuilding = True
+        try:
+            for t in self._thumb_tasks: t.cancel()
+            self._thumb_tasks.clear()
+            self._thumb_gen += 1
+            old_cards = self._cards[:]
+            old_pm = {c.path: c.img.pixmap() for c in old_cards
+                      if c.img.pixmap() and not c.img.pixmap().isNull()}
+            self._cards = []
+            render_w = self._render_w()
+            for i, path in enumerate(self._paths):
+                pm = None
+                if os.path.splitext(path)[1].lower() == ".pdf":
+                    cached = (_ThumbnailCache.get((path, 0, 0, render_w))
+                              or _ThumbnailCache.get_any(path, 0, 0))
+                    if cached is not None:
+                        pm = QPixmap.fromImage(cached)
+                    else:
+                        pm = old_pm.get(path)
+                card = FileCard(i, path, pm, self, self._card_w, self._card_h)
+                card.clicked.connect(self._on_click)
+                card.set_selected(i in self._selected)
+                self._cards.append(card)
+            for c in old_cards:
+                c.hide(); c.deleteLater()
+            self._relayout()
+            QTimer.singleShot(0, self._connect_scroll)
+            QTimer.singleShot(0, self._schedule_visible)
+        finally:
+            self._rebuilding = False
+
+    # ── lazy PDF thumbnails on the shared queue ───────────────────────────────
+    def _get_scroll_area(self):
+        p = self.parent()
+        if p is None: return None
+        p = p.parent()
+        return p if isinstance(p, QScrollArea) else None
+
+    def _connect_scroll(self):
+        if self._scroll_connected: return
+        sa = self._get_scroll_area()
+        if sa is None: return
+        sa.verticalScrollBar().valueChanged.connect(self._schedule_visible)
+        self._scroll_connected = True
+
+    def _schedule_visible(self, _=None):
+        if not self._cards: return
+        sa = self._get_scroll_area()
+        if sa is not None:
+            scroll_y   = sa.verticalScrollBar().value()
+            viewport_h = sa.viewport().height() or 600
+            y_min = max(0, scroll_y - viewport_h); y_max = scroll_y + 2*viewport_h
+        else:
+            y_min, y_max = 0, 9_999_999
+        per_row = self._per_row()
+        cell_h  = self._card_h + 28 + GAP
+        row_min = max(0, int((y_min - MARGIN) // cell_h))
+        row_max = int((y_max - MARGIN) // cell_h) + 1
+        gen = self._thumb_gen
+        for i, card in enumerate(self._cards):
+            if i // per_row < row_min or i // per_row > row_max: continue
+            self._maybe_schedule(i, gen)
+
+    def _maybe_schedule(self, cidx, gen):
+        if cidx >= len(self._cards): return
+        card = self._cards[cidx]
+        if os.path.splitext(card.path)[1].lower() != ".pdf": return
+        render_w = self._render_w()
+        if _ThumbnailCache.get((card.path, 0, 0, render_w)) is not None:
+            return
+        self._thumb_tasks = [t for t in self._thumb_tasks if t._active]
+        for t in self._thumb_tasks:
+            if t._cidx == cidx: return
+        task = _ThumbTask(gen, cidx, card.path, 0, 0, render_w, self._thumb_signals)
+        self._thumb_tasks.append(task)
+        _render_queue.submit(task, 1)
+
+    def _on_thumb_ready(self, gen, cidx, image):
+        if gen != self._thumb_gen: return
+        if 0 <= cidx < len(self._cards):
+            self._cards[cidx].set_image(image)
+
+    # ── layout ────────────────────────────────────────────────────────────────
     def _per_row(self):
-        return max(1, (self.width()-2*MARGIN+GAP)//(CARD_W+16+GAP))
+        w = self.width() or 800
+        return max(1, (w - 2*MARGIN + GAP) // (self._card_w+16+GAP))
 
     def _relayout(self):
         if not self._cards: self.setMinimumHeight(200); return
         pr     = self._per_row()
-        cell_w = CARD_W+16+GAP; cell_h = CARD_H+36+GAP
+        cell_w = self._card_w+16+GAP; cell_h = self._card_h+28+GAP
         rows   = (len(self._cards)+pr-1)//pr
         for i, card in enumerate(self._cards):
             card.move(MARGIN+i%pr*cell_w, MARGIN+i//pr*cell_h)
@@ -5043,21 +5220,21 @@ class FileGrid(QWidget):
         self.setMinimumHeight(MARGIN+rows*cell_h+MARGIN)
         self.update()
 
-    def resizeEvent(self, e): self._relayout()
+    def resizeEvent(self, e):
+        self._relayout(); self._schedule_visible()
 
     def paintEvent(self, e):
         super().paintEvent(e)
         if self._drop_indicator < 0 or not self._cards: return
-        from PyQt6.QtGui import QPainter, QPen
         pr     = self._per_row()
-        cell_w = CARD_W+16+GAP; cell_h = CARD_H+36+GAP
+        cell_w = self._card_w+16+GAP; cell_h = self._card_h+28+GAP
         pos    = min(self._drop_indicator, len(self._cards))
         col    = pos%pr; row = pos//pr
         x      = MARGIN+col*cell_w-GAP//2
         y0     = MARGIN+row*cell_h-4
         y1     = y0+cell_h-GAP+8
         p = QPainter(self)
-        pen = QPen(QColor("#e94560"),3); p.setPen(pen)
+        p.setPen(QPen(QColor("#e94560"), 3))
         p.drawLine(x,y0,x,y1)
         p.drawLine(x-5,y0+6,x,y0); p.drawLine(x+5,y0+6,x,y0)
         p.drawLine(x-5,y1-6,x,y1); p.drawLine(x+5,y1-6,x,y1)
@@ -5066,7 +5243,7 @@ class FileGrid(QWidget):
     def _pos_from_point(self, pt):
         if not self._cards: return 0
         pr     = self._per_row()
-        cell_w = CARD_W+16+GAP; cell_h = CARD_H+36+GAP
+        cell_w = self._card_w+16+GAP; cell_h = self._card_h+28+GAP
         rel_x  = pt.x()-MARGIN; rel_y = pt.y()-MARGIN
         col    = max(0,min(rel_x//cell_w,pr-1))
         row    = max(0,rel_y//cell_h)
@@ -5074,26 +5251,64 @@ class FileGrid(QWidget):
         if rel_x-col*cell_w > cell_w//2: pos+=1
         return min(pos,len(self._cards))
 
+    # ── selection (Ctrl toggles, Shift selects a range — as in PageGrid) ──────
     def _on_click(self, pos):
-        if pos in self._selected: self._selected.discard(pos)
-        else: self._selected = {pos}
+        mods  = QApplication.keyboardModifiers()
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+        ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
+        if shift and self._last_click_pos is not None:
+            lo, hi = sorted((self._last_click_pos, pos))
+            self._selected |= set(range(lo, hi+1))
+        elif ctrl:
+            self._selected ^= {pos}
+            self._last_click_pos = pos
+        else:
+            self._selected = {pos}
+            self._last_click_pos = pos
         self._last_selected = pos
-        for i,c in enumerate(self._cards): c.set_selected(i in self._selected)
+        self._update_selection()
         self.selection_changed.emit(pos)
 
+    def _update_selection(self):
+        for i, c in enumerate(self._cards):
+            c.set_selected(i in self._selected)
+
+    def select_all(self):
+        self._selected = set(range(len(self._paths)))
+        self._update_selection(); self.selection_changed.emit(self._last_selected)
+
+    def deselect_all(self):
+        self._selected.clear(); self._last_selected = -1; self._last_click_pos = None
+        self._update_selection(); self.selection_changed.emit(-1)
+
     def current_path(self):
-        if self._last_selected >= 0 and self._last_selected < len(self._paths):
+        if 0 <= self._last_selected < len(self._paths):
             return self._paths[self._last_selected]
         return None
 
-    def handle_drop(self, from_pos, to_pos):
+    # ── drag & drop ───────────────────────────────────────────────────────────
+    def handle_drop(self, from_pos, to_pos, multi=False):
         self._drop_indicator = -1; self.update()
-        if from_pos == to_pos: return
-        p = self._paths.pop(from_pos)
-        ins = to_pos-1 if from_pos < to_pos else to_pos
-        self._paths.insert(max(0,min(ins,len(self._paths))), p)
-        self._selected.clear()
+        if multi:
+            picked = [self._paths[i] for i in sorted(self._selected)
+                      if 0 <= i < len(self._paths)]
+            if not picked: return
+            before = sum(1 for i in self._selected if i < to_pos)
+            rest   = [p for i, p in enumerate(self._paths) if i not in self._selected]
+            ins    = max(0, min(to_pos - before, len(rest)))
+            self._paths = rest[:ins] + picked + rest[ins:]
+            self._selected = set(range(ins, ins+len(picked)))
+            self._last_selected = ins
+        else:
+            if from_pos == to_pos: return
+            p   = self._paths.pop(from_pos)
+            ins = to_pos-1 if from_pos < to_pos else to_pos
+            ins = max(0, min(ins, len(self._paths)))
+            self._paths.insert(ins, p)
+            self._selected = {ins}; self._last_selected = ins
+        self._last_click_pos = self._last_selected
         self._rebuild(); self.order_changed.emit()
+        self.selection_changed.emit(self._last_selected)
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasText(): e.acceptProposedAction()
@@ -5109,43 +5324,55 @@ class FileGrid(QWidget):
 
     def dropEvent(self, e):
         if not e.mimeData().hasText(): return
-        to = self._pos_from_point(e.position().toPoint())
+        to = self._drop_indicator
+        if to < 0: to = self._pos_from_point(e.position().toPoint())
         self._drop_indicator = -1; self.update()
-        try: self.handle_drop(int(e.mimeData().text()), to)
-        except (ValueError, IndexError): pass
+        text = e.mimeData().text()
         e.acceptProposedAction()
+        try:
+            if text.startswith("multi:"):
+                self.handle_drop(int(text.split(":")[1]), to, multi=True)
+            else:
+                self.handle_drop(int(text), to)
+        except (ValueError, IndexError):
+            pass
 
+    # ── operations ────────────────────────────────────────────────────────────
     def remove_selected(self):
         for i in sorted(self._selected, reverse=True):
             if 0<=i<len(self._paths): self._paths.pop(i)
-        self._selected.clear(); self._rebuild(); self.order_changed.emit()
+        self._selected.clear(); self._last_selected = -1; self._last_click_pos = None
+        self._rebuild(); self.order_changed.emit(); self.selection_changed.emit(-1)
 
     def move_up(self):
         sel = sorted(self._selected)
         if not sel or sel[0]==0: return
         for i in sel:
-            if i>0: self._paths[i-1],self._paths[i]=self._paths[i],self._paths[i-1]
+            self._paths[i-1], self._paths[i] = self._paths[i], self._paths[i-1]
         self._selected = {i-1 for i in sel}
-        self._last_selected = min(self._selected) if self._selected else -1
+        self._last_selected = min(self._selected)
+        self._last_click_pos = self._last_selected
         self._rebuild(); self.order_changed.emit()
+        self.selection_changed.emit(self._last_selected)
 
     def move_down(self):
-        sel = sorted(self._selected,reverse=True)
+        sel = sorted(self._selected, reverse=True)
         if not sel or sel[0]>=len(self._paths)-1: return
         for i in sel:
-            if i<len(self._paths)-1:
-                self._paths[i],self._paths[i+1]=self._paths[i+1],self._paths[i]
+            self._paths[i], self._paths[i+1] = self._paths[i+1], self._paths[i]
         self._selected = {i+1 for i in sel}
-        self._last_selected = max(self._selected) if self._selected else -1
+        self._last_selected = max(self._selected)
+        self._last_click_pos = self._last_selected
         self._rebuild(); self.order_changed.emit()
+        self.selection_changed.emit(self._last_selected)
 
     def get_paths(self): return list(self._paths)
 
     def get_selected_info(self):
-        if not self._selected: return "Keine Auswahl"
+        if not self._selected: return tr("Keine Auswahl")
         sel = sorted(self._selected)
-        if len(sel)==1: return f"Datei {sel[0]+1}"
-        return f"{len(sel)} Dateien ausgewaehlt"
+        if len(sel)==1: return tr('Datei {p0}').format(p0=sel[0] + 1)
+        return tr('{p0} Dateien ausgewaehlt').format(p0=len(sel))
 
 
 class MergeOrderWidget(QWidget):
@@ -5156,7 +5383,29 @@ class MergeOrderWidget(QWidget):
         super().__init__(parent)
         self._setup(file_paths)
 
+    def _sep(self):
+        f = QFrame()
+        f.setFrameShape(QFrame.Shape.HLine)
+        f.setStyleSheet(f"color:{_TV['border']};margin:3px 0;")
+        return f
+
+    def _section(self, layout, text):
+        lbl = QLabel(text)
+        lbl.setObjectName("sectionLabel")
+        layout.addWidget(lbl)
+
+    def _btn(self, text, fn):
+        b = QPushButton(text)
+        b.setObjectName("secondaryBtn")
+        b.clicked.connect(fn)
+        b.setMinimumHeight(28)
+        return b
+
     def _setup(self, file_paths):
+        # The layout below mirrors ManagePanel exactly (fixed title bar, scrollable
+        # sidebar with the same margins/sections/helpers, grid on the right) — this
+        # view is "Seiten verwalten" for files, so it should not look like a
+        # different program.
         root = QVBoxLayout(self)
         root.setContentsMargins(0,0,0,0); root.setSpacing(0)
 
@@ -5165,72 +5414,99 @@ class MergeOrderWidget(QWidget):
             f"QSplitter::handle{{background:{_TV['splitter']};width:2px;}}")
 
         # ── Links: Steuerung wie ManagePanel ─────────────────────────
-        self._left_w = QWidget(); self._left_w.setObjectName("mergeLeftW"); self._left_w.setFixedWidth(210)
+        self._left_w = QWidget(); self._left_w.setObjectName("mergeLeftW")
+        self._left_w.setMinimumWidth(220)
+        ol = QVBoxLayout(self._left_w); ol.setContentsMargins(0,0,0,0); ol.setSpacing(0)
+
+        self._title_w = QWidget(); self._title_w.setObjectName("mergeTitleW")
+        self._title_w.setFixedHeight(36)
+        tl = QHBoxLayout(self._title_w); tl.setContentsMargins(10, 0, 10, 0)
+        self._title_lbl = QLabel(tr("Dateien zusammenfuehren"))
+        tl.addWidget(self._title_lbl)
+        ol.addWidget(self._title_w)
+
         self._left_scroll = QScrollArea(); self._left_scroll.setWidgetResizable(True)
         self._left_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._left_content = QWidget(); self._left_content.setObjectName("mergeLeftContent")
-        ll = QVBoxLayout(self._left_content); ll.setContentsMargins(10,10,10,10); ll.setSpacing(5)
+        ll = QVBoxLayout(self._left_content); ll.setContentsMargins(10, 8, 22, 10); ll.setSpacing(5)
         self._left_scroll.setWidget(self._left_content)
-        ol = QVBoxLayout(self._left_w); ol.setContentsMargins(0,0,0,0); ol.setSpacing(0)
-        ol.addWidget(self._left_scroll)
+        ol.addWidget(self._left_scroll, 1)
 
-        def sep():
-            f = QFrame(); f.setFrameShape(QFrame.Shape.HLine)
-            f.setStyleSheet(f"color:{_TV['border']};margin:2px 0;"); return f
-        def sec(t):
-            lb = QLabel(t); lb.setObjectName("sectionLabel")
-            ll.addWidget(lb)
-        def btn(t, fn):
-            b = QPushButton(t); b.setObjectName("secondaryBtn")
-            b.setMinimumHeight(28); b.clicked.connect(fn); return b
-
-        self._info = QLabel("Keine Auswahl")
+        sel_lbl = QLabel(tr("Auswahl  (z.B. 1, 3, 5-8)"))
+        sel_lbl.setObjectName("sectionLabel")
+        ll.addWidget(sel_lbl)
+        self.sel_edit = QLineEdit()
+        self.sel_edit.setPlaceholderText(tr("z.B. 1, 3, 5-8, 12  →  Enter"))
+        self.sel_edit.returnPressed.connect(self._apply_sel_edit)
+        ll.addWidget(self.sel_edit)
+        self._info = QLabel(tr("Keine Auswahl"))
         self._info.setWordWrap(True)
         self._info.setObjectName("dimLabel")
-        ll.addWidget(self._info); ll.addWidget(sep())
+        ll.addWidget(self._info); ll.addWidget(self._sep())
 
-        sec("REIHENFOLGE")
-        ll.addWidget(btn("▲  Hoch",    self._move_up))
-        ll.addWidget(btn("▼  Runter",  self._move_down))
-        ll.addWidget(sep())
+        self._section(ll, tr("ANSICHT"))
+        zoom_row = QHBoxLayout(); zoom_row.setSpacing(4)
+        self._zoom_btns = []
+        for text, fn in [("−", lambda: self._grid.zoom_out()),
+                         ("+", lambda: self._grid.zoom_in()),
+                         ("↺", lambda: self._grid.zoom_reset())]:
+            b = QPushButton(text); b.setFixedSize(30, 26)
+            b.clicked.connect(fn)
+            zoom_row.addWidget(b); self._zoom_btns.append(b)
+        self._zoom_hint_lbl = QLabel(tr("Thumbnails"))
+        zoom_row.addWidget(self._zoom_hint_lbl); zoom_row.addStretch()
+        ll.addLayout(zoom_row)
+        ll.addWidget(self._sep())
 
-        sec("OPERATIONEN")
-        ll.addWidget(btn("✕  Entfernen  (Entf)", self._remove))
-        ll.addWidget(sep())
+        self._section(ll, tr("AUSWAHL"))
+        ll.addWidget(self._btn(tr("Alle auswaehlen  (Strg+A)"),  lambda: self._grid.select_all()))
+        ll.addWidget(self._btn(tr("Auswahl aufheben  (Strg+D)"), lambda: self._grid.deselect_all()))
+        ll.addWidget(self._sep())
 
-        sec("DATEI-INFO")
+        self._section(ll, tr("REIHENFOLGE"))
+        ll.addWidget(self._btn(tr("▲  Hoch"),   self._move_up))
+        ll.addWidget(self._btn(tr("▼  Runter"), self._move_down))
+        ll.addWidget(self._sep())
+
+        self._section(ll, tr("OPERATIONEN"))
+        ll.addWidget(self._btn(tr("Entfernen  (Entf)"), self._remove))
+        ll.addWidget(self._sep())
+
+        self._section(ll, tr("DATEI-INFO"))
         self._inf_name = QLabel("—"); self._inf_name.setWordWrap(True)
         self._inf_name.setObjectName("currentFileLabel")
         ll.addWidget(self._inf_name)
         self._inf_type = QLabel(""); self._inf_pages = QLabel(""); self._inf_size = QLabel("")
         for w in [self._inf_type, self._inf_pages, self._inf_size]:
             w.setObjectName("dimLabel"); ll.addWidget(w)
-        ll.addWidget(sep())
+        ll.addWidget(self._sep())
+
+        self._section(ll, tr("ZUSAMMENFUEHREN"))
         self._total = QLabel("")
         self._total.setWordWrap(True)
         self._total.setObjectName("dimLabel")
-        ll.addWidget(self._total); ll.addStretch()
-
-        self._btn_go = QPushButton("  Zusammenfuehren")
+        ll.addWidget(self._total)
+        self._btn_go = QPushButton(tr("  Zusammenfuehren"))
         self._btn_go.setObjectName("actionBtn")
         self._btn_go.clicked.connect(self._confirm)
         ll.addWidget(self._btn_go)
-        ll.addWidget(btn("✗  Abbrechen", self.cancelled.emit))
+        ll.addStretch()
+
+        ll.addWidget(self._btn(tr("✗  Abbrechen"), self.cancelled.emit))
+        self.status = QLabel(tr("Drag & Drop zum Umsortieren  ·  Strg/Shift zum Mehrfachauswaehlen"))
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet("font-size:10px;min-height:32px;background:transparent;")
+        ll.addWidget(self.status)
         splitter.addWidget(self._left_w)
-        _register_themed(self)
 
         # ── Rechts: FileGrid ─────────────────────────────────────────
         self._right_w = QWidget(); self._right_w.setObjectName("mergeRightW")
         rl = QVBoxLayout(self._right_w); rl.setContentsMargins(0,0,0,0); rl.setSpacing(0)
 
-        hint = QLabel("  Drag & Drop zum Umsortieren  |  Klick zum Auswaehlen  |  Entf zum Entfernen")
-        hint.setObjectName("dimLabel")
-        hint.setFixedHeight(24)
-        rl.addWidget(hint)
-
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._grid = FileGrid(file_paths)
         self._grid.order_changed.connect(self._on_order_changed)
         self._grid.selection_changed.connect(self._on_select)
@@ -5238,20 +5514,28 @@ class MergeOrderWidget(QWidget):
         rl.addWidget(self._scroll, 1)
         splitter.addWidget(self._right_w)
 
-        splitter.setSizes([210, 500])
+        splitter.setSizes([220, 500])
         splitter.setStretchFactor(0,0); splitter.setStretchFactor(1,1)
         root.addWidget(splitter, 1)
 
         from PyQt6.QtGui import QShortcut, QKeySequence
-        QShortcut(QKeySequence(Qt.Key.Key_Delete), self).activated.connect(self._remove)
+        for keys, fn in ((Qt.Key.Key_Delete, self._remove),
+                         ("Ctrl+A", lambda: self._grid.select_all()),
+                         ("Ctrl+D", lambda: self._grid.deselect_all())):
+            QShortcut(QKeySequence(keys), self).activated.connect(fn)
 
         self._on_order_changed()
+        _register_themed(self)
         self._apply_theme()
 
     def _apply_theme(self):
         t = _TV
         self._left_w.setStyleSheet(
-            f"QWidget#mergeLeftW{{background:{t['sidebar_bg']};}}")
+            f"QWidget#mergeLeftW{{background:{t['sidebar_bg']};border-right:1px solid {t['border']};}}")
+        self._title_w.setStyleSheet(
+            f"QWidget#mergeTitleW{{background:{t['sidebar_bg']};}}")
+        self._title_lbl.setStyleSheet(
+            f"color:{t['text']};font-size:13px;font-weight:bold;background:transparent;")
         self._left_scroll.setStyleSheet(
             f"QScrollArea{{background:{t['sidebar_bg']};border:none;}}")
         self._left_content.setStyleSheet(
@@ -5260,6 +5544,17 @@ class MergeOrderWidget(QWidget):
             f"QWidget#mergeRightW{{background:{t['viewer_bg']};}}")
         self._scroll.setStyleSheet(
             f"QScrollArea{{background:{t['viewer_bg']};border:none;}}")
+        _zs = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
+               f"border:1px solid {t['btn_brd']};border-radius:4px;font-size:13px;}}"
+               f"QPushButton:hover{{background:{t['hover']};}}")
+        for b in getattr(self, "_zoom_btns", []):
+            b.setStyleSheet(_zs)
+        if hasattr(self, "_zoom_hint_lbl"):
+            self._zoom_hint_lbl.setStyleSheet(
+                f"color:{t['vdim']};font-size:9px;background:transparent;")
+        if hasattr(self, "status"):
+            self.status.setStyleSheet(
+                f"color:{t['vdim']};font-size:10px;min-height:32px;background:transparent;")
 
     FILE_KINDS = {
         ".pdf":"PDF",".jpg":"JPEG",".jpeg":"JPEG",".png":"PNG",
@@ -5274,31 +5569,51 @@ class MergeOrderWidget(QWidget):
         n = len(self._grid.get_paths())
         n_conv = sum(1 for p in self._grid.get_paths()
                      if os.path.splitext(p)[1].lower() != ".pdf")
-        txt = f"{n} Datei(en)"
-        if n_conv: txt += f"  —  {n_conv} zu konvertieren"
+        txt = tr('{p0} Datei(en)').format(p0=n)
+        if n_conv: txt += tr("  —  {p0} zu konvertieren").format(p0=n_conv)
         self._total.setText(txt)
-        self._btn_go.setText(f"  Zusammenfuehren  ({n})")
+        self._btn_go.setText(tr('  Zusammenfuehren  ({p0})').format(p0=n))
+
+    def _apply_sel_edit(self):
+        positions = _parse_positions(self.sel_edit.text(), len(self._grid.get_paths()))
+        if positions:
+            self._grid._selected = set(positions)
+            self._grid._last_selected = min(positions)
+            self._grid._last_click_pos = self._grid._last_selected
+            self._grid._update_selection()
+            self._on_select(self._grid._last_selected)
+        else:
+            self.update_info()
+
+    def update_info(self):
+        """Keep the selection field showing the current selection in compact
+        form — the page manager does the same after every selection change."""
+        self.sel_edit.blockSignals(True)
+        self.sel_edit.setText(_positions_to_str(sorted(i+1 for i in self._grid._selected)))
+        self.sel_edit.blockSignals(False)
 
     def _on_select(self, pos):
+        self.update_info()
         path = self._grid.current_path()
         if not path:
             self._inf_name.setText("—"); self._inf_type.setText("")
             self._inf_pages.setText(""); self._inf_size.setText("")
-            self._info.setText("Keine Auswahl"); return
+            self._info.setText(tr("Keine Auswahl")); return
+        self._info.setText(self._grid.get_selected_info())
         ext = os.path.splitext(path)[1].lower()
         self._inf_name.setText(os.path.basename(path))
         self._inf_type.setText(f"Typ: {self.FILE_KINDS.get(ext, ext.upper().lstrip('.'))}")
-        try: self._inf_size.setText(f"Groesse: {os.path.getsize(path)/1024:.0f} KB")
+        try: self._inf_size.setText(tr('Groesse: {p0:.0f} KB').format(p0=os.path.getsize(path) / 1024))
         except Exception: self._inf_size.setText("")
         if ext == ".pdf":
             try:
                 from pypdf import PdfReader
-                self._inf_pages.setText(f"Seiten: {len(PdfReader(path, strict=False).pages)}")
-            except Exception: self._inf_pages.setText("Seiten: ?")
+                self._inf_pages.setText(tr('Seiten: {p0}').format(p0=len(PdfReader(path, strict=False).pages)))
+            except Exception: self._inf_pages.setText(tr("Seiten: ?"))
         else:
-            self._inf_pages.setText("Seiten: nach Konvertierung")
+            self._inf_pages.setText(tr("Seiten: nach Konvertierung"))
         paths = self._grid.get_paths()
-        self._info.setText(f"Datei {pos+1} von {len(paths)}")
+        self._info.setText(tr('Datei {p0} von {p1}').format(p0=pos + 1, p1=len(paths)))
 
     def _move_up(self):
         self._grid.move_up()
@@ -5320,16 +5635,18 @@ class MergeOrderWidget(QWidget):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GLOBALER KEY-FILTER FUER TAB / ESCAPE
-# Tab   → Einzelansicht ↔ Seiten verwalten umschalten
-# Esc   → immer zurück zur Einzelansicht
+# GLOBALER KEY-FILTER
+# Ctrl+Shift+O → Einzelansicht ↔ Seiten verwalten umschalten
+# Esc          → immer zurück zur Einzelansicht
+# Tab          → normale Fokus-Navigation zwischen Eingabefeldern (nicht abgefangen)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class _ViewerKeyFilter(QObject):
     """
     Globaler QApplication-Event-Filter.
-    Tab   → Viewer einblenden + Einzelansicht ↔ Seiten verwalten
-    Escape→ Viewer einblenden + immer zur Einzelansicht
+    Ctrl+Shift+O → Viewer einblenden + Einzelansicht ↔ Seiten verwalten
+    Escape       → Viewer einblenden + immer zur Einzelansicht
+    Tab wird NICHT abgefangen → Standard-Fokus-Traversal der Widgets.
     """
     def __init__(self, viewer_panel):
         super().__init__(viewer_panel)
@@ -5352,7 +5669,10 @@ class _ViewerKeyFilter(QObject):
             k = event.key()
             mods = event.modifiers()
             ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
-            if k in (Qt.Key.Key_Tab, Qt.Key.Key_Escape):
+            # Escape is claimed (exits the manage view). Tab is intentionally
+            # NOT claimed anymore so it performs normal focus traversal between
+            # input fields — the manage view moved to Ctrl+Shift+O.
+            if k == Qt.Key.Key_Escape:
                 focused = QApplication.focusWidget()
                 if not isinstance(focused, QLineEdit):
                     event.accept()
@@ -5368,15 +5688,26 @@ class _ViewerKeyFilter(QObject):
         if t != QEvent.Type.KeyPress:
             return False
 
-        # Nie abfangen wenn ein Textfeld fokussiert ist
-        focused = QApplication.focusWidget()
-        if isinstance(focused, QLineEdit):
-            return False
-
         k    = event.key()
         mods = event.modifiers()
         ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
         shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+
+        # Ctrl+Shift+O → toggle the pages overview (Manage view). Handled BEFORE
+        # the text-field guard so it works globally, even while a field is
+        # focused. This replaces the old plain-Tab binding, which hijacked Tab
+        # everywhere and made normal field-to-field focus traversal impossible.
+        if ctrl and shift and k == Qt.Key.Key_O:
+            try:
+                self._vp._toggle_manage()
+            except Exception as exc:
+                import logging; logging.error(f"_toggle_manage: {exc}", exc_info=True)
+            return True
+
+        # Nie abfangen wenn ein Textfeld fokussiert ist
+        focused = QApplication.focusWidget()
+        if isinstance(focused, QLineEdit):
+            return False
 
         # Ctrl+W → close current tab (like browser / Acrobat)
         if ctrl and k == Qt.Key.Key_W:
@@ -5429,12 +5760,6 @@ class _ViewerKeyFilter(QObject):
                         import logging; logging.error(f"zoom shortcut: {exc}", exc_info=True)
             return True
 
-        if k == Qt.Key.Key_Tab and not ctrl:
-            try:
-                self._vp._toggle_manage()
-            except Exception as exc:
-                import logging; logging.error(f"_toggle_manage: {exc}", exc_info=True)
-            return True
         if k == Qt.Key.Key_Escape:
             try:
                 self._vp._ensure_single_view()
@@ -5580,7 +5905,7 @@ class PageViewerPanel(QWidget):
         self._viewer_info.setObjectName("dimLabel")
         tbl.addWidget(self._viewer_info, 1)
 
-        self._manage_btn = QPushButton(tr("Seiten verwalten  [Tab]"))
+        self._manage_btn = QPushButton(tr("Seiten verwalten  [Strg+Umschalt+O]"))
         self._manage_btn.setObjectName("actionBtn")
         self._manage_btn.setEnabled(False)
         self._manage_btn.clicked.connect(self._manage_current)
@@ -5671,14 +5996,14 @@ class PageViewerPanel(QWidget):
     def _open(self, path=None):
         if not path:
             path, _ = QFileDialog.getOpenFileName(
-                self, "Datei oeffnen", "",
-                "Alle unterstuetzten Dateien ("
+                self, tr("Datei oeffnen"), "",
+                tr("Alle unterstuetzten Dateien ("
                 "*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp "
                 "*.docx *.doc *.xlsx *.xls *.pptx *.ppt "
                 "*.odt *.ods *.odp *.rtf *.pages);;"
                 "PDF (*.pdf);;"
                 "Bilder (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;"
-                "Office (*.docx *.doc *.xlsx *.xls *.pptx *.ppt *.odt *.ods *.odp *.rtf *.pages)")
+                "Office (*.docx *.doc *.xlsx *.xls *.pptx *.ppt *.odt *.ods *.odp *.rtf *.pages)"))
         if not path: return
 
         ext = os.path.splitext(path)[1].lower()
@@ -5696,7 +6021,7 @@ class PageViewerPanel(QWidget):
                 path = tmp
             except Exception as e:
                 from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Bild-Konvertierung fehlgeschlagen", str(e))
+                QMessageBox.warning(self, tr("Bild-Konvertierung fehlgeschlagen"), str(e))
                 return
 
         elif ext in OFFICE_EXTS:
@@ -5705,9 +6030,9 @@ class PageViewerPanel(QWidget):
                 soffice = shutil.which("soffice") or shutil.which("libreoffice")
                 if not soffice:
                     from PyQt6.QtWidgets import QMessageBox
-                    QMessageBox.warning(self, "LibreOffice fehlt",
-                        "LibreOffice wird benoetigt um Office-Dateien zu oeffnen.\n"
-                        "Installation: sudo pacman -S libreoffice-still")
+                    QMessageBox.warning(self, tr("LibreOffice fehlt"),
+                        tr("LibreOffice wird benoetigt um Office-Dateien zu oeffnen.\n"
+                        "Installation: sudo pacman -S libreoffice-still"))
                     return
                 tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
                 import atexit, shutil as _shutil
@@ -5723,14 +6048,14 @@ class PageViewerPanel(QWidget):
                     pdfs = [f for f in os.listdir(tmp_dir) if f.endswith(".pdf")]
                     if not pdfs:
                         from PyQt6.QtWidgets import QMessageBox
-                        QMessageBox.warning(self, "Konvertierung fehlgeschlagen",
+                        QMessageBox.warning(self, tr("Konvertierung fehlgeschlagen"),
                             r.stderr.strip()[:300] or "Unbekannter Fehler")
                         return
                     converted = os.path.join(tmp_dir, pdfs[0])
                 path = converted
             except Exception as e:
                 from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Office-Konvertierung fehlgeschlagen", str(e))
+                QMessageBox.warning(self, tr("Office-Konvertierung fehlgeschlagen"), str(e))
                 return
 
         tab  = PdfTab(path)
@@ -5791,11 +6116,11 @@ class PageViewerPanel(QWidget):
         import tempfile, logging
         logging.debug(f"show_merge_tab: {len(file_paths)} Dateien: {file_paths}")
         widget = MergeOrderWidget(file_paths)
-        idx = self.tabs.addTab(widget, "  🔗  Zusammenfuehren  ")
+        idx = self.tabs.addTab(widget, tr("  🔗  Zusammenfuehren  "))
         self.tabs.setCurrentIndex(idx)
         self._manage_btn.setEnabled(False)
         self._print_btn.setEnabled(False)
-        self._viewer_info.setText("Dateien sortieren und zusammenfuehren")
+        self._viewer_info.setText(tr("Dateien sortieren und zusammenfuehren"))
         self._tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
 
         def _on_confirmed(paths):
@@ -5819,11 +6144,11 @@ class PageViewerPanel(QWidget):
         import logging
         logging.debug(f"_do_convert_and_merge: {len(file_paths)} Dateien")
         from tools.multi_open import ConvertWorker
-        self._viewer_info.setText("Konvertiere Dateien...")
+        self._viewer_info.setText(tr("Konvertiere Dateien..."))
         # Tab-Titel via Widget-Referenz setzen (sicher gegen Index-Shifts)
         wi = self.tabs.indexOf(merge_widget)
         if wi >= 0:
-            self.tabs.setTabText(wi, "  ⏳  Konvertiere...  ")
+            self.tabs.setTabText(wi, tr("  ⏳  Konvertiere...  "))
 
         worker = ConvertWorker(file_paths, self._tmp_dir)
         self._merge_worker = worker
@@ -5835,9 +6160,9 @@ class PageViewerPanel(QWidget):
             valid = [p for p in pdfs if p]
             wi2 = self.tabs.indexOf(merge_widget)
             if not valid:
-                self._viewer_info.setText("Fehler: Keine Dateien konvertiert")
+                self._viewer_info.setText(tr("Fehler: Keine Dateien konvertiert"))
                 if wi2 >= 0:
-                    self.tabs.setTabText(wi2, "  ✗  Fehler  ")
+                    self.tabs.setTabText(wi2, tr("  ✗  Fehler  "))
                 return
             try:
                 from pypdf import PdfWriter, PdfReader
@@ -5850,10 +6175,10 @@ class PageViewerPanel(QWidget):
                     writer.write(f)
                 if wi2 >= 0:
                     self.tabs.removeTab(wi2)
-                self._open_result_tab(out, "Zusammengefuehrt")
+                self._open_result_tab(out, tr("Zusammengefuehrt"))
                 self._update_toolbar()
             except Exception as e:
-                self._viewer_info.setText(f"Fehler: {e}")
+                self._viewer_info.setText(tr('Fehler: {p0}').format(p0=e))
 
         worker.progress.connect(_on_progress)
         worker.finished.connect(_on_done)
@@ -5881,7 +6206,7 @@ class PageViewerPanel(QWidget):
         try:
             tab.save_to(tab.pdf_path)
             AppState.get().status_message.emit(
-                f"Gespeichert: {os.path.basename(tab.pdf_path)}")
+                tr('Gespeichert: {p0}').format(p0=os.path.basename(tab.pdf_path)))
         except Exception as e:
             AppState.get().status_message.emit(f"Speicherfehler: {e}")
 
@@ -5890,7 +6215,7 @@ class PageViewerPanel(QWidget):
         tab = self._current()
         if not tab: return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Speichern als", tab.pdf_path, "PDF Dateien (*.pdf)")
+            self, tr("Speichern als"), tab.pdf_path, tr("PDF Dateien (*.pdf)"))
         if not path: return
         try:
             tab.save_to(path)
@@ -5904,7 +6229,7 @@ class PageViewerPanel(QWidget):
             disp = name if len(name) <= 22 else name[:19] + "..."
             self.tabs.setTabText(idx, f"  {disp}  ")
             AppState.get().open_pdf(path)
-            AppState.get().status_message.emit(f"Gespeichert als: {name}")
+            AppState.get().status_message.emit(tr('Gespeichert als: {p0}').format(p0=name))
         except Exception as e:
             AppState.get().status_message.emit(f"Speicherfehler: {e}")
 
@@ -5954,7 +6279,7 @@ class PageViewerPanel(QWidget):
         elif isinstance(w, MergeOrderWidget):
             self._manage_btn.setEnabled(False)
             self._print_btn.setEnabled(False)
-            self._viewer_info.setText("Dateien sortieren und zusammenfuehren")
+            self._viewer_info.setText(tr("Dateien sortieren und zusammenfuehren"))
         else:
             self._manage_btn.setEnabled(False)
             self._print_btn.setEnabled(False)

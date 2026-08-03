@@ -12,6 +12,7 @@ Verwendung:
     state.open_result(path, title) # Ergebnis in neuem Tab öffnen
 """
 from PyQt6.QtCore import QObject, pyqtSignal
+from tools.i18n import tr
 
 # Farbpalette — wird von main.py bei Theme-Wechsel aktualisiert
 THEME = {
@@ -81,7 +82,7 @@ class AppState(QObject):
             import os
             title = os.path.basename(path)
         self.result_ready.emit(path, title)
-        self.status_message.emit(f"Ergebnis geöffnet: {title}")
+        self.status_message.emit(tr('Ergebnis geöffnet: {p0}').format(p0=title))
 
     def has_pdf(self) -> bool:
         import os

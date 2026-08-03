@@ -66,6 +66,76 @@ def _normalized_page(src_page):
     return p
 
 
+def _inherited_rotate(page) -> int:
+    """/Rotate of a pikepdf page, following the inheritance chain up the page
+    tree (it may live on a /Pages node instead of the page itself)."""
+    node = page.obj
+    for _ in range(32):
+        try:
+            if "/Rotate" in node:
+                return int(node["/Rotate"]) % 360
+            node = node["/Parent"]
+        except Exception:
+            break
+    return 0
+
+
+def _visible_box(page):
+    """The rectangle a viewer actually shows for a pikepdf page: its CropBox
+    clipped to the MediaBox (the PDF spec requires that intersection), falling
+    back to the MediaBox.
+
+    This matters because qpdf's ``add_overlay`` places TrimBox → CropBox →
+    MediaBox *as written*, without clipping. A file whose CropBox is stale or
+    larger than its MediaBox — e.g. one the Crop tool resized — would otherwise
+    be laid out from a box that has nothing to do with the visible page, and the
+    content lands off-centre in its slot."""
+    def _rect(o):
+        v = [float(x) for x in o]
+        return (min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3]))
+    x0, y0, x1, y1 = _rect(page.mediabox)
+    try:
+        cx0, cy0, cx1, cy1 = _rect(page.cropbox)
+    except Exception:
+        return x0, y0, x1, y1
+    ix0, iy0 = max(x0, cx0), max(y0, cy0)
+    ix1, iy1 = min(x1, cx1), min(y1, cy1)
+    if ix1 - ix0 > 1.0 and iy1 - iy0 > 1.0:
+        return ix0, iy0, ix1, iy1
+    return x0, y0, x1, y1
+
+
+def _visible_size(page):
+    """(width, height) of the page as it is displayed — the visible box with
+    /Rotate applied. This is what pdfium reports (and therefore what every tool
+    preview draws), so layout maths must use it too."""
+    x0, y0, x1, y1 = _visible_box(page)
+    w, h = x1 - x0, y1 - y0
+    return (h, w) if _inherited_rotate(page) in (90, 270) else (w, h)
+
+
+def _mat_mul(m, n):
+    """Compose two PDF matrices (a b c d e f): apply `m` first, then `n`."""
+    a1, b1, c1, d1, e1, f1 = m
+    a2, b2, c2, d2, e2, f2 = n
+    return (a1*a2 + b1*c2,        a1*b2 + b1*d2,
+            c1*a2 + d1*c2,        c1*b2 + d1*d2,
+            e1*a2 + f1*c2 + e2,   e1*b2 + f1*d2 + f2)
+
+
+def _display_matrix(box, rot):
+    """Matrix mapping a page's visible box into display space: origin at (0, 0)
+    and /Rotate applied, i.e. the coordinate system the previews (and every
+    viewer) show. Lets a tool do its geometry in the same space the user sees
+    instead of in raw MediaBox coordinates."""
+    x0, y0, x1, y1 = box
+    rot = rot % 360
+    if rot == 90:   return (0.0, -1.0, 1.0,  0.0, -y0,  x1)
+    if rot == 180:  return (-1.0, 0.0, 0.0, -1.0,  x1,  y1)
+    if rot == 270:  return (0.0,  1.0, -1.0, 0.0,  y1, -x0)
+    return (1.0, 0.0, 0.0, 1.0, -x0, -y0)
+
+
 def row(label_text: str, widget, stretch=1, label_w: int = LABEL_W) -> QHBoxLayout:
     """
     Garantiert sichtbares Label + Eingabefeld.
@@ -121,11 +191,13 @@ class PreviewPane(QWidget):
         hdr_row = QHBoxLayout()
         hdr = QLabel(tr(header)); hdr.setObjectName("dimLabel")
         hdr_row.addStretch(); hdr_row.addWidget(hdr); hdr_row.addStretch()
-        zoom_out_btn = QPushButton("−"); zoom_out_btn.setFixedSize(22, 22); zoom_out_btn.setObjectName("secondaryBtn")
+        # iconBtn, not secondaryBtn: the latter's padding leaves no room for the
+        # glyph in a 22px square and the buttons come out blank.
+        zoom_out_btn = QPushButton("−"); zoom_out_btn.setFixedSize(24, 24); zoom_out_btn.setObjectName("iconBtn")
         self._zoom_lbl = QLabel("100%"); self._zoom_lbl.setObjectName("dimLabel")
         self._zoom_lbl.setFixedWidth(38); self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zoom_in_btn  = QPushButton("+");  zoom_in_btn.setFixedSize(22, 22);  zoom_in_btn.setObjectName("secondaryBtn")
-        zoom_rst_btn = QPushButton("⟳"); zoom_rst_btn.setFixedSize(22, 22); zoom_rst_btn.setObjectName("secondaryBtn")
+        zoom_in_btn  = QPushButton("+");  zoom_in_btn.setFixedSize(24, 24);  zoom_in_btn.setObjectName("iconBtn")
+        zoom_rst_btn = QPushButton("⟳"); zoom_rst_btn.setFixedSize(24, 24); zoom_rst_btn.setObjectName("iconBtn")
         hdr_row.addWidget(zoom_out_btn); hdr_row.addWidget(self._zoom_lbl)
         hdr_row.addWidget(zoom_in_btn);  hdr_row.addWidget(zoom_rst_btn)
         outer.addLayout(hdr_row)
@@ -163,14 +235,19 @@ class PreviewPane(QWidget):
         # (under _pdfium_lock) on every scroll, starving the viewer's background
         # pre-render and making scrolling stutter. showEvent refreshes it when
         # the tool is opened, so it's always up to date when visible.
-        if not self.isVisible():
+        try:
+            if not self.isVisible():
+                return
+            avail_w = max(100, self.label.width()  - 16)
+            avail_h = max(100, self.label.height() - 16)
+        except RuntimeError:
+            # Underlying C++ widget already destroyed (window closing while a
+            # queued refresh or an AppState signal is still in flight).
             return
-        avail_w = max(100, self.label.width()  - 16)
-        avail_h = max(100, self.label.height() - 16)
         try:
             pm, info = self._render_fn(avail_w, avail_h, self.zoom)
         except Exception as ex:
-            self.label.setText(f"Vorschau: {ex}")
+            self.label.setText(tr('Vorschau: {p0}').format(p0=ex))
             return
         if pm is None:
             self.label.setText(info or "")
@@ -251,7 +328,7 @@ class MergeSplitPanel(BasePanel):
     def _do_merge_impl(self):
         from pypdf import PdfWriter, PdfReader
         paths = self.merge_list.get_paths()
-        if not paths: self.log.log("Mindestens eine PDF hinzufuegen.", error=True); return
+        if not paths: self.log.log(tr("Mindestens eine PDF hinzufuegen."), error=True); return
         out = self.save_pdf("Zusammengefuehrte PDF speichern als")
         if not out: return
         self.log.clear_log(); QApplication.processEvents()
@@ -260,8 +337,8 @@ class MergeSplitPanel(BasePanel):
             for p in paths:
                 for page in PdfReader(p, strict=False).pages: writer.add_page(page)
             with open(out, "wb") as f: writer.write(f)
-            self.log.log(f"{len(paths)} Dateien zusammengefuehrt")
-            self.open_result(out, "Zusammengefuehrt")
+            self.log.log(tr('{p0} Dateien zusammengefuehrt').format(p0=len(paths)))
+            self.open_result(out, tr("Zusammengefuehrt"))
         except Exception as e: self.log.log(str(e), error=True)
 
     def _do_split(self):
@@ -301,8 +378,8 @@ class MergeSplitPanel(BasePanel):
                     for i in range(start, min(start+nv, n)): w.add_page(reader.pages[i])
                     path = os.path.join(out_dir, f"{stem}_teil{chunk:03d}.pdf")
                     with open(path, "wb") as f: w.write(f); saved.append(path)
-            self.log.log(f"In {len(saved)} Dateien aufgeteilt")
-            if saved: self.open_result(saved[0], f"Teil 1 von {len(saved)}")
+            self.log.log(tr('In {p0} Dateien aufgeteilt').format(p0=len(saved)))
+            if saved: self.open_result(saved[0], tr('Teil 1 von {p0}').format(p0=len(saved)))
         except Exception as e: self.log.log(str(e), error=True)
 
     def _parse_ranges(self, raw, n):
@@ -361,7 +438,7 @@ class CompressPanel(BasePanel):
         src = self.require_pdf()
         out = self.save_pdf("Komprimierte PDF speichern als")
         if not out:
-            raise ValueError("Kein Ausgabepfad.")
+            raise ValueError(tr("Kein Ausgabepfad."))
 
         preset_map = ["/screen", "/ebook", "/printer", "/prepress"]
         gs_setting = preset_map[self.preset.currentIndex()]
@@ -378,7 +455,7 @@ class CompressPanel(BasePanel):
             ]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if r.returncode != 0:
-                raise RuntimeError(f"Ghostscript-Fehler:\n{(r.stderr or r.stdout)[:400]}")
+                raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=(r.stderr or r.stdout)[:400]))
         else:
             import pikepdf
             pdf = pikepdf.open(src)
@@ -390,8 +467,7 @@ class CompressPanel(BasePanel):
         size_after = os.path.getsize(out)
         ratio = (1 - size_after / size_before) * 100 if size_before else 0
         self.open_result(out, "Komprimiert")
-        return (f"Fertig. {_fmt(size_before)} → {_fmt(size_after)}"
-                f"  ({ratio:+.1f}%)")
+        return (tr('Fertig. {p0} → {p1}  ({p2:+.1f}%)').format(p0=_fmt(size_before), p1=_fmt(size_after), p2=ratio))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CROP / RESIZE
@@ -623,9 +699,39 @@ class CropResizePanel(BasePanel):
             self.ct.setValue(diff_h_mm);  self.cb2.setValue(diff_h_mm)
             for w in [self.ct, self.cb2, self.cl2, self.cr]:
                 w.blockSignals(False)
+            # Remember that these margins came from the format, so the run can
+            # re-derive them for every page instead of applying this one page's
+            # millimetres to pages of a different size (see _format_margins).
+            self._fmt_margins = self._margins_mm()
             self._update_preview()
         except Exception as ex:
             self.log.log(str(ex), error=True)
+
+    def _margins_mm(self):
+        return (self.ct.value(), self.cb2.value(), self.cl2.value(), self.cr.value())
+
+    def _format_margins(self):
+        """(tw, th) when the four margin boxes still hold exactly what the Format
+        dropdown put there — meaning "make every page this size", not "take these
+        millimetres off every page". The run then re-derives the margins per page,
+        so pages that differ from the previewed one still come out at the target
+        size and centred instead of inheriting the first page's millimetres."""
+        if self._marks_only(): return None
+        size = self._target_size_pt()
+        if size is None: return None
+        if getattr(self, "_fmt_margins", None) != self._margins_mm(): return None
+        return size
+
+    def _effective_margins_pt(self, pw, ph):
+        """(top, bottom, left, right) in points for a page of size (pw, ph) —
+        derived from the chosen Format when one is active, else the four spin
+        boxes. Shared by the preview and the run so they can never disagree."""
+        size = self._format_margins()
+        if size is not None:
+            dw = (pw - size[0]) / 2; dh = (ph - size[1]) / 2
+            return dh, dh, dw, dw
+        return (self.ct.value()  * MM_TO_PT, self.cb2.value() * MM_TO_PT,
+                self.cl2.value() * MM_TO_PT, self.cr.value()  * MM_TO_PT)
 
     def _get_target_pages(self):
         state = AppState.get(); model = state.page_model
@@ -679,13 +785,13 @@ class CropResizePanel(BasePanel):
         # made dragging the sidebar and editing the custom size hang on big PDFs.
         base_pil, pw, ph = self._base_page(pdf_path, page_idx)
 
-        t_pt = self.ct.value()  * MM_TO_PT
-        b_pt = self.cb2.value() * MM_TO_PT
-        l_pt = self.cl2.value() * MM_TO_PT
-        r_pt = self.cr.value()  * MM_TO_PT
+        t_pt, b_pt, l_pt, r_pt = self._effective_margins_pt(pw, ph)
 
-        new_w = max(1., pw - l_pt - r_pt)
-        new_h = max(1., ph - t_pt - b_pt)
+        new_w = pw - l_pt - r_pt
+        new_h = ph - t_pt - b_pt
+        if new_w < 1. or new_h < 1.:
+            # Same refusal the run makes — better than drawing a 1pt sliver.
+            return None, tr("Ränder zu groß — von der Seite bleibt nichts übrig.")
         do_scale = self.scale_check.isChecked()
 
         cs = min(avail_w / new_w, avail_h / new_h) * zoom
@@ -713,6 +819,14 @@ class CropResizePanel(BasePanel):
         result.fill(QColor("#1a2a40"))
         painter = QPainter(result)
 
+        # Paint the resulting page as paper first. With negative margins
+        # ("- erweitern", i.e. adding white space) the added strips belong to the
+        # new page but carried no content, so they stayed the dark canvas colour
+        # — the white space you were adding was invisible in the preview.
+        painter.setPen(_Qt2.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor("#ffffff")))
+        painter.drawRect(rx, ry, cw_px, ch_px)
+
         def draw_ghost():
             painter.setPen(_Qt2.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor(100, 140, 220, 45)))
@@ -731,9 +845,12 @@ class CropResizePanel(BasePanel):
             draw_x = rx + (cw_px - pm_s.width())  // 2
             draw_y = ry + (ch_px - pm_s.height()) // 2
             painter.drawPixmap(draw_x, draw_y, pm_s)
+            # Outline the new PAGE, not the scaled content: with "Proportionen
+            # beibehalten" the content is narrower than the page, and marking the
+            # content made it look as if it filled the sheet.
             painter.setPen(QPen(QColor("#e94560"), 2))
             painter.setBrush(_Qt2.BrushStyle.NoBrush)
-            painter.drawRect(draw_x, draw_y, pm_s.width()-1, pm_s.height()-1)
+            painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
             if changed: draw_ghost()
         else:
             src_x = max(0, int(l_pt * cs)); src_y = max(0, int(t_pt * cs))
@@ -773,14 +890,14 @@ class CropResizePanel(BasePanel):
         import pikepdf as _pik
         src_path = self.require_pdf()
         out = self.save_pdf("PDF speichern als")
-        if not out: raise ValueError("Kein Ausgabepfad.")
+        if not out: raise ValueError(tr("Kein Ausgabepfad."))
 
         if self.apply_all.isChecked():
             from pypdf import PdfReader as _PR
             target_origs = set(range(len(_PR(src_path, strict=False).pages)))
         else:
             target_pages = self._get_target_pages()
-            if not target_pages: raise ValueError("Keine Seiten ausgewaehlt.")
+            if not target_pages: raise ValueError(tr("Keine Seiten ausgewaehlt."))
             target_origs = {orig for orig, _ in target_pages}
 
         # Cut-marks-only mode: don't resize the page — just stamp crop marks at
@@ -791,71 +908,87 @@ class CropResizePanel(BasePanel):
             pdf = _pik.open(src_path); n_changed = 0
             for i, page in enumerate(pdf.pages):
                 if i not in target_origs: continue
-                mb = page.mediabox
-                ox, oy = float(mb[0]), float(mb[1])
-                pw = float(mb[2]) - ox; ph = float(mb[3]) - oy
-                x0 = ox + (pw - tw) / 2; y0 = oy + (ph - th) / 2
-                ops = _crop_marks_content_stream([(x0, y0, x0 + tw, y0 + th)])
+                # Centre the marks on the *visible* page; on a rotated page the
+                # requested size is meant as seen, so it swaps in page space.
+                bx0, by0, bx1, by1 = _visible_box(page)
+                mw, mh = ((th, tw) if _inherited_rotate(page) in (90, 270)
+                          else (tw, th))
+                x0 = bx0 + ((bx1 - bx0) - mw) / 2; y0 = by0 + ((by1 - by0) - mh) / 2
+                ops = _crop_marks_content_stream([(x0, y0, x0 + mw, y0 + mh)])
                 page.contents_add(_pik.Stream(pdf, ops))
                 n_changed += 1
             pdf.save(out)
             self.open_result(out, os.path.basename(out))
-            return f"Schnittmarken auf {n_changed} Seite(n) gesetzt ({tw/MM_TO_PT:.0f}×{th/MM_TO_PT:.0f} mm)."
+            return tr('Schnittmarken auf {p0} Seite(n) gesetzt ({p1:.0f}×{p2:.0f} mm).').format(p0=n_changed, p1=tw / MM_TO_PT, p2=th / MM_TO_PT)
 
-        t_mm = self.ct.value();  b_mm = self.cb2.value()
-        l_mm = self.cl2.value(); r_mm = self.cr.value()
         do_scale = self.scale_check.isChecked()
         pdf = _pik.open(src_path)
         n_changed = 0
 
+        def _apply_ctm(pg, m):
+            """Prepend `q a b c d e f cm` to the page's content stream."""
+            if m == (1.0, 0.0, 0.0, 1.0, 0.0, 0.0): return
+            contents = pg.get("/Contents")
+            if contents is None: return
+            old = (b" ".join(bytes(s.read_bytes()) for s in contents)
+                   if isinstance(contents, _pik.Array)
+                   else bytes(contents.read_bytes()))
+            hdr = ("q %.6f %.6f %.6f %.6f %.4f %.4f cm\n" % m).encode()
+            pg["/Contents"] = _pik.Stream(pdf, hdr + old + (chr(10) + "Q").encode())
+
         for i, page in enumerate(pdf.pages):
             if i not in target_origs: continue
-            mb = page.mediabox
-            pw = float(mb[2]) - float(mb[0])
-            ph = float(mb[3]) - float(mb[1])
+            # Measure the page the way the preview draws it: the visible box
+            # (CropBox clipped to MediaBox) with /Rotate applied. Reading the raw
+            # MediaBox instead meant the millimetres came off the wrong edges on
+            # any page with a CropBox or a /Rotate, and a MediaBox that did not
+            # start at (0,0) shifted the whole content.
+            box = _visible_box(page)
+            rot = _inherited_rotate(page)
+            R   = _display_matrix(box, rot)
+            pw, ph = _visible_size(page)
+
+            # With a Format selected this derives the margins from *this* page,
+            # so a document with mixed page sizes ends up all one size and
+            # centred instead of inheriting the previewed page's millimetres.
+            t_pt, b_pt, l_pt, r_pt = self._effective_margins_pt(pw, ph)
 
             # Neue Seitengröße
-            new_w = max(1.0, pw - l_mm*MM_TO_PT - r_mm*MM_TO_PT)
-            new_h = max(1.0, ph - t_mm*MM_TO_PT - b_mm*MM_TO_PT)
-
-            # Inhalt-Versatz: -new_left = -l_mm*MM_TO_PT
-            tx = -l_mm * MM_TO_PT   # neg. bei Abschneiden, pos. bei Erweitern
-            ty = -b_mm * MM_TO_PT
-
-            def _apply_ctm(pg, sx, sy, e, f):
-                """Wendet q sx 0 0 sy e f cm auf den Content-Stream an."""
-                contents = pg.get("/Contents")
-                if contents is None: return
-                old = (b" ".join(bytes(s.read_bytes()) for s in contents)
-                       if isinstance(contents, _pik.Array)
-                       else bytes(contents.read_bytes()))
-                hdr = (("q %.6f 0 0 %.6f %.4f %.4f cm" + chr(10)) % (sx, sy, e, f)).encode()
-                pg["/Contents"] = _pik.Stream(pdf, hdr + old + (chr(10) + "Q").encode())
-
-            l_pt = l_mm * MM_TO_PT; b_pt = b_mm * MM_TO_PT
+            new_w = pw - l_pt - r_pt
+            new_h = ph - t_pt - b_pt
+            if new_w < 1.0 or new_h < 1.0:
+                raise ValueError(tr("Ränder zu groß — von der Seite bleibt nichts übrig."))
 
             if do_scale:
-                keep = self.keep_ratio.isChecked()
-                if keep:
+                if self.keep_ratio.isChecked():
                     # Proportionen beibehalten: kleinerer Faktor, zentriert
-                    s  = min(new_w/pw, new_h/ph)
-                    cx = (new_w - pw*s) / 2
-                    cy = (new_h - ph*s) / 2
-                    _apply_ctm(page, s, s, cx, cy)
+                    s = min(new_w/pw, new_h/ph)
+                    C = (s, 0.0, 0.0, s, (new_w - pw*s)/2, (new_h - ph*s)/2)
                 else:
                     # Strecken: Inhalt füllt neuen Rahmen exakt
-                    _apply_ctm(page, new_w/pw, new_h/ph, 0.0, 0.0)
+                    C = (new_w/pw, 0.0, 0.0, new_h/ph, 0.0, 0.0)
             else:
                 # Nur Rahmen verschieben, Inhalt bleibt
-                if abs(l_pt) > 0.01 or abs(b_pt) > 0.01:
-                    _apply_ctm(page, 1.0, 1.0, -l_pt, -b_pt)
+                C = (1.0, 0.0, 0.0, 1.0, -l_pt, -b_pt)
+            _apply_ctm(page, _mat_mul(R, C))
+
             page.mediabox = _pik.Array([_pik.Real(0),_pik.Real(0),
                                          _pik.Real(new_w),_pik.Real(new_h)])
+            # The rotation and the old boxes are now baked into the content —
+            # leaving them behind used to hand every later tool (N-Up above all)
+            # a page whose declared boxes no longer matched its content, which is
+            # what pushed the content off-centre there. /CropBox and /Rotate are
+            # inheritable, so they must be overwritten rather than deleted.
+            page.obj["/CropBox"] = _pik.Array([_pik.Real(0), _pik.Real(0),
+                                               _pik.Real(new_w), _pik.Real(new_h)])
+            page.obj["/Rotate"]  = 0
+            for key in ("/TrimBox", "/BleedBox", "/ArtBox"):
+                if key in page.obj: del page.obj[key]
             n_changed += 1
 
         pdf.save(out)
         self.open_result(out, os.path.basename(out))
-        return f"{n_changed} Seite(n) bearbeitet."
+        return tr('{p0} Seite(n) bearbeitet.').format(p0=n_changed)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE NUMBERS
@@ -873,10 +1006,10 @@ class PageNumbersPanel(BasePanel):
                            tr("Oben Mitte"),  tr("Oben Links"),  tr("Oben Rechts")])
         ol.addLayout(row(tr("Position:"), self.pos))
 
-        self.prefix = QLineEdit(); self.prefix.setPlaceholderText("z.B. Seite ")
+        self.prefix = QLineEdit(); self.prefix.setPlaceholderText(tr("z.B. Seite "))
         ol.addLayout(row(tr("Praefix:"), self.prefix))
 
-        self.suffix = QLineEdit(); self.suffix.setPlaceholderText("z.B.  / {gesamt}")
+        self.suffix = QLineEdit(); self.suffix.setPlaceholderText(tr("z.B.  / {gesamt}"))
         ol.addLayout(row(tr("Suffix:"), self.suffix))
 
         self.start_spin = QSpinBox(); self.start_spin.setRange(0,9999); self.start_spin.setValue(1)
@@ -896,7 +1029,7 @@ class PageNumbersPanel(BasePanel):
     def _run_action(self):
         src = self.require_pdf()
         out = self.save_pdf("PDF mit Seitenzahlen speichern als")
-        if not out: raise ValueError("Kein Ausgabepfad.")
+        if not out: raise ValueError(tr("Kein Ausgabepfad."))
         from pypdf import PdfReader, PdfWriter
         from reportlab.pdfgen import canvas as rl_canvas
         reader = PdfReader(src, strict=False); writer = PdfWriter()
@@ -927,8 +1060,8 @@ class PageNumbersPanel(BasePanel):
             from pypdf import PdfReader as PR
             page.merge_page(PR(packet).pages[0]); writer.add_page(page)
         with open(out, "wb") as f: writer.write(f)
-        self.open_result(out, "Mit Seitenzahlen")
-        return f"Seitenzahlen auf {n-skip} Seiten hinzugefuegt"
+        self.open_result(out, tr("Mit Seitenzahlen"))
+        return tr('Seitenzahlen auf {p0} Seiten hinzugefuegt').format(p0=n - skip)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -970,14 +1103,14 @@ class ImgPdfPanel(BasePanel):
     def _to_pdf(self):
         import img2pdf
         paths = self.img_list.get_paths()
-        if not paths: self.log.log("Bilder hinzufuegen.", error=True); return
+        if not paths: self.log.log(tr("Bilder hinzufuegen."), error=True); return
         out = self.save_pdf("Als PDF speichern")
         if not out: return
         self.log.clear_log(); QApplication.processEvents()
         try:
             with open(out, "wb") as f: f.write(img2pdf.convert(paths))
-            self.log.log(f"PDF aus {len(paths)} Bildern erstellt")
-            self.open_result(out, "Aus Bildern")
+            self.log.log(tr('PDF aus {p0} Bildern erstellt').format(p0=len(paths)))
+            self.open_result(out, tr("Aus Bildern"))
         except Exception as e: self.log.log(str(e), error=True)
 
     def _to_img(self):
@@ -998,7 +1131,7 @@ class ImgPdfPanel(BasePanel):
                 pages=convert_from_path(src, dpi=self.dpi.value(), first_page=i+1, last_page=end)
                 for j, img in enumerate(pages):
                     img.save(os.path.join(out_dir, f"{stem}_s{i+j+1:03d}.{ext}"), fmt.upper())
-            self.log.log(f"{n_pages} Bilder exportiert")
+            self.log.log(tr('{p0} Bilder exportiert').format(p0=n_pages))
         except Exception as e: self.log.log(str(e), error=True)
 
     def _run_action(self): pass
@@ -1026,7 +1159,7 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
                "-o", grey_tmp, src]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
         if r.returncode != 0 or not os.path.exists(grey_tmp) or os.path.getsize(grey_tmp) == 0:
-            raise RuntimeError((r.stderr or r.stdout or "Ghostscript-Fehler").strip()[:400])
+            raise RuntimeError((r.stderr or r.stdout or tr("Ghostscript-Fehler")).strip()[:400])
 
         report(tr("Seiten zusammenstellen …"))
         src_pdf  = pikepdf.open(src)
@@ -1154,6 +1287,21 @@ class GrayscalePanel(BasePanel):
                     f"color:{t['dim']};font-size:14px;background:{t['viewer_bg']};")
             except RuntimeError:
                 self._gs_placeholder = None   # replaced by cards after a PDF loads
+        # The preview grid is built later (once a PDF is scanned), so it has to
+        # be re-styled here too — otherwise it keeps the colours that were live
+        # when it was built and stays dark after a switch to the light theme.
+        box = getattr(self, '_preview_box', None)
+        if box is not None:
+            try:
+                box.setStyleSheet(
+                    f"QWidget#greyPreviewBox{{background:{t['viewer_bg']};}}")
+                for _f, img_lbl, num_lbl in self._preview_cards:
+                    img_lbl.setStyleSheet(f"background:{t['card_bg']};border:none;")
+                    num_lbl.setStyleSheet(
+                        f"color:{t['dim']};font-size:10px;background:transparent;border:none;")
+                self._update_preview_borders()   # restores the status colours
+            except RuntimeError:
+                self._preview_box = None; self._preview_cards = []
 
     def eventFilter(self, obj, e):
         if (hasattr(self, '_preview_scroll') and
@@ -1290,7 +1438,10 @@ class GrayscalePanel(BasePanel):
 
     def _build_preview(self, n_pages):
         container = QWidget()
-        container.setStyleSheet(f"background:{theme_color('BG')};")
+        container.setObjectName("greyPreviewBox")
+        self._preview_box = container
+        container.setStyleSheet(
+            f"QWidget#greyPreviewBox{{background:{_TV['viewer_bg']};}}")
         self._preview_scroll.setWidget(container)
         self._preview_cards = []
         CARD_W = self._card_w; CARD_H = int(CARD_W * (127/90)); GAP = 8; MARGIN = 10
@@ -1300,14 +1451,16 @@ class GrayscalePanel(BasePanel):
         grid.setContentsMargins(MARGIN, MARGIN, MARGIN, MARGIN); grid.setSpacing(GAP)
         for i in range(n_pages):
             frame = QFrame(); frame.setFixedSize(CARD_W + 12, CARD_H + 24)
-            frame.setStyleSheet(f"QFrame{{background:transparent;border:2px solid {theme_color('LINE')};border-radius:5px;}}")
+            frame.setStyleSheet(
+                f"QFrame{{background:transparent;border:2px solid {_TV['border']};border-radius:5px;}}")
             fl = QVBoxLayout(frame); fl.setContentsMargins(3,3,3,2); fl.setSpacing(2)
             img_lbl = QLabel(); img_lbl.setFixedSize(CARD_W, CARD_H)
             img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            img_lbl.setStyleSheet(f"background:{theme_color('PANEL')};border:none;")
+            img_lbl.setStyleSheet(f"background:{_TV['card_bg']};border:none;")
             fl.addWidget(img_lbl)
             num_lbl = QLabel(str(i+1)); num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            num_lbl.setStyleSheet(f"color:{theme_color('DIM')};font-size:10px;background:transparent;border:none;")
+            num_lbl.setStyleSheet(
+                f"color:{_TV['dim']};font-size:10px;background:transparent;border:none;")
             fl.addWidget(num_lbl)
             grid.addWidget(frame, i // cols, i % cols)
             self._preview_cards.append((frame, img_lbl, num_lbl))
@@ -1446,7 +1599,7 @@ class GrayscalePanel(BasePanel):
                 max_diff = max(diffs)
                 colour_ratio = sum(1 for d in diffs if d > thr) / total
                 self._page_data.append((max_diff, colour_ratio))
-                self.log.log(f"Seite {i+1}: max={max_diff}, farbig={colour_ratio*100:.2f}%")
+                self.log.log(tr('Seite {p0}: max={p1}, farbig={p2:.2f}%').format(p0=i + 1, p1=max_diff, p2=colour_ratio * 100))
             doc.close()
             self._reclassify()
             try:
@@ -1614,7 +1767,7 @@ class ImposePanel(BasePanel):
                         place(sheet, pages[left_i], 0, 0)
                     if right_i < n_orig and pages[right_i] is not None:
                         place(sheet, pages[right_i], pw, 0)
-            msg = f"Broschüre: {n} Seiten → {num_sheets * 2} Blätter"
+            msg = tr('Broschüre: {p0} Seiten → {p1} Blätter').format(p0=n, p1=num_sheets * 2)
 
         elif mode == 1:
             if self.blank.isChecked() and len(pages) % 2: pages.append(None)
@@ -1623,7 +1776,7 @@ class ImposePanel(BasePanel):
                 if pages[i] is not None: place(sheet, pages[i], 0, 0)
                 if i + 1 < len(pages) and pages[i+1] is not None:
                     place(sheet, pages[i+1], pw, 0)
-            msg = f"2-up: {math.ceil(len(pages) / 2)} Bögen"
+            msg = tr('2-up: {p0} Bögen').format(p0=math.ceil(len(pages) / 2))
 
         else:
             cols = self.cols.value(); rows = self.rows_spin.value(); per = cols * rows
@@ -1639,7 +1792,7 @@ class ImposePanel(BasePanel):
                           (slot % cols) * cell_w,
                           (rows - 1 - slot // cols) * cell_h,
                           1.0 / cols, 1.0 / rows)
-            msg = f"{cols}×{rows}-up: {math.ceil(len(pages) / per)} Bögen"
+            msg = tr('{p0}×{p1}-up: {p2} Bögen').format(p0=cols, p1=rows, p2=math.ceil(len(pages) / per))
 
         with open(out, "wb") as f: writer.write(f)
         self.open_result(out, "Ausgeschossen")
@@ -1712,7 +1865,7 @@ class FormsPanel(BasePanel):
         try:
             from pypdf import PdfReader
             fields=PdfReader(src, strict=False).get_fields()
-            if not fields: self.log.log("Keine Formularfelder gefunden."); return
+            if not fields: self.log.log(tr("Keine Formularfelder gefunden.")); return
             for name,field in fields.items():
                 ft=field.get("/FT",""); val=field.get("/V","")
                 if ft=="/Btn":
@@ -1721,13 +1874,13 @@ class FormsPanel(BasePanel):
                     w=QLineEdit(); w.setText(str(val) if val else "")
                 self._fields[name]=w
                 self.form_vbox.addLayout(row(name, w))
-            self.log.log(f"{len(fields)} Feld(er) geladen.")
+            self.log.log(tr('{p0} Feld(er) geladen.').format(p0=len(fields)))
         except Exception as e: self.log.log(str(e),error=True)
 
     def _run_action(self):
         src=self.require_pdf()
         out=self.save_pdf("Ausgefuelltes Formular speichern als")
-        if not out: raise ValueError("Kein Ausgabepfad.")
+        if not out: raise ValueError(tr("Kein Ausgabepfad."))
         from pypdf import PdfReader, PdfWriter
         reader=PdfReader(src, strict=False); writer=PdfWriter(); writer.append(reader)
         data={name: ("/Yes" if (isinstance(w,QCheckBox) and w.isChecked()) else
@@ -1738,8 +1891,8 @@ class FormsPanel(BasePanel):
             for page in writer.pages:
                 if "/Annots" in page: del page["/Annots"]
         with open(out,"wb") as f: writer.write(f)
-        self.open_result(out,"Formular ausgefuellt")
-        return f"Formular ausgefuellt ({len(data)} Felder)"
+        self.open_result(out,tr("Formular ausgefuellt"))
+        return tr('Formular ausgefuellt ({p0} Felder)').format(p0=len(data))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1749,7 +1902,7 @@ def _run_ocr(src, out, lang, deskew, skip, report):
     """Run OCR on a worker thread (via BasePanel.run_async). Returns
     (out_path, summary); raises on failure."""
     if shutil.which("ocrmypdf"):
-        report("Starte ocrmypdf …")
+        report(tr("Starte ocrmypdf …"))
         cmd = ["ocrmypdf", "--language", lang, "--output-type", "pdfa"]
         if deskew: cmd.append("--deskew")
         if skip:   cmd.append("--skip-text")
@@ -1757,27 +1910,27 @@ def _run_ocr(src, out, lang, deskew, skip, report):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if r.returncode not in (0, 6):
             raise RuntimeError(r.stderr.strip() or r.stdout.strip())
-        return out, f"OCR abgeschlossen ({lang})"
+        return out, tr('OCR abgeschlossen ({p0})').format(p0=lang)
 
     if shutil.which("tesseract"):
         from pdf2image import convert_from_path
         import pytesseract
-        report("Rendere Seiten …")
+        report(tr("Rendere Seiten …"))
         images = convert_from_path(src, dpi=300)
         txt = ""
         for i, img in enumerate(images):
-            report(f"OCR Seite {i+1} / {len(images)} …")
-            txt += f"--- Seite {i+1} ---\n"
+            report(tr('OCR Seite {p0} / {p1} …').format(p0=i + 1, p1=len(images)))
+            txt += tr('--- Seite {p0} ---\n').format(p0=i + 1)
             txt += pytesseract.image_to_string(img, lang=lang) + "\n\n"
         out_txt = os.path.splitext(out)[0] + ".txt"
         with open(out_txt, "w", encoding="utf-8") as f:
             f.write(txt)
-        return out_txt, f"OCR abgeschlossen — Text gespeichert ({lang})"
+        return out_txt, tr('OCR abgeschlossen — Text gespeichert ({p0})').format(p0=lang)
 
-    raise RuntimeError(
+    raise RuntimeError(tr(
         "Kein OCR-Programm gefunden.\n"
         "Installation:  pip install ocrmypdf --break-system-packages\n"
-        "           oder:  sudo pacman -S tesseract tesseract-data-deu")
+        "           oder:  sudo pacman -S tesseract tesseract-data-deu"))
 
 
 class OcrPanel(BasePanel):
@@ -1795,7 +1948,7 @@ class OcrPanel(BasePanel):
         ob = QGroupBox(tr("EINSTELLUNGEN")); ol = QVBoxLayout(ob)
         self.lang = QComboBox()
         for name, code in [(tr("Deutsch (deu)"), "deu"), (tr("Englisch (eng)"), "eng"),
-                            (tr("Deutsch + Englisch"), "deu+eng"), ("Französisch", "fra")]:
+                            (tr("Deutsch + Englisch"), "deu+eng"), (tr("Französisch"), "fra")]:
             self.lang.addItem(name, code)
         ol.addLayout(row(tr("Sprache:"), self.lang))
         self.deskew = QCheckBox(tr("Seiten begradigen")); self.deskew.setChecked(True); ol.addWidget(self.deskew)
@@ -1810,11 +1963,11 @@ class OcrPanel(BasePanel):
         # Prep on the UI thread, then hand the work to the shared run_async().
         src  = self.require_pdf()
         out  = self.save_pdf("OCR-PDF speichern als")
-        if not out: raise ValueError("Kein Ausgabepfad.")
+        if not out: raise ValueError(tr("Kein Ausgabepfad."))
         lang   = self.lang.currentData()
         deskew = self.deskew.isChecked()
         skip   = self.skip.isChecked()
-        self.progress_lbl.setText("OCR läuft …")
+        self.progress_lbl.setText(tr("OCR läuft …"))
         self.run_async(
             lambda report: _run_ocr(src, out, lang, deskew, skip, report),
             on_done=self._ocr_done,
@@ -1829,15 +1982,15 @@ class OcrPanel(BasePanel):
 
     def _ocr_done(self, result):
         out_path, summary = result
-        self.progress_lbl.setText("Fertig.")
+        self.progress_lbl.setText(tr("Fertig."))
         self.log.log(summary)
         if out_path.endswith(".txt"):
-            self.log.log(f"Text gespeichert: {out_path}")
+            self.log.log(tr('Text gespeichert: {p0}').format(p0=out_path))
         else:
             self.open_result(out_path, "OCR")
 
     def _ocr_failed(self, exc):
-        self.progress_lbl.setText("Fehler.")
+        self.progress_lbl.setText(tr("Fehler."))
         self.log.log(str(exc), error=True)
 
 
@@ -1878,8 +2031,8 @@ class PreflightPanel(BasePanel):
         try:
             n=len(reader.pages); issues=[]; oks=[]
             if self.chk_enc.isChecked():
-                if reader.is_encrypted: issues.append("PDF ist passwortgeschuetzt")
-                else: oks.append("Nicht verschluesselt")
+                if reader.is_encrypted: issues.append(tr("PDF ist passwortgeschuetzt"))
+                else: oks.append(tr("Nicht verschluesselt"))
             target=PAPER_SIZES_PT.get(self.size_combo.currentText())
             orients=[]; colour_pages=[]
             for i in range(n):
@@ -1889,21 +2042,21 @@ class PreflightPanel(BasePanel):
                 if self.chk_size.isChecked() and target:
                     tw,th=target
                     if not ((abs(pw-tw)<5 and abs(ph-th)<5) or (abs(pw-th)<5 and abs(ph-tw)<5)):
-                        issues.append(f"Seite {i+1}: {pw:.0f}x{ph:.0f}pt != {tw:.0f}x{th:.0f}pt")
+                        issues.append(tr('Seite {p0}: {p1:.0f}x{p2:.0f}pt != {p3:.0f}x{p4:.0f}pt').format(p0=i + 1, p1=pw, p2=ph, p3=tw, p4=th))
                 if self.chk_colour.isChecked():
                     with _pdfium_lock:
                         bm=doc[i].render(scale=1); pil=bm.to_pil().convert("RGB").resize((64,64))
                     if any(max(abs(r-g),abs(r-b),abs(g-b))>20 for r,g,b in pil.getdata()):
                         colour_pages.append(i+1)
             if self.chk_orient.isChecked() and orients:
-                if len(set(orients))>1: issues.append(f"Gemischte Ausrichtungen")
-                else: oks.append(f"Einheitlich: {'Hochformat' if orients[0]=='H' else 'Querformat'}")
+                if len(set(orients))>1: issues.append(tr("Gemischte Ausrichtungen"))
+                else: oks.append(tr("Einheitlich: {p0}").format(p0=tr('Hochformat') if orients[0]=='H' else tr('Querformat')))
             if self.chk_colour.isChecked():
                 if colour_pages: issues.append(f"Farbseiten: {colour_pages[:10]}")
-                else: oks.append("Keine Farbseiten erkannt")
-            lines=[f"BERICHT -- {os.path.basename(src)}",f"Seiten: {n}  |  {os.path.getsize(src)//1024} KB",""]
+                else: oks.append(tr("Keine Farbseiten erkannt"))
+            lines=[f"BERICHT -- {os.path.basename(src)}",tr('Seiten: {p0}  |  {p1} KB').format(p0=n, p1=os.path.getsize(src) // 1024),""]
             if issues: lines+=[f"PROBLEME ({len(issues)}):"]+ [f"  x  {x}" for x in issues]+[""]
-            else: lines.append("BESTANDEN -- Datei scheint druckfertig.")
+            else: lines.append(tr("BESTANDEN -- Datei scheint druckfertig."))
             if oks: lines+=["BESTANDEN:"]+[f"  v  {x}" for x in oks]
             self.report.setPlainText("\n".join(lines))
         finally:
@@ -1939,13 +2092,13 @@ class LayersPanel(BasePanel):
         try:
             from pypdf import PdfReader; from pypdf.generic import ArrayObject
             reader=PdfReader(src, strict=False); root=reader.trailer["/Root"]; oc=root.get("/OCProperties")
-            if not oc: self.no_layers.setVisible(True); self.log.log("Keine Ebenen gefunden."); return
+            if not oc: self.no_layers.setVisible(True); self.log.log(tr("Keine Ebenen gefunden.")); return
             self.no_layers.setVisible(False)
             for ref in oc.get_object().get("/OCGs",ArrayObject()):
                 obj=ref.get_object(); name=str(obj.get("/Name","(unbenannt)"))
                 cb=QCheckBox("  "+name); cb.setChecked(True)
                 self.cb_layout.addWidget(cb); self._cbs.append((ref.idnum, cb))
-            self.log.log(f"{len(self._cbs)} Ebene(n) gefunden.")
+            self.log.log(tr('{p0} Ebene(n) gefunden.').format(p0=len(self._cbs)))
         except Exception as e: self.log.log(str(e),error=True)
 
     def _all(self,state):
@@ -1954,7 +2107,7 @@ class LayersPanel(BasePanel):
     def _run_action(self):
         src=self.require_pdf()
         out=self.save_pdf("PDF speichern als")
-        if not out: raise ValueError("Kein Ausgabepfad.")
+        if not out: raise ValueError(tr("Kein Ausgabepfad."))
         from pypdf import PdfReader, PdfWriter
         from pypdf.generic import ArrayObject, NameObject
         reader = PdfReader(src, strict=False)
@@ -1988,8 +2141,8 @@ class LayersPanel(BasePanel):
             finally:
                 try: os.remove(flat)
                 except OSError: pass
-        self.open_result(out,"Ebenen verarbeitet")
-        return "Ebenen verarbeitet"
+        self.open_result(out,tr("Ebenen verarbeitet"))
+        return tr("Ebenen verarbeitet")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2004,16 +2157,16 @@ class ColourProfilePanel(BasePanel):
     # The generic option needs no ICC file; the named ones use the matching .icc
     # via Ghostscript when present (drop them in ~/.local/share/copyshop_pdf_suite/icc/).
     CMYK_PROFILES = [
-        ("Standard (generisch) — universell, ohne ICC-Datei", None),
-        ("ISO Coated v2 (FOGRA39) — gestrichenes Papier, EU-Offset-Standard",
+        (tr("Standard (generisch) — universell, ohne ICC-Datei"), None),
+        (tr("ISO Coated v2 (FOGRA39) — gestrichenes Papier, EU-Offset-Standard"),
             ("ISOcoated_v2_eci.icc", "ISOcoated_v2_300_eci.icc")),
-        ("PSO Coated v3 (FOGRA51) — modernes gestrichenes Papier, Premium-Offset",
+        (tr("PSO Coated v3 (FOGRA51) — modernes gestrichenes Papier, Premium-Offset"),
             ("PSOcoated_v3.icc",)),
-        ("PSO Uncoated v3 (FOGRA52) — ungestrichenes/Naturpapier, Bücher & Briefbögen",
+        (tr("PSO Uncoated v3 (FOGRA52) — ungestrichenes/Naturpapier, Bücher & Briefbögen"),
             ("PSOuncoated_v3_FOGRA52.icc", "PSO_Uncoated_ISO12647_eci.icc")),
-        ("U.S. Web Coated (SWOP) v2 — US-Rollenoffset, Magazine (gestrichen)",
+        (tr("U.S. Web Coated (SWOP) v2 — US-Rollenoffset, Magazine (gestrichen)"),
             ("USWebCoatedSWOP.icc",)),
-        ("Coated GRACoL 2006 — US-Bogenoffset, hochwertiges gestrichenes Papier",
+        (tr("Coated GRACoL 2006 — US-Bogenoffset, hochwertiges gestrichenes Papier"),
             ("GRACoL2006_Coated1v2.icc", "CGATS21_CRPC6.icc")),
     ]
 
@@ -2065,7 +2218,7 @@ class ColourProfilePanel(BasePanel):
             CS_MAP={
                 "/DeviceRGB":"RGB", "/DeviceCMYK":"CMYK", "/DeviceGray":"Graustufen",
                 "/CalRGB":"Kal. RGB", "/CalGray":"Kal. Grau", "/ICCBased":"ICC",
-                "/Lab":"CIE Lab", "/Separation":"Sonderfarbe", "/DeviceN":"DeviceN",
+                "/Lab":"CIE Lab", "/Separation":tr("Sonderfarbe"), "/DeviceN":"DeviceN",
             }
             pdf=pikepdf.open(src)
             found=set()
@@ -2128,22 +2281,22 @@ class ColourProfilePanel(BasePanel):
             is_cmyk="/DeviceCMYK" in found
             is_rgb=bool(found & {"/DeviceRGB","/CalRGB","/ICCBased"})
             lines=[
-                f"Datei:   {os.path.basename(src)}",
-                f"Seiten:  {n_pages}",
+                tr('Datei:   {p0}').format(p0=os.path.basename(src)),
+                tr('Seiten:  {p0}').format(p0=n_pages),
                 "",
-                f"Farbraum: {', '.join(sorted(readable)) if readable else 'nicht erkennbar'}",
+                tr("Farbraum: {p0}").format(p0=', '.join(sorted(readable)) if readable else tr('nicht erkennbar')),
                 "",
             ]
             if is_cmyk and not is_rgb:
                 lines.append("✓  CMYK — druckfertig.")
             elif is_rgb and is_cmyk:
-                lines.append("⚠  Gemischt (RGB + CMYK) — vor Profidruck vollständig in CMYK umwandeln.")
+                lines.append(tr("⚠  Gemischt (RGB + CMYK) — vor Profidruck vollständig in CMYK umwandeln."))
             elif is_rgb:
-                lines.append("⚠  RGB — vor Profidruck in CMYK umwandeln.")
+                lines.append(tr("⚠  RGB — vor Profidruck in CMYK umwandeln."))
             else:
-                lines.append("ℹ  Farbraum nicht eindeutig erkennbar.")
+                lines.append(tr("ℹ  Farbraum nicht eindeutig erkennbar."))
             self.report.setPlainText("\n".join(lines))
-            self.log.log("Pruefung abgeschlossen.")
+            self.log.log(tr("Pruefung abgeschlossen."))
         except Exception as e:
             self.log.log(str(e), error=True)
 
@@ -2153,12 +2306,12 @@ class ColourProfilePanel(BasePanel):
         src = self.require_pdf()
 
         if not shutil.which("gs"):
-            raise RuntimeError(
+            raise RuntimeError(tr(
                 "Ghostscript nicht gefunden.\n"
-                "Installation:  sudo pacman -S ghostscript")
+                "Installation:  sudo pacman -S ghostscript"))
 
         out = self.save_pdf("CMYK-PDF speichern als")
-        if not out: raise ValueError("Kein Ausgabepfad angegeben.")
+        if not out: raise ValueError(tr("Kein Ausgabepfad angegeben."))
 
         # Bewährter GS-Befehl für RGB→CMYK ohne ICC-Profil-Problematik.
         # -dEncodeColorImages=false / -dEncodeGrayImages=false verhindert
@@ -2189,7 +2342,7 @@ class ColourProfilePanel(BasePanel):
 
         if r.returncode != 0:
             err = (r.stderr.strip() or r.stdout.strip())[:500]
-            raise RuntimeError(f"Ghostscript-Fehler:\n{err}")
+            raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=err))
 
         # Ergebnis verifizieren
         try:
@@ -2212,21 +2365,19 @@ class ColourProfilePanel(BasePanel):
                         except Exception:
                             pass
             pdf_out.close()
-            verify = "⚠  Einige RGB-Bilder noch vorhanden (eingebettete Profile)." if found_rgb else "✓  Farbraum erfolgreich in CMYK konvertiert."
+            verify = tr("⚠  Einige RGB-Bilder noch vorhanden (eingebettete Profile).") if found_rgb else tr("✓  Farbraum erfolgreich in CMYK konvertiert.")
         except Exception:
-            verify = "(Verifikation nicht möglich)"
+            verify = tr("(Verifikation nicht möglich)")
 
         if icc:
             prof_note = f"Profil: {prof_label}  ({os.path.basename(icc)})"
         elif candidates:
-            prof_note = (f"⚠  Profil '{prof_label}' nicht installiert — generische "
-                         f"CMYK-Konvertierung verwendet.\n"
-                         f"   .icc-Datei nach ~/.local/share/copyshop_pdf_suite/icc/ legen.")
+            prof_note = (tr("⚠  Profil '{p0}' nicht installiert — generische CMYK-Konvertierung verwendet.\n   .icc-Datei nach ~/.local/share/copyshop_pdf_suite/icc/ legen.").format(p0=prof_label))
         else:
             prof_note = "Profil: Standard (generisch)"
 
-        self.open_result(out, "CMYK konvertiert")
-        return f"Konvertierung abgeschlossen.\n{prof_note}\n{verify}"
+        self.open_result(out, tr("CMYK konvertiert"))
+        return tr('Konvertierung abgeschlossen.\n{p0}\n{p1}').format(p0=prof_note, p1=verify)
 
 
 def _fmt(b):
@@ -2296,21 +2447,72 @@ def _crop_marks_content_stream(rects, length=7.0, gap=2.0):
     return ("\n".join(ops)).encode("latin-1")
 
 
+_ROT_MATRIX = {0: (1.0, 0.0, 0.0, 1.0), 90:  (0.0, -1.0, 1.0, 0.0),
+               180: (-1.0, 0.0, 0.0, -1.0), 270: (0.0, 1.0, -1.0, 0.0)}
+
+
+def _slot_placement(box, rot, rect):
+    """Matrix that fits a page into a slot: scale it to fit `rect` keeping its
+    aspect ratio, and centre it there. `box` is the page's visible rectangle,
+    `rot` its /Rotate. Returns (scale, tx, ty) for a ``s 0 0 s tx ty cm``, applied
+    after the rotation matrix — i.e. exactly the placement pikepdf's add_overlay
+    performs, but computed in full precision. qpdf writes that matrix rounded to
+    five decimals and truncates the rotation offset to a whole point, which left
+    the content up to ~1.5pt off-centre in its slot — small, but this is a print
+    tool and it showed up as visibly uneven margins."""
+    x0, y0, x1, y1 = box
+    a, b, c, d = _ROT_MATRIX[rot % 360 if rot % 90 == 0 else 0]
+    pts = [(a * x + c * y, b * x + d * y) for x in (x0, x1) for y in (y0, y1)]
+    bx0 = min(p[0] for p in pts); bx1 = max(p[0] for p in pts)
+    by0 = min(p[1] for p in pts); by1 = max(p[1] for p in pts)
+    bw  = max(bx1 - bx0, 1e-6);   bh  = max(by1 - by0, 1e-6)
+    rx0, ry0, rx1, ry1 = rect
+    s  = min((rx1 - rx0) / bw, (ry1 - ry0) / bh)
+    tx = rx0 + ((rx1 - rx0) - bw * s) / 2.0 - bx0 * s
+    ty = ry0 + ((ry1 - ry0) - bh * s) / 2.0 - by0 * s
+    return s, tx, ty
+
+
 def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False):
     """Build the N-Up PDF on a worker thread (via BasePanel.run_async).
 
-    Uses pikepdf/qpdf's ``add_overlay`` to place each source page into its slot.
-    This is dramatically faster than pypdf's ``merge_transformed_page`` on
-    vector-heavy pages (which parses + decompresses every content stream — ~30s
-    and a 10× larger output for a dense 4-page file vs ~0.5s here) and keeps the
-    source content compressed. ``add_overlay`` scales each page to fit its slot
-    rectangle, preserving aspect ratio and centring it. Only plain data crosses
-    the thread boundary."""
-    from pikepdf import Pdf, Page, Rectangle, Stream
+    Each source page becomes a Form XObject that is scaled to fit its slot,
+    keeping its aspect ratio, and centred there. This is dramatically faster than
+    pypdf's ``merge_transformed_page`` on vector-heavy pages (which parses +
+    decompresses every content stream — ~30s and a 10× larger output for a dense
+    4-page file vs ~0.5s here) and keeps the source content compressed. Only
+    plain data crosses the thread boundary."""
+    from pikepdf import Pdf, Page, Stream, Array, Name
     (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
     src_doc = Pdf.open(src)
     out_doc = Pdf.new()
     rects = _nup_slot_rects(params, n_slot)
+
+    # One Form XObject per used source page, built once and reused across slots
+    # and sheets. Two things are pinned deliberately:
+    #  * the BBox is the page's *visible* box (CropBox clipped to MediaBox).
+    #    as_form_xobject would otherwise take TrimBox → CropBox → MediaBox
+    #    verbatim, so a print PDF's bleed TrimBox — or a stale CropBox left
+    #    behind by an earlier crop — decided the layout and pushed the content
+    #    off-centre, showing something different from the preview.
+    #  * /Rotate is applied through our own exact matrix instead of qpdf's, which
+    #    truncates the rotation offset to whole points.
+    _forms = {}
+    def _form_for(page_i):
+        if page_i not in _forms:
+            page = src_doc.pages[page_i]
+            box  = _visible_box(page)
+            arr  = Array([float(v) for v in box])
+            page.obj["/CropBox"] = arr
+            page.obj["/TrimBox"] = arr
+            for key in ("/BleedBox", "/ArtBox"):
+                if key in page.obj: del page.obj[key]
+            rot = _inherited_rotate(page)
+            fx  = page.as_form_xobject(handle_transformations=False)
+            fx["/Matrix"] = Array(list(_ROT_MATRIX[rot if rot % 90 == 0 else 0]) + [0.0, 0.0])
+            _forms[page_i] = (fx, box, rot)
+        return _forms[page_i]
+
     # Pre-build the crop-marks content stream once (same grid on every sheet).
     mark_ops = _crop_marks_content_stream(rects) if crop_marks else None
     n_sheets = math.ceil(len(src_pages) / n_slot)
@@ -2318,19 +2520,26 @@ def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False):
     for sheet_i in range(n_sheets):
         report(f"{tr('Blatt')} {sheet_i+1} / {n_sheets} …")
         sheet = Page(out_doc.add_blank_page(page_size=(out_w, out_h)))
+        names = {}   # one resource name per page, even when it fills several slots
         for slot_i in range(n_slot):
             page_i = sheet_i * n_slot + slot_i
             if page_i >= len(src_pages): break
             src_pi = src_pages[page_i]
             if src_pi is None or src_pi >= len(src_doc.pages): continue
-            x0, y0, x1, y1 = rects[slot_i]
-            sheet.add_overlay(Page(src_doc.pages[src_pi]), Rectangle(x0, y0, x1, y1))
+            fx, box, rot = _form_for(src_pi)
+            s, tx, ty = _slot_placement(box, rot, rects[slot_i])
+            if src_pi not in names:
+                names[src_pi] = sheet.add_resource(fx, Name.XObject, prefix="NUp")
+            name = names[src_pi]
+            sheet.contents_add(Stream(out_doc,
+                f"q {s:.6f} 0 0 {s:.6f} {tx:.6f} {ty:.6f} cm {name} Do Q\n".encode("latin-1")))
             placed += 1
         if mark_ops is not None:
             sheet.contents_add(Stream(out_doc, mark_ops))
+        sheet.contents_coalesce()
     report(tr("Schreibe Datei …"))
     out_doc.save(out)
-    return out, f"Fertig. {placed} Seiten auf {n_sheets} Blatt ({cols}×{rows})."
+    return out, tr('Fertig. {p0} Seiten auf {p1} Blatt ({p2}×{p3}).').format(p0=placed, p1=n_sheets, p2=cols, p3=rows)
 
 
 class NUpPanel(BasePanel):
@@ -2438,10 +2647,14 @@ class NUpPanel(BasePanel):
         self.out_fmt.addItems([tr("DIN A4  (210 × 297 mm)"), tr("DIN A3  (297 × 420 mm)"),
                                 tr("DIN A5  (148 × 210 mm)"), tr("Letter  (216 × 279 mm)"),
                                 tr("Wie Quellseite × Raster  (automatisch)")])
-        self.out_fmt.currentIndexChanged.connect(self._update_preview)
         ol.addLayout(r(tr("Format:"), self.out_fmt))
         self.landscape = QCheckBox(tr("Querformat")); self.landscape.toggled.connect(self._update_preview)
         ol.addWidget(self.landscape)
+        def _fmt_changed(idx):
+            # The auto format takes its orientation from the source page.
+            self.landscape.setEnabled(idx != 4)
+            self._update_preview()
+        self.out_fmt.currentIndexChanged.connect(_fmt_changed)
         layout.addWidget(ob)
 
         ab = QGroupBox(tr("ABSTÄNDE")); al = QVBoxLayout(ab)
@@ -2483,16 +2696,29 @@ class NUpPanel(BasePanel):
         cols = self.cols.value(); rows = self.rows.value()
         fmt_idx = self.out_fmt.currentIndex()
         fmt_map = {0:(210*PT,297*PT), 1:(297*PT,420*PT), 2:(148*PT,210*PT), 3:(216*PT,279*PT)}
-        if fmt_idx == 4:
-            out_w, out_h = src_pw * cols, src_ph * rows
-        else:
-            out_w, out_h = fmt_map[fmt_idx]
-        if self.landscape.isChecked(): out_w, out_h = out_h, out_w
         mt = self.margin_t.value() * PT; mb = self.margin_b.value() * PT
         ml = self.margin_l.value() * PT; mr = self.margin_r.value() * PT
         gh = self.gap_h.value() * PT;    gv = self.gap_v.value() * PT
-        slot_w = max(1.0, (out_w - ml - mr - gh * (cols-1)) / cols)
-        slot_h = max(1.0, (out_h - mt - mb - gv * (rows-1)) / rows)
+        if fmt_idx == 4:
+            # "Wie Quellseite × Raster": size the sheet so that every slot is
+            # exactly one source page and the margins/gaps are added *around*
+            # them. They used to be carved out of a sheet of src×grid, so asking
+            # for a 10 mm margin here shrank the page to ~95% and — because the
+            # fit keeps the aspect ratio — actually produced 10 mm at the sides
+            # and 14 mm top/bottom, the opposite of "add white space".
+            out_w = src_pw * cols + ml + mr + gh * (cols - 1)
+            out_h = src_ph * rows + mt + mb + gv * (rows - 1)
+        else:
+            out_w, out_h = fmt_map[fmt_idx]
+            # Only meaningful for the fixed paper sizes — the auto sheet already
+            # follows the orientation of the source page.
+            if self.landscape.isChecked(): out_w, out_h = out_h, out_w
+        # NOT clamped: a slot can come out zero or negative when the margins and
+        # gaps exceed the sheet. Callers must check (the run refuses, the preview
+        # says so) — clamping it to 1pt used to squeeze the whole page into a
+        # hairline in the corner instead of reporting the problem.
+        slot_w = (out_w - ml - mr - gh * (cols-1)) / cols
+        slot_h = (out_h - mt - mb - gv * (rows-1)) / rows
         return out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows
 
     def _page_dims(self, pdf_path):
@@ -2543,6 +2769,8 @@ class NUpPanel(BasePanel):
         page_idx, src_pw, src_ph, n_total = self._page_dims(pdf_path)
         out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows = \
             self._get_layout_params(src_pw, src_ph)
+        if slot_w <= 1.0 or slot_h <= 1.0:
+            return None, tr("Abstände zu groß — kein Platz für Inhalt.")
         cs = min(avail_w / out_w, avail_h / out_h) * zoom
         canvas_w = max(1, int(out_w * cs)); canvas_h = max(1, int(out_h * cs))
 
@@ -2614,23 +2842,29 @@ class NUpPanel(BasePanel):
     def _run_action(self):
         # Prepare on the UI thread (cheap: reads widget values + first page size),
         # then hand the heavy merge loop to a worker via the shared run_async().
-        from pypdf import PdfReader
+        import pikepdf as _pik
         src_path = self.require_pdf()
         out_path = self.save_pdf(tr("N-Up PDF speichern als"))
         if not out_path: raise ValueError(tr("Kein Ausgabepfad."))
-        reader  = PdfReader(src_path, strict=False); n_total = len(reader.pages)
-        cols = self.cols.value(); rows = self.rows.value(); n_slot = cols * rows
-        if self.src_combo.currentIndex() == 1:
-            # Each page repeated to fill its own sheet (n_slot copies per page).
-            src_pages = [p for p in range(n_total) for _ in range(n_slot)]
-        else:
-            # All pages, packed sequentially across the slots.
-            src_pages = list(range(n_total))
-        sp = reader.pages[src_pages[0]]
-        src_pw = float(sp.mediabox.width); src_ph = float(sp.mediabox.height)
+        with _pik.open(src_path) as _doc:
+            n_total = len(_doc.pages)
+            cols = self.cols.value(); rows = self.rows.value(); n_slot = cols * rows
+            if self.src_combo.currentIndex() == 1:
+                # Each page repeated to fill its own sheet (n_slot copies per page).
+                src_pages = [p for p in range(n_total) for _ in range(n_slot)]
+            else:
+                # All pages, packed sequentially across the slots.
+                src_pages = list(range(n_total))
+            # Size the sheet from the same page the preview shows, measured the
+            # same way (visible box, /Rotate applied) — reading the raw MediaBox
+            # of page 0 made "Wie Quellseite × Raster" disagree with the preview
+            # on rotated or cropped pages, e.g. a portrait sheet for landscape
+            # content.
+            rep = max(0, min(AppState.get().current_page, n_total - 1))
+            src_pw, src_ph = _visible_size(_doc.pages[rep])
         params = self._get_layout_params(src_pw, src_ph)
         slot_w, slot_h = params[8], params[9]
-        if slot_w <= 0 or slot_h <= 0:
+        if slot_w <= 1.0 or slot_h <= 1.0:
             raise ValueError(tr("Abstände zu groß — kein Platz für Inhalt."))
         if len(src_pages) == 1: src_pages = src_pages * n_slot   # single-page doc → fill the sheet
         if self.blank_fill.isChecked():
@@ -2641,7 +2875,7 @@ class NUpPanel(BasePanel):
             lambda report: _build_nup(src_path, out_path, src_pages, params,
                                       n_slot, report, crop_marks=crop),
             on_done=self._nup_done,
-            busy_label="N-Up läuft …",
+            busy_label=tr("N-Up läuft …"),
         )
         return None
 

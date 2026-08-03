@@ -125,7 +125,7 @@ class CurrentFileBar(QWidget):
 
     def _pick_other(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "PDF öffnen", "", "PDF Dateien (*.pdf)")
+            self, tr("PDF öffnen"), "", tr("PDF Dateien (*.pdf)"))
         if path:
             AppState.get().open_pdf(path)
 
@@ -374,18 +374,18 @@ class BasePanel(QWidget):
         """Gibt aktuellen PDF-Pfad zurück, wirft Fehler wenn keine offen."""
         path = self.current_pdf()
         if not path or not os.path.isfile(path):
-            raise ValueError(
+            raise ValueError(tr(
                 "Keine PDF geöffnet.\n"
-                "Öffne zuerst eine PDF im Page Viewer (linke Seite).")
+                "Öffne zuerst eine PDF im Page Viewer (linke Seite)."))
         # Central guard: password-protected PDFs can't be processed and otherwise
         # surface as cryptic library errors (PasswordError / FileNotDecryptedError
         # / PdfiumError) in each tool. Give one clear message instead.
         try:
             from pypdf import PdfReader
             if PdfReader(path, strict=False).is_encrypted:
-                raise ValueError(
+                raise ValueError(tr(
                     "Diese PDF ist passwortgeschützt.\n"
-                    "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen.")
+                    "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen."))
         except ValueError:
             raise
         except Exception:
@@ -489,15 +489,15 @@ class BasePanel(QWidget):
         return tmp_dir
 
     def pick_pdf(self, caption="PDF öffnen") -> str:
-        path, _ = QFileDialog.getOpenFileName(self, caption, "", "PDF Dateien (*.pdf)")
+        path, _ = QFileDialog.getOpenFileName(self, tr(caption), "", tr("PDF Dateien (*.pdf)"))
         return path or ""
 
     def pick_pdfs(self) -> list:
-        paths, _ = QFileDialog.getOpenFileNames(self, "PDFs öffnen", "", "PDF Dateien (*.pdf)")
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("PDFs öffnen"), "", tr("PDF Dateien (*.pdf)"))
         return paths
 
     def pick_images(self) -> list:
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Bilder öffnen", "",
-            "Bilder (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.webp)")
+            self, tr("Bilder öffnen"), "",
+            tr("Bilder (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.webp)"))
         return paths
