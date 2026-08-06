@@ -1727,104 +1727,70 @@ class ImposePanel(BasePanel):
             for i in range(layout.count()):
                 w = layout.itemAt(i).widget()
                 if w: w.setVisible(nup)
+        # A saddle-stitched booklet is always a multiple of four pages — a folded
+        # sheet carries four of them — so the fill-up option has no meaning there.
+        # It used to stay enabled and be silently ignored.
+        booklet = (idx == 0)
+        self.blank.setEnabled(not booklet)
+        self.blank.setToolTip(tr(
+            "Eine Broschüre wird immer auf ein Vielfaches von 4 Seiten aufgefüllt.")
+            if booklet else "")
 
     def _run_action(self):
-        from pypdf import PdfReader, PdfWriter, Transformation
+        import pikepdf as _pik
         src = self.require_pdf()
         out = self.save_pdf(tr("Ausgeschossene PDF speichern als"))
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
 
-        reader = PdfReader(src, strict=False)
-        pages  = list(reader.pages)
-        n_orig = len(pages)
-        target_w, target_h = self._get_target_size(pages)
-        if self.norm_check.isChecked():
-            pages = self._normalize_pages(pages, target_w, target_h)
+        with _pik.open(src) as doc:
+            n = len(doc.pages)
+            if not n: raise ValueError(tr("Die PDF hat keine Seiten."))
+            pw, ph = _impose_page_size(doc, self.norm_target.currentIndex())
 
-        mode   = self.mode.currentIndex()
-        writer = PdfWriter()
-        pw, ph = target_w, target_h
-
-        def place(sheet, src_page, tx, ty, sx=1.0, sy=1.0):
-            try:
-                sheet.merge_transformed_page(src_page,
-                    Transformation().scale(sx, sy).translate(tx=tx, ty=ty))
-            except Exception:
-                sheet.merge_page(src_page)
-
+        mode = self.mode.currentIndex()
+        pad  = self.blank.isChecked()
         if mode == 0:
-            while len(pages) % 4: pages.append(None)
-            n = len(pages)
-            num_sheets = n // 4
-            for k in range(1, num_sheets + 1):
-                vs_left  = n - 2*k + 1
-                vs_right = 2*k - 2
-                rs_left  = 2*k - 1
-                rs_right = n - 2*k
-                for left_i, right_i in [(vs_left, vs_right), (rs_left, rs_right)]:
-                    sheet = writer.add_blank_page(pw * 2, ph)
-                    if left_i < n_orig and pages[left_i] is not None:
-                        place(sheet, pages[left_i], 0, 0)
-                    if right_i < n_orig and pages[right_i] is not None:
-                        place(sheet, pages[right_i], pw, 0)
-            msg = tr('Broschüre: {p0} Seiten → {p1} Blätter').format(p0=n, p1=num_sheets * 2)
-
+            sheet_w, sheet_h = pw * 2, ph
+            halves = [(0.0, 0.0, pw, ph), (pw, 0.0, pw * 2, ph)]
+            sheets = [list(zip(side, halves)) for side in _booklet_sides(n)]
+            summary = lambda placed, nsheets: tr(
+                'Broschüre: {p0} Seiten auf {p1} Blattseiten.').format(p0=placed, p1=nsheets)
         elif mode == 1:
-            if self.blank.isChecked() and len(pages) % 2: pages.append(None)
-            for i in range(0, len(pages), 2):
-                sheet = writer.add_blank_page(pw * 2, ph)
-                if pages[i] is not None: place(sheet, pages[i], 0, 0)
-                if i + 1 < len(pages) and pages[i+1] is not None:
-                    place(sheet, pages[i+1], pw, 0)
-            msg = tr('2-up: {p0} Bögen').format(p0=math.ceil(len(pages) / 2))
-
+            sheet_w, sheet_h = pw * 2, ph
+            halves = [(0.0, 0.0, pw, ph), (pw, 0.0, pw * 2, ph)]
+            pages = list(range(n))
+            if pad:
+                while len(pages) % 2: pages.append(None)
+            sheets = [list(zip(pages[i:i + 2], halves)) for i in range(0, len(pages), 2)]
+            summary = lambda placed, nsheets: tr(
+                '2-up: {p0} Seiten auf {p1} Bögen.').format(p0=placed, p1=nsheets)
         else:
             cols = self.cols.value(); rows = self.rows_spin.value(); per = cols * rows
-            if self.blank.isChecked():
+            sheet_w, sheet_h = pw, ph
+            cw, chh = pw / cols, ph / rows
+            cells = [(c * cw, ph - (r + 1) * chh, (c + 1) * cw, ph - r * chh)
+                     for r in range(rows) for c in range(cols)]
+            pages = list(range(n))
+            if pad:
                 while len(pages) % per: pages.append(None)
-            cell_w = pw / cols; cell_h = ph / rows
-            for si in range(0, len(pages), per):
-                sheet = writer.add_blank_page(pw, ph)
-                for slot in range(per):
-                    pi = si + slot
-                    if pi >= len(pages) or pages[pi] is None: break
-                    place(sheet, pages[pi],
-                          (slot % cols) * cell_w,
-                          (rows - 1 - slot // cols) * cell_h,
-                          1.0 / cols, 1.0 / rows)
-            msg = tr('{p0}×{p1}-up: {p2} Bögen').format(p0=cols, p1=rows, p2=math.ceil(len(pages) / per))
+            sheets = [list(zip(pages[i:i + per], cells)) for i in range(0, len(pages), per)]
+            summary = lambda placed, nsheets: tr(
+                '{p0}×{p1}-up: {p2} Seiten auf {p3} Bögen.').format(
+                    p0=cols, p1=rows, p2=placed, p3=nsheets)
 
-        with open(out, "wb") as f: writer.write(f)
-        self.open_result(out, "Ausgeschossen")
-        return msg
+        fit = self.norm_check.isChecked()
+        self.run_async(
+            lambda report: _build_impose(src, out, sheets, sheet_w, sheet_h,
+                                         fit, report, summary),
+            on_done=self._impose_done,
+            busy_label="Ausschießen …",
+        )
+        return None
 
-    def _get_target_size(self, pages):
-        idx = self.norm_target.currentIndex()
-        sizes = {1: (595.28, 841.89), 2: (841.89, 1190.55),
-                 3: (419.53, 595.28), 4: (612.0, 792.0)}
-        if idx in sizes: return sizes[idx]
-        max_w = max(float(p.mediabox.width)  for p in pages)
-        max_h = max(float(p.mediabox.height) for p in pages)
-        return max_w, max_h
-
-    def _normalize_pages(self, pages, target_w, target_h):
-        from pypdf import PdfWriter, Transformation
-        result = []
-        for p in pages:
-            if p is None: result.append(None); continue
-            pw = float(p.mediabox.width); ph = float(p.mediabox.height)
-            if pw <= 0 or ph <= 0: result.append(p); continue
-            scale = min(target_w / pw, target_h / ph)
-            tx = (target_w - pw * scale) / 2
-            ty = (target_h - ph * scale) / 2
-            w = PdfWriter(); sheet = w.add_blank_page(target_w, target_h)
-            try:
-                sheet.merge_transformed_page(p,
-                    Transformation().scale(scale, scale).translate(tx=tx, ty=ty))
-            except Exception:
-                sheet.merge_page(p)
-            result.append(sheet)
-        return result
+    def _impose_done(self, result):
+        out_path, summary = result
+        self.log.log(summary)
+        self.open_result(out_path, "Ausgeschossen")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2451,7 +2417,7 @@ _ROT_MATRIX = {0: (1.0, 0.0, 0.0, 1.0), 90:  (0.0, -1.0, 1.0, 0.0),
                180: (-1.0, 0.0, 0.0, -1.0), 270: (0.0, 1.0, -1.0, 0.0)}
 
 
-def _slot_placement(box, rot, rect):
+def _slot_placement(box, rot, rect, fixed_scale=None):
     """Matrix that fits a page into a slot: scale it to fit `rect` keeping its
     aspect ratio, and centre it there. `box` is the page's visible rectangle,
     `rot` its /Rotate. Returns (scale, tx, ty) for a ``s 0 0 s tx ty cm``, applied
@@ -2459,7 +2425,10 @@ def _slot_placement(box, rot, rect):
     performs, but computed in full precision. qpdf writes that matrix rounded to
     five decimals and truncates the rotation offset to a whole point, which left
     the content up to ~1.5pt off-centre in its slot — small, but this is a print
-    tool and it showed up as visibly uneven margins."""
+    tool and it showed up as visibly uneven margins.
+
+    `fixed_scale` places the page at that scale instead of fitting it (still
+    centred) — what the Broschüre tool does when normalising is switched off."""
     x0, y0, x1, y1 = box
     a, b, c, d = _ROT_MATRIX[rot % 360 if rot % 90 == 0 else 0]
     pts = [(a * x + c * y, b * x + d * y) for x in (x0, x1) for y in (y0, y1)]
@@ -2467,10 +2436,118 @@ def _slot_placement(box, rot, rect):
     by0 = min(p[1] for p in pts); by1 = max(p[1] for p in pts)
     bw  = max(bx1 - bx0, 1e-6);   bh  = max(by1 - by0, 1e-6)
     rx0, ry0, rx1, ry1 = rect
-    s  = min((rx1 - rx0) / bw, (ry1 - ry0) / bh)
+    s  = min((rx1 - rx0) / bw, (ry1 - ry0) / bh) if fixed_scale is None else fixed_scale
     tx = rx0 + ((rx1 - rx0) - bw * s) / 2.0 - bx0 * s
     ty = ry0 + ((ry1 - ry0) - bh * s) / 2.0 - by0 * s
     return s, tx, ty
+
+
+def _flatten_annots(doc):
+    """Bake annotation appearances (stamps, signatures, filled form fields) into
+    the page content.
+
+    Imposition turns every source page into a Form XObject, and an XObject
+    carries content only — annotations stay behind on the page that is being
+    left behind. Anything the user could see but that lived in an /AP stream
+    would silently vanish from the printed sheet."""
+    if not any("/Annots" in p.obj for p in doc.pages):
+        return
+    try:
+        doc.flatten_annotations("all")
+    except Exception:
+        pass          # older qpdf: better an un-flattened page than no output
+
+
+def _booklet_sides(n_pages):
+    """Saddle-stitch imposition order for `n_pages` source pages.
+
+    Returns one list per printed sheet side — [left, right] as 0-based source
+    page indexes, None for a blank — ordered front, back, front, back … so the
+    result prints duplex and folds into a booklet. Padded to a multiple of four
+    because a folded sheet always carries four pages."""
+    n = n_pages
+    while n % 4:
+        n += 1
+    sides = []
+    for k in range(1, n // 4 + 1):
+        sides.append([n - 2 * k + 1, 2 * k - 2])     # front of sheet k
+        sides.append([2 * k - 1,     n - 2 * k])     # its back
+    return [[(i if i < n_pages else None) for i in side] for side in sides]
+
+
+def _impose_page_size(doc, idx):
+    """The size of one booklet page: a fixed paper size, or — for "largest page
+    in the document" — the biggest page *as displayed* (visible box, /Rotate
+    applied).
+
+    Deliberately the largest single page, not max(width) × max(height) over all
+    of them: a document mixing portrait and landscape A4 made those two maxima
+    841×841, so every sheet came out square."""
+    sizes = {1: (595.28, 841.89), 2: (841.89, 1190.55),
+             3: (419.53, 595.28), 4: (612.0, 792.0)}
+    if idx in sizes:
+        return sizes[idx]
+    return max((_visible_size(p) for p in doc.pages),
+               key=lambda wh: wh[0] * wh[1], default=(595.28, 841.89))
+
+
+def _build_impose(src, out, sheets, sheet_w, sheet_h, fit, report, summary):
+    """Render an imposition on a worker thread (via BasePanel.run_async).
+
+    `sheets` is a list of sheets, each a list of (source_page_index_or_None,
+    slot_rect); `summary(placed, sheets)` builds the finished-message.
+    Uses the same Form-XObject engine as _build_nup instead of pypdf's
+    merge_transformed_page, which
+
+      * ignored /Rotate, so a page turned in the page manager was imposed
+        unturned,
+      * measured pages by their raw MediaBox, so a print PDF's bleed decided the
+        sheet size (an A4 booklet came out 432 × 303 mm instead of A3) and the
+        content sat off-centre,
+      * re-encoded every content stream on the GUI thread, freezing the window.
+    """
+    from pikepdf import Pdf, Page, Stream, Array, Name
+    src_doc = Pdf.open(src)
+    _flatten_annots(src_doc)
+    out_doc = Pdf.new()
+
+    _forms = {}
+    def _form_for(page_i):
+        if page_i not in _forms:
+            page = src_doc.pages[page_i]
+            box  = _visible_box(page)
+            arr  = Array([float(v) for v in box])
+            page.obj["/CropBox"] = arr
+            page.obj["/TrimBox"] = arr
+            for key in ("/BleedBox", "/ArtBox"):
+                if key in page.obj: del page.obj[key]
+            rot = _inherited_rotate(page)
+            fx  = page.as_form_xobject(handle_transformations=False)
+            fx["/Matrix"] = Array(list(_ROT_MATRIX[rot if rot % 90 == 0 else 0]) + [0.0, 0.0])
+            _forms[page_i] = (fx, box, rot)
+        return _forms[page_i]
+
+    placed = 0
+    for sheet_i, slots in enumerate(sheets):
+        report(f"{tr('Blatt')} {sheet_i + 1} / {len(sheets)} …")
+        sheet = Page(out_doc.add_blank_page(page_size=(sheet_w, sheet_h)))
+        names = {}
+        for page_i, rect in slots:
+            if page_i is None or page_i >= len(src_doc.pages):
+                continue          # a blank slot: leave the paper empty
+            fx, box, rot = _form_for(page_i)
+            s, tx, ty = _slot_placement(box, rot, rect,
+                                        fixed_scale=None if fit else 1.0)
+            if page_i not in names:
+                names[page_i] = sheet.add_resource(fx, Name.XObject, prefix="Imp")
+            sheet.contents_add(Stream(out_doc,
+                f"q {s:.6f} 0 0 {s:.6f} {tx:.6f} {ty:.6f} cm {names[page_i]} Do Q\n"
+                .encode("latin-1")))
+            placed += 1
+        sheet.contents_coalesce()
+    report(tr("Schreibe Datei …"))
+    out_doc.save(out)
+    return out, summary(placed, len(sheets))
 
 
 def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False):
@@ -2485,6 +2562,7 @@ def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False):
     from pikepdf import Pdf, Page, Stream, Array, Name
     (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
     src_doc = Pdf.open(src)
+    _flatten_annots(src_doc)
     out_doc = Pdf.new()
     rects = _nup_slot_rects(params, n_slot)
 

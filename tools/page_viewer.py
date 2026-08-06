@@ -2771,20 +2771,54 @@ class ManagePanel(QWidget):
         except Exception as e:
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
+    def _swap_source(self, new_path):
+        """Point the page manager — and everything else that resolves the model's
+        page indexes — at a rebuilt file.
+
+        The grid, the owning tab and AppState each cached the old path, and only
+        the panel's own copy was updated. Anything reading the document therefore
+        resolved the model against the *previous* file: the tools kept processing
+        the pre-edit PDF (the booklet tool imposed the old page order, so an
+        inserted blank surfaced as the back of the cover), and switching tabs
+        snapped the viewer back to it too."""
+        self.pdf_path = new_path
+        self.grid.pdf_path = new_path
+        tab = self.parent()
+        while tab is not None and not isinstance(tab, PdfTab):
+            tab = tab.parent()
+        if tab is not None:
+            tab.pdf_path = new_path
+            tab.single.pdf_path = new_path
+        if AppState.get().page_model is self.model:
+            AppState.get().current_pdf = new_path
+
     def _insert_blank(self):
         try:
             from pypdf import PdfReader, PdfWriter
             import tempfile
             self._save_history()
             reader = PdfReader(self.pdf_path, strict=False)
-            pw = float(reader.pages[0].mediabox.width)
-            ph = float(reader.pages[0].mediabox.height)
             if self.model.selected:
                 positions = [i for i, u in enumerate(self.model.order)
                              if u in self.model.selected]
                 insert_at = max(positions) + 1
             else:
                 insert_at = len(self.model.order)
+            # Size the blank like the page it follows, as that page is displayed
+            # (page 0's raw MediaBox gave a mixed-size document an A4 sheet in
+            # the middle of its A5 pages, and a portrait one next to landscape).
+            if self.model.order:
+                ref_uid = self.model.order[min(max(0, insert_at - 1),
+                                               len(self.model.order) - 1)]
+                ref_path, ref_orig = self.model.page_source(ref_uid, self.pdf_path)
+                ref = PdfReader(ref_path, strict=False).pages[ref_orig]
+                rot = (int(ref.get("/Rotate", 0) or 0)
+                       + self.model.get_rotation(ref_uid)) % 360
+            else:
+                ref, rot = reader.pages[0], 0
+            pw = float(ref.mediabox.width)
+            ph = float(ref.mediabox.height)
+            if rot in (90, 270): pw, ph = ph, pw
             # Leerseite ans Ende der Datei anhängen
             new_orig = len(reader.pages)
             writer = PdfWriter()
@@ -2796,7 +2830,7 @@ class ManagePanel(QWidget):
             new_uid = self.model._new_uid()
             self.model.src[new_uid] = new_orig
             self.model.order.insert(insert_at, new_uid)
-            self.grid.pdf_path = tmp; self.pdf_path = tmp
+            self._swap_source(tmp)
             self.grid._rebuild(); self.grid.order_changed.emit()
             self.status.setText(tr("Leere Seite eingefuegt."))
         except Exception as e:
@@ -2843,7 +2877,7 @@ class ManagePanel(QWidget):
             # Model neu aufbauen mit frischen UIDs
             self.model.__init__(n_new)
             self.model.selected.clear()
-            self.grid.pdf_path = tmp; self.pdf_path = tmp
+            self._swap_source(tmp)
             self.grid._rebuild(); self.grid.order_changed.emit()
             self.status.setText(tr('{p0} Seite(n) eingefuegt.').format(p0=n_ins))
         except Exception as e:

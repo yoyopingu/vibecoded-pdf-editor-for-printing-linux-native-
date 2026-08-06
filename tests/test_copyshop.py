@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import QApplication, QStackedWidget, QLabel
 from PyQt6.QtCore import QTimer
 _app = QApplication(sys.argv)
 
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 import pypdfium2 as pdfium
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
@@ -101,8 +101,65 @@ def _make_fixtures():
     # an image for Image→PDF
     img = os.path.join(_TMP, "img.png")
     Image.new("RGB", (400, 600), (40, 90, 160)).save(img)
+    # booklet: 32 pages, each a unique flat grey so a half of an imposed sheet
+    # identifies the source page it came from, plus a black bar along the bottom
+    # edge so a lost /Rotate is visible as the bar landing on the wrong side.
+    bk = os.path.join(_TMP, "booklet32.pdf")
+    c = canvas.Canvas(bk, pagesize=A4)
+    for i in range(32):
+        c.setFillGray(_BK_GREY(i)); c.rect(0, 0, W, H, fill=1, stroke=0)
+        c.setFillGray(0.0);         c.rect(0, 0, W, H * 0.05, fill=1, stroke=0)
+        c.showPage()
+    c.save()
     return {"normal": p, "single": s, "color": col, "encrypted": enc, "image": img,
-            "framed": fr, "framed_cropbox": box, "framed_rot90": rot, "mixed": mix}
+            "framed": fr, "framed_cropbox": box, "framed_rot90": rot, "mixed": mix,
+            "booklet32": bk}
+
+
+def _BK_GREY(i):
+    """Grey level identifying source page `i` of the booklet fixture."""
+    return 0.90 - 0.02 * i
+
+
+def _booklet_halves(path):
+    """Decode an imposed booklet: one (left, right) tuple per sheet, each entry
+    the 1-based source page that landed there or "blank"."""
+    d = pdfium.PdfDocument(path)
+    out = []
+    for pg in d:
+        im = pg.render(scale=0.25).to_pil().convert("L")
+        w, h = im.size
+        row = []
+        for k in (0, 1):
+            half = im.crop((w * k // 2, 0, w * (k + 1) // 2, h))
+            hw, hh = half.size
+            patch = half.crop((int(hw*.3), int(hh*.3), int(hw*.7), int(hh*.7)))
+            mean = sum(patch.get_flattened_data()) / (patch.size[0]*patch.size[1]) / 255.0
+            if mean > 0.94:
+                row.append("blank"); continue
+            best = min(range(32), key=lambda j: abs(_BK_GREY(j) - mean))
+            row.append(best + 1 if abs(_BK_GREY(best) - mean) < 0.008 else f"?{mean:.3f}")
+        out.append(tuple(row))
+    d.close()
+    return out
+
+
+def _impose(path, open_first=True, **kw):
+    """Run the Broschüre tool on `path` and return the output file.
+
+    `open_first=False` keeps the PageModel AppState already carries — the point
+    of the page-manager test is that the tool follows that model."""
+    if open_first:
+        _open(path)
+    p = T.ImposePanel(); _sync_async(p)
+    for attr, val in kw.items():
+        w = getattr(p, attr)
+        (w.setCurrentIndex if hasattr(w, "setCurrentIndex") else w.setChecked)(val)
+    o = os.path.join(_TMP, f"impose_{os.path.basename(path)}")
+    p.save_pdf = lambda *a, **k: o
+    cap = {}; p.open_result = lambda path_, t="": cap.update(p=path_)
+    p._run_action()
+    return cap["p"]
 
 
 FX = {}
@@ -753,6 +810,128 @@ def test_cmyk_profiles():
     p._run_action()
     assert len(PdfReader(o).pages) >= 1, "CMYK conversion produced no valid output"
     return "ok"
+
+
+def test_booklet_pads_to_multiples_of_four():
+    """A folded sheet carries four pages, so the imposition always rounds up to a
+    multiple of four — and it must do that by adding blank *slots* at the end,
+    never by dropping or duplicating a source page."""
+    for n in (1, 2, 3, 4, 5, 6, 29, 30, 31, 32):
+        sides = T._booklet_sides(n)
+        flat  = [i for side in sides for i in side]
+        assert sorted(i for i in flat if i is not None) == list(range(n)), \
+            f"n={n}: pages lost or duplicated — {flat}"
+        assert len(flat) % 4 == 0 and 0 <= len(flat) - n < 4, \
+            f"n={n}: padded to {len(flat)} slots"
+    # 4 pages fold as [back|front] then [inside-left|inside-right]
+    assert T._booklet_sides(4) == [[3, 0], [1, 2]]
+
+
+def test_booklet_page_order():
+    """32 pages must come out in saddle-stitch order with nothing blank: the back
+    cover (page 32) shares the first sheet with the front cover, and page 2 lands
+    on the reverse of it."""
+    out = _impose(FX["booklet32"], mode=0)
+    got = _booklet_halves(out)
+    want = [(32, 1), (2, 31), (30, 3), (4, 29), (28, 5), (6, 27), (26, 7), (8, 25),
+            (24, 9), (10, 23), (22, 11), (12, 21), (20, 13), (14, 19), (18, 15), (16, 17)]
+    assert got == want, f"booklet order wrong:\n got {got}\nwant {want}"
+
+
+def test_booklet_keeps_rotation_and_visible_box():
+    """The imposition must place pages the way the viewer shows them. Measuring
+    the raw MediaBox with pypdf's merge_transformed_page dropped /Rotate and let
+    a print PDF's bleed decide the sheet size."""
+    import pikepdf
+    src = os.path.join(_TMP, "booklet32_boxes.pdf")
+    with pikepdf.open(FX["booklet32"]) as pdf:
+        pdf.pages[16].obj["/Rotate"] = 180              # upside down in the viewer
+        for i in (0, 31):                               # 3 mm bleed around the trim
+            pdf.pages[i].obj["/MediaBox"] = pikepdf.Array([-8.5, -8.5, 603.78, 850.39])
+            pdf.pages[i].obj["/CropBox"]  = pikepdf.Array([0, 0, 595.28, 841.89])
+        pdf.save(src)
+    out = _impose(src, mode=0)
+
+    d = pdfium.PdfDocument(out)
+    w, h = d[0].get_width(), d[0].get_height()
+    assert abs(w - 2*595.28) < 1 and abs(h - 841.89) < 1, \
+        f"bleed inflated the sheet to {w:.0f}x{h:.0f}, expected A3 landscape"
+    # page 17 sits on the right of the last sheet; turned 180° its black bar is
+    # at the top, not the bottom.
+    im = d[15].render(scale=0.25).to_pil().convert("L"); d.close()
+    iw, ih = im.size
+    half = im.crop((iw // 2, 0, iw, ih)); hw, hh = half.size
+    def _mean(box):
+        c = half.crop(box)
+        return sum(c.get_flattened_data()) / (c.size[0] * c.size[1]) / 255.0
+    assert _mean((0, 0, hw, int(hh*.07))) < _mean((0, int(hh*.93), hw, hh)), \
+        "the /Rotate of the source page was dropped"
+    assert _booklet_halves(out)[0] == (32, 1), "bleed/rotation changed the page order"
+
+
+def test_booklet_annotation_content_survives():
+    """Content that lives in an annotation appearance (a stamp, a filled form
+    field) is on the page for the user, so it must be on the printed sheet too —
+    a page turned into a Form XObject leaves its annotations behind."""
+    import pikepdf
+    src = os.path.join(_TMP, "booklet32_stamp.pdf")
+    with pikepdf.open(FX["booklet32"]) as pdf:
+        ap = pikepdf.Stream(pdf, b"0 0 0 rg 0 0 300 300 re f")
+        ap.Type = pikepdf.Name.XObject; ap.Subtype = pikepdf.Name.Form
+        ap.BBox = pikepdf.Array([0, 0, 300, 300])
+        pdf.pages[31].obj["/Annots"] = pikepdf.Array([pdf.make_indirect(
+            pikepdf.Dictionary(Type=pikepdf.Name.Annot, Subtype=pikepdf.Name.Stamp,
+                               Rect=pikepdf.Array([150, 250, 450, 550]), F=4,
+                               AP=pikepdf.Dictionary(N=ap)))])
+        pdf.save(src)
+    out = _impose(src, mode=0)
+    d = pdfium.PdfDocument(out)
+    im = d[0].render(scale=0.25).to_pil().convert("L"); d.close()
+    w, h = im.size
+    left = im.crop((0, 0, w // 2, h))
+    px = list(left.get_flattened_data())
+    black = sum(1 for v in px if v < 60) / len(px)
+    assert black > 0.15, \
+        f"the stamp on page 32 is missing from the sheet (black {black:.3f})"
+
+
+def test_tools_see_the_page_manager():
+    """Tools must process the document "Seiten verwalten" is showing. The page
+    order, rotations and inserted pages live in an in-memory PageModel until the
+    user saves; reading the file instead imposed the pre-edit document — and
+    since "Leere Seite einfuegen" appends the blank to the end of the file, it
+    surfaced as the back of the cover."""
+    from tools._base import displayed_pdf
+    from tools.page_viewer import PdfTab
+
+    # unedited document -> the original file, no copy
+    _open(FX["booklet32"])
+    st = AppState.get()
+    assert displayed_pdf(st.current_pdf) == FX["booklet32"], \
+        "an unedited document should not be rewritten"
+
+    # 31 pages + a blank inserted after page 1 == 32 pages on screen
+    src31 = os.path.join(_TMP, "booklet31.pdf")
+    w = PdfWriter()
+    for pg in PdfReader(FX["booklet32"], strict=False).pages[:31]:
+        w.add_page(pg)
+    with open(src31, "wb") as f: w.write(f)
+
+    tab = PdfTab(src31)
+    st.open_pdf(tab.pdf_path); st.page_model = tab.model
+    tab._build_manage_once()
+    tab.model.selected = {tab.model.order[0]}
+    tab._manage_panel._insert_blank()
+    assert len(tab.model.order) == 32, "the blank was not inserted"
+    assert st.current_pdf == tab.pdf_path, \
+        "the rebuilt file was not published — tools still read the old one"
+
+    out = _impose(st.current_pdf, open_first=False, mode=0)
+    got = _booklet_halves(out)
+    assert got[0] == (31, 1), \
+        f"the back of the cover should carry page 31, got {got[0]}"
+    assert got[1] == ("blank", 30), \
+        f"the inserted blank belongs on the inside of the cover, got {got[1]}"
 
 
 def test_output_validity():

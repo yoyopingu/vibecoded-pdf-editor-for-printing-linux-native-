@@ -533,9 +533,9 @@ _EN: dict[str, str] = {
     "{p0} Bilder exportiert": "{p0} images exported",
     "Seitenzahlen auf {p0} Seiten hinzugefuegt": "Page numbers added to {p0} pages",
     "Schnittmarken auf {p0} Seite(n) gesetzt ({p1:.0f}×{p2:.0f} mm).": "Crop marks added to {p0} page(s) ({p1:.0f}×{p2:.0f} mm).",
-    "Broschüre: {p0} Seiten → {p1} Blätter": "Booklet: {p0} pages → {p1} sheets",
-    "2-up: {p0} Bögen": "2-up: {p0} sheets",
-    "{p0}×{p1}-up: {p2} Bögen": "{p0}×{p1}-up: {p2} sheets",
+    "Broschüre: {p0} Seiten auf {p1} Blattseiten.": "Booklet: {p0} pages on {p1} sheet sides.",
+    "2-up: {p0} Seiten auf {p1} Bögen.": "2-up: {p0} pages on {p1} sheets.",
+    "{p0}×{p1}-up: {p2} Seiten auf {p3} Bögen.": "{p0}×{p1}-up: {p2} pages on {p3} sheets.",
     "Fertig. {p0} Seiten auf {p1} Blatt ({p2}×{p3}).": "Done. {p0} pages on {p1} sheets ({p2}×{p3}).",
     "Fertig. {p0} → {p1}  ({p2:+.1f}%)": "Done. {p0} → {p1}  ({p2:+.1f}%)",
     "Formular ausgefuellt ({p0} Felder)": "Form filled ({p0} fields)",
@@ -795,6 +795,10 @@ _EN: dict[str, str] = {
     "Alle Seiten werden zuerst auf dieselbe Größe gebracht\n(Proportionen bleiben erhalten, Rand wird aufgefüllt).":
         "All pages are first brought to the same size\n(proportions preserved, edges filled).",
     "Vor dem Ausschießen normalisieren": "Normalize before imposing",
+    "Eine Broschüre wird immer auf ein Vielfaches von 4 Seiten aufgefüllt.":
+        "A booklet is always padded to a multiple of 4 pages.",
+    "Die PDF hat keine Seiten.": "The PDF has no pages.",
+    "Ausschießen …": "Imposing …",
     "Größte Seite im Dokument  (automatisch)": "Largest page in document  (auto)",
     "Zielgröße:": "Target size:",
     "Ausgeschossene PDF speichern als": "Save imposed PDF as",

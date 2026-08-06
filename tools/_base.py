@@ -7,7 +7,9 @@ BasePanel v3
 - Ergebnisse werden automatisch in neuem Tab geöffnet
 """
 import os
+import tempfile
 import traceback
+import uuid
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QFrame,
@@ -18,6 +20,80 @@ from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
+
+
+_VIEW_SNAPSHOTS: dict = {}     # model signature -> flattened temp PDF
+
+
+def _model_signature(model, base_path):
+    """Everything about a PageModel that changes the document a tool should see."""
+    return (base_path,
+            tuple(model.order),
+            tuple(sorted(model.src.items())),
+            tuple(sorted((u, r) for u, r in model.rotations.items() if r)),
+            tuple(sorted(model.foreign_src.items())))
+
+
+def displayed_pdf(base_path: str) -> str:
+    """Path to a PDF that matches what "Seiten verwalten" is showing.
+
+    Tools used to process the file on disk, but the page manager keeps the page
+    order, the rotations, pages pulled in from other tabs and inserted blanks in
+    an in-memory PageModel — the file only catches up when the user saves. A
+    booklet built from a document whose pages had been reordered was therefore
+    imposed from the *old* order, and "Leere Seite einfuegen" (which appends the
+    blank to the end of the file and only records where it should appear) put
+    that blank on the back of the cover.
+
+    Returns `base_path` untouched when the model is a plain 1:1 view of the file
+    — the common case, so nothing is written — and otherwise a temp PDF
+    flattened into display order, cached per model state so repeated tool runs
+    reuse it. Same page-for-page result as PdfTab.save_to().
+    """
+    model = getattr(AppState.get(), "page_model", None)
+    if model is None or not getattr(model, "order", None) or not base_path:
+        return base_path
+    if base_path in _VIEW_SNAPSHOTS.values():
+        return base_path       # already flattened — never apply the model twice
+    try:
+        sig = _model_signature(model, base_path)
+    except Exception:
+        return base_path                       # not a model we understand
+    cached = _VIEW_SNAPSHOTS.get(sig)
+    if cached and os.path.isfile(cached):
+        return cached
+    try:
+        from pypdf import PdfReader, PdfWriter
+        n_file = len(PdfReader(base_path, strict=False).pages)
+        # Identity view — the file already *is* what the user sees.
+        if (not any(model.rotations.values()) and not model.foreign_src
+                and [model.src.get(u) for u in model.order] == list(range(n_file))):
+            return base_path
+        readers = {}
+        def _rdr(p):
+            if p not in readers: readers[p] = PdfReader(p, strict=False)
+            return readers[p]
+        writer = PdfWriter()
+        for uid in model.order:
+            src_path, orig = model.page_source(uid, base_path)
+            page = _rdr(src_path).pages[orig]
+            rot  = model.get_rotation(uid)
+            if rot: page.rotate(rot)
+            writer.add_page(page)
+        tmp_dir = os.path.join(tempfile.gettempdir(), "copyshop_view")
+        os.makedirs(tmp_dir, exist_ok=True)
+        out = os.path.join(tmp_dir, f"view_{uuid.uuid4().hex[:8]}.pdf")
+        with open(out, "wb") as f:
+            writer.write(f)
+    except Exception:
+        return base_path        # never block a tool because the snapshot failed
+    # Drop the previous snapshot of the same file — one temp file per document,
+    # not one per edit.
+    for old_sig in [s for s in _VIEW_SNAPSHOTS if s[0] == base_path]:
+        try: os.remove(_VIEW_SNAPSHOTS.pop(old_sig))
+        except Exception: pass
+    _VIEW_SNAPSHOTS[sig] = out
+    return out
 
 
 class _AsyncWorker(QThread):
@@ -367,12 +443,14 @@ class BasePanel(QWidget):
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def current_pdf(self) -> str:
-        """Gibt den Pfad der aktuell geöffneten PDF zurück."""
-        return AppState.get().current_pdf
+        """Pfad der PDF, die das Tool verarbeiten soll — die Seiten so, wie der
+        Viewer sie zeigt (Reihenfolge, Drehung, eingefügte Seiten). Für den
+        Original-Dateinamen (Titelzeile, Ausgabename) AppState.current_pdf."""
+        return displayed_pdf(AppState.get().current_pdf)
 
     def require_pdf(self) -> str:
         """Gibt aktuellen PDF-Pfad zurück, wirft Fehler wenn keine offen."""
-        path = self.current_pdf()
+        path = AppState.get().current_pdf
         if not path or not os.path.isfile(path):
             raise ValueError(tr(
                 "Keine PDF geöffnet.\n"
@@ -390,7 +468,9 @@ class BasePanel(QWidget):
             raise
         except Exception:
             pass   # unreadable for another reason — let the tool surface that itself
-        return path
+        # Only now flatten the page manager's view: the guards above have to run
+        # on the real file (an encrypted one can't be copied page by page).
+        return displayed_pdf(path)
 
     def open_result(self, path: str, title: str = ""):
         """Öffnet ein Ergebnis in einem neuen Tab."""
