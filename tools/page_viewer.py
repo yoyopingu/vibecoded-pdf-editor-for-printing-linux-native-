@@ -2507,33 +2507,37 @@ class ManagePanel(QWidget):
         layout.addWidget(self.sel_edit)
         layout.addWidget(self._sep())
 
+        # Zoom and rotation are both one-click view actions, so they share a
+        # single row of icon buttons. Rotation used to be its own section with
+        # two full-width buttons — three rows of sidebar for two clicks — while
+        # this row carried a "↺" that looked like rotate but reset the zoom.
         self._section(layout, tr("ANSICHT"))
-        zoom_row = QHBoxLayout()
-        zoom_row.setSpacing(4)
+        view_row = QHBoxLayout()
+        view_row.setSpacing(4)
         self._zoom_btns_manage = []
-        for text, direction in [("−", -1), ("+", +1), ("↺", 0)]:
+        def _icon_btn(text, tip, slot):
             b = QPushButton(text)
-            b.setFixedSize(30, 26)
-            b.clicked.connect(lambda checked, d=direction: self._zoom_grid(d))
-            zoom_row.addWidget(b)
+            b.setFixedSize(32, 26)
+            b.setToolTip(tr(tip))
+            b.clicked.connect(slot)
+            view_row.addWidget(b)
             self._zoom_btns_manage.append(b)
-        self._zoom_hint_lbl = QLabel(tr("Thumbnails"))
-        self._zoom_hint_lbl.setStyleSheet("font-size:9px;background:transparent;")
-        zoom_row.addWidget(self._zoom_hint_lbl)
-        zoom_row.addStretch()
-        layout.addLayout(zoom_row)
+            return b
+        _icon_btn("−",   "Thumbnails verkleinern", lambda: self._zoom_grid(-1))
+        _icon_btn("+",   "Thumbnails vergroessern", lambda: self._zoom_grid(+1))
+        _icon_btn("1:1", "Zoom zuruecksetzen",      lambda: self._zoom_grid(0))
+        view_row.addSpacing(10)
+        _icon_btn("↺", "Auswahl 90° gegen den Uhrzeigersinn drehen",
+                  lambda: self.grid.rotate_selected(270))
+        _icon_btn("↻", "Auswahl 90° im Uhrzeigersinn drehen",
+                  lambda: self.grid.rotate_selected(90))
+        view_row.addStretch()
+        layout.addLayout(view_row)
         layout.addWidget(self._sep())
 
         self._section(layout, tr("AUSWAHL"))
         layout.addWidget(self._btn(tr("Alle auswaehlen  (Strg+A)"),  self.grid.select_all))
         layout.addWidget(self._btn(tr("Auswahl aufheben  (Strg+D)"), self.grid.deselect_all))
-        layout.addWidget(self._sep())
-
-        self._section(layout, tr("DREHEN"))
-        layout.addWidget(self._btn(tr("90° im Uhrzeigersinn"),
-                                   lambda: self.grid.rotate_selected(90)))
-        layout.addWidget(self._btn(tr("90° gegen Uhrzeigersinn"),
-                                   lambda: self.grid.rotate_selected(270)))
         layout.addWidget(self._sep())
 
         self._section(layout, tr("OPERATIONEN"))
@@ -2544,26 +2548,20 @@ class ManagePanel(QWidget):
         layout.addWidget(self._btn(tr("Extrahieren..."),            self._extract))
         layout.addWidget(self._btn(tr("Als neuen Tab oeffnen"),    self._open_as_tab))
         layout.addWidget(self._btn(tr("Leere Seite einfuegen"),    self._insert_blank))
-        layout.addWidget(self._btn(tr("Aus Datei einfuegen..."),   self._insert_from_file))
+        # Takes several files at once, which is what the separate
+        # "ZUSAMMENFUEHREN ▸ PDFs zusammenfuehren..." section did — same dialog,
+        # same insert position, one button.
+        layout.addWidget(self._btn(tr("Aus Datei(en) einfuegen..."), self._insert_from_file))
         layout.addWidget(self._sep())
 
-        self._section(layout, tr("SPEICHERN"))
-        save_btn = QPushButton(tr("Speichern"))
-        save_btn.setObjectName("actionBtn")
-        save_btn.clicked.connect(self._save)
-        layout.addWidget(save_btn)
-        layout.addWidget(self._btn(tr("Speichern als..."), self._save_as))
-        layout.addWidget(self._sep())
-
-        self._section(layout, tr("ZUSAMMENFUEHREN"))
-        layout.addWidget(self._btn(tr("PDFs zusammenfuehren..."), self._merge))
-        layout.addWidget(self._sep())
+        # Speichern / Speichern unter live in Datei ▸ at the top of the window
+        # (Strg+S / Strg+Umschalt+S) — they are document-wide, not page-manager
+        # actions, and having them in both places invited saving twice.
 
         self._section(layout, tr("TRENNEN"))
         layout.addWidget(self._btn(tr("Auswahl als Datei speichern"), self._split_selection))
         layout.addWidget(self._btn(tr("Jede Seite als Datei"),        self._split_each))
         layout.addWidget(self._btn(tr("Alle N Seiten..."),            self._split_n))
-        layout.addWidget(self._btn(tr("Nach Bereichen..."),           self._split_ranges))
 
         layout.addStretch()
 
@@ -2798,9 +2796,28 @@ class ManagePanel(QWidget):
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _open_as_tab(self):
-        """Ausgewählte Seiten als neue temporäre PDF in neuem Tab öffnen."""
+        """Ausgewählte Seiten als neue temporäre PDF in neuem Tab öffnen.
+
+        Asks whether to copy or move them. Moving is the case the separate
+        "Nach Bereichen..." split button used to cover, and it is easier to do
+        by picking the pages you want than by typing ranges into a prompt."""
+        from PyQt6.QtWidgets import QMessageBox
         if not self.model.selected:
             self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("Als neuen Tab oeffnen"))
+        box.setText(tr('{p0} Seite(n) in einem neuen Tab oeffnen.').format(
+            p0=len(self.model.selected)))
+        box.setInformativeText(tr("Sollen die Seiten hier ebenfalls bleiben?"))
+        keep = box.addButton(tr("Kopieren  (hier behalten)"),
+                             QMessageBox.ButtonRole.AcceptRole)
+        move = box.addButton(tr("Verschieben  (hier entfernen)"),
+                             QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(keep)
+        box.exec()
+        if box.clickedButton() not in (keep, move):
+            return
         try:
             import tempfile
             from pypdf import PdfReader, PdfWriter
@@ -2822,8 +2839,16 @@ class ManagePanel(QWidget):
                 prefix="copyshop_sel_")
             with open(tmp.name, "wb") as f: writer.write(f)
             stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
+            # Only remove them here once the new file is safely written.
+            if box.clickedButton() is move:
+                self._save_history()
+                self.model.delete_selected()
+                self.grid._rebuild(); self.grid.order_changed.emit()
             AppState.get().open_result(tmp.name, f"{stem} [{n}S]")
-            self.status.setText(tr('{p0} Seite(n) als neuer Tab geoeffnet.').format(p0=n))
+            self.status.setText(
+                (tr('{p0} Seite(n) in neuen Tab verschoben.')
+                 if box.clickedButton() is move
+                 else tr('{p0} Seite(n) als neuer Tab geoeffnet.')).format(p0=n))
         except Exception as e:
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
@@ -2893,15 +2918,24 @@ class ManagePanel(QWidget):
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _insert_from_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, tr("PDF einfuegen"), "", tr("PDF (*.pdf)"))
-        if not path: return
+        """Insert the pages of one or more PDFs after the selection.
+
+        Takes several files because this replaced the separate "PDFs
+        zusammenfuehren..." button, which asked the same question and inserted at
+        the same place — the only difference was that it opened the result in a
+        new tab instead of editing this one, which is not what a page manager is
+        for."""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, tr("PDF(s) einfuegen"), "", tr("PDF Dateien (*.pdf)"))
+        if not paths: return
         try:
             from pypdf import PdfReader, PdfWriter
             self._save_history()
             import tempfile
-            reader_ins = PdfReader(path, strict=False)
-            n_ins = len(reader_ins.pages)
+            ins_pages = []
+            for p in paths:
+                ins_pages.extend(PdfReader(p, strict=False).pages)
+            n_ins = len(ins_pages)
             if self.model.selected:
                 positions = [i for i, u in enumerate(self.model.order)
                              if u in self.model.selected]
@@ -2918,14 +2952,14 @@ class ManagePanel(QWidget):
                 return readers[p]
             for i, uid in enumerate(self.model.order):
                 if i == insert_at:
-                    for p in reader_ins.pages: writer.add_page(p)
+                    for p in ins_pages: writer.add_page(p)
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
                 page = _rdr(src_path).pages[orig]
                 rot  = self.model.get_rotation(uid)
                 if rot: page.rotate(rot)
                 writer.add_page(page)
             if insert_at >= len(self.model.order):
-                for p in reader_ins.pages: writer.add_page(p)
+                for p in ins_pages: writer.add_page(p)
             tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
             with open(tmp, "wb") as f: writer.write(f)
             from pypdf import PdfReader as PR
@@ -2936,56 +2970,6 @@ class ManagePanel(QWidget):
             self._swap_source(tmp)
             self.grid._rebuild(); self.grid.order_changed.emit()
             self.status.setText(tr('{p0} Seite(n) eingefuegt.').format(p0=n_ins))
-        except Exception as e:
-            self.status.setText(tr('Fehler: {p0}').format(p0=e))
-
-    # ── Zusammenführen ──────────────────────────────────────────────────────
-    def _merge(self):
-        from PyQt6.QtWidgets import QFileDialog
-        from pypdf import PdfReader, PdfWriter
-        import tempfile
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, tr("PDFs einfuegen"), "", tr("PDF Dateien (*.pdf)"))
-        if not paths: return
-        try:
-            self._save_history()
-            # Einfügeposition: nach letzter ausgewählter Seite, sonst ans Ende
-            if self.model.selected:
-                positions = [i for i, u in enumerate(self.model.order)
-                             if u in self.model.selected]
-                insert_at = max(positions) + 1
-            else:
-                insert_at = len(self.model.order)
-
-            # Neue PDF zusammenbauen mit eingefügten Seiten
-            writer  = PdfWriter()
-            readers = {}
-            def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p, strict=False)
-                return readers[p]
-            for i, uid in enumerate(self.model.order):
-                if i == insert_at:
-                    for p in paths:
-                        for page in PdfReader(p, strict=False).pages:
-                            writer.add_page(page)
-                src_path, orig = self.model.page_source(uid, self.pdf_path)
-                page = _rdr(src_path).pages[orig]
-                rot  = self.model.get_rotation(uid)
-                if rot: page.rotate(rot)
-                writer.add_page(page)
-
-            # Falls insert_at am Ende
-            if insert_at >= len(self.model.order):
-                for p in paths:
-                    for page in PdfReader(p, strict=False).pages:
-                        writer.add_page(page)
-
-            tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
-            with open(tmp, "wb") as f: writer.write(f)
-            AppState.get().result_ready.emit(tmp, tr("Zusammengefuehrt"))
-            n_pages = sum(len(PdfReader(p, strict=False).pages) for p in paths)
-            pos_txt = tr('nach Seite {p0}').format(p0=insert_at) if insert_at < len(self.model.order) else tr("am Ende")
-            self.status.setText(tr('OK: {p0} Seite(n) {p1} eingefuegt').format(p0=n_pages, p1=pos_txt))
         except Exception as e:
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
@@ -3076,100 +3060,6 @@ class ManagePanel(QWidget):
         except Exception as e:
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
-    def _split_ranges(self):
-        from PyQt6.QtWidgets import QFileDialog, QInputDialog
-        from pypdf import PdfReader, PdfWriter
-        total = len(self.model.order)
-        text, ok = QInputDialog.getText(
-            self, tr("Seitenbereiche"),
-            f"{tr('Bereiche eingeben')} (z.B. 1-3, 5, 7-9) — {total} {tr('Seiten gesamt')}:")
-        if not ok or not text.strip(): return
-        out_dir = QFileDialog.getExistingDirectory(self, tr("Zielordner waehlen"))
-        if not out_dir: return
-        try:
-            readers = {}
-            def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p, strict=False)
-                return readers[p]
-            stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
-            uid_list = list(self.model.order)
-            groups = []
-            for part in text.split(","):
-                part = part.strip()
-                if "-" in part:
-                    a, b = part.split("-", 1)
-                    indices = list(range(int(a.strip())-1, int(b.strip())))
-                else:
-                    indices = [int(part)-1]
-                uids = [uid_list[i] for i in indices if 0 <= i < total]
-                if uids: groups.append(uids)
-            for gi, uids in enumerate(groups, 1):
-                w = PdfWriter()
-                for uid in uids:
-                    src_path, orig = self.model.page_source(uid, self.pdf_path)
-                    page = _rdr(src_path).pages[orig]
-                    rot = self.model.get_rotation(uid)
-                    if rot: page.rotate(rot)
-                    w.add_page(page)
-                path = os.path.join(out_dir, f"{stem}_teil{gi:02d}.pdf")
-                with open(path, "wb") as f: w.write(f)
-            self.status.setText(f"OK: {len(groups)} {tr('Dateien erstellt')}")
-        except Exception as e:
-            self.status.setText(tr('Fehler: {p0}').format(p0=e))
-
-
-    def _save(self):
-        try:
-            self.status.setText(self._do_save(self.pdf_path))
-        except Exception as e:
-            self.status.setText(tr('Fehler: {p0}').format(p0=e))
-
-    def _save_as(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, tr("Speichern als"), "", tr("PDF (*.pdf)"))
-        if not path: return
-        try:
-            self.status.setText(self._do_save(path))
-            AppState.get().open_result(path, os.path.basename(path))
-        except Exception as e:
-            self.status.setText(tr('Fehler: {p0}').format(p0=e))
-
-    def _do_save(self, out_path):
-        import tempfile
-        from pypdf import PdfReader, PdfWriter
-        readers = {}   # cache: path → PdfReader
-        def get_reader(path):
-            if path not in readers:
-                readers[path] = PdfReader(path, strict=False)
-            return readers[path]
-        writer = PdfWriter()
-        for uid in self.model.order:
-            src_path, orig = self.model.page_source(uid, self.pdf_path)
-            reader = get_reader(src_path)
-            if orig >= len(reader.pages): continue
-            page = reader.pages[orig]
-            rot  = self.model.get_rotation(uid)
-            if rot: page.rotate(rot)
-            writer.add_page(page)
-        n = len(writer.pages)
-        # Write to a temp file first, then rename atomically. This prevents
-        # corruption when out_path == self.pdf_path (reading and writing same file).
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            suffix=".pdf", dir=os.path.dirname(os.path.abspath(out_path)))
-        try:
-            with os.fdopen(tmp_fd, "wb") as f:
-                writer.write(f)
-            os.replace(tmp_path, out_path)
-        except Exception:
-            try: os.unlink(tmp_path)
-            except Exception: pass
-            raise
-        return tr('Gespeichert: {p0} Seiten').format(p0=n)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# DRUCKDIALOG — vollstaendig wie Acrobat
-# ══════════════════════════════════════════════════════════════════════════════
 
 class _PrintPreview(QWidget):
     """Left-side print preview panel — mirrors Acrobat's layout preview."""
@@ -4971,7 +4861,10 @@ class PdfTab(QWidget):
         return len(self.model.order) if self.model else 0
 
     def save_to(self, out_path):
+        """Write the document as the page manager shows it. This is what Ctrl+S
+        and Datei ▸ Speichern go through."""
         if not self.model: raise ValueError(tr("Keine PDF geladen."))
+        import tempfile
         from pypdf import PdfReader, PdfWriter
         readers = {}
         def _rdr(p):
@@ -4980,12 +4873,27 @@ class PdfTab(QWidget):
         writer = PdfWriter()
         for uid in self.model.order:
             src_path, orig = self.model.page_source(uid, self.pdf_path)
-            page = _rdr(src_path).pages[orig]
+            reader = _rdr(src_path)
+            if orig >= len(reader.pages): continue
+            page = reader.pages[orig]
             rot  = self.model.get_rotation(uid)
             if rot: page.rotate(rot)
             writer.add_page(page)
-        with open(out_path, "wb") as f: writer.write(f)
-        return tr('Gespeichert: {p0} Seiten -> {p1}').format(p0=len(self.model.order), p1=out_path)
+        n = len(writer.pages)
+        # Write beside the target and rename over it: saving in place is the
+        # normal case here (Ctrl+S), and writing straight into the file we are
+        # reading from leaves a truncated PDF behind if anything fails midway.
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            suffix=".pdf", dir=os.path.dirname(os.path.abspath(out_path)))
+        try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                writer.write(f)
+            os.replace(tmp_path, out_path)
+        except Exception:
+            try: os.unlink(tmp_path)
+            except Exception: pass
+            raise
+        return tr('Gespeichert: {p0} Seiten -> {p1}').format(p0=n, p1=out_path)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -5967,11 +5875,10 @@ class PageViewerPanel(QWidget):
 
         # Shortcuts
         from PyQt6.QtGui import QKeySequence, QShortcut
-        sc_save    = QShortcut(QKeySequence("Ctrl+S"),       self)
-        sc_save_as = QShortcut(QKeySequence("Ctrl+Shift+S"), self)
-        sc_print   = QShortcut(QKeySequence("Ctrl+P"),       self)
-        sc_save.activated.connect(self._save_current)
-        sc_save_as.activated.connect(self._save_as_current)
+        # Ctrl+S / Ctrl+Shift+S belong to the Datei menu actions, which are
+        # window-scoped and so fire from a tool panel too. Registering them here
+        # as well made both ambiguous, and Qt then delivers neither.
+        sc_print = QShortcut(QKeySequence("Ctrl+P"), self)
         sc_print.activated.connect(self._print_current)
 
         # ── Obere Toolbar ────────────────────────────────────────────────────

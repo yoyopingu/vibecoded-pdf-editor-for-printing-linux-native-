@@ -877,6 +877,20 @@ class TitleBar(QWidget):
         act_multi.triggered.connect(self._win._open_multi_dialog)
         menu_file.addAction(act_multi)
         menu_file.addSeparator()
+        # Saving belongs to the document, not to the page manager — it used to
+        # live only in that sidebar, so it was unreachable from the normal view
+        # even though Strg+S was already wired up there.
+        # Resolved when triggered, not now: the title bar is built before
+        # MainWindow creates .viewer.
+        act_save = QAction(tr("Speichern"), self)
+        act_save.setShortcut(QKeySequence("Ctrl+S"))
+        act_save.triggered.connect(lambda: self._win.viewer._save_current())
+        menu_file.addAction(act_save)
+        act_save_as = QAction(tr("Speichern unter…"), self)
+        act_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        act_save_as.triggered.connect(lambda: self._win.viewer._save_as_current())
+        menu_file.addAction(act_save_as)
+        menu_file.addSeparator()
         act_quit = QAction(tr("Beenden"), self)
         act_quit.setShortcut(QKeySequence("Ctrl+Q"))
         act_quit.triggered.connect(self._win.close)

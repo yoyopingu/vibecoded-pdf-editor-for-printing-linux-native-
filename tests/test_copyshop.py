@@ -989,6 +989,120 @@ def test_tools_see_the_page_manager():
         f"the inserted blank belongs on the inside of the cover, got {got[1]}"
 
 
+def _manage(n_pages=6, name="mgr.pdf"):
+    """A PdfTab with its page manager built, wired into AppState."""
+    from tools.page_viewer import PdfTab
+    src = os.path.join(_TMP, name)
+    c = canvas.Canvas(src, pagesize=A4)
+    for i in range(n_pages):
+        c.setFont("Helvetica", 80); c.drawCentredString(300, 400, f"P{i+1}"); c.showPage()
+    c.save()
+    tab = PdfTab(src)
+    st = AppState.get(); st.open_pdf(tab.pdf_path); st.page_model = tab.model
+    tab._build_manage_once()
+    return tab, tab._manage_panel
+
+
+def _page_labels(path):
+    return [p.extract_text().strip().replace("\n", "") for p in PdfReader(path).pages]
+
+
+def _answer_dialog(word):
+    """Answer the copy/move QMessageBox by button text, without showing it."""
+    from PyQt6.QtWidgets import QMessageBox
+    def picked(self):
+        for b in self.buttons():
+            if word in b.text():
+                return b
+        return None
+    QMessageBox.exec = lambda self: self.setResult(0)
+    QMessageBox.clickedButton = picked
+
+
+def test_manage_open_as_tab_copies_or_moves():
+    """"Als neuen Tab oeffnen" asks whether the pages should stay. Moving them is
+    what the removed "Nach Bereichen..." split was for, only driven by picking
+    pages instead of typing ranges into a prompt."""
+    from PyQt6.QtWidgets import QMessageBox
+    from tools._base import displayed_pdf
+    tab, mp = _manage(6, "mgr_tab.pdf")
+    opened = []
+    AppState.get().open_result = lambda p, t="": opened.append(p)
+    real = (QMessageBox.exec, QMessageBox.clickedButton)
+    try:
+      _answer_dialog("Kopieren")
+      mp.model.selected = {mp.model.order[1], mp.model.order[2]}
+      mp._open_as_tab()
+      assert _page_labels(opened[-1]) == ["P2", "P3"], _page_labels(opened[-1])
+      assert len(mp.model.order) == 6, "copy must leave the document alone"
+
+      _answer_dialog("Verschieben")
+      mp.model.selected = {mp.model.order[0], mp.model.order[1]}
+      mp._open_as_tab()
+      assert _page_labels(opened[-1]) == ["P1", "P2"], _page_labels(opened[-1])
+      assert len(mp.model.order) == 4, "move must remove them from the document"
+      assert _page_labels(displayed_pdf(AppState.get().current_pdf)) == \
+        ["P3", "P4", "P5", "P6"]
+
+      _answer_dialog("Abbrechen")          # matches nothing -> treated as cancel
+      mp.model.selected = {mp.model.order[0]}
+      n_before, n_opened = len(mp.model.order), len(opened)
+      mp._open_as_tab()
+      assert len(mp.model.order) == n_before and len(opened) == n_opened, \
+        "cancelling must neither open a tab nor touch the pages"
+    finally:
+        QMessageBox.exec, QMessageBox.clickedButton = real
+
+
+def test_manage_inserts_several_files_at_once():
+    """"Aus Datei(en) einfuegen..." replaced the separate merge button, so it has
+    to accept more than one file and insert them after the selection."""
+    from PyQt6.QtWidgets import QFileDialog
+    from tools._base import displayed_pdf
+    extras = []
+    for tag, n in (("X", 2), ("Y", 1)):
+        p = os.path.join(_TMP, f"ins_{tag}.pdf")
+        c = canvas.Canvas(p, pagesize=A4)
+        for i in range(n):
+            c.setFont("Helvetica", 80); c.drawCentredString(300, 400, f"{tag}{i+1}")
+            c.showPage()
+        c.save(); extras.append(p)
+
+    tab, mp = _manage(3, "mgr_ins.pdf")
+    real = QFileDialog.getOpenFileNames
+    QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: (extras, ""))
+    try:
+        mp.model.selected = {mp.model.order[0]}      # after page 1
+        mp._insert_from_file()
+    finally:
+        QFileDialog.getOpenFileNames = real
+    assert len(mp.model.order) == 6, f"expected 6 pages, got {len(mp.model.order)}"
+    assert _page_labels(displayed_pdf(AppState.get().current_pdf)) == \
+        ["P1", "X1", "X2", "Y1", "P2", "P3"]
+
+
+def test_manage_panel_has_no_duplicate_actions():
+    """Saving moved to Datei ▸ and merge folded into insert-from-file. Those
+    buttons must be gone from the sidebar, not merely hidden, and Strg+S must be
+    owned by exactly one thing or Qt delivers it to neither."""
+    from PyQt6.QtGui import QShortcut
+    tab, mp = _manage(3, "mgr_dup.pdf")
+    for gone in ("_merge", "_split_ranges", "_save", "_save_as", "_do_save"):
+        assert not hasattr(mp, gone), f"{gone} is still on the panel"
+
+    win = MAIN.MainWindow()
+    try:
+        names = []
+        for m in win._title_bar.menu_bar.actions():
+            if m.menu():
+                names += [a.text() for a in m.menu().actions() if a.text()]
+        assert "Speichern" in names and "Speichern unter…" in names, names
+        keys = [s.key().toString() for s in win.viewer.findChildren(QShortcut)]
+        assert "Ctrl+S" not in keys, "Ctrl+S is registered twice — it will not fire"
+    finally:
+        win.deleteLater(); _app.processEvents()
+
+
 def test_output_validity():
     """Every tool (incl. the multi-button Merge / Image→PDF and the transformers)
     must produce a valid, openable PDF — guards against silent corruption."""
