@@ -1113,6 +1113,127 @@ def test_print_blackout_check_tolerates_scaling():
     assert _gs_blacked_out(before, os.path.join(_TMP, "pg_missing.pdf")) is None
 
 
+def _plain_render_ink(path, page=0, scale=1):
+    """Dark pixels with form rendering OFF — what actually goes on paper."""
+    d = pdfium.PdfDocument(path)
+    im = d[page].render(scale=scale).to_pil().convert("L"); d.close()
+    return sum(1 for v in im.get_flattened_data() if v < 128)
+
+
+def test_form_flatten_keeps_the_filled_values():
+    """"Reduzieren (fuer Druck)" used to be `del page["/Annots"]`, which deletes
+    the widget annotations — and the widget is where the value is *drawn*. The
+    value stayed in the AcroForm dictionary, so the file still looked filled to
+    anything inspecting fields, while the page printed blank. Ticking the box
+    that says "for printing" produced an empty form."""
+    from PyQt6.QtWidgets import QLineEdit
+    src = os.path.join(_TMP, "form_src.pdf")
+    c = canvas.Canvas(src, pagesize=A4)
+    c.setFont("Helvetica", 14); c.drawString(60, 700, "Name:")
+    c.acroForm.textfield(name="name", x=140, y=694, width=300, height=22,
+                         borderStyle="inset", forceBorder=True, value="")
+    c.showPage(); c.save()
+    empty_ink = _plain_render_ink(src)
+
+    _open(src)
+    p = T.FormsPanel(); p.log.log = lambda *a, **k: None
+    p._load()
+    for w in p._fields.values():
+        if isinstance(w, QLineEdit): w.setText("MAX MUSTERMANN")
+    p.flatten.setChecked(True)
+    out = os.path.join(_TMP, "form_flat.pdf")
+    p.save_pdf = lambda *a, **k: out
+    p.open_result = lambda *a, **k: None
+    p._run_action()
+
+    assert _plain_render_ink(out) > empty_ink, \
+        "the flattened form prints blank — the typed value was lost"
+    r = PdfReader(out)
+    assert "/Annots" not in r.pages[0], "widgets are still interactive"
+    assert "/AcroForm" not in r.trailer["/Root"], "the form was not flattened"
+
+
+def test_compress_refuses_a_damaged_result():
+    """Compression is judged by the file getting smaller, which makes "lost
+    content" indistinguishable from "worked well". The result is checked against
+    the source before it is handed over."""
+    if not shutil.which("gs"):
+        return "SKIP (no ghostscript)"
+    from reportlab.lib import colors
+    from reportlab.lib.utils import ImageReader
+    photo = os.path.join(_TMP, "cmp_photo.png")
+    im = Image.new("RGB", (700, 500))
+    im.putdata([((x*3) % 256, (y*7) % 256, ((x*y)//7) % 256)
+                for y in range(500) for x in range(700)])
+    im.save(photo)
+    src = os.path.join(_TMP, "cmp_src.pdf")
+    c = canvas.Canvas(src, pagesize=A4)
+    for i in range(3):
+        c.drawImage(ImageReader(photo), 40, 380, 500, 380)
+        c.setFillGray(0); c.setFont("Helvetica", 20)
+        c.drawString(50, 300, f"Page {i+1} body text")
+        c.setFillColor(colors.HexColor("#cc2244")); c.rect(50, 120, 300, 120, fill=1, stroke=0)
+        c.showPage()
+    c.save()
+    _open(src)
+
+    def compress(patch=None, tag="ok"):
+        p = T.CompressPanel(); p.log.log = lambda *a, **k: None
+        p.preset.setCurrentIndex(1); p.gs_check.setChecked(True)
+        o = os.path.join(_TMP, f"cmp_{tag}.pdf")
+        p.save_pdf = lambda *a, **k: o
+        p.open_result = lambda *a, **k: None
+        if patch is None:
+            return p._run_action()
+        restore = _damage_gs(patch)
+        try:
+            return p._run_action()
+        finally:
+            restore()
+
+    # Honest compression at every preset must go through untouched.
+    for i in range(4):
+        p = T.CompressPanel(); p.log.log = lambda *a, **k: None
+        p.preset.setCurrentIndex(i); p.gs_check.setChecked(True)
+        o = os.path.join(_TMP, f"cmp_p{i}.pdf")
+        p.save_pdf = lambda *a, **k: o
+        p.open_result = lambda *a, **k: None
+        p._run_action()          # must not raise
+        assert len(PdfReader(o).pages) == 3
+
+    import pikepdf
+    for patch, expect in (
+            (lambda pdf: pdf.pages.__delitem__(1), "Seitenzahl"),
+            (lambda pdf: pdf.pages[1].contents_add(
+                pikepdf.Stream(pdf, b"0 g 0 0 3000 3000 re f")), "beschaedigt")):
+        try:
+            compress(patch, tag="bad")
+            assert False, "a damaged compression was accepted"
+        except AssertionError:
+            raise
+        except Exception as e:
+            assert expect in str(e), f"unexpected error: {e}"
+    return "4 presets clean, 2 failures caught"
+
+
+def _damage_gs(patch):
+    """Let Ghostscript run, then corrupt its output — exit code stays 0."""
+    import subprocess, pikepdf
+    real = subprocess.run
+    def faked(cmd, *a, **k):
+        r = real(cmd, *a, **k)
+        if "-o" in cmd:
+            outp = cmd[cmd.index("-o") + 1]
+            try:
+                with pikepdf.open(outp, allow_overwriting_input=True) as pdf:
+                    patch(pdf); pdf.save(outp)
+            except Exception:
+                pass
+        return r
+    subprocess.run = faked
+    return lambda: setattr(subprocess, "run", real)
+
+
 def test_greyscale_vector():
     if not (shutil.which("gs") or shutil.which("gswin64c")):
         return "SKIP (no ghostscript)"

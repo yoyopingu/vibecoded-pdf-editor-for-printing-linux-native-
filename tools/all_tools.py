@@ -334,10 +334,22 @@ class MergeSplitPanel(BasePanel):
         self.log.clear_log(); QApplication.processEvents()
         try:
             writer = PdfWriter()
+            empty = []
             for p in paths:
+                n_before = len(writer.pages)
                 for page in PdfReader(p, strict=False).pages: writer.add_page(page)
+                if len(writer.pages) == n_before:
+                    empty.append(os.path.basename(p))
+            if not writer.pages:
+                raise ValueError(tr("Keine der gewaehlten Dateien enthielt Seiten."))
             with open(out, "wb") as f: writer.write(f)
-            self.log.log(tr('{p0} Dateien zusammengefuehrt').format(p0=len(paths)))
+            # Report what actually came out, not how many files were picked: a
+            # file that contributed nothing used to be counted as merged.
+            self.log.log(tr('{p0} Dateien zusammengefuehrt ({p1} Seiten)').format(
+                p0=len(paths) - len(empty), p1=len(writer.pages)))
+            if empty:
+                self.log.log(tr('Ohne Seiten uebersprungen: {p0}').format(
+                    p0=", ".join(empty)), error=True)
             self.open_result(out, tr("Zusammengefuehrt"))
         except Exception as e: self.log.log(str(e), error=True)
 
@@ -446,23 +458,47 @@ class CompressPanel(BasePanel):
         size_before = os.path.getsize(src)
 
         if self.gs_check.isChecked() and shutil.which("gs"):
-            cmd = [
-                "gs", "-o", out,
-                "-sDEVICE=pdfwrite",
-                f"-dPDFSETTINGS={gs_setting}",
-                "-dNOPAUSE", "-dBATCH", "-dQUIET",
-                src,
-            ]
-            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
-            if r.returncode != 0:
-                raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(
-                    p0=(r.stderr or r.stdout or f"exit {r.returncode}")[:400]))
-            # -dQUIET means a Ghostscript that fails softly says nothing at all;
-            # without this the next line raised FileNotFoundError from
-            # getsize() instead of reporting that the compression failed.
-            if not os.path.exists(out) or os.path.getsize(out) == 0:
-                raise RuntimeError(tr(
-                    "Ghostscript hat keine Ausgabedatei erzeugt."))
+            # Into a temp file first, so nothing Ghostscript mangled is handed
+            # over: a smaller file is the whole point here, which makes "lost
+            # content" indistinguishable from "worked well" by size alone.
+            import tempfile, pikepdf
+            fd, gs_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+            try:
+                cmd = [
+                    "gs", "-o", gs_tmp,
+                    "-sDEVICE=pdfwrite",
+                    f"-dPDFSETTINGS={gs_setting}",
+                    "-dNOPAUSE", "-dBATCH", "-dQUIET",
+                    src,
+                ]
+                r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
+                if r.returncode != 0:
+                    raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(
+                        p0=(r.stderr or r.stdout or f"exit {r.returncode}")[:400]))
+                # -dQUIET means a Ghostscript that fails softly says nothing at
+                # all; without this the size check below raised FileNotFoundError
+                # instead of reporting that the compression failed.
+                if not os.path.exists(gs_tmp) or os.path.getsize(gs_tmp) == 0:
+                    raise RuntimeError(tr(
+                        "Ghostscript hat keine Ausgabedatei erzeugt."))
+                with pikepdf.open(src) as _a, pikepdf.open(gs_tmp) as _b:
+                    n_src, n_out = len(_a.pages), len(_b.pages)
+                if n_out != n_src:
+                    raise RuntimeError(tr(
+                        'Komprimierung hat die Seitenzahl veraendert '
+                        '({p0} → {p1}) — Datei nicht gespeichert.').format(
+                            p0=n_src, p1=n_out))
+                damaged = _verify_pages_intact(src, gs_tmp, range(n_src), None)
+                if damaged:
+                    raise RuntimeError(tr(
+                        'Komprimierung hat Seite(n) beschaedigt: {p0} — Datei '
+                        'nicht gespeichert.').format(
+                            p0=", ".join(f"{i + 1} ({why})"
+                                         for i, why in sorted(damaged.items()))))
+                shutil.copyfile(gs_tmp, out)
+            finally:
+                try: os.remove(gs_tmp)
+                except OSError: pass
         else:
             import pikepdf
             pdf = pikepdf.open(src)
@@ -2043,6 +2079,58 @@ class ImposePanel(BasePanel):
 # ══════════════════════════════════════════════════════════════════════════════
 # FORMS
 # ══════════════════════════════════════════════════════════════════════════════
+def _plain_ink(path):
+    """Dark pixels per page when the file is rendered *without* form support —
+    i.e. what a printer, a RIP or any non-interactive viewer puts on paper."""
+    import pypdfium2 as pdfium
+    with _pdfium_lock:
+        doc = pdfium.PdfDocument(path)
+        try:
+            out = []
+            for i in range(len(doc)):
+                im = doc[i].render(scale=0.5).to_pil().convert("L")
+                out.append(sum(1 for v in im.get_flattened_data() if v < 128))
+            return out
+        finally:
+            doc.close()
+
+
+def _flatten_form(filled, out, has_values):
+    """Bake the filled-in values into the page so they survive printing.
+
+    "Reduzieren (fuer Druck)" used to be `del page["/Annots"]`, which deletes the
+    widget annotations — and the widget is *where the value is drawn*. The field
+    value stayed in the AcroForm dictionary, so the file still looked filled to
+    anything that inspects fields, while the page itself rendered blank. Ticking
+    the box that says "for printing" produced an empty form.
+
+    Flattening properly means drawing each widget's appearance stream into the
+    page content. pypdf writes a correct appearance when it fills a field, but it
+    also sets /NeedAppearances, and qpdf refuses to flatten form fields while
+    that flag is set — so it has to be cleared first, which is safe precisely
+    because the appearance we are about to bake in is the one pypdf just wrote."""
+    import pikepdf
+    before = _plain_ink(filled)
+    with pikepdf.open(filled) as pdf:
+        acro = pdf.Root.get("/AcroForm")
+        if acro is not None and "/NeedAppearances" in acro:
+            del acro["/NeedAppearances"]
+        pdf.flatten_annotations("all")
+        pdf.save(out)
+    after = _plain_ink(out)
+    # Refuse to hand over a form that lost what was typed into it.
+    if len(after) == len(before):
+        if any(a < b for a, b in zip(after, before)):
+            raise RuntimeError(tr(
+                "Reduzieren hat Seiteninhalt entfernt — die Datei wurde nicht "
+                "gespeichert. Bitte ohne 'Reduzieren' erneut speichern."))
+        if has_values and sum(after) <= sum(before):
+            raise RuntimeError(tr(
+                "Reduzieren hat die ausgefuellten Werte nicht ins Seitenbild "
+                "uebernommen — die Datei wurde nicht gespeichert. Bitte ohne "
+                "'Reduzieren' erneut speichern."))
+
+
 class FormsPanel(BasePanel):
     TITLE         = "Formulare / Reduzieren"
     SUBTITLE      = "Formularfelder ausfuellen und einbetten."
@@ -2094,16 +2182,25 @@ class FormsPanel(BasePanel):
         src=self.require_pdf()
         out=self.save_pdf("Ausgefuelltes Formular speichern als")
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
+        import tempfile
         from pypdf import PdfReader, PdfWriter
         reader=PdfReader(src, strict=False); writer=PdfWriter(); writer.append(reader)
         data={name: ("/Yes" if (isinstance(w,QCheckBox) and w.isChecked()) else
                      "/Off" if isinstance(w,QCheckBox) else w.text())
               for name,w in self._fields.items()}
         for page in writer.pages: writer.update_page_form_field_values(page,data)
-        if self.flatten.isChecked():
-            for page in writer.pages:
-                if "/Annots" in page: del page["/Annots"]
-        with open(out,"wb") as f: writer.write(f)
+        filled_fd, filled = tempfile.mkstemp(suffix=".pdf"); os.close(filled_fd)
+        try:
+            with open(filled,"wb") as f: writer.write(f)
+            if self.flatten.isChecked():
+                _flatten_form(filled, out,
+                              has_values=any(str(v).strip() not in ("", "/Off")
+                                             for v in data.values()))
+            else:
+                shutil.copyfile(filled, out)
+        finally:
+            try: os.remove(filled)
+            except OSError: pass
         self.open_result(out,tr("Formular ausgefuellt"))
         return tr('Formular ausgefuellt ({p0} Felder)').format(p0=len(data))
 
@@ -2365,6 +2462,20 @@ class LayersPanel(BasePanel):
                                        or tr('Ghostscript beendet mit Code {p0}').format(p0=r.returncode))
                 if not os.path.exists(flat) or os.path.getsize(flat) == 0:
                     raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
+                # Check before replacing: flattening layers runs the same
+                # pdfwrite path that can black a page out while exiting 0, and
+                # this one overwrites the file the user is about to be handed.
+                import pikepdf as _pk
+                with _pk.open(out) as _a, _pk.open(flat) as _b:
+                    n_a, n_b = len(_a.pages), len(_b.pages)
+                damaged = (_verify_pages_intact(out, flat, range(min(n_a, n_b)), None)
+                           if n_a == n_b else {0: tr("Seitenzahl")})
+                if damaged:
+                    raise RuntimeError(tr(
+                        'Reduzieren hat Seite(n) beschaedigt: {p0} — die '
+                        'unreduzierte Datei wurde behalten.').format(
+                            p0=", ".join(f"{i + 1} ({why})"
+                                         for i, why in sorted(damaged.items()))))
                 os.replace(flat, out)
             finally:
                 try: os.remove(flat)

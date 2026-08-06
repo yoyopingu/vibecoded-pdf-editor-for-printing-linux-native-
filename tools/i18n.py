@@ -428,6 +428,20 @@ _EN: dict[str, str] = {
     "Ghostscript-Fehler": "Ghostscript error",
     "Ghostscript hat keine Ausgabedatei erzeugt.": "Ghostscript produced no output file.",
     "Konvertierte Seiten prüfen …": "Verifying converted pages …",
+    "{p0} Dateien zusammengefuehrt ({p1} Seiten)": "{p0} files merged ({p1} pages)",
+    "Keine der gewaehlten Dateien enthielt Seiten.": "None of the selected files contained any pages.",
+    "Ohne Seiten uebersprungen: {p0}": "Skipped, no pages: {p0}",
+    "Reduzieren hat Seiteninhalt entfernt — die Datei wurde nicht gespeichert. Bitte ohne 'Reduzieren' erneut speichern.":
+        "Flattening removed page content — the file was not saved. Please save again without 'flatten'.",
+    "Reduzieren hat die ausgefuellten Werte nicht ins Seitenbild uebernommen — die Datei wurde nicht gespeichert. Bitte ohne 'Reduzieren' erneut speichern.":
+        "Flattening did not transfer the filled-in values onto the page — the file was not saved. Please save again without 'flatten'.",
+    "Komprimierung hat die Seitenzahl veraendert ({p0} → {p1}) — Datei nicht gespeichert.":
+        "Compression changed the page count ({p0} → {p1}) — file not saved.",
+    "Komprimierung hat Seite(n) beschaedigt: {p0} — Datei nicht gespeichert.":
+        "Compression damaged page(s): {p0} — file not saved.",
+    "Reduzieren hat Seite(n) beschaedigt: {p0} — die unreduzierte Datei wurde behalten.":
+        "Flattening damaged page(s): {p0} — the unflattened file was kept.",
+    "Seitenzahl": "page count",
     "Farbumwandlung hat Seite(n) {p0} geschwaerzt — es wird ohne Umwandlung gedruckt.":
         "Colour conversion blacked out page(s) {p0} — printing without conversion.",
     "ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt und blieben deshalb unveraendert: {p1}":
