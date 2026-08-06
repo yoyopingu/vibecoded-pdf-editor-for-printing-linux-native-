@@ -830,6 +830,104 @@ def test_light_theme_reaches_every_colour_source():
         _app.setStyleSheet(old)
 
 
+def _grey_fixture():
+    """A page whose only colour is a half-point red mark, plus controls."""
+    from reportlab.lib import colors
+    W, H = A4
+    p = os.path.join(_TMP, "grey_detect.pdf")
+    c = canvas.Canvas(p, pagesize=A4)
+    c.setFillGray(0); c.setFont("Helvetica", 40)
+    c.drawString(60, 700, "BLACK ONLY"); c.showPage()                     # 1 grey
+    c.setFillGray(0); c.drawString(60, 700, "TINY RED MARK")
+    c.setFillColor(colors.HexColor("#ff0000"))
+    c.rect(300, 400, 0.5, 0.5, fill=1, stroke=0); c.showPage()            # 2 colour
+    c.setFillGray(0); c.drawString(60, 700, "FAINT TINT")
+    c.setFillColor(colors.Color(0.62, 0.58, 0.58))
+    c.rect(60, 100, 480, 500, fill=1, stroke=0); c.showPage()             # 3 faint
+    c.setFillColor(colors.HexColor("#ff0000"))
+    c.rect(60, 300, 400, 300, fill=1, stroke=0); c.showPage()             # 4 colour
+    c.save()
+    return p
+
+
+def test_greyscale_detects_a_tiny_colour_mark():
+    """A half-point red mark — a stamp, a logo dot, a coloured signature — must
+    keep its page out of the conversion. The scan used to squash every page to
+    128×128 first, which averaged that mark from a colour distance of 255 down to
+    6, so at the default threshold of 20 it was invisible and the page was
+    silently converted. That is a reprint."""
+    src = _grey_fixture()
+    _open(src)
+    p = T.GrayscalePanel(); p.log.log = lambda *a, **k: None
+    p._scan()
+    assert len(p._page_data) == 4, f"scan produced {len(p._page_data)} pages"
+    dist = [T._hist_stats(h, 20)[0] for h in p._page_data]
+    assert dist[1] > 200, f"the tiny red mark reads as only {dist[1]}"
+    assert dist[0] == 0, f"the black-only page is not neutral ({dist[0]})"
+
+    p.mode_single.setChecked(True); p.thr.setValue(20); p._reclassify()
+    assert 1 not in p._grey_pages, "page with the red mark would be converted"
+    assert 3 not in p._grey_pages, "the saturated page would be converted"
+    assert 0 in p._grey_pages, "the black-only page should convert"
+
+
+def test_greyscale_threshold_slider_is_live():
+    """Moving "Farb-Schwellwert" has to re-classify. The colour fraction used to
+    be frozen with whatever the slider read when the document was scanned, so in
+    the default ratio mode the control did nothing at all."""
+    src = _grey_fixture()
+    _open(src)
+    p = T.GrayscalePanel(); p.log.log = lambda *a, **k: None
+    p._scan()
+    p.mode_ratio.setChecked(True); p.ratio.setValue(300)
+    outcomes = set()
+    for t in (1, 10, 30, 60, 80):
+        p.thr.setValue(t); p._on_setting_changed()
+        outcomes.add(tuple(sorted(p._grey_pages)))
+    assert len(outcomes) > 1, "the threshold slider still changes nothing"
+
+
+def test_greyscale_scan_recovers_from_failure():
+    """A failed scan must not wedge the tool. The in-progress flag was set before
+    the work and cleared after it, so an exception left it set and every later
+    scan returned immediately for the rest of the session."""
+    src = _grey_fixture()
+    _open(src)
+    p = T.GrayscalePanel(); p.log.log = lambda *a, **k: None
+    boom = lambda: (_ for _ in ()).throw(RuntimeError("render exploded"))
+    real = p._scan_impl
+    p._scan_impl = boom
+    try:
+        try: p._scan()
+        except RuntimeError: pass
+    finally:
+        p._scan_impl = real
+    assert p._scanning is False, "the tool is wedged — no further scan can run"
+    p._scan()
+    assert len(p._page_data) == 4, "scanning did not recover"
+
+
+def test_preflight_sees_a_tiny_colour_mark():
+    """Preflight exists to stop a job going to press wrong, so its colour check
+    must not miss a half-point mark. It squashed every page to 64×64 first, which
+    averaged that mark away and reported "Keine Farbseiten erkannt" — a clean
+    bill of health for a page that would cost a colour click."""
+    from reportlab.lib import colors
+    src = os.path.join(_TMP, "preflight_tiny.pdf")
+    c = canvas.Canvas(src, pagesize=A4)
+    c.setFillGray(0); c.setFont("Helvetica", 30); c.drawString(60, 700, "MOSTLY BLACK")
+    c.setFillColor(colors.HexColor("#ff0000"))
+    c.rect(300, 400, 0.5, 0.5, fill=1, stroke=0)
+    c.showPage(); c.save()
+
+    _open(src)
+    p = T.PreflightPanel(); p.log.log = lambda *a, **k: None
+    p.chk_colour.setChecked(True)
+    p._do_preflight()
+    report = p.report.toPlainText()
+    assert "Farbseiten:" in report, f"the colour mark was missed:\n{report}"
+
+
 def test_greyscale_vector():
     if not (shutil.which("gs") or shutil.which("gswin64c")):
         return "SKIP (no ghostscript)"

@@ -5,7 +5,7 @@ Alle Tool-Panels v3.3
 - setFixedWidth(220) auf Labels — garantiert sichtbar
 - Kein Abschneiden moeglich
 """
-import os, io, math, subprocess, shutil
+import os, io, math, subprocess, shutil, logging
 from tools.page_viewer import (_TV, _register_themed, _pdfium_lock,
                                _ThumbnailCache, _render_queue,
                                _ThumbTask, _ThumbSignals, pil_to_qpixmap)
@@ -453,9 +453,16 @@ class CompressPanel(BasePanel):
                 "-dNOPAUSE", "-dBATCH", "-dQUIET",
                 src,
             ]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
             if r.returncode != 0:
-                raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=(r.stderr or r.stdout)[:400]))
+                raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(
+                    p0=(r.stderr or r.stdout or f"exit {r.returncode}")[:400]))
+            # -dQUIET means a Ghostscript that fails softly says nothing at all;
+            # without this the next line raised FileNotFoundError from
+            # getsize() instead of reporting that the compression failed.
+            if not os.path.exists(out) or os.path.getsize(out) == 0:
+                raise RuntimeError(tr(
+                    "Ghostscript hat keine Ausgabedatei erzeugt."))
         else:
             import pikepdf
             pdf = pikepdf.open(src)
@@ -1145,6 +1152,40 @@ class ImgPdfPanel(BasePanel):
 # ══════════════════════════════════════════════════════════════════════════════
 # GRAYSCALE
 # ══════════════════════════════════════════════════════════════════════════════
+def _colour_histogram(pil_rgb):
+    """256-bin histogram of how far each pixel is from neutral grey, where the
+    distance is max(|r-g|, |r-b|, |g-b|) — 0 is exactly grey, 255 fully saturated.
+
+    Measured over EVERY pixel of the render. The scan used to squash the page to
+    128×128 first and loop over that in Python, which averaged small colour marks
+    away: a 1 pt red dot on A4 came out as a distance of 19 instead of 255, so at
+    the default threshold of 20 it was invisible and the page was silently
+    converted to grey. Losing a red stamp or a coloured logo that way is exactly
+    the mistake a copy shop pays for. Pillow does the work in C, so reading every
+    pixel is also faster than the old Python loop over the thumbnail."""
+    from PIL import ImageChops
+    r, g, b = pil_rgb.split()
+    d = ImageChops.lighter(
+        ImageChops.lighter(ImageChops.difference(r, g), ImageChops.difference(r, b)),
+        ImageChops.difference(g, b))
+    return d.histogram()
+
+
+def _hist_stats(hist, thr):
+    """(max distance from grey, fraction of pixels above `thr`) for a histogram.
+
+    Derived on demand rather than frozen at scan time: the colour fraction used
+    to be computed with whatever the threshold slider happened to be when the
+    document was scanned, so moving that slider afterwards changed nothing at all
+    in "Nach Anteil farbiger Pixel" mode — the control looked broken because it
+    was."""
+    total = sum(hist)
+    if not total:
+        return 0, 0.0
+    max_diff = max((b for b, n in enumerate(hist) if n), default=0)
+    return max_diff, sum(hist[thr + 1:]) / total
+
+
 def _grey_vector(gs_bin, src, out, selected, n_pages, report):
     """Convert the `selected` page indices to greyscale LOSSLESSLY and
     VECTOR-BASED with Ghostscript (pdfwrite + ColorConversionStrategy=Gray):
@@ -1152,7 +1193,7 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
     spot) is mapped to DeviceGray, and images keep full resolution (no
     downsampling). Pages NOT selected are copied through unchanged. Runs on a
     worker thread (only paths/ints cross the boundary). Returns (out, summary)."""
-    import subprocess, tempfile, os, pikepdf
+    import subprocess, tempfile, os, contextlib, pikepdf
     report(tr("Ghostscript: Graustufen-Konvertierung …"))
     fd, grey_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
     try:
@@ -1162,25 +1203,58 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
                "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
                "-dDownsampleMonoImages=false",
                "-o", grey_tmp, src]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        try:
+            # errors="replace": Ghostscript writes its diagnostics in the system
+            # locale, and a byte it could not decode used to raise UnicodeDecodeError
+            # here — burying the actual failure under a decoding error.
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               errors="replace", timeout=900)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(tr(
+                "Ghostscript hat nach 15 Minuten nicht geantwortet und wurde "
+                "abgebrochen. Die PDF ist vermutlich beschädigt oder sehr groß."))
         if r.returncode != 0 or not os.path.exists(grey_tmp) or os.path.getsize(grey_tmp) == 0:
             raise RuntimeError((r.stderr or r.stdout or tr("Ghostscript-Fehler")).strip()[:400])
 
         report(tr("Seiten zusammenstellen …"))
-        src_pdf  = pikepdf.open(src)
-        grey_pdf = pikepdf.open(grey_tmp)
-        try:
-            out_pdf = pikepdf.Pdf.new(); n_conv = 0
-            for i in range(n_pages):
-                if i in selected and i < len(grey_pdf.pages):
-                    out_pdf.pages.append(grey_pdf.pages[i]); n_conv += 1
-                else:
-                    out_pdf.pages.append(src_pdf.pages[i])   # keep original exactly
-            out_pdf.save(out)
-        finally:
-            src_pdf.close(); grey_pdf.close()
-        return out, (f"{n_conv} {tr('Seite(n) konvertiert (vektorbasiert)')}, "
-                     f"{n_pages - n_conv} {tr('unveraendert')}")
+        # ExitStack closes whatever was opened even if the second open throws —
+        # the old shape opened src_pdf outside the try, so a bad Ghostscript
+        # output leaked the source document's handle.
+        with contextlib.ExitStack() as stack:
+            src_pdf  = stack.enter_context(pikepdf.open(src))
+            grey_pdf = stack.enter_context(pikepdf.open(grey_tmp))
+            out_pdf  = stack.enter_context(pikepdf.Pdf.new())
+            # Never index past either document: the scan's page count can be
+            # stale, and Ghostscript can return fewer pages than it was given.
+            n = min(n_pages, len(src_pdf.pages))
+            n_conv = missing = 0
+            for i in range(n):
+                if i in selected:
+                    if i < len(grey_pdf.pages):
+                        out_pdf.pages.append(grey_pdf.pages[i]); n_conv += 1
+                        continue
+                    missing += 1        # fell through to the untouched original
+                out_pdf.pages.append(src_pdf.pages[i])   # keep original exactly
+            # Save beside the target and rename over it, so a failure part way
+            # through cannot leave a half-written PDF for the app to open.
+            tmp_fd, out_tmp = tempfile.mkstemp(
+                suffix=".pdf", dir=os.path.dirname(os.path.abspath(out)))
+            os.close(tmp_fd)
+            try:
+                out_pdf.save(out_tmp)
+                os.replace(out_tmp, out)
+            except Exception:
+                with contextlib.suppress(OSError): os.remove(out_tmp)
+                raise
+        msg = (f"{n_conv} {tr('Seite(n) konvertiert (vektorbasiert)')}, "
+               f"{n - n_conv} {tr('unveraendert')}")
+        if missing:
+            msg += "  — " + tr(
+                '{p0} Seite(n) konnte Ghostscript nicht umwandeln und blieben farbig.'
+            ).format(p0=missing)
+        if n < n_pages:
+            msg += "  — " + tr('Dokument hat nur {p0} Seiten.').format(p0=n)
+        return out, msg
     finally:
         try: os.remove(grey_tmp)
         except OSError: pass
@@ -1433,7 +1507,8 @@ class GrayscalePanel(BasePanel):
         thr = self.thr.value(); use_ratio = self.mode_ratio.isChecked()
         min_ratio = self.ratio.value() / 20000.0
         self._grey_pages.clear()
-        for i, (max_diff, colour_ratio) in enumerate(self._page_data):
+        for i, hist in enumerate(self._page_data):
+            max_diff, colour_ratio = _hist_stats(hist, thr)
             is_colour = (colour_ratio >= min_ratio) if use_ratio else (max_diff > thr)
             if not is_colour: self._grey_pages.add(i)
         self._update_preview_borders(); self._update_status_bar()
@@ -1581,8 +1656,17 @@ class GrayscalePanel(BasePanel):
         if self._scanning:
             return
         self._scanning = True
+        try:
+            self._scan_impl()
+        finally:
+            # Always clear it: an error escaping the scan used to leave the flag
+            # set, and then no later scan would ever run for the rest of the
+            # session — the tool just quietly stopped updating.
+            self._scanning = False
+
+    def _scan_impl(self):
         try: src = self.require_pdf()
-        except ValueError as e: self.log.log(str(e), error=True); self._scanning = False; return
+        except ValueError as e: self.log.log(str(e), error=True); return
         self.log.clear_log()
         self._page_data.clear(); self._grey_pages.clear()
         self._manual_sel.clear(); self._manual_skip.clear(); self._last_click = None
@@ -1591,26 +1675,28 @@ class GrayscalePanel(BasePanel):
         QApplication.processEvents()
         try:
             import pypdfium2 as pdfium
-            doc = pdfium.PdfDocument(src); n = len(doc)
-            self._build_preview(n); QApplication.processEvents()
-            thr = self.thr.value()
-            for i in range(n):
-                QApplication.processEvents()
-                with _pdfium_lock:
-                    bm = doc[i].render(scale=1)
-                    pil = bm.to_pil().convert("RGB").resize((128, 128))
-                pixels = list(pil.getdata()); total = len(pixels)
-                diffs = [max(abs(r-g), abs(r-b), abs(g-b)) for r,g,b in pixels]
-                max_diff = max(diffs)
-                colour_ratio = sum(1 for d in diffs if d > thr) / total
-                self._page_data.append((max_diff, colour_ratio))
-                self.log.log(tr('Seite {p0}: max={p1}, farbig={p2:.2f}%').format(p0=i + 1, p1=max_diff, p2=colour_ratio * 100))
-            doc.close()
+            doc = pdfium.PdfDocument(src)
+            try:
+                n = len(doc)
+                self._build_preview(n); QApplication.processEvents()
+                for i in range(n):
+                    QApplication.processEvents()
+                    with _pdfium_lock:
+                        pil = doc[i].render(scale=1).to_pil().convert("RGB")
+                    hist = _colour_histogram(pil)
+                    self._page_data.append(hist)
+                    md, _ = _hist_stats(hist, self.thr.value())
+                    self.log.log(tr('Seite {p0}: max={p1}, farbig={p2:.2f}%').format(
+                        p0=i + 1, p1=md, p2=_hist_stats(hist, self.thr.value())[1] * 100))
+            finally:
+                # Always: a failed render used to leave the document (and its
+                # file handle) open for the life of the app.
+                doc.close()
             self._reclassify()
             try:
                 import pikepdf, re as _re
-                pdf = pikepdf.open(src)
-                for i, page in enumerate(pdf.pages):
+                with pikepdf.open(src) as pdf:
+                  for i, page in enumerate(pdf.pages):
                     res = page.get("/Resources"); cs_names = set()
                     if res:
                         cs_d = res.get("/ColorSpace")
@@ -1637,13 +1723,19 @@ class GrayscalePanel(BasePanel):
                     except Exception: pass
                     if "/DeviceGray" in cs_names and not any(x in cs_names for x in ("/DeviceRGB","/DeviceCMYK","/CalRGB","/ICCBased")):
                         self._already_grey.add(i)
-                pdf.close()
-            except Exception: pass
+            except Exception:
+                # Only an optimisation — it marks pages that are already
+                # DeviceGray so they are left alone. If it fails they simply get
+                # converted like any other page, so carry on, but say so rather
+                # than swallowing it silently.
+                self._already_grey.clear()
+                logging.exception("grayscale: colour-space probe failed")
             self._update_preview_borders()
             self._load_preview_pixmaps_async(src)
             self._scanned_path = src
-        except Exception as e: self.log.log(str(e), error=True)
-        self._scanning = False
+        except Exception as e:
+            logging.exception("grayscale scan failed")
+            self.log.log(str(e), error=True)
 
     def _run_action(self):
         src = self.require_pdf()
@@ -1878,9 +1970,14 @@ def _run_ocr(src, out, lang, deskew, skip, report):
         if deskew: cmd.append("--deskew")
         if skip:   cmd.append("--skip-text")
         cmd += [src, out]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=600)
         if r.returncode not in (0, 6):
-            raise RuntimeError(r.stderr.strip() or r.stdout.strip())
+            # A silent non-zero exit used to raise RuntimeError("") — an error
+            # dialog with nothing in it.
+            raise RuntimeError(r.stderr.strip() or r.stdout.strip()
+                               or tr('ocrmypdf beendet mit Code {p0}').format(p0=r.returncode))
+        if not os.path.exists(out) or os.path.getsize(out) == 0:
+            raise RuntimeError(tr("OCR hat keine Ausgabedatei erzeugt."))
         return out, tr('OCR abgeschlossen ({p0})').format(p0=lang)
 
     if shutil.which("tesseract"):
@@ -2016,8 +2113,12 @@ class PreflightPanel(BasePanel):
                         issues.append(tr('Seite {p0}: {p1:.0f}x{p2:.0f}pt != {p3:.0f}x{p4:.0f}pt').format(p0=i + 1, p1=pw, p2=ph, p3=tw, p4=th))
                 if self.chk_colour.isChecked():
                     with _pdfium_lock:
-                        bm=doc[i].render(scale=1); pil=bm.to_pil().convert("RGB").resize((64,64))
-                    if any(max(abs(r-g),abs(r-b),abs(g-b))>20 for r,g,b in pil.getdata()):
+                        pil=doc[i].render(scale=1).to_pil().convert("RGB")
+                    # Every pixel, not a 64x64 squash of the page: averaging the
+                    # render first hid small colour marks completely, and this
+                    # check reporting "Keine Farbseiten erkannt" for a page that
+                    # has them is a preflight that passes a job it should stop.
+                    if _hist_stats(_colour_histogram(pil), 20)[0] > 20:
                         colour_pages.append(i+1)
             if self.chk_orient.isChecked() and orients:
                 if len(set(orients))>1: issues.append(tr("Gemischte Ausrichtungen"))
@@ -2106,8 +2207,14 @@ class LayersPanel(BasePanel):
             try:
                 cmd=["gs","-sDEVICE=pdfwrite","-dCompatibilityLevel=1.5",
                      "-dNOPAUSE","-dBATCH","-dQUIET",f"-sOutputFile={flat}",out]
-                r=subprocess.run(cmd,capture_output=True,text=True,timeout=300)
-                if r.returncode!=0: raise RuntimeError(r.stderr.strip())
+                r=subprocess.run(cmd,capture_output=True, text=True, errors="replace",timeout=300)
+                if r.returncode!=0:
+                    # -dQUIET: a failing Ghostscript often says nothing, and
+                    # RuntimeError("") is an error dialog with no error in it.
+                    raise RuntimeError(r.stderr.strip() or r.stdout.strip()
+                                       or tr('Ghostscript beendet mit Code {p0}').format(p0=r.returncode))
+                if not os.path.exists(flat) or os.path.getsize(flat) == 0:
+                    raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
                 os.replace(flat, out)
             finally:
                 try: os.remove(flat)
@@ -2309,7 +2416,7 @@ class ColourProfilePanel(BasePanel):
             cmd.append(f"-sOutputICCProfile={icc}")   # convert to this named CMYK space
         cmd.append(src)
 
-        r = sp.run(cmd, capture_output=True, text=True, timeout=300)
+        r = sp.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
 
         if r.returncode != 0:
             err = (r.stderr.strip() or r.stdout.strip())[:500]

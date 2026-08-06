@@ -426,6 +426,15 @@ _EN: dict[str, str] = {
     "N-Up läuft …": "N-Up running …",
     "Pruefung abgeschlossen.": "Check complete.",
     "Ghostscript-Fehler": "Ghostscript error",
+    "Ghostscript hat keine Ausgabedatei erzeugt.": "Ghostscript produced no output file.",
+    "Ghostscript beendet mit Code {p0}": "Ghostscript exited with code {p0}",
+    "Ghostscript hat nach 15 Minuten nicht geantwortet und wurde abgebrochen. Die PDF ist vermutlich beschädigt oder sehr groß.":
+        "Ghostscript did not respond within 15 minutes and was aborted. The PDF is probably damaged or very large.",
+    "{p0} Seite(n) konnte Ghostscript nicht umwandeln und blieben farbig.":
+        "Ghostscript could not convert {p0} page(s); they were left in colour.",
+    "Dokument hat nur {p0} Seiten.": "Document only has {p0} pages.",
+    "OCR hat keine Ausgabedatei erzeugt.": "OCR produced no output file.",
+    "ocrmypdf beendet mit Code {p0}": "ocrmypdf exited with code {p0}",
     "Kein OCR-Programm gefunden.\nInstallation:  pip install ocrmypdf --break-system-packages\n           oder:  sudo pacman -S tesseract tesseract-data-deu":
         "No OCR program found.\nInstallation:  pip install ocrmypdf --break-system-packages\n           or:  sudo pacman -S tesseract tesseract-data-deu",
     "Ghostscript nicht gefunden.\nInstallation:  sudo pacman -S ghostscript":

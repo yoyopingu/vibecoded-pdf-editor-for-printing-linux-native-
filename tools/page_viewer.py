@@ -3816,7 +3816,7 @@ class PrintDialog(QDialog):
             try:
                 import subprocess
                 r = subprocess.run(["lpstat", "-e"],
-                                   capture_output=True, text=True, timeout=15)
+                                   capture_output=True, text=True, errors="replace", timeout=15)
                 names = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
             except Exception:
                 pass
@@ -3830,7 +3830,7 @@ class PrintDialog(QDialog):
             try:
                 import subprocess
                 r = subprocess.run(["lpstat", "-d"],
-                                   capture_output=True, text=True, timeout=10)
+                                   capture_output=True, text=True, errors="replace", timeout=10)
                 out = r.stdout.strip()
                 if ":" in out:
                     cand = out.split(":", 1)[1].strip()
@@ -4510,7 +4510,7 @@ class PrintDialog(QDialog):
                     gs_cmd += ["-sColorConversionStrategy=LeaveColorUnchanged"]
 
                 gs_cmd += [f"-sOutputFile={norm_tmp}", sub_tmp]
-                r = subprocess.run(gs_cmd, capture_output=True, text=True, timeout=240)
+                r = subprocess.run(gs_cmd, capture_output=True, text=True, errors="replace", timeout=240)
                 if r.returncode == 0 and os.path.getsize(norm_tmp) > 100:
                     print_src = norm_tmp
                     # Re-centre the printable-area page on a full-size sheet so
@@ -4601,7 +4601,7 @@ class PrintDialog(QDialog):
             cmd += ["-o", f"media={paper_key}"]
             cmd.append(print_src)
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=60)
             if result.returncode != 0:
                 raise RuntimeError(
                     result.stderr.strip() or result.stdout.strip()
@@ -6050,7 +6050,7 @@ class PageViewerPanel(QWidget):
                 r = subprocess.run(
                     [soffice, "--headless", "--convert-to", "pdf",
                      "--outdir", tmp_dir, path],
-                    capture_output=True, text=True, timeout=120)
+                    capture_output=True, text=True, errors="replace", timeout=120)
                 converted = os.path.join(tmp_dir, stem + ".pdf")
                 if not os.path.isfile(converted):
                     # LibreOffice benennt manchmal anders — suche erste PDF

@@ -59,7 +59,7 @@ def convert_to_pdf(path, out_dir):
             raise RuntimeError(tr("LibreOffice nicht gefunden.\nsudo pacman -S libreoffice-still"))
         r = subprocess.run(
             [soffice, "--headless", "--convert-to", "pdf", "--outdir", out_dir, path],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, errors="replace", timeout=120)
         expected = os.path.join(out_dir, stem + ".pdf")
         if os.path.isfile(expected):
             return expected
