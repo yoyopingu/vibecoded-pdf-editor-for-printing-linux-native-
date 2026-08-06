@@ -450,10 +450,15 @@ def test_crop_preview_shows_added_whitespace():
     for w in (p.ct, p.cb2, p.cl2, p.cr): w.setValue(-15.0)
     pm, _ = p._render_preview(500, 650, 1.0)
     im = _qpix_to_pil(pm); px = im.load()
-    red = [(x, y) for y in range(im.height) for x in range(im.width)
-           if abs(px[x, y][0]-0xe9) < 40 and abs(px[x, y][1]-0x45) < 40 and abs(px[x, y][2]-0x60) < 40]
-    assert red, "no page outline in the preview"
-    x0 = min(q[0] for q in red); y0 = min(q[1] for q in red); y1 = max(q[1] for q in red)
+    # Match the outline against the *live* accent rather than a literal colour —
+    # this used to hardcode the old red and broke the moment the accent changed.
+    from tools.page_viewer import _TV
+    ar, ag, ab = (int(_TV["acc"].lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
+    hits = [(x, y) for y in range(im.height) for x in range(im.width)
+            if abs(px[x, y][0]-ar) < 40 and abs(px[x, y][1]-ag) < 40
+            and abs(px[x, y][2]-ab) < 40]
+    assert hits, "no page outline in the preview"
+    x0 = min(q[0] for q in hits); y0 = min(q[1] for q in hits); y1 = max(q[1] for q in hits)
     probe = px[x0+4, (y0+y1)//2]          # inside the added left strip
     assert min(probe) > 200, f"added margin is {probe}, expected white paper"
 

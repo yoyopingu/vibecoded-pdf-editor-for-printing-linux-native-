@@ -87,11 +87,19 @@ from tools.plugin_manager import PluginManagerPanel, discover_plugins
 BG     = "#1a1a2e"
 SIDE   = "#0f3460"
 PANEL  = "#16213e"
-ACC    = "#e94560"
+ACC    = "#3d82f0"
 TEXT   = "#eaeaea"
 DIM    = "#8892a4"
 HOVER  = "#1a4a80"
 LINE   = "#1e3a5a"
+
+# The accent, per theme: (base, hover, pressed). One blue family for both, but
+# the dark theme needs the brighter end of it to separate from the navy chrome
+# while the light theme needs the deeper end to stay readable as white-on-blue.
+_ACCENT = {
+    True:  ("#4d8df5", "#6ba1f8", "#3a76d8"),   # dark
+    False: ("#1f6feb", "#1a5fd0", "#1550b4"),   # light
+}
 
 TOOLS = [
     ("N-Up Layout",               NUpPanel),
@@ -175,6 +183,12 @@ def _build_style(dark: bool) -> str:
         _BTN_DIS = "#c0cede"; _BTN_DIS_T = "#88a0b4"
         _GB    = "#f6f9fd"
 
+    _ACC, _ACC_HOV, _ACC_PRS = _ACCENT[dark]
+    # Spelled out as rgba(): Qt reads a 9-character "#rrggbbaa" as "#aarrggbb"
+    # and would silently take the alpha byte for the red channel.
+    _r, _g, _b = (int(_ACC[1:][i:i+2], 16) for i in (0, 2, 4))
+    _ACC_DIM = f"rgba({_r},{_g},{_b},0.35)"     # nav hover marker
+
     return f"""
 * {{
     font-family: 'Noto Sans', 'DejaVu Sans', sans-serif;
@@ -194,7 +208,7 @@ QLabel#formLabel {{
     qproperty-wordWrap: true;
 }}
 QLabel#sectionLabel {{
-    color: {ACC}; font-size: 9px; font-weight: bold; letter-spacing: 3px;
+    color: {_ACC}; font-size: 9px; font-weight: bold; letter-spacing: 3px;
     text-transform: uppercase;
 }}
 QLabel#currentFileLabel {{ color: {_TEXT}; font-size: 12px; }}
@@ -255,15 +269,15 @@ QPushButton#navBtn {{
 }}
 QPushButton#navBtn:hover {{
     background: {_NB_HOV}; color: {_NB_ACT_TEXT};
-    border-left: 4px solid rgba(233,69,96,0.35);
+    border-left: 4px solid {_ACC_DIM};
 }}
 QPushButton#navBtn[active="true"] {{
     background: {_NB_HOV}; color: {_NB_ACT_TEXT};
-    border-left: 4px solid {ACC}; font-weight: bold;
+    border-left: 4px solid {_ACC}; font-weight: bold;
 }}
 QPushButton#viewerBtn {{
     background: {_VB_BG}; color: {_NB_ACT_TEXT};
-    border: none; border-left: 4px solid {ACC};
+    border: none; border-left: 4px solid {_ACC};
     padding: 11px 16px; text-align: left;
     font-size: 13px; font-weight: bold;
     border-radius: 0; min-height: 40px;
@@ -273,13 +287,13 @@ QPushButton#viewerBtn[active="true"] {{ background: {_VB_HOV}; }}
 
 /* ── Buttons ────────────────────────────────────────────── */
 QPushButton#actionBtn {{
-    background: {ACC}; color: #ffffff; border: none;
+    background: {_ACC}; color: #ffffff; border: none;
     border-radius: 7px; padding: 8px 20px;
     font-weight: bold; font-size: 13px; min-height: 32px;
     letter-spacing: 0.3px;
 }}
-QPushButton#actionBtn:hover {{ background: #d03050; }}
-QPushButton#actionBtn:pressed {{ background: #b02840; }}
+QPushButton#actionBtn:hover {{ background: {_ACC_HOV}; }}
+QPushButton#actionBtn:pressed {{ background: {_ACC_PRS}; }}
 QPushButton#actionBtn:disabled {{ background: {_BTN_DIS}; color: {_BTN_DIS_T}; }}
 QPushButton#secondaryBtn {{
     background: {_IB}; color: {_TEXT};
@@ -295,9 +309,9 @@ QPushButton#iconBtn {{
     padding: 0px; min-height: 0px; min-width: 0px;
     font-size: 13px;
 }}
-QPushButton#iconBtn:hover {{ background: {_HOVER}; border-color: {ACC}; }}
+QPushButton#iconBtn:hover {{ background: {_HOVER}; border-color: {_ACC}; }}
 QPushButton#iconBtn:pressed {{ background: {_SEL}; }}
-QPushButton#secondaryBtn:hover {{ background: {_HOVER}; border-color: {ACC}; }}
+QPushButton#secondaryBtn:hover {{ background: {_HOVER}; border-color: {_ACC}; }}
 QPushButton#secondaryBtn:pressed {{ background: {_SEL}; }}
 
 /* ── Input fields ───────────────────────────────────────── */
@@ -308,7 +322,7 @@ QLineEdit {{
     selection-background-color: {_SEL};
 }}
 QLineEdit:focus {{
-    border: 2px solid {ACC};
+    border: 2px solid {_ACC};
     padding: 4px 9px;
 }}
 /* Combo boxes get their height from min-height, NEVER from vertical padding:
@@ -322,7 +336,7 @@ QComboBox {{
     selection-background-color: {_SEL};
 }}
 QComboBox:focus {{
-    border: 2px solid {ACC};
+    border: 2px solid {_ACC};
     padding: 0px 9px;
 }}
 /* No ::drop-down override here: giving it `border:none` and no arrow image left
@@ -355,7 +369,7 @@ QSpinBox, QDoubleSpinBox {{
     padding-left: 10px; min-height: 36px;
     selection-background-color: {_SEL};
 }}
-QSpinBox:focus, QDoubleSpinBox:focus {{ border: 2px solid {ACC}; }}
+QSpinBox:focus, QDoubleSpinBox:focus {{ border: 2px solid {_ACC}; }}
 /* Width only — nothing else. Any paint property here (a background, even a
    transparent one) makes the stylesheet engine draw the buttons itself, and it
    has no arrow to draw: they came out as two blank slivers you could barely
@@ -404,22 +418,25 @@ QTextEdit, QPlainTextEdit {{
 }}
 
 /* ── Checkboxes & radios ────────────────────────────────── */
-QCheckBox {{ color: {_TEXT}; spacing: 8px; }}
+/* background:transparent is not cosmetic — without it these inherit the window
+   background from the QWidget rule above and paint it as an opaque bar right
+   across the group box they sit in, which looked like a rendering fault. */
+QCheckBox {{ color: {_TEXT}; spacing: 8px; background: transparent; }}
 QCheckBox::indicator {{
     width: 16px; height: 16px; border-radius: 4px;
     border: 1px solid {_IBD}; background: {_IB};
 }}
-QCheckBox::indicator:hover {{ border-color: {ACC}; }}
+QCheckBox::indicator:hover {{ border-color: {_ACC}; }}
 QCheckBox::indicator:checked {{
-    background: {ACC}; border: 1px solid {ACC};
+    background: {_ACC}; border: 1px solid {_ACC};
 }}
-QRadioButton {{ color: {_TEXT}; spacing: 8px; }}
+QRadioButton {{ color: {_TEXT}; spacing: 8px; background: transparent; }}
 QRadioButton::indicator {{
     width: 15px; height: 15px; border-radius: 8px;
     border: 1px solid {_IBD}; background: {_IB};
 }}
-QRadioButton::indicator:hover {{ border-color: {ACC}; }}
-QRadioButton::indicator:checked {{ background: {ACC}; border: 2px solid {ACC}; }}
+QRadioButton::indicator:hover {{ border-color: {_ACC}; }}
+QRadioButton::indicator:checked {{ background: {_ACC}; border: 2px solid {_ACC}; }}
 
 /* ── Group boxes ────────────────────────────────────────── */
 QGroupBox {{
@@ -432,7 +449,7 @@ QGroupBox::title {{
     subcontrol-position: top left;
     left: 12px; top: 5px;
     padding: 0 6px;
-    color: {ACC}; font-size: 9px; font-weight: bold;
+    color: {_ACC}; font-size: 9px; font-weight: bold;
     letter-spacing: 2px;
 }}
 
@@ -443,7 +460,7 @@ QScrollBar:vertical {{
 QScrollBar::handle:vertical {{
     background: {_SCB}; border-radius: 4px; min-height: 24px;
 }}
-QScrollBar::handle:vertical:hover {{ background: {ACC}; }}
+QScrollBar::handle:vertical:hover {{ background: {_ACC}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar:horizontal {{
     background: {_SCT}; height: 8px; border-radius: 4px; margin: 2px;
@@ -451,7 +468,7 @@ QScrollBar:horizontal {{
 QScrollBar::handle:horizontal {{
     background: {_SCB}; border-radius: 4px; min-width: 24px;
 }}
-QScrollBar::handle:horizontal:hover {{ background: {ACC}; }}
+QScrollBar::handle:horizontal:hover {{ background: {_ACC}; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 
 /* ── Slider ─────────────────────────────────────────────── */
@@ -459,11 +476,11 @@ QSlider::groove:horizontal {{
     background: {_IBD}; height: 4px; border-radius: 2px;
 }}
 QSlider::handle:horizontal {{
-    background: {ACC}; width: 14px; height: 14px;
+    background: {_ACC}; width: 14px; height: 14px;
     border-radius: 7px; margin: -5px 0;
     border: 2px solid {_IB};
 }}
-QSlider::sub-page:horizontal {{ background: {ACC}; border-radius: 2px; }}
+QSlider::sub-page:horizontal {{ background: {_ACC}; border-radius: 2px; }}
 
 /* ── Separator ──────────────────────────────────────────── */
 QFrame#separator {{ background: {_LINE}; max-height: 1px; min-height: 1px; }}
@@ -487,7 +504,7 @@ QTabBar::tab {{
 QTabBar::tab:selected {{
     background: {_TAB_P}; color: {_TEXT};
     font-weight: bold;
-    border-bottom: 3px solid {ACC};
+    border-bottom: 3px solid {_ACC};
 }}
 QTabBar::tab:hover:!selected {{ background: {_HOVER}; color: {_TEXT}; }}
 QTabBar::close-button {{ subcontrol-position: right; }}
@@ -495,6 +512,45 @@ QTabBar::close-button {{ subcontrol-position: right; }}
 
 STYLE       = _build_style(dark=True)
 LIGHT_STYLE = _build_style(dark=False)
+
+
+class AppStyle:
+    """Factory for the application style, with our own tab close button.
+
+    Fusion draws SP_TabCloseButton as a red-boxed cross — it read as a Windows
+    error icon sitting in the corner of every open tab. Overriding it here
+    covers every tab the app opens without touching the several places that
+    create them. The glyph is a neutral grey on purpose so it needs no repaint
+    when the theme is switched.
+    """
+    @staticmethod
+    def create():
+        from PyQt6.QtWidgets import QProxyStyle, QStyle, QStyleFactory
+        from PyQt6.QtGui import QIcon, QPixmap, QPainter, QPen, QColor
+
+        def _cross(size=16, colour="#8892a4", alpha=255):
+            pm = QPixmap(size, size)
+            pm.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            c = QColor(colour); c.setAlpha(alpha)
+            p.setPen(QPen(c, 1.6))
+            m = size * 0.3
+            p.drawLine(int(m), int(m), int(size - m), int(size - m))
+            p.drawLine(int(size - m), int(m), int(m), int(size - m))
+            p.end()
+            return pm
+
+        class _Style(QProxyStyle):
+            def standardIcon(self, standardIcon, option=None, widget=None):
+                if standardIcon == QStyle.StandardPixmap.SP_TabCloseButton:
+                    icon = QIcon()
+                    icon.addPixmap(_cross(alpha=190), QIcon.Mode.Normal)
+                    icon.addPixmap(_cross(colour="#e05260"), QIcon.Mode.Active)
+                    return icon
+                return super().standardIcon(standardIcon, option, widget)
+
+        return _Style(QStyleFactory.create("Fusion"))
 
 
 # ── Persistente Einstellungen ─────────────────────────────────────────────────
@@ -1093,10 +1149,10 @@ class MainWindow(QMainWindow):
 
 _THEME_COLOURS = {
     "light": {"BG": "#edf1f7", "SIDE": "#d8e8f8", "PANEL": "#ffffff",
-              "ACC": "#e94560", "TEXT": "#0d1a28", "DIM": "#556070",
+              "ACC": "#1f6feb", "TEXT": "#0d1a28", "DIM": "#556070",
               "HOVER": "#d4e4f8", "LINE": "#c0d0e4"},
     "dark":  {"BG": "#151520", "SIDE": "#0e2d58", "PANEL": "#1c2340",
-              "ACC": "#e94560", "TEXT": "#e8eaf0", "DIM": "#7a8699",
+              "ACC": "#4d8df5", "TEXT": "#e8eaf0", "DIM": "#7a8699",
               "HOVER": "#1e4d82", "LINE": "#1e3354"},
 }
 
@@ -1196,7 +1252,7 @@ def _listen_for_open_requests(win):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("CopyShop PDF Suite")
-    app.setStyle("Fusion")
+    app.setStyle(AppStyle.create())
 
     # Hand the files to an already-running instance and quit, before building
     # any UI. With no files this just raises the existing window — the app is
@@ -1239,12 +1295,12 @@ def main():
     p.drawPolygon(QPolygon([QPoint(36,8), QPoint(44,8), QPoint(44,16)]))
     p.setBrush(QBrush(QColor("#cccccc")))
     p.drawPolygon(QPolygon([QPoint(36,8), QPoint(44,16), QPoint(36,16)]))
-    p.setPen(QPen(QColor("#e94560"), 2))
+    p.setPen(QPen(QColor(ACC), 2))
     p.drawLine(18, 24, 38, 24)
     p.drawLine(18, 30, 38, 30)
     p.drawLine(18, 36, 30, 36)
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QBrush(QColor("#e94560")))
+    p.setBrush(QBrush(QColor(ACC)))
     p.drawEllipse(38, 42, 14, 14)
     p.end()
     app.setWindowIcon(QIcon(icon_pm))

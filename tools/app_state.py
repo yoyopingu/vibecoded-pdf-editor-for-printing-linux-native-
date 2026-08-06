@@ -19,7 +19,7 @@ THEME = {
     "BG":    "#151520",
     "SIDE":  "#0e2d58",
     "PANEL": "#1c2340",
-    "ACC":   "#e94560",
+    "ACC":   "#4d8df5",
     "TEXT":  "#e8eaf0",
     "DIM":   "#7a8699",
     "HOVER": "#1e4d82",

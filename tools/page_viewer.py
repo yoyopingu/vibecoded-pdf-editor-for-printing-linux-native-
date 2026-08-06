@@ -556,7 +556,7 @@ _DARK_TV = {
     'text':       '#eaeaea',
     'dim':        '#8892a4',
     'vdim':       '#556070',
-    'acc':        '#e94560',
+    'acc':        '#4d8df5',
     'btn_bg':     '#16213e',
     'btn_brd':    '#2a4a70',
     'sel_bg':     '#1a4a80',
@@ -574,7 +574,7 @@ _LIGHT_TV = {
     'text':       '#0f1925',
     'dim':        '#4a6080',
     'vdim':       '#6888a0',
-    'acc':        '#e94560',
+    'acc':        '#1f6feb',
     'btn_bg':     '#eef4fc',
     'btn_brd':    '#98b4cc',
     'sel_bg':     '#b0ccec',
@@ -582,6 +582,15 @@ _LIGHT_TV = {
 }
 
 _TV: dict = dict(_DARK_TV)   # current live theme — mutated by set_viewer_theme()
+
+# Shared width for the viewer's top-bar buttons, so "Öffnen", "Seiten verwalten"
+# and "Drucken" line up as one set instead of three different sizes.
+_TOP_BTN_W = 132
+
+# Shared size for the small square controls around the preview (page ▲▼ and the
+# zoom cluster). They were 34×26 and 28×22 — near-identical but not quite, which
+# is exactly the kind of mismatch that reads as sloppy.
+_PREV_BTN = (34, 26)
 
 import weakref as _weakref
 _theme_panels: list = []      # weakrefs to panels that have _apply_theme()
@@ -731,8 +740,11 @@ class PdfPageCanvas(QWidget):
 
         p.drawPixmap(self._offset_x, self._offset_y, self._pixmap)
 
-        # Thin border around the page so it's distinguishable on any background
-        p.setPen(QPen(QColor(0, 0, 0), 1))
+        # Hairline around the page so it stays defined on a light background.
+        # Solid black drew a hard halo around the sheet — on the dark backdrop
+        # the white page needs no help separating, and the line only made the
+        # edge look burnt.
+        p.setPen(QPen(QColor(0, 0, 0, 45), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(self._offset_x, self._offset_y,
                    self._pixmap.width() - 1, self._pixmap.height() - 1)
@@ -975,10 +987,12 @@ class SinglePageView(QWidget):
         sl.addWidget(self._tot_lbl)
         sl.addStretch()
 
+        # Same metrics as the zoom cluster below — the two sets of controls sit
+        # in the same corner of the preview and used to be different sizes.
         self._nav_btns = []
         for text, fn in [("▲", self.prev_page), ("▼", self.next_page)]:
             b = QPushButton(text)
-            b.setFixedSize(34, 26)
+            b.setFixedSize(*_PREV_BTN)
             b.clicked.connect(fn)
             sl.addWidget(b, alignment=Qt.AlignmentFlag.AlignCenter)
             self._nav_btns.append(b)
@@ -1008,7 +1022,7 @@ class SinglePageView(QWidget):
         self._zoom_btns = []
         for txt, fn in [("−", self._zoom_out), ("fit", self._zoom_fit), ("+", self._zoom_in)]:
             zb = QPushButton(txt)
-            zb.setFixedSize(28, 22)
+            zb.setFixedSize(*_PREV_BTN)
             zb.clicked.connect(fn)
             il.addWidget(zb)
             self._zoom_btns.append(zb)
@@ -1034,15 +1048,15 @@ class SinglePageView(QWidget):
         self._tot_lbl.setStyleSheet(
             f"color:{t['dim']};font-size:11px;background:transparent;")
         _nb = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
-               f"border:1px solid {t['btn_brd']};border-radius:4px;font-size:13px;}}"
-               f"QPushButton:hover{{background:{t['hover']};}}")
+               f"border:1px solid {t['btn_brd']};border-radius:5px;font-size:12px;}}"
+               f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}")
         for b in self._nav_btns:
             b.setStyleSheet(_nb)
         self._info_bar.setStyleSheet(
             f"QWidget#infoBar{{background:{t['sidebar_bg']};border-top:1px solid {t['border']};}}")
         _zb = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
-               f"border:1px solid {t['btn_brd']};border-radius:3px;font-size:11px;padding:0;}}"
-               f"QPushButton:hover{{background:{t['hover']};}}")
+               f"border:1px solid {t['btn_brd']};border-radius:5px;font-size:12px;padding:0;}}"
+               f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}")
         for zb in self._zoom_btns:
             zb.setStyleSheet(_zb)
 
@@ -2157,7 +2171,7 @@ class PageGrid(QWidget):
         if self._drop_indicator < 0 or not self._cards: return
         pr = self._per_row()
         p  = QPainter(self)
-        pen = QPen(QColor("#e94560"), 3); p.setPen(pen)
+        pen = QPen(QColor(_TV['acc']), 3); p.setPen(pen)
         if pr == 1:
             tops = self._card_tops()
             idx  = min(self._drop_indicator, len(tops))
@@ -5268,7 +5282,7 @@ class FileGrid(QWidget):
         y0     = MARGIN+row*cell_h-4
         y1     = y0+cell_h-GAP+8
         p = QPainter(self)
-        p.setPen(QPen(QColor("#e94560"), 3))
+        p.setPen(QPen(QColor(_TV['acc']), 3))
         p.drawLine(x,y0,x,y1)
         p.drawLine(x-5,y0+6,x,y0); p.drawLine(x+5,y0+6,x,y0)
         p.drawLine(x-5,y1-6,x,y1); p.drawLine(x+5,y1-6,x,y1)
@@ -5927,26 +5941,38 @@ class PageViewerPanel(QWidget):
         top_bar = self._top_bar
         _register_themed(self)
         tbl = QHBoxLayout(top_bar)
-        tbl.setContentsMargins(10, 0, 10, 0)
+        tbl.setContentsMargins(12, 0, 12, 0)
         tbl.setSpacing(8)
 
+        # One primary action on the left, the document-scoped actions grouped on
+        # the right in the *same* weight. "Öffnen" and "Seiten verwalten" used to
+        # both be accent-filled, so the bar had two competing primaries pulling
+        # at opposite ends with a third, differently-styled button beside one of
+        # them.
         open_btn = QPushButton(tr("Öffnen..."))
         open_btn.setObjectName("actionBtn")
+        open_btn.setMinimumWidth(_TOP_BTN_W)
         open_btn.clicked.connect(self._open)
         tbl.addWidget(open_btn)
 
         self._viewer_info = QLabel("")
-        self._viewer_info.setObjectName("dimLabel")
+        self._viewer_info.setObjectName("currentFileLabel")
         tbl.addWidget(self._viewer_info, 1)
 
-        self._manage_btn = QPushButton(tr("Seiten verwalten  [Strg+Umschalt+O]"))
-        self._manage_btn.setObjectName("actionBtn")
+        # The shortcut lives in the tooltip, not in the label: spelled out it made
+        # this button twice the width of every other one in the app.
+        self._manage_btn = QPushButton(tr("Seiten verwalten"))
+        self._manage_btn.setObjectName("secondaryBtn")
+        self._manage_btn.setToolTip(tr("Seiten verwalten") + "  (Strg+Umschalt+O)")
+        self._manage_btn.setMinimumWidth(_TOP_BTN_W)
         self._manage_btn.setEnabled(False)
         self._manage_btn.clicked.connect(self._manage_current)
         tbl.addWidget(self._manage_btn)
 
         self._print_btn = QPushButton(tr("Drucken"))
         self._print_btn.setObjectName("secondaryBtn")
+        self._print_btn.setToolTip(tr("Drucken") + "  (Strg+P)")
+        self._print_btn.setMinimumWidth(_TOP_BTN_W)
         self._print_btn.setEnabled(False)
         self._print_btn.clicked.connect(self._print_current)
         tbl.addWidget(self._print_btn)

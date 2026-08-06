@@ -284,7 +284,6 @@ _EN: dict[str, str] = {
 
     # ── Manage panel / save & split dialogs / main buttons ──────────────────────
     "Öffnen...": "Open...",
-    "Seiten verwalten  [Strg+Umschalt+O]": "Manage pages  [Ctrl+Shift+O]",
     "Auswahl als Datei speichern": "Save selection as file",
     "Zuerst Seiten auswaehlen.": "Select pages first.",
     "Auswahl speichern als": "Save selection as",

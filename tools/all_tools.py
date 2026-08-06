@@ -567,10 +567,15 @@ class CropResizePanel(BasePanel):
         # ── Randfelder ───────────────────────────────────────────────
         crop_grp = QGroupBox(tr("Raender  [+ schneiden / - erweitern]"))
         cg = QVBoxLayout(crop_grp); cg.setSpacing(4); cg.setContentsMargins(6,8,6,6)
-        for lbl_txt, w in [(tr("Oben"), self.ct), (tr("Unten"), self.cb2),
-                             (tr("Links"), self.cl2), (tr("Rechts"), self.cr)]:
+        _rows = [(tr("Oben"), self.ct), (tr("Unten"), self.cb2),
+                 (tr("Links"), self.cl2), (tr("Rechts"), self.cr)]
+        # Width from the widest label, not a fixed 38px: that fit the German
+        # "Unten" but clipped the English "Bottom" to "Bottor".
+        _fm = self.fontMetrics()
+        _lw = max(_fm.horizontalAdvance(t) for t, _ in _rows) + 8
+        for lbl_txt, w in _rows:
             hl = QHBoxLayout(); hl.setSpacing(4)
-            lb = QLabel(lbl_txt); lb.setFixedWidth(38)
+            lb = QLabel(lbl_txt); lb.setFixedWidth(_lw)
             hl.addWidget(lb); hl.addWidget(w); hl.addStretch()
             cg.addLayout(hl)
 
@@ -848,7 +853,7 @@ class CropResizePanel(BasePanel):
             # Outline the new PAGE, not the scaled content: with "Proportionen
             # beibehalten" the content is narrower than the page, and marking the
             # content made it look as if it filled the sheet.
-            painter.setPen(QPen(QColor("#e94560"), 2))
+            painter.setPen(QPen(QColor(_TV['acc']), 2))
             painter.setBrush(_Qt2.BrushStyle.NoBrush)
             painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
             if changed: draw_ghost()
@@ -860,7 +865,7 @@ class CropResizePanel(BasePanel):
             dst_y = ry + max(0, int(-t_pt * cs))
             pm  = pil_to_qpixmap(pil)
             painter.drawPixmap(dst_x, dst_y, src_w, src_h, pm, src_x, src_y, src_w, src_h)
-            painter.setPen(QPen(QColor("#e94560"), 2))
+            painter.setPen(QPen(QColor(_TV['acc']), 2))
             painter.setBrush(_Qt2.BrushStyle.NoBrush)
             painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
             if changed: draw_ghost()
@@ -2900,7 +2905,7 @@ class NUpPanel(BasePanel):
                     Qt.TransformationMode.SmoothTransformation)
                 painter.drawPixmap(off_x, off_y, pm_s)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.setPen(QPen(QColor("#e94560"), 1))
+                painter.setPen(QPen(QColor(_TV['acc']), 1))
                 painter.drawRect(off_x, off_y, pm_s.width()-1, pm_s.height()-1)
         if self.crop_marks.isChecked():
             params_t = (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows)
