@@ -428,6 +428,10 @@ _EN: dict[str, str] = {
     "Ghostscript-Fehler": "Ghostscript error",
     "Ghostscript hat keine Ausgabedatei erzeugt.": "Ghostscript produced no output file.",
     "Konvertierte Seiten prüfen …": "Verifying converted pages …",
+    "Aktuelle Seite kann nicht ermittelt werden — bitte »Alle Seiten« oder einen Bereich waehlen.":
+        "Cannot determine the current page — please choose \u00abAll pages\u00bb or a range.",
+    "Hinweis: Der Fallback kann die gewaehlte Farbraum-Umwandlung nicht ausfuehren — es wird ohne sie gedruckt.":
+        "Note: the fallback cannot perform the selected colour conversion — printing without it.",
     "{p0} Dateien zusammengefuehrt ({p1} Seiten)": "{p0} files merged ({p1} pages)",
     "Keine der gewaehlten Dateien enthielt Seiten.": "None of the selected files contained any pages.",
     "Ohne Seiten uebersprungen: {p0}": "Skipped, no pages: {p0}",

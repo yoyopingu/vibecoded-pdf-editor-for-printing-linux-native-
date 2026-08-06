@@ -3780,6 +3780,20 @@ class PrintDialog(QDialog):
         self.range_edit.textChanged.connect(self._sync_preview_pages)
         self._sync_preview_pages()
 
+    def _current_page_pos(self):
+        """Position of the page the viewer is showing, or None if unknown.
+
+        Shared by the preview and the print job so they can never disagree
+        about which page "Aktuelle Seite" means."""
+        parent = self.parent()
+        while parent is not None and not isinstance(parent, PdfTab):
+            parent = parent.parent()
+        if parent is not None and getattr(parent, "single", None) is not None:
+            pos = parent.single._current
+            if 0 <= pos < len(self.model.order):
+                return pos
+        return None
+
     def _preview_pages(self):
         """Page positions the preview should show for the current selection.
 
@@ -3789,16 +3803,16 @@ class PrintDialog(QDialog):
         """
         n = len(self.model.order)
         if self.radio_current.isChecked():
-            parent = self.parent()
-            while parent and not isinstance(parent, PdfTab):
-                parent = parent.parent()
-            if parent and hasattr(parent, 'single'):
-                return [parent.single._current]
-            return [0]
+            cur = self._current_page_pos()
+            return None if cur is None else [cur]
         if self.radio_range.isChecked():
             text = self.range_edit.text().strip()
             if not text:
                 return list(range(n))
+            # Same rules as _get_pages(), deliberately: this used to silently
+            # clamp, so "5-99" on a ten-page file previewed pages 5–10 and then
+            # printing rejected it. The preview must not show a job that will
+            # not run.
             pages = []
             try:
                 for part in text.split(","):
@@ -3808,9 +3822,14 @@ class PrintDialog(QDialog):
                     if "-" in part:
                         a, b = part.split("-", 1)
                         lo, hi = int(a.strip()), int(b.strip())
+                        if lo < 1 or hi > n or lo > hi:
+                            return None
                         pages.extend(range(lo - 1, hi))
                     else:
-                        pages.append(int(part) - 1)
+                        p = int(part)
+                        if p < 1 or p > n:
+                            return None
+                        pages.append(p - 1)
             except ValueError:
                 return None
             pages = [p for p in sorted(set(pages)) if 0 <= p < n]
@@ -4123,12 +4142,15 @@ class PrintDialog(QDialog):
         if self.radio_all.isChecked():
             return list(range(n))
         elif self.radio_current.isChecked():
-            parent = self.parent()
-            while parent and not isinstance(parent, PdfTab):
-                parent = parent.parent()
-            if parent and hasattr(parent, 'single'):
-                return [parent.single._current]
-            return [0]
+            cur = self._current_page_pos()
+            if cur is None:
+                # Never quietly substitute page 1 for the page the user is
+                # looking at — that prints the wrong sheet and says nothing.
+                self.status_lbl.setText(tr(
+                    "Aktuelle Seite kann nicht ermittelt werden — bitte "
+                    "»Alle Seiten« oder einen Bereich waehlen."))
+                return None
+            return [cur]
         else:
             text = self.range_edit.text().strip()
             if not text:
@@ -4307,6 +4329,14 @@ class PrintDialog(QDialog):
                 except Exception as e:
                     errors.append(f"GS/lp: {e}")
                     _report(tr("GS-Pfad fehlgeschlagen — Versuche Qt-Fallback…"))
+                    # The rasteriser cannot do the colour-space conversions, so
+                    # say so instead of printing a job that quietly ignores the
+                    # setting the operator chose.
+                    if colorconv in (1, 2):
+                        _report(tr(
+                            "Hinweis: Der Fallback kann die gewaehlte "
+                            "Farbraum-Umwandlung nicht ausfuehren — es wird "
+                            "ohne sie gedruckt."))
 
             # ── Fallback: Qt rasteriser ───────────────────────────────────────
             # Pre-render pages in background (pdfium, no QPrinter); draw on GUI thread.
@@ -4370,10 +4400,16 @@ class PrintDialog(QDialog):
         self._set_printing(False)   # keep the dialog open so the user can retry
 
     def _finish(self, pages, copies, skipped):
-        total = len(pages) * copies
+        # Count what was actually sent, not what was asked for: a page that
+        # could not be read was already dropped from the job, so reporting the
+        # requested figure told the operator more sheets were coming than the
+        # printer had been given — while listing the skipped pages in the same
+        # breath.
+        sent  = max(0, len(pages) - len(skipped or []))
+        total = sent * copies
         msg = tr("Druckauftrag gesendet: "
                  "{pages} Seite(n) × {copies} Kopie(n) = {total} Blatt.").format(
-                     pages=len(pages), copies=copies, total=total)
+                     pages=sent, copies=copies, total=total)
         if skipped:
             msg += tr("  (Übersprungen: S. {skipped})").format(skipped=skipped)
         self.status_lbl.setText(msg)

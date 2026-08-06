@@ -1234,6 +1234,78 @@ def _damage_gs(patch):
     return lambda: setattr(subprocess, "run", real)
 
 
+def _print_dialog(n_pages=10, name="print_src.pdf"):
+    from tools.page_viewer import PdfTab, PrintDialog
+    src = os.path.join(_TMP, name)
+    c = canvas.Canvas(src, pagesize=A4)
+    for i in range(n_pages):
+        c.setFont("Helvetica", 90); c.drawCentredString(300, 400, f"P{i+1}"); c.showPage()
+    c.save()
+    tab = PdfTab(src)
+    return tab, PrintDialog(tab.pdf_path, tab.model, tab)
+
+
+def test_print_spools_exactly_what_was_asked_for():
+    """The job handed to the spooler has to be the pages the operator picked, in
+    the order and rotation the viewer is showing — including page-manager edits
+    that have not been saved to the file yet."""
+    tab, dlg = _print_dialog()
+    def spool(tag):
+        out = os.path.join(_TMP, f"spool_{tag}.pdf")
+        dlg._write_subset_pdf(dlg._get_pages(), out)
+        return _page_labels(out), out
+
+    dlg.radio_range.setChecked(True); dlg.range_edit.setText("3-5, 8")
+    assert spool("range")[0] == ["P3", "P4", "P5", "P8"]
+    assert [p + 1 for p in dlg._preview_pages()] == [3, 4, 5, 8], \
+        "the preview disagrees with the job"
+
+    tab.single._current = 6
+    dlg.radio_current.setChecked(True)
+    assert spool("current")[0] == ["P7"], "'current page' printed the wrong sheet"
+
+    dlg.radio_all.setChecked(True)
+    assert len(spool("all")[0]) == 10
+
+    # Unsaved reorder + rotation must reach the printer.
+    tab.model.move(0, 10)
+    tab.model.selected = {tab.model.order[0]}
+    tab.model.rotate_selected(90)
+    dlg.radio_range.setChecked(True); dlg.range_edit.setText("1-3")
+    labels, out = spool("edited")
+    assert labels == ["P2", "P3", "P4"], f"page-manager order ignored: {labels}"
+    rot = [int(p.get("/Rotate", 0) or 0) for p in PdfReader(out).pages]
+    assert rot == [90, 0, 0], f"page-manager rotation ignored: {rot}"
+
+
+def test_print_preview_and_job_agree_on_a_bad_range():
+    """The preview used to clamp an out-of-range entry while the job rejected it,
+    so "5-99" on a ten-page file previewed six printable pages and then refused
+    to print. Showing a job that cannot run is its own kind of lie."""
+    tab, dlg = _print_dialog()
+    dlg.radio_range.setChecked(True)
+    dlg.range_edit.setText("5-99")
+    assert dlg._get_pages() is None, "the job accepted an out-of-range request"
+    assert not dlg._preview_pages(), "the preview promised pages that will not print"
+    dlg.range_edit.setText("4-6")
+    assert dlg._get_pages() == [3, 4, 5]
+    assert [p + 1 for p in dlg._preview_pages()] == [4, 5, 6]
+
+
+def test_print_reports_the_sheets_it_actually_sent():
+    """Unreadable pages are dropped from the job, so counting the requested
+    pages told the operator more sheets were coming than the printer got — while
+    listing the skipped ones in the same sentence."""
+    tab, dlg = _print_dialog()
+    dlg._progress = None
+    dlg._after_print_close = lambda: None
+    dlg._finish(list(range(10)), 2, [3, 7])
+    text = dlg.status_lbl.text()
+    assert "8" in text and "16" in text, \
+        f"expected 8 pages x 2 copies = 16 sheets, got: {text}"
+    assert "3, 7" in text or "[3, 7]" in text, f"skipped pages not named: {text}"
+
+
 def test_greyscale_vector():
     if not (shutil.which("gs") or shutil.which("gswin64c")):
         return "SKIP (no ghostscript)"
