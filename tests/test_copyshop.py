@@ -635,6 +635,56 @@ app.exec()
 '''
 
 
+_EXIT_SCRIPT = '''
+import sys, os
+sys.path.insert(0, {repo!r})
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+sys.argv = ["copyshop", {src!r}]
+import main as MAIN
+MAIN._IPC_KEY = {key!r}          # own socket, so a real running app is untouched
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication
+
+# Quit the way a user does, once the window is up and rendering.
+_show = MAIN.MainWindow.show
+def show(self):
+    _show(self)
+    QTimer.singleShot(1500, QApplication.instance().quit)
+MAIN.MainWindow.show = show
+try:
+    MAIN.main()
+except SystemExit as e:
+    print("RC", e.code, flush=True)
+'''
+
+
+def test_app_exits_without_crashing():
+    """Quitting must not dump core.
+
+    The widget tree used to survive until interpreter finalisation, where PyQt's
+    own cleanup_on_exit atexit hook destroyed it — that walk dereferenced a
+    wrapper whose C++ object had already gone and segfaulted inside
+    sip_api_get_address. It hit *every* quit, and only showed up as a core dump
+    after the window had already vanished. Has to run as a real process: the
+    fault is in how this one shuts down."""
+    import subprocess
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = os.path.join(_TMP, "exit_host.py")
+    with open(script, "w") as f:
+        f.write(_EXIT_SCRIPT.format(repo=repo, src=FX["normal"],
+                                    key=f"copyshop_exit_{os.getpid()}"))
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    runs = []
+    for _ in range(3):          # the crash was racy — one clean run proves little
+        p = subprocess.run([sys.executable, "-u", script], env=env,
+                           capture_output=True, text=True, timeout=120)
+        runs.append(p.returncode)
+    bad = [rc for rc in runs if rc != 0]
+    assert not bad, (f"app exited with {runs} "
+                     f"(negative = killed by signal, -11 = SIGSEGV)")
+    return f"{len(runs)} clean exits"
+
+
 def _expect_line(proc, prefix, timeout=25.0):
     """Read the child's stdout until a line starts with `prefix`."""
     end = time.time() + timeout

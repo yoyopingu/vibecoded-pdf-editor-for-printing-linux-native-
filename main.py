@@ -74,7 +74,7 @@ except ImportError:                       # QtNetwork not installed
 
 from tools.i18n          import tr, get_language, load_language, set_language
 from tools.app_state     import AppState
-from tools.page_viewer   import PageViewerPanel
+from tools.page_viewer   import PageViewerPanel, shutdown_render_queue
 from tools.all_tools     import (
     CompressPanel, CropResizePanel, PageNumbersPanel,
     ImgPdfPanel, GrayscalePanel, FormsPanel,
@@ -1254,6 +1254,10 @@ def main():
     app.setApplicationName("CopyShop PDF Suite")
     app.setStyle(AppStyle.create())
 
+    # Stop the render worker before anything gets torn down, so a task can't
+    # finish and emit into receivers we are about to delete below.
+    app.aboutToQuit.connect(shutdown_render_queue)
+
     # Hand the files to an already-running instance and quit, before building
     # any UI. With no files this just raises the existing window — the app is
     # tab-based, so a second launch should never mean a second window.
@@ -1322,7 +1326,18 @@ def main():
         _listen_for_open_requests(win)
     except Exception:
         pass   # QtNetwork unavailable — the app still works, just not shared
-    sys.exit(app.exec())
+    rc = app.exec()
+
+    # Tear the widget tree down here, while the event loop and the interpreter
+    # are both still healthy. Left alive, it was PyQt's own cleanup_on_exit
+    # atexit hook that destroyed it during interpreter finalisation, and that
+    # walk hit a wrapper whose C++ object was already gone — every single quit
+    # ended in a segfault inside sip_api_get_address. deleteLater + one event
+    # loop pass disposes of it in the normal Qt order instead.
+    win.deleteLater()
+    app.processEvents()
+    del win
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ Page Viewer v3.7
 - Seiten-Verwaltung unveraendert
 - Textauswahl + Kopieren (Strg+C)
 """
-import os, io, threading, heapq
+import os, io, threading, heapq, atexit
 from collections import OrderedDict
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -335,12 +335,15 @@ class _RenderQueue:
         self._lock    = threading.Lock()
         self._cond    = threading.Condition(self._lock)
         self._running = None
-        t = threading.Thread(target=self._loop, daemon=True,
-                             name="CopyShop-Render")
-        t.start()
+        self._stop    = False
+        self._thread  = threading.Thread(target=self._loop, daemon=True,
+                                         name="CopyShop-Render")
+        self._thread.start()
 
     def submit(self, task, priority: int = 1):
         with self._cond:
+            if self._stop:
+                return              # shutting down — never start new work
             self._seq += 1
             task._priority = priority
             heapq.heappush(self._heap, (priority, self._seq, task))
@@ -357,11 +360,28 @@ class _RenderQueue:
             self._heap = [(p, s, t) for p, s, t in self._heap
                           if getattr(t, '_priority', 99) < min_priority]
 
+    def shutdown(self, timeout: float = 2.0):
+        """Stop the worker and drop every pending task. Idempotent."""
+        with self._cond:
+            self._stop = True
+            for _, _, task in self._heap:
+                try: task.cancel()
+                except Exception: pass
+            self._heap.clear()
+            if self._running is not None:
+                try: self._running.cancel()
+                except Exception: pass
+            self._cond.notify_all()
+        if self._thread.is_alive():
+            self._thread.join(timeout)
+
     def _loop(self):
         while True:
             with self._cond:
-                while not self._heap:
+                while not self._heap and not self._stop:
                     self._cond.wait()
+                if self._stop:
+                    return
                 _, _, task = heapq.heappop(self._heap)
                 self._running = task          # set while lock is held
             try:
@@ -374,6 +394,28 @@ class _RenderQueue:
 
 
 _render_queue = _RenderQueue()
+
+
+def shutdown_render_queue(timeout: float = 2.0):
+    """Stop the background render thread before the widget tree is torn down.
+
+    The worker emits Qt signals (``_ThumbSignals`` / ``_PageSignals``) at the
+    end of every task. main() now deletes the whole window on the way out, so
+    the worker has to be stopped *first* — otherwise a render finishing a
+    moment later would emit into half-deleted receivers.
+
+    Wired to QApplication.aboutToQuit, which runs before app.exec() returns,
+    and registered with atexit as a backstop for anything that exits without an
+    event loop (tests, scripts). Joining is what makes it deterministic: the
+    thread is a daemon, so without it shutdown ordering is left to chance.
+    """
+    try:
+        _render_queue.shutdown(timeout)
+    except Exception:
+        pass          # never let shutdown noise mask the real exit path
+
+
+atexit.register(shutdown_render_queue)
 
 
 # ── Background single-page rendering ─────────────────────────────────────────
