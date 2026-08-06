@@ -427,6 +427,16 @@ _EN: dict[str, str] = {
     "Pruefung abgeschlossen.": "Check complete.",
     "Ghostscript-Fehler": "Ghostscript error",
     "Ghostscript hat keine Ausgabedatei erzeugt.": "Ghostscript produced no output file.",
+    "Konvertierte Seiten prüfen …": "Verifying converted pages …",
+    "Farbumwandlung hat Seite(n) {p0} geschwaerzt — es wird ohne Umwandlung gedruckt.":
+        "Colour conversion blacked out page(s) {p0} — printing without conversion.",
+    "ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt und blieben deshalb unveraendert: {p1}":
+        "WARNING: {p0} page(s) were damaged by the conversion and were therefore left unchanged: {p1}",
+    "Prüfe Seite {p0} / {p1} …{p2}": "Verifying page {p0} / {p1} …{p2}",
+    "Seite {p0} erneut versuchen …": "Retrying page {p0} …",
+    "{p0} Seite(n) einzeln nachkonvertiert.": "{p0} page(s) re-converted individually.",
+    "ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt und blieben deshalb unveraendert farbig: {p1}":
+        "WARNING: {p0} page(s) were damaged by the conversion and were therefore left unchanged, in colour: {p1}",
     "Ghostscript beendet mit Code {p0}": "Ghostscript exited with code {p0}",
     "Ghostscript hat nach 15 Minuten nicht geantwortet und wurde abgebrochen. Die PDF ist vermutlich beschädigt oder sehr groß.":
         "Ghostscript did not respond within 15 minutes and was aborted. The PDF is probably damaged or very large.",

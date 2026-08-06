@@ -1186,6 +1186,110 @@ def _hist_stats(hist, thr):
     return max_diff, sum(hist[thr + 1:]) / total
 
 
+_VERIFY_SCALE   = 0.30    # ~180 px across an A4 page — enough to see a blackout
+_BLACKOUT_LIMIT = 0.004   # 0.4 % of the page turning solid black is already wrong
+
+
+def _page_luma(path, index, scale=_VERIFY_SCALE):
+    """Greyscale render of one page, for comparing before against after."""
+    import pypdfium2 as pdfium
+    with _pdfium_lock:
+        doc = pdfium.PdfDocument(path)
+        try:
+            return doc[index].render(scale=scale).to_pil().convert("L")
+        finally:
+            doc.close()
+
+
+def _conversion_damage(ref_l, got_l):
+    """(blacked_out, vanished) as fractions of the page.
+
+    `blacked_out` is the share of pixels that were clearly light in the original
+    and came back solid black; `vanished` is the reverse — content that was dark
+    and is now blank paper. Both are compared against a *greyscale* render of the
+    original, so a legitimate colour→grey conversion scores ~0: only gross
+    damage registers, not the small colorimetric differences between
+    Ghostscript's conversion and Pillow's."""
+    from PIL import ImageChops
+    if got_l.size != ref_l.size:
+        got_l = got_l.resize(ref_l.size)
+    light = ref_l.point(lambda v: 255 if v > 160 else 0)
+    dark  = ref_l.point(lambda v: 255 if v < 90  else 0)
+    now_black = got_l.point(lambda v: 255 if v < 50  else 0)
+    now_blank = got_l.point(lambda v: 255 if v > 230 else 0)
+    total = ref_l.size[0] * ref_l.size[1] or 1
+    hit = lambda a, b: ImageChops.darker(a, b).histogram()[255] / total
+    return hit(light, now_black), hit(dark, now_blank)
+
+
+def _verify_pages_intact(src, cand, pages, report, label=""):
+    """Which of `pages` came out damaged in `cand` compared with `src`.
+
+    Ghostscript reports success and exits 0 while blacking out a transparency
+    group or a soft-masked image — the failure this exists to catch. It is
+    silent, it is invisible until the job is printed, and it is not something a
+    return code will ever tell us about, so every converted page is looked at.
+
+    Used by both colour conversions (greyscale and CMYK); `report` may be None.
+    Returns {page_index: reason}."""
+    bad = {}
+    for n, i in enumerate(sorted(pages), 1):
+        if report and n % 5 == 1:
+            report(tr('Prüfe Seite {p0} / {p1} …{p2}').format(
+                p0=n, p1=len(pages), p2=label))
+        try:
+            blacked, vanished = _conversion_damage(
+                _page_luma(src, i), _page_luma(cand, i))
+        except Exception:
+            # Could not check it — treat as damaged rather than assume it is
+            # fine. Silently shipping an unverified page is the whole problem.
+            logging.exception("grayscale: verification of page %d failed", i + 1)
+            bad[i] = "unverified"
+            continue
+        if blacked > _BLACKOUT_LIMIT:
+            bad[i] = f"{blacked * 100:.1f}% schwarz"
+        elif vanished > _BLACKOUT_LIMIT:
+            bad[i] = f"{vanished * 100:.1f}% verschwunden"
+    return bad
+
+
+def _grey_retry_page(gs_bin, src, index, report):
+    """Convert a single page on its own, for pages the full-document run damaged.
+
+    Isolating the page drops the surrounding transparency groups and shared
+    resources that trip Ghostscript up, so this often succeeds where the whole
+    document did not. Returns a one-page PDF path, or None."""
+    import subprocess, tempfile, pikepdf
+    one = grey = None
+    try:
+        fd, one = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+        fd, grey = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+        with pikepdf.open(src) as pdf, pikepdf.Pdf.new() as single:
+            single.pages.append(pdf.pages[index])
+            single.save(one)
+        r = subprocess.run(
+            [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
+             "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
+             "-dCompatibilityLevel=1.5", "-dAutoRotatePages=/None",
+             "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
+             "-dDownsampleMonoImages=false", "-o", grey, one],
+            capture_output=True, text=True, errors="replace", timeout=300)
+        if r.returncode != 0 or not os.path.getsize(grey):
+            return None
+        blacked, vanished = _conversion_damage(
+            _page_luma(src, index), _page_luma(grey, 0))
+        if blacked > _BLACKOUT_LIMIT or vanished > _BLACKOUT_LIMIT:
+            return None
+        return grey
+    except Exception:
+        logging.exception("grayscale: single-page retry for page %d failed", index + 1)
+        return None
+    finally:
+        if one:
+            try: os.remove(one)
+            except OSError: pass
+
+
 def _grey_vector(gs_bin, src, out, selected, n_pages, report):
     """Convert the `selected` page indices to greyscale LOSSLESSLY and
     VECTOR-BASED with Ghostscript (pdfwrite + ColorConversionStrategy=Gray):
@@ -1196,6 +1300,7 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
     import subprocess, tempfile, os, contextlib, pikepdf
     report(tr("Ghostscript: Graustufen-Konvertierung …"))
     fd, grey_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+    repaired = {}          # bound before the try: the finally cleans it up
     try:
         cmd = [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
                "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
@@ -1216,6 +1321,30 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
         if r.returncode != 0 or not os.path.exists(grey_tmp) or os.path.getsize(grey_tmp) == 0:
             raise RuntimeError((r.stderr or r.stdout or tr("Ghostscript-Fehler")).strip()[:400])
 
+        # ── Verify before anything is written ────────────────────────────────
+        # Ghostscript exits 0 while blacking out a transparency group or a
+        # soft-masked image. Nothing in the return code, the stderr or the page
+        # count reveals it, and the result only shows up on paper. So every
+        # converted page is compared against a greyscale render of the original
+        # and no page that failed that comparison is ever written out.
+        with pikepdf.open(src) as _s:
+            n = min(n_pages, len(_s.pages))
+        with pikepdf.open(grey_tmp) as _g:
+            n_grey = len(_g.pages)
+        convertible = {i for i in selected if i < n and i < n_grey}
+        report(tr("Konvertierte Seiten prüfen …"))
+        damaged = _verify_pages_intact(src, grey_tmp, convertible, report)
+
+        # Give the damaged ones a second chance on their own — isolating a page
+        # drops the surrounding transparency groups that trip Ghostscript up.
+        for i in sorted(damaged):
+            report(tr('Seite {p0} erneut versuchen …').format(p0=i + 1))
+            fixed = _grey_retry_page(gs_bin, src, i, report)
+            if fixed:
+                repaired[i] = fixed
+        for i in repaired:
+            damaged.pop(i, None)
+
         report(tr("Seiten zusammenstellen …"))
         # ExitStack closes whatever was opened even if the second open throws —
         # the old shape opened src_pdf outside the try, so a bad Ghostscript
@@ -1224,17 +1353,24 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
             src_pdf  = stack.enter_context(pikepdf.open(src))
             grey_pdf = stack.enter_context(pikepdf.open(grey_tmp))
             out_pdf  = stack.enter_context(pikepdf.Pdf.new())
+            fixed_pdfs = {i: stack.enter_context(pikepdf.open(p))
+                          for i, p in repaired.items()}
             # Never index past either document: the scan's page count can be
             # stale, and Ghostscript can return fewer pages than it was given.
-            n = min(n_pages, len(src_pdf.pages))
             n_conv = missing = 0
             for i in range(n):
                 if i in selected:
-                    if i < len(grey_pdf.pages):
+                    if i in fixed_pdfs:
+                        out_pdf.pages.append(fixed_pdfs[i].pages[0]); n_conv += 1
+                        continue
+                    if i in convertible and i not in damaged:
                         out_pdf.pages.append(grey_pdf.pages[i]); n_conv += 1
                         continue
-                    missing += 1        # fell through to the untouched original
-                out_pdf.pages.append(src_pdf.pages[i])   # keep original exactly
+                    if i not in damaged:
+                        missing += 1    # Ghostscript returned fewer pages
+                # Anything damaged, missing or unselected keeps the original
+                # exactly — a colour page is a nuisance, a black one is a reprint.
+                out_pdf.pages.append(src_pdf.pages[i])
             # Save beside the target and rename over it, so a failure part way
             # through cannot leave a half-written PDF for the app to open.
             tmp_fd, out_tmp = tempfile.mkstemp(
@@ -1254,8 +1390,22 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
             ).format(p0=missing)
         if n < n_pages:
             msg += "  — " + tr('Dokument hat nur {p0} Seiten.').format(p0=n)
+        if repaired:
+            msg += "  — " + tr(
+                '{p0} Seite(n) einzeln nachkonvertiert.').format(p0=len(repaired))
+        if damaged:
+            # Loud and specific: these pages are still in colour, on purpose,
+            # and the operator has to know which ones before the job goes out.
+            detail = ", ".join(f"{i + 1} ({why})" for i, why in sorted(damaged.items()))
+            msg += ("\n⚠  " + tr(
+                'ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt '
+                'und blieben deshalb unveraendert farbig: {p1}').format(
+                    p0=len(damaged), p1=detail))
         return out, msg
     finally:
+        for _p in repaired.values():
+            try: os.remove(_p)
+            except OSError: pass
         try: os.remove(grey_tmp)
         except OSError: pass
 
@@ -2400,27 +2550,56 @@ class ColourProfilePanel(BasePanel):
         icc = self._resolve_icc(candidates)
         prof_label = self.profile_combo.currentText().split(" — ")[0]
 
-        cmd = [
-            "gs",
-            "-o", out,
-            "-sDEVICE=pdfwrite",
-            "-dPDFSETTINGS=/prepress",
-            "-dEncodeColorImages=false",
-            "-dEncodeGrayImages=false",
-            "-dEncodeMonoImages=false",
-            "-sProcessColorModel=DeviceCMYK",
-            "-sColorConversionStrategy=CMYK",
-            "-sColorConversionStrategyForImages=CMYK",
-        ]
-        if icc:
-            cmd.append(f"-sOutputICCProfile={icc}")   # convert to this named CMYK space
-        cmd.append(src)
+        # Ghostscript writes to a temp file, never straight to `out`: the result
+        # is checked page by page first, exactly as the greyscale conversion is.
+        # pdfwrite can black out a transparency group while exiting 0, and for a
+        # prepress file nobody notices until it is on press.
+        import tempfile, contextlib, pikepdf
+        fd, cmyk_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+        try:
+            cmd = [
+                "gs",
+                "-o", cmyk_tmp,
+                "-sDEVICE=pdfwrite",
+                "-dPDFSETTINGS=/prepress",
+                "-dEncodeColorImages=false",
+                "-dEncodeGrayImages=false",
+                "-dEncodeMonoImages=false",
+                "-sProcessColorModel=DeviceCMYK",
+                "-sColorConversionStrategy=CMYK",
+                "-sColorConversionStrategyForImages=CMYK",
+            ]
+            if icc:
+                cmd.append(f"-sOutputICCProfile={icc}")   # convert to this named CMYK space
+            cmd.append(src)
 
-        r = sp.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
+            r = sp.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
 
-        if r.returncode != 0:
-            err = (r.stderr.strip() or r.stdout.strip())[:500]
-            raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=err))
+            if r.returncode != 0:
+                err = (r.stderr.strip() or r.stdout.strip() or f"exit {r.returncode}")[:500]
+                raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=err))
+            if not os.path.exists(cmyk_tmp) or os.path.getsize(cmyk_tmp) == 0:
+                raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
+
+            with pikepdf.open(src) as _s, pikepdf.open(cmyk_tmp) as _c:
+                n_ok = min(len(_s.pages), len(_c.pages))
+            damaged = _verify_pages_intact(src, cmyk_tmp, range(n_ok), None)
+            if damaged:
+                # Keep the untouched original for those pages rather than hand
+                # over a file with black rectangles in it.
+                with contextlib.ExitStack() as stack:
+                    s_pdf = stack.enter_context(pikepdf.open(src))
+                    c_pdf = stack.enter_context(pikepdf.open(cmyk_tmp))
+                    o_pdf = stack.enter_context(pikepdf.Pdf.new())
+                    for i in range(n_ok):
+                        o_pdf.pages.append(
+                            s_pdf.pages[i] if i in damaged else c_pdf.pages[i])
+                    o_pdf.save(out)
+            else:
+                shutil.copyfile(cmyk_tmp, out)
+        finally:
+            try: os.remove(cmyk_tmp)
+            except OSError: pass
 
         # Ergebnis verifizieren
         try:
@@ -2446,6 +2625,12 @@ class ColourProfilePanel(BasePanel):
             verify = tr("⚠  Einige RGB-Bilder noch vorhanden (eingebettete Profile).") if found_rgb else tr("✓  Farbraum erfolgreich in CMYK konvertiert.")
         except Exception:
             verify = tr("(Verifikation nicht möglich)")
+        if damaged:
+            verify += "\n⚠  " + tr(
+                'ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt '
+                'und blieben deshalb unveraendert: {p1}').format(
+                    p0=len(damaged),
+                    p1=", ".join(f"{i + 1} ({why})" for i, why in sorted(damaged.items())))
 
         if icc:
             prof_note = f"Profil: {prof_label}  ({os.path.basename(icc)})"

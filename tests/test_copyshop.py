@@ -928,6 +928,191 @@ def test_preflight_sees_a_tiny_colour_mark():
     assert "Farbseiten:" in report, f"the colour mark was missed:\n{report}"
 
 
+def _blackout_gs(inject_into_retry):
+    """Patch subprocess.run so Ghostscript "succeeds" but blacks out page 2.
+
+    That is what the real failure looks like from the outside: exit 0, empty
+    stderr, right page count, ruined page."""
+    import subprocess, pikepdf
+    real = subprocess.run
+    def faked(cmd, *a, **k):
+        r = real(cmd, *a, **k)
+        if "-o" in cmd:
+            outp = cmd[cmd.index("-o") + 1]
+            try:
+                with pikepdf.open(outp, allow_overwriting_input=True) as pdf:
+                    full = len(pdf.pages) >= 3
+                    if full or inject_into_retry:
+                        pdf.pages[1 if full else 0].contents_add(
+                            pikepdf.Stream(pdf, b"0 g 0 0 3000 3000 re f"))
+                        pdf.save(outp)
+            except Exception:
+                pass
+        return r
+    subprocess.run = faked
+    return lambda: setattr(subprocess, "run", real)
+
+
+def _grey_job():
+    from reportlab.lib import colors
+    p = os.path.join(_TMP, "grey_job.pdf")
+    c = canvas.Canvas(p, pagesize=A4)
+    for i in range(3):
+        c.setFillColor(colors.HexColor("#2277cc")); c.rect(40, 500, 500, 250, fill=1, stroke=0)
+        c.setFillGray(0); c.setFont("Helvetica", 30)
+        c.drawString(50, 430, f"CONTENT {i+1}"); c.showPage()
+    c.save()
+    return p
+
+
+def _mean_luma(path, i):
+    d = pdfium.PdfDocument(path)
+    im = d[i].render(scale=0.3).to_pil().convert("L"); d.close()
+    return sum(im.get_flattened_data()) / (im.size[0] * im.size[1])
+
+
+def test_greyscale_never_ships_a_blacked_out_page():
+    """Ghostscript can black out a transparency group while exiting 0 with an
+    empty stderr and the right page count — nothing in the process result says
+    anything is wrong, and it only shows on paper. Every converted page is
+    therefore compared against the original before it is written, and a damaged
+    one keeps its original content instead. A colour page is a nuisance; a black
+    one is a reprint."""
+    if not (shutil.which("gs") or shutil.which("gswin64c")):
+        return "SKIP (no ghostscript)"
+    gs = shutil.which("gs") or shutil.which("gswin64c")
+    src = _grey_job()
+
+    # The damaged page can be rescued by converting it on its own.
+    restore = _blackout_gs(inject_into_retry=False)
+    try:
+        out = os.path.join(_TMP, "grey_guard1.pdf")
+        res, msg = T._grey_vector(gs, src, out, {0, 1, 2}, 3, lambda m: None)
+    finally:
+        restore()
+    assert _mean_luma(res, 1) > 100, "a blacked-out page reached the output"
+    assert "nachkonvertiert" in msg, msg
+
+    # ...and when the retry is damaged too, the original page is kept and said so.
+    restore = _blackout_gs(inject_into_retry=True)
+    try:
+        out = os.path.join(_TMP, "grey_guard2.pdf")
+        res, msg = T._grey_vector(gs, src, out, {0, 1, 2}, 3, lambda m: None)
+    finally:
+        restore()
+    assert _mean_luma(res, 1) > 100, "a blacked-out page reached the output"
+    assert "ACHTUNG" in msg and "2 (" in msg, f"damage not reported: {msg}"
+    for i in (0, 2):
+        assert _mean_luma(res, i) > 100, f"page {i+1} damaged too"
+    return "rescued, then refused"
+
+
+def test_greyscale_verification_passes_normal_pages():
+    """The guard must not cost colour clicks by refusing pages that converted
+    perfectly well — dense text, saturated blocks, a photo, transparency, a dark
+    full-bleed cover and hairline anti-aliasing all have to come back clean."""
+    if not (shutil.which("gs") or shutil.which("gswin64c")):
+        return "SKIP (no ghostscript)"
+    from reportlab.lib import colors
+    from reportlab.lib.utils import ImageReader
+    gs = shutil.which("gs") or shutil.which("gswin64c")
+    W, H = A4
+    photo = os.path.join(_TMP, "grey_photo.png")
+    im = Image.new("RGB", (300, 220))
+    im.putdata([((x*7) % 256, (y*5) % 256, ((x+y)*3) % 256)
+                for y in range(220) for x in range(300)])
+    im.save(photo)
+
+    src = os.path.join(_TMP, "grey_real.pdf")
+    c = canvas.Canvas(src, pagesize=A4)
+    c.setFillGray(0); c.setFont("Helvetica", 11)
+    for i in range(45):
+        c.drawString(50, H-70-i*16, "Lorem ipsum dolor sit amet, consectetur. " * 2)
+    c.showPage()
+    for i, col in enumerate(["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#000080"]):
+        c.setFillColor(colors.HexColor(col)); c.rect(40, 700-i*130, 500, 110, fill=1, stroke=0)
+    c.showPage()
+    c.drawImage(ImageReader(photo), 60, 400, 470, 350); c.showPage()
+    c.setFillColor(colors.HexColor("#2277cc")); c.rect(40, 500, 500, 250, fill=1, stroke=0)
+    try: c.setFillAlpha(0.45)
+    except Exception: pass
+    c.setFillColor(colors.HexColor("#cc3322")); c.rect(150, 560, 300, 150, fill=1, stroke=0)
+    try: c.setFillAlpha(1)
+    except Exception: pass
+    c.showPage()
+    c.setFillColor(colors.HexColor("#101830")); c.rect(0, 0, W, H, fill=1, stroke=0)
+    c.setFillColor(colors.white); c.setFont("Helvetica-Bold", 40)
+    c.drawString(60, 400, "DARK COVER"); c.showPage()
+    c.setStrokeGray(0); c.setLineWidth(0.25)
+    for i in range(60): c.line(40, 100+i*11, 550, 100+i*11)
+    c.showPage(); c.save()
+
+    out = os.path.join(_TMP, "grey_real_out.pdf")
+    _, msg = T._grey_vector(gs, src, out, set(range(6)), 6, lambda m: None)
+    assert "ACHTUNG" not in msg, f"legitimate pages were refused:\n{msg}"
+    return "6 pages, no false positives"
+
+
+def test_cmyk_never_ships_a_blacked_out_page():
+    """The CMYK conversion runs the same Ghostscript colour machinery, so it
+    carries the same risk — and for a prepress file nobody notices until it is on
+    press. It used to write Ghostscript's output straight to the chosen path and
+    only check which colour spaces were named, never whether the page still
+    looked like the page."""
+    if not shutil.which("gs"):
+        return "SKIP (no ghostscript)"
+    src = _grey_job()
+    _open(src)
+    restore = _blackout_gs(inject_into_retry=True)
+    try:
+        p = T.ColourProfilePanel(); p.log.log = lambda *a, **k: None
+        out = os.path.join(_TMP, "cmyk_guard.pdf")
+        p.save_pdf = lambda *a, **k: out
+        p.open_result = lambda *a, **k: None
+        msg = p._run_action()
+    finally:
+        restore()
+    assert _mean_luma(out, 1) > 100, "a blacked-out page reached the CMYK output"
+    assert "ACHTUNG" in msg, f"damage not reported:\n{msg}"
+    return "refused"
+
+
+def test_print_blackout_check_tolerates_scaling():
+    """The print path scales, fits and re-centres, so its blackout check compares
+    mean brightness rather than pixels — a per-pixel diff would flag healthy
+    pages as damaged and quietly print everything unconverted."""
+    from reportlab.lib import colors
+    from tools.page_viewer import _gs_blacked_out
+    import pikepdf
+
+    def make(name, black_page=None, scaled=False):
+        p = os.path.join(_TMP, name)
+        c = canvas.Canvas(p, pagesize=A4)
+        for i in range(4):
+            if scaled:
+                c.saveState(); c.translate(20, 20); c.scale(0.93, 0.93)
+            c.setFillColor(colors.HexColor("#2277cc"))
+            c.rect(40, 500, 500, 250, fill=1, stroke=0)
+            c.setFillGray(0); c.setFont("Helvetica", 30)
+            c.drawString(50, 430, f"PAGE {i+1}")
+            if scaled: c.restoreState()
+            c.showPage()
+        c.save()
+        if black_page is not None:
+            with pikepdf.open(p, allow_overwriting_input=True) as pdf:
+                pdf.pages[black_page].contents_add(
+                    pikepdf.Stream(pdf, b"0 g 0 0 3000 3000 re f"))
+                pdf.save(p)
+        return p
+
+    before = make("pg_before.pdf")
+    assert _gs_blacked_out(before, make("pg_same.pdf")) == []
+    assert _gs_blacked_out(before, make("pg_fit.pdf", scaled=True)) == [], \
+        "scaling was mistaken for damage"
+    assert _gs_blacked_out(before, make("pg_bad.pdf", black_page=2)) == [2]
+    assert _gs_blacked_out(before, os.path.join(_TMP, "pg_missing.pdf")) is None
+
+
 def test_greyscale_vector():
     if not (shutil.which("gs") or shutil.which("gswin64c")):
         return "SKIP (no ghostscript)"
