@@ -995,25 +995,23 @@ class MainWindow(QMainWindow):
         self.show(); self.raise_(); self.activateWindow()
 
     def _open_multi(self, files):
-        from tools.multi_open import MultiOpenDialog
-        dlg = MultiOpenDialog(files, parent=self)
-        dlg.result_single.connect(self._load_single_files)
-        dlg.result_merged.connect(self._load_merged_file)
-        dlg.result_merge_tab.connect(self._start_merge_tab)
-        dlg.exec()
+        """Several files at once go straight to the merge preview, which offers
+        both "merge" and "open separately".
 
-    def _start_merge_tab(self, file_paths):
+        There used to be a modal chooser in front of it. Clicking its merge
+        button faster than the preview could be built queued the click again
+        and stacked up one merge tab per click, and confirming a second merge
+        while the first was still converting destroyed a running QThread —
+        an instant abort. The preview is the only step now."""
+        from tools.multi_open import classify
+        files = [f for f in files if os.path.isfile(f) and classify(f)]
+        if not files:
+            return
         self._switch(0)
-        self.viewer.show_merge_tab(file_paths)
-
-    def _load_single_files(self, pdf_paths):
-        self._switch(0)
-        for path in pdf_paths:
-            self.viewer.open_file(path)
-
-    def _load_merged_file(self, pdf_path):
-        self._switch(0)
-        self.viewer.open_file(pdf_path)
+        if len(files) == 1:
+            self.viewer.open_file(files[0])
+        else:
+            self.viewer.show_merge_tab(files)
 
     def _build(self):
         central = QWidget()

@@ -570,8 +570,11 @@ def test_merge_view_reorders_and_removes():
     assert g._selected == {1, 2}, "selection must follow the move"
     g.move_up()
     assert g.get_paths()[0] == paths[0], "move up"
-    # dragging one card of a multi-selection moves the whole selection
-    g2 = MergeOrderWidget(paths)._grid
+    # dragging one card of a multi-selection moves the whole selection.
+    # Hold the widget, not just its grid: nothing else keeps a merge view alive
+    # (the theme registry only weakrefs it), so dropping it here let the garbage
+    # collector delete the labels the grid's order_changed signal writes to.
+    mw2 = MergeOrderWidget(paths); g2 = mw2._grid
     g2._selected = {0, 1}; g2._last_selected = 0
     g2.handle_drop(0, 3, multi=True)
     assert g2.get_paths() == [paths[2], paths[0], paths[1], paths[3]], g2.get_paths()
@@ -605,6 +608,149 @@ def test_merge_tab_end_to_end():
     out = getattr(cur, "pdf_path", None)
     assert out and os.path.isfile(out), "no merged file"
     assert len(PdfReader(out).pages) == 7, f"{len(PdfReader(out).pages)} pages, expected 7"
+    vp.deleteLater()
+
+
+def _settle(vp, done, tries=600):
+    for _ in range(tries):
+        _app.processEvents(); time.sleep(0.02)
+        if done():
+            return True
+    return False
+
+
+def test_several_files_go_straight_to_the_preview():
+    """Picking several files must land in the sort/merge preview with no modal
+    chooser in front of it, and the preview must offer both actions. The
+    chooser was removed because clicking its merge button faster than the
+    preview could be built queued the click and opened one preview per click."""
+    from PyQt6.QtWidgets import QDialog
+    from tools.page_viewer import PageViewerPanel, MergeOrderWidget
+    import tools.multi_open as MO
+    assert not hasattr(MO, "MultiOpenDialog"), "the modal chooser is back"
+
+    class FakeWindow:
+        def __init__(self, vp): self.viewer = vp
+        def _switch(self, idx): pass
+    vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
+    paths = [FX["normal"], FX["single"], FX["framed"]]
+    MAIN.MainWindow._open_multi(FakeWindow(vp), paths)
+    _app.processEvents()
+
+    assert not [w for w in _app.topLevelWidgets()
+                if isinstance(w, QDialog) and w.isVisible()], "a popup appeared"
+    w = vp.tabs.currentWidget()
+    assert isinstance(w, MergeOrderWidget), "the preview did not open"
+    assert w._grid.get_paths() == paths
+    assert "Zusammenfuehren" in w._btn_go.text() and w._btn_go.isEnabled()
+    assert "Einzeln" in w._btn_single.text() and w._btn_single.isEnabled()
+
+    # a repeat request for the same files raises that tab, it does not stack
+    for _ in range(4):
+        MAIN.MainWindow._open_multi(FakeWindow(vp), paths)
+    _app.processEvents()
+    previews = [vp.tabs.widget(i) for i in range(vp.tabs.count())
+                if isinstance(vp.tabs.widget(i), MergeOrderWidget)]
+    assert len(previews) == 1, f"{len(previews)} preview tabs, expected 1"
+
+    # a single file still bypasses the preview entirely
+    MAIN.MainWindow._open_multi(FakeWindow(vp), [FX["color"]])
+    _app.processEvents()
+    assert getattr(vp.tabs.currentWidget(), "pdf_path", None) == FX["color"]
+    vp.deleteLater()
+
+
+def test_preview_opens_files_separately():
+    """"Einzeln oeffnen" converts the same way the merge does, but gives every
+    file its own tab."""
+    from tools.page_viewer import PageViewerPanel, MergeOrderWidget, PdfTab
+    paths = [FX["normal"], FX["single"], FX["image"]]   # 5 + 1 + 1(converted)
+    vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
+    vp.show_merge_tab(paths)
+    _app.processEvents()
+    w = vp.tabs.currentWidget()
+    w._do_open_separately()
+    assert _settle(vp, lambda: not any(isinstance(vp.tabs.widget(i), MergeOrderWidget)
+                                       for i in range(vp.tabs.count()))), \
+        "open-separately never finished"
+    opened = [vp.tabs.widget(i).pdf_path for i in range(vp.tabs.count())
+              if isinstance(vp.tabs.widget(i), PdfTab)]
+    assert len(opened) == 3, f"{len(opened)} tabs, expected 3"
+    assert opened[0] == FX["normal"] and opened[1] == FX["single"]
+    assert opened[2].endswith(".pdf") and os.path.isfile(opened[2]), \
+        "the image was not converted"
+    for p in opened:
+        assert len(PdfReader(p, strict=False).pages) >= 1
+    vp.deleteLater()
+
+
+def test_preview_reports_files_it_could_not_convert():
+    """A file that fails to convert is dropped from the merge. The user has to
+    be told which one, or they get a document quietly missing pages — the
+    removed chooser dialog was the only thing that ever showed those errors."""
+    from PyQt6.QtWidgets import QMessageBox
+    from tools.page_viewer import PageViewerPanel, MergeOrderWidget
+    broken = os.path.join(_TMP, "broken.png")
+    with open(broken, "wb") as f:
+        f.write(b"this is not an image")
+    paths = [FX["normal"], broken, FX["single"]]
+
+    vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
+    vp.show_merge_tab(paths)
+    _app.processEvents()
+    warned = []
+    orig = QMessageBox.warning
+    QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a))
+    try:
+        vp.tabs.currentWidget()._confirm()
+        assert _settle(vp, lambda: not any(isinstance(vp.tabs.widget(i), MergeOrderWidget)
+                                           for i in range(vp.tabs.count()))), \
+            "the merge never completed"
+    finally:
+        QMessageBox.warning = orig
+    out = vp.tabs.currentWidget().pdf_path
+    assert len(PdfReader(out, strict=False).pages) == 6, "the good files must still merge"
+    assert warned, "the unconvertible file was dropped without a word"
+    assert "broken.png" in " ".join(str(x) for x in warned[0]), warned[0]
+    vp.deleteLater()
+
+
+def test_preview_survives_fast_clicks():
+    """Hammering the preview must not start a second job behind the first.
+
+    Two conversions at once used to overwrite the panel's single worker
+    attribute, dropping the last reference to a QThread that was still running
+    — which Qt answers by aborting the process. Two previews converting side by
+    side must both finish, each into its own output."""
+    from tools.page_viewer import PageViewerPanel, MergeOrderWidget, PdfTab
+    vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
+    set_a = [FX["normal"], FX["image"]]      # the image forces real work
+    set_b = [FX["single"], FX["framed"], FX["image"]]
+    vp.show_merge_tab(set_a); vp.show_merge_tab(set_b)
+    previews = [vp.tabs.widget(i) for i in range(vp.tabs.count())
+                if isinstance(vp.tabs.widget(i), MergeOrderWidget)]
+    assert len(previews) == 2, "different file sets each need their own tab"
+    a, b = previews
+    assert a.tmp_dir != b.tmp_dir, "previews must not share a conversion dir"
+
+    a._confirm()
+    a._confirm(); a._do_open_separately(); a._do_cancel()   # all ignored: busy
+    assert len(vp._workers) == 1, f"{len(vp._workers)} workers after spamming one tab"
+    assert not a._btn_go.isEnabled() and not a._btn_single.isEnabled()
+    b._confirm()                                            # second job, in parallel
+    assert len(vp._workers) == 2, "the running worker was dropped"
+
+    assert _settle(vp, lambda: not any(isinstance(vp.tabs.widget(i), MergeOrderWidget)
+                                       for i in range(vp.tabs.count()))), \
+        "the merges never completed"
+    outs = [vp.tabs.widget(i).pdf_path for i in range(vp.tabs.count())
+            if isinstance(vp.tabs.widget(i), PdfTab)]
+    assert len(outs) == 2, f"{len(outs)} merged tabs, expected 2"
+    assert len(set(outs)) == 2, "both merges wrote to the same file"
+    pages = sorted(len(PdfReader(o, strict=False).pages) for o in outs)
+    assert pages == [3, 6], f"merged page counts {pages}, expected [3, 6]"
+    _settle(vp, lambda: not vp._workers, tries=100)
+    assert not vp._workers, "finished workers were never released"
     vp.deleteLater()
 
 
@@ -729,7 +875,7 @@ def test_single_instance_forwards_files():
 
 
 def test_open_paths_routes_by_count():
-    """One file goes straight to a tab, several go to the open/merge chooser.
+    """One file goes straight to a tab, several go to the sort/merge preview.
     Driven against the real method with a stand-in window, so it stays
     deterministic (a second MainWindow in this process is not)."""
     class FakeWindow:

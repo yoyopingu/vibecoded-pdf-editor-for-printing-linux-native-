@@ -5490,10 +5490,14 @@ class FileGrid(QWidget):
 
 class MergeOrderWidget(QWidget):
     merge_confirmed = pyqtSignal(list)
+    open_separately = pyqtSignal(list)
     cancelled       = pyqtSignal()
 
     def __init__(self, file_paths, parent=None):
         super().__init__(parent)
+        self._busy        = False
+        self.source_paths = list(file_paths)   # what the tab was opened with
+        self.tmp_dir      = None               # set by PageViewerPanel
         self._setup(file_paths)
 
     def _sep(self):
@@ -5534,7 +5538,7 @@ class MergeOrderWidget(QWidget):
         self._title_w = QWidget(); self._title_w.setObjectName("mergeTitleW")
         self._title_w.setFixedHeight(36)
         tl = QHBoxLayout(self._title_w); tl.setContentsMargins(10, 0, 10, 0)
-        self._title_lbl = QLabel(tr("Dateien zusammenfuehren"))
+        self._title_lbl = QLabel(tr("Dateien oeffnen"))
         tl.addWidget(self._title_lbl)
         ol.addWidget(self._title_w)
 
@@ -5593,24 +5597,37 @@ class MergeOrderWidget(QWidget):
         self._inf_type = QLabel(""); self._inf_pages = QLabel(""); self._inf_size = QLabel("")
         for w in [self._inf_type, self._inf_pages, self._inf_size]:
             w.setObjectName("dimLabel"); ll.addWidget(w)
-        ll.addWidget(self._sep())
+        ll.addStretch()
 
-        self._section(ll, tr("ZUSAMMENFUEHREN"))
+        # ── The two ways out, pinned below the scroll area ───────────────
+        # These are what the view exists for, so they must never be scrolled
+        # out of reach: at the bottom of the scrolling column they sat below
+        # the fold on a standard window and "Zusammenfuehren" was invisible
+        # until the sidebar was scrolled.
+        self._actions_w = QWidget(); self._actions_w.setObjectName("mergeActionsW")
+        al = QVBoxLayout(self._actions_w)
+        al.setContentsMargins(10, 8, 22, 10); al.setSpacing(5)
+
+        self._section(al, tr("OEFFNEN"))
         self._total = QLabel("")
         self._total.setWordWrap(True)
         self._total.setObjectName("dimLabel")
-        ll.addWidget(self._total)
+        al.addWidget(self._total)
         self._btn_go = QPushButton(tr("  Zusammenfuehren"))
         self._btn_go.setObjectName("actionBtn")
+        self._btn_go.setMinimumHeight(28)
         self._btn_go.clicked.connect(self._confirm)
-        ll.addWidget(self._btn_go)
-        ll.addStretch()
+        al.addWidget(self._btn_go)
+        self._btn_single = self._btn(tr("  Einzeln oeffnen"), self._do_open_separately)
+        al.addWidget(self._btn_single)
+        self._btn_cancel = self._btn(tr("✗  Abbrechen"), self._do_cancel)
+        al.addWidget(self._btn_cancel)
 
-        ll.addWidget(self._btn(tr("✗  Abbrechen"), self.cancelled.emit))
         self.status = QLabel(tr("Drag & Drop zum Umsortieren  ·  Strg/Shift zum Mehrfachauswaehlen"))
         self.status.setWordWrap(True)
         self.status.setStyleSheet("font-size:10px;min-height:32px;background:transparent;")
-        ll.addWidget(self.status)
+        al.addWidget(self.status)
+        ol.addWidget(self._actions_w)
         splitter.addWidget(self._left_w)
 
         # ── Rechts: FileGrid ─────────────────────────────────────────
@@ -5653,6 +5670,9 @@ class MergeOrderWidget(QWidget):
             f"QScrollArea{{background:{t['sidebar_bg']};border:none;}}")
         self._left_content.setStyleSheet(
             f"QWidget#mergeLeftContent{{background:{t['sidebar_bg']};}}")
+        self._actions_w.setStyleSheet(
+            f"QWidget#mergeActionsW{{background:{t['sidebar_bg']};"
+            f"border-top:1px solid {t['border']};}}")
         self._right_w.setStyleSheet(
             f"QWidget#mergeRightW{{background:{t['viewer_bg']};}}")
         self._scroll.setStyleSheet(
@@ -5686,6 +5706,7 @@ class MergeOrderWidget(QWidget):
         if n_conv: txt += tr("  —  {p0} zu konvertieren").format(p0=n_conv)
         self._total.setText(txt)
         self._btn_go.setText(tr('  Zusammenfuehren  ({p0})').format(p0=n))
+        self._btn_single.setText(tr('  Einzeln oeffnen  ({p0})').format(p0=n))
 
     def _apply_sel_edit(self):
         positions = _parse_positions(self.sel_edit.text(), len(self._grid.get_paths()))
@@ -5740,11 +5761,39 @@ class MergeOrderWidget(QWidget):
         self._grid.remove_selected()
         self._on_order_changed()
 
+    def set_busy(self, busy):
+        """Latch the view while a conversion runs. Every button that starts or
+        aborts work goes dead, so a double click — or a click on the second
+        button while the first one's work is in flight — cannot start a second
+        run behind the first one."""
+        self._busy = bool(busy)
+        for b in (self._btn_go, self._btn_single, self._btn_cancel):
+            b.setEnabled(not self._busy)
+
     def _confirm(self):
+        if self._busy:
+            return
         paths = self._grid.get_paths()
         import logging; logging.debug(f"MergeOrderWidget._confirm: {paths}")
-        if paths:
-            self.merge_confirmed.emit(paths)
+        if not paths:
+            return
+        self.set_busy(True)
+        self.merge_confirmed.emit(paths)
+
+    def _do_open_separately(self):
+        if self._busy:
+            return
+        paths = self._grid.get_paths()
+        if not paths:
+            return
+        self.set_busy(True)
+        self.open_separately.emit(paths)
+
+    def _do_cancel(self):
+        if self._busy:
+            return
+        self.set_busy(True)      # one cancel only — the tab is about to go
+        self.cancelled.emit()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -5899,6 +5948,7 @@ class PageViewerPanel(QWidget):
         self.hide_sidebar       = None   # lambda: sidebar.setVisible(False)
         self.show_sidebar       = None   # lambda: sidebar.setVisible(True)
         self._pre_manage_idx    = None   # gespeicherter Stack-Index vor Manage-Modus
+        self._workers           = set()  # running ConvertWorkers, see _keep_worker
         self._setup_ui()
         AppState.get().result_ready.connect(self._open_result_tab)
         # Globaler Tab/Escape-Filter
@@ -6213,6 +6263,12 @@ class PageViewerPanel(QWidget):
         if isinstance(w, PdfTab):
             _ThumbnailCache.evict_tab(w.pdf_path)
             _FullPageCache.evict_tab(w.pdf_path)
+        elif isinstance(w, MergeOrderWidget):
+            # Closing the preview discards its conversions — unless one is still
+            # running, in which case the worker is still writing in there.
+            if w.tmp_dir and not w._busy:
+                try: shutil.rmtree(w.tmp_dir, ignore_errors=True)
+                except Exception: pass
         self.tabs.removeTab(idx)
         self.tabs_changed.emit()
 
@@ -6236,37 +6292,73 @@ class PageViewerPanel(QWidget):
         self._toggle_manage()
 
     def show_merge_tab(self, file_paths):
-        """Zeigt MergeOrderWidget als Tab — gleicher Stil wie Seitenverwaltung."""
+        """Preview for several picked files, shown as a tab in the same style as
+        the page manager: sort them, then either merge them into one document or
+        open them as separate tabs."""
         import tempfile, logging
+        file_paths = [p for p in file_paths if os.path.isfile(p)]
+        if not file_paths:
+            return
         logging.debug(f"show_merge_tab: {len(file_paths)} Dateien: {file_paths}")
-        widget = MergeOrderWidget(file_paths)
-        idx = self.tabs.addTab(widget, tr("  🔗  Zusammenfuehren  "))
+
+        # A repeat call with the same files is a double click or a re-sent open
+        # request, not a second job. Raise the tab that is already open instead
+        # of stacking an identical one behind it — that stack was how a fast
+        # click ended up merging twice at once.
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if isinstance(w, MergeOrderWidget) and w.source_paths == file_paths:
+                self.tabs.setCurrentIndex(i)
+                return
+
+        widget = MergeOrderWidget(file_paths)   # records file_paths as source_paths
+        # One conversion directory per tab. A single panel-wide one was wiped by
+        # whichever merge tab was cancelled first, taking the output another tab
+        # was still using with it.
+        widget.tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
+        idx = self.tabs.addTab(widget, tr("  📂  Dateien oeffnen  "))
         self.tabs.setCurrentIndex(idx)
         self._manage_btn.setEnabled(False)
         self._print_btn.setEnabled(False)
-        self._viewer_info.setText(tr("Dateien sortieren und zusammenfuehren"))
-        self._tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
+        self._viewer_info.setText(tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
 
         def _on_confirmed(paths):
             import logging
             logging.debug(f"_on_confirmed empfangen: {len(paths)} Dateien")
             self._do_convert_and_merge(paths, widget)
 
+        def _on_separately(paths):
+            self._do_convert_and_open(paths, widget)
+
         def _on_cancelled():
             wi = self.tabs.indexOf(widget)
             if wi >= 0:
                 self.tabs.removeTab(wi)
             self._update_toolbar()
-            try: shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            try: shutil.rmtree(widget.tmp_dir, ignore_errors=True)
             except Exception: pass
 
         widget.merge_confirmed.connect(_on_confirmed)
+        widget.open_separately.connect(_on_separately)
         widget.cancelled.connect(_on_cancelled)
 
-    def _do_convert_and_merge(self, file_paths, merge_widget):
-        """Konvertiert Dateien und fuegt sie zusammen."""
-        import logging
-        logging.debug(f"_do_convert_and_merge: {len(file_paths)} Dateien")
+    def _keep_worker(self, worker):
+        """Hold a reference to a running ConvertWorker until the thread has
+        really stopped.
+
+        This used to be a single `self._merge_worker = worker` attribute. A
+        second merge started while the first was converting overwrote it,
+        dropped the last reference to a QThread that was still inside run(),
+        and Qt answers that by aborting the process."""
+        self._workers.add(worker)
+        # QThread.finished — not the worker's own result signal, which fires
+        # while the thread is still winding down.
+        worker.finished.connect(lambda: self._workers.discard(worker))
+
+    def _start_conversion(self, file_paths, merge_widget, on_done):
+        """Convert the picked files to PDF in the merge tab's own temp dir and
+        hand the results to `on_done(pdfs, failures)`. Shared by merge and
+        open-separately."""
         from tools.multi_open import ConvertWorker
         self._viewer_info.setText(tr("Konvertiere Dateien..."))
         # Tab-Titel via Widget-Referenz setzen (sicher gegen Index-Shifts)
@@ -6274,19 +6366,53 @@ class PageViewerPanel(QWidget):
         if wi >= 0:
             self.tabs.setTabText(wi, tr("  ⏳  Konvertiere...  "))
 
-        worker = ConvertWorker(file_paths, self._tmp_dir)
-        self._merge_worker = worker
+        worker = ConvertWorker(file_paths, merge_widget.tmp_dir)
+        self._keep_worker(worker)
+        # A file that cannot be converted is dropped from the result. Collect
+        # those so the user is told which ones are missing — the chooser dialog
+        # used to show them and nothing else does. Both signals come from the
+        # same worker, so every error has arrived before `converted` does.
+        failures = []
+        worker.error.connect(
+            lambda i, msg: failures.append((file_paths[i], msg))
+            if 0 <= i < len(file_paths) else None)
+        worker.progress.connect(lambda i, text: self._viewer_info.setText(text))
+        worker.converted.connect(lambda pdfs: on_done(pdfs, failures))
+        worker.start()
 
-        def _on_progress(i, text):
-            self._viewer_info.setText(text)
+    def _report_conversion_failures(self, failures):
+        """Never let files vanish from a merge in silence."""
+        if not failures:
+            return
+        import logging
+        from PyQt6.QtWidgets import QMessageBox
+        detail = "\n".join(f"{os.path.basename(p)}  —  {m}" for p, m in failures)
+        logging.error("conversion failed:\n%s", detail)
+        AppState.get().status_message.emit(
+            tr('{p0} Datei(en) konnten nicht konvertiert werden').format(p0=len(failures)))
+        QMessageBox.warning(
+            self, tr("Nicht konvertierte Dateien"),
+            tr("Diese Dateien fehlen im Ergebnis:\n\n{p0}").format(p0=detail))
 
-        def _on_done(pdfs):
+    def _conversion_failed(self, merge_widget, failures=()):
+        """No file survived conversion — put the tab back the way it was so the
+        user can change the list and try again instead of being stuck."""
+        self._viewer_info.setText(tr("Fehler: Keine Dateien konvertiert"))
+        wi = self.tabs.indexOf(merge_widget)
+        if wi >= 0:
+            self.tabs.setTabText(wi, tr("  ✗  Fehler  "))
+        merge_widget.set_busy(False)
+        self._report_conversion_failures(failures)
+
+    def _do_convert_and_merge(self, file_paths, merge_widget):
+        """Konvertiert Dateien und fuegt sie zusammen."""
+        import logging
+        logging.debug(f"_do_convert_and_merge: {len(file_paths)} Dateien")
+
+        def _on_done(pdfs, failures):
             valid = [p for p in pdfs if p]
-            wi2 = self.tabs.indexOf(merge_widget)
             if not valid:
-                self._viewer_info.setText(tr("Fehler: Keine Dateien konvertiert"))
-                if wi2 >= 0:
-                    self.tabs.setTabText(wi2, tr("  ✗  Fehler  "))
+                self._conversion_failed(merge_widget, failures)
                 return
             try:
                 from pypdf import PdfWriter, PdfReader
@@ -6294,19 +6420,48 @@ class PageViewerPanel(QWidget):
                 for path in valid:
                     for page in PdfReader(path, strict=False).pages:
                         writer.add_page(page)
-                out = os.path.join(self._tmp_dir, "zusammengefuehrt.pdf")
+                out = os.path.join(merge_widget.tmp_dir, "zusammengefuehrt.pdf")
                 with open(out, "wb") as f:
                     writer.write(f)
-                if wi2 >= 0:
-                    self.tabs.removeTab(wi2)
-                self._open_result_tab(out, tr("Zusammengefuehrt"))
-                self._update_toolbar()
             except Exception as e:
+                logging.exception("merge failed")
                 self._viewer_info.setText(tr('Fehler: {p0}').format(p0=e))
+                merge_widget.set_busy(False)
+                return
+            wi = self.tabs.indexOf(merge_widget)
+            if wi >= 0:
+                self.tabs.removeTab(wi)
+            self._open_result_tab(out, tr("Zusammengefuehrt"))
+            self._update_toolbar()
+            self._report_conversion_failures(failures)
 
-        worker.progress.connect(_on_progress)
-        worker.finished.connect(_on_done)
-        worker.start()
+        self._start_conversion(file_paths, merge_widget, _on_done)
+
+    def _do_convert_and_open(self, file_paths, merge_widget):
+        """"Einzeln oeffnen" — same conversion as the merge, but every file
+        becomes its own tab instead of one combined document."""
+        import logging
+        logging.debug(f"_do_convert_and_open: {len(file_paths)} Dateien")
+
+        def _on_done(pdfs, failures):
+            valid = [p for p in pdfs if p]
+            if not valid:
+                self._conversion_failed(merge_widget, failures)
+                return
+            wi = self.tabs.indexOf(merge_widget)
+            if wi >= 0:
+                self.tabs.removeTab(wi)
+            failures = list(failures)
+            for path in valid:
+                try:
+                    self._open(path)
+                except Exception as e:
+                    logging.exception("open failed: %s", path)
+                    failures.append((path, str(e)))
+            self._update_toolbar()
+            self._report_conversion_failures(failures)
+
+        self._start_conversion(file_paths, merge_widget, _on_done)
 
     def _update_toolbar(self):
         tab = self._current()
@@ -6403,7 +6558,7 @@ class PageViewerPanel(QWidget):
         elif isinstance(w, MergeOrderWidget):
             self._manage_btn.setEnabled(False)
             self._print_btn.setEnabled(False)
-            self._viewer_info.setText(tr("Dateien sortieren und zusammenfuehren"))
+            self._viewer_info.setText(tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
         else:
             self._manage_btn.setEnabled(False)
             self._print_btn.setEnabled(False)
