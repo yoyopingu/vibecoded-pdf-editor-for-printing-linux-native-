@@ -623,6 +623,158 @@ def _settle(vp, done, tries=600):
     return False
 
 
+def _spin(n=60, delay=0.02):
+    for _ in range(n):
+        _app.processEvents(); time.sleep(delay)
+
+
+def _open_in_manage(path):
+    """Open `path` in a viewer panel and switch it into the page manager.
+    Returns (viewer, tab, manage_panel)."""
+    from tools.page_viewer import PageViewerPanel
+    vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
+    vp.open_file(path)
+    _spin(60, 0.01)
+    tab = vp.tabs.currentWidget()
+    vp._toggle_manage()
+    _spin(40, 0.01)
+    # Not findChild(): manage mode reparents the panel out of the tab and into
+    # the viewer's splitter. The tab keeps its own reference.
+    panel = tab._manage_panel
+    assert panel is not None and tab.in_manage_mode(), "page manager did not open"
+    return vp, tab, panel
+
+
+def test_inserted_blank_page_renders_in_the_preview():
+    """"Leere Seite einfuegen" rebuilds the PDF into a temp file. The single-page
+    view has to follow it there — it used to keep the old, shorter path, so the
+    blank page's index was past the end of the file it was rendering from and
+    the preview showed the blue "render failed" fallback at a bogus size."""
+    vp, tab, panel = _open_in_manage(FX["normal"])          # 5 pages
+    before = len(tab.model.order)
+    tab.model.selected = {tab.model.order[1]}
+    panel._insert_blank()
+    _spin(40, 0.01)
+    assert len(tab.model.order) == before + 1, panel.status.text()
+    assert tab.pdf_path == panel.pdf_path, \
+        "the tab still points at the pre-insert file"
+
+    vp._toggle_manage()                                      # back to preview
+    _spin(40, 0.01)
+    sv = tab.single
+    sv._current = 2                                          # the blank
+    sv._render()
+    _settle(vp, lambda: sv._page_w_pt > 0, tries=200)
+    assert sv._page_w_pt > 0 and sv._page_h_pt > 0, \
+        f"preview has no page size ({sv._page_w_pt}x{sv._page_h_pt}) — render failed"
+    # A4-ish, like the page it was inserted after — not a fallback of any size
+    assert 500 < sv._page_w_pt < 700 and 700 < sv._page_h_pt < 950, \
+        f"blank page is {sv._page_w_pt}x{sv._page_h_pt} pt"
+    img = sv._last_pm.toImage()
+    mid = img.pixel(img.width()//2, img.height()//2)
+    assert (mid & 0xFFFFFF) == 0xFFFFFF, \
+        f"blank page is not white (got {hex(mid)}) — this is the fallback fill"
+    vp.deleteLater()
+
+
+def test_save_as_honours_the_page_selection():
+    """Ctrl+Shift+S with pages picked in the manager saves those pages, not the
+    whole document. A selection left over from an earlier visit must not
+    truncate a normal Save As, and a full Save As must re-base the model onto
+    the file it just wrote."""
+    from PyQt6.QtWidgets import QFileDialog
+    out_dir = tempfile.mkdtemp(dir=_TMP)
+    def _pick(path):
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (path, ""))
+
+    vp, tab, panel = _open_in_manage(FX["normal"])           # 5 pages
+    assert tab.in_manage_mode()
+    picked = [tab.model.order[1], tab.model.order[3]]
+    tab.model.selected = set(picked)
+    sel = os.path.join(out_dir, "sel.pdf")
+    _pick(sel); vp._save_as_current(); _spin(20, 0.01)
+    assert len(PdfReader(sel, strict=False).pages) == 2, \
+        f"{len(PdfReader(sel).pages)} pages saved, expected the 2 picked"
+    assert tab.pdf_path == FX["normal"], \
+        "an export of part of the document must not retarget the tab"
+
+    # Leaving the manager makes the stale selection irrelevant again.
+    vp._toggle_manage(); _spin(20, 0.01)
+    assert not tab.in_manage_mode()
+    tab.model.order = list(reversed(tab.model.order))   # reorder, so a stale
+    full = os.path.join(out_dir, "full.pdf")            # index mapping shows up
+    _pick(full); vp._save_as_current(); _spin(20, 0.01)
+    assert len(PdfReader(full, strict=False).pages) == 5, \
+        "a stale selection truncated an ordinary Save As"
+    assert tab.pdf_path == full, "Save As did not retarget the tab"
+
+    # The model must resolve to exactly what is in the file it now points at.
+    on_disk = _page_labels(full)
+    resolved = []
+    for uid in tab.model.order:
+        p, o = tab.model.page_source(uid, tab.pdf_path)
+        resolved.append(_page_labels(p)[o])
+    assert resolved == on_disk, f"model {resolved} vs file {on_disk} after Save As"
+    assert resolved == list(reversed(["PAGE 1", "PAGE 2", "PAGE 3", "PAGE 4", "PAGE 5"])), \
+        resolved
+    vp.deleteLater()
+
+
+def _page_labels(path):
+    """The visible text of each page, used to tell pages apart by identity."""
+    doc = pdfium.PdfDocument(path)
+    try:
+        return [doc[i].get_textpage().get_text_range().strip()
+                for i in range(len(doc))]
+    finally:
+        doc.close()
+
+
+def test_drop_marker_is_a_slim_page_slot():
+    """The drag-drop indicator is a slim rounded slot the height of a page card,
+    not the barbed line that used to read as a crooked arrow. Measured by
+    diffing a render with and without the marker, so only the marker's own
+    pixels are inspected."""
+    from tools.page_viewer import PageGrid, CARD_H
+    from tools.page_viewer import PageModel as _PM
+    grid = PageGrid(_PM(6), FX["normal"])
+    grid.resize(700, 500); grid.show()
+    _spin(40, 0.02)
+
+    def _shot():
+        return grid.grab().toImage()
+    plain = _shot()
+    grid._drop_indicator = 3
+    grid.update(); _spin(15, 0.01)
+    marked = _shot()
+
+    rows = {}
+    for y in range(min(plain.height(), marked.height())):
+        xs = [x for x in range(min(plain.width(), marked.width()))
+              if plain.pixel(x, y) != marked.pixel(x, y)]
+        if xs:
+            rows[y] = (min(xs), max(xs))
+    assert rows, "the drop marker painted nothing"
+
+    ys = sorted(rows)
+    height = ys[-1] - ys[0] + 1
+    widths = [hi - lo + 1 for lo, hi in rows.values()]
+    # Slim: a narrow slot, not a full card and not a 3px hairline
+    assert 5 <= max(widths) <= 24, f"marker is {max(widths)}px across"
+    # Page-shaped: as tall as the card it slots beside
+    assert abs(height - CARD_H) <= 16, f"marker is {height}px tall, card is {CARD_H}"
+    # Blob, not arrow: no flaring barbs — the width stays even down its length
+    core = [w for y, w in zip(ys, (rows[y][1] - rows[y][0] + 1 for y in ys))
+            if ys[0] + 3 <= y <= ys[-1] - 3]
+    assert core and max(core) - min(core) <= 3, \
+        f"width varies {min(core)}..{max(core)} along the marker — that is an arrow"
+    # And it is the accent colour
+    y_mid = ys[len(ys)//2]; lo, hi = rows[y_mid]
+    px = marked.pixel((lo + hi)//2, y_mid)
+    r, g, b = (px >> 16) & 0xFF, (px >> 8) & 0xFF, px & 0xFF
+    assert b > r and b > 100, f"marker colour {hex(px)} is not blue"
+
+
 def test_several_files_go_straight_to_the_preview():
     """Picking several files must land in the sort/merge preview with no modal
     chooser in front of it, and the preview must offer both actions. The

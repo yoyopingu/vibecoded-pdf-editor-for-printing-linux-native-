@@ -402,6 +402,8 @@ _EN: dict[str, str] = {
     "  ✗  Fehler  ": "  ✗  Error  ",
     "Konvertiere Dateien...": "Converting files...",
     "Fehler: Keine Dateien konvertiert": "Error: no files converted",
+    "Auswahl speichern als ({p0} Seiten)": "Save selection as ({p0} pages)",
+    "{p0} Seite(n) gespeichert als: {p1}": "{p0} page(s) saved as: {p1}",
     "Nicht konvertierte Dateien": "Files that were not converted",
     "Diese Dateien fehlen im Ergebnis:\n\n{p0}":
         "These files are missing from the result:\n\n{p0}",

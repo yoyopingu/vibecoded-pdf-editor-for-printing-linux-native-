@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QAbstractItemView
 )
 from PyQt6.QtCore import (Qt, QSize, pyqtSignal, QMimeData, QObject, QEvent,
-                           QTimer, QRect, QPoint)
+                           QTimer, QRect, QRectF, QPoint)
 from PyQt6.QtGui import (
     QPixmap, QImage, QColor, QDrag, QPainter, QPen, QIcon,
     QKeySequence, QShortcut, QTransform, QBrush, QCursor, QPageLayout
@@ -670,6 +670,36 @@ _TOP_BTN_W = 132
 # zoom cluster). They were 34×26 and 28×22 — near-identical but not quite, which
 # is exactly the kind of mismatch that reads as sloppy.
 _PREV_BTN = (34, 26)
+
+# ── Drop marker ──────────────────────────────────────────────────────────────
+# Where a dragged page or file will land. Drawn as a slim rounded blue slot the
+# size of a page card's silhouette, with a soft halo behind it — it reads as the
+# outline of the pages being carried sliding into the gap. It used to be a line
+# with arrowheads barbed onto both ends, which looked like a crooked arrow
+# rather than a page.
+_DROP_THICKNESS = 7      # px across the slim axis
+_DROP_HALO      = 4      # px of glow around the body
+
+def _paint_drop_marker(p, x, y, length, horizontal=False):
+    """Paint the drop slot. (x, y) is its top-left; `length` runs along the
+    card edge it marks — the card height for a column of cards, the card width
+    for a row."""
+    w, h = (length, _DROP_THICKNESS) if horizontal else (_DROP_THICKNESS, length)
+    body = QRectF(x, y, w, h)
+    acc  = QColor(_TV['acc'])
+    halo = QColor(acc); halo.setAlpha(70)
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(halo)
+    glow = body.adjusted(-_DROP_HALO, -_DROP_HALO, _DROP_HALO, _DROP_HALO)
+    r_glow = min(glow.width(), glow.height()) / 2.0
+    p.drawRoundedRect(glow, r_glow, r_glow)
+    p.setBrush(acc)
+    r_body = min(body.width(), body.height()) / 2.0
+    p.drawRoundedRect(body, r_body, r_body)
+    p.restore()
+
 
 import weakref as _weakref
 _theme_panels: list = []      # weakrefs to panels that have _apply_theme()
@@ -2250,7 +2280,6 @@ class PageGrid(QWidget):
         if self._drop_indicator < 0 or not self._cards: return
         pr = self._per_row()
         p  = QPainter(self)
-        pen = QPen(QColor(_TV['acc']), 3); p.setPen(pen)
         if pr == 1:
             tops = self._card_tops()
             idx  = min(self._drop_indicator, len(tops))
@@ -2258,21 +2287,16 @@ class PageGrid(QWidget):
                 y = tops[idx] - GAP//2
             else:
                 y = tops[-1] + self._cards[-1].height() + GAP//2
-            x0 = MARGIN; x1 = MARGIN + self._cards[0].width()
-            p.drawLine(x0, y, x1, y)
-            p.drawLine(x0+6, y-5, x0, y); p.drawLine(x0+6, y+5, x0, y)
-            p.drawLine(x1-6, y-5, x1, y); p.drawLine(x1-6, y+5, x1, y)
+            _paint_drop_marker(p, MARGIN, y - _DROP_THICKNESS/2.0,
+                               self._cards[0].width(), horizontal=True)
         else:
             cell_w = self._card_w+16+GAP
             cell_h = self._card_h+28+GAP
             pos    = min(self._drop_indicator, len(self._cards))
             col    = pos % pr; row = pos // pr
             x      = MARGIN + col*cell_w - GAP//2
-            y0     = MARGIN + row*cell_h - 4
-            y1     = y0 + cell_h - GAP + 8
-            p.drawLine(x, y0, x, y1)
-            p.drawLine(x-5, y0+6, x, y0); p.drawLine(x+5, y0+6, x, y0)
-            p.drawLine(x-5, y1-6, x, y1); p.drawLine(x+5, y1-6, x, y1)
+            y      = MARGIN + row*cell_h
+            _paint_drop_marker(p, x - _DROP_THICKNESS/2.0, y, self._card_h)
         p.end()
 
     def _pos_from_point(self, pt):
@@ -2489,12 +2513,16 @@ class ManagePanel(QWidget):
     # Shared cross-tab clipboard: list of (pdf_path, orig_page_idx, rotation)
     _shared_clipboard: list = []
 
-    def __init__(self, model, pdf_path, grid, parent=None):
+    def __init__(self, model, pdf_path, grid, parent=None, tab=None):
         super().__init__(parent)
         self.setObjectName("managePanel")
         self.model        = model
         self.pdf_path     = pdf_path
         self.grid         = grid
+        # The owning PdfTab, kept explicitly. Manage mode reparents this panel
+        # into a splitter owned by the viewer, so the parent chain no longer
+        # leads back to the tab — see _swap_source.
+        self.tab          = tab if tab is not None else parent
         self._history     = []
         self._redo_stack  = []
         self._filter    = None
@@ -2901,9 +2929,17 @@ class ManagePanel(QWidget):
         snapped the viewer back to it too."""
         self.pdf_path = new_path
         self.grid.pdf_path = new_path
-        tab = self.parent()
-        while tab is not None and not isinstance(tab, PdfTab):
-            tab = tab.parent()
+        # Use the recorded tab, not a walk up the parent chain: in manage mode
+        # this panel lives in the viewer's splitter, so the walk found no PdfTab
+        # and silently skipped the update. The single view then resolved the new
+        # page indexes against the old, shorter file — an inserted blank page is
+        # past its last index, so the render threw and the preview showed the
+        # blue "could not render" fallback at a bogus size.
+        tab = self.tab if isinstance(self.tab, PdfTab) else None
+        if tab is None:
+            tab = self.parent()
+            while tab is not None and not isinstance(tab, PdfTab):
+                tab = tab.parent()
         if tab is not None:
             tab.pdf_path = new_path
             tab.single.pdf_path = new_path
@@ -4931,7 +4967,7 @@ class PdfTab(QWidget):
         grid_scroll.setFrameShape(QFrame.Shape.NoFrame)
         grid_scroll.setWidget(grid)
 
-        panel = ManagePanel(self.model, self.pdf_path, grid, parent=self)
+        panel = ManagePanel(self.model, self.pdf_path, grid, parent=self, tab=self)
         panel.hide()
         panel.closed.connect(self._exit_manage)
         grid.order_changed.connect(self.changed.emit)
@@ -4975,9 +5011,23 @@ class PdfTab(QWidget):
     def page_count(self):
         return len(self.model.order) if self.model else 0
 
-    def save_to(self, out_path):
+    def in_manage_mode(self):
+        """True while this tab is showing the page manager rather than the
+        single-page preview."""
+        return bool(self._manage_widget is not None
+                    and self._stack.currentWidget() is self._manage_widget)
+
+    def selected_uids(self):
+        """Selected pages in display order — empty when nothing is picked."""
+        if not self.model: return []
+        return [uid for uid in self.model.order if uid in self.model.selected]
+
+    def save_to(self, out_path, uids=None):
         """Write the document as the page manager shows it. This is what Ctrl+S
-        and Datei ▸ Speichern go through."""
+        and Datei ▸ Speichern go through.
+
+        `uids` limits the output to those pages, in display order — used by
+        Ctrl+Shift+S when pages are picked in the page manager."""
         if not self.model: raise ValueError(tr("Keine PDF geladen."))
         import tempfile
         from pypdf import PdfReader, PdfWriter
@@ -4986,7 +5036,9 @@ class PdfTab(QWidget):
             if p not in readers: readers[p] = PdfReader(p, strict=False)
             return readers[p]
         writer = PdfWriter()
+        wanted = None if uids is None else set(uids)
         for uid in self.model.order:
+            if wanted is not None and uid not in wanted: continue
             src_path, orig = self.model.page_source(uid, self.pdf_path)
             reader = _rdr(src_path)
             if orig >= len(reader.pages): continue
@@ -5344,13 +5396,9 @@ class FileGrid(QWidget):
         pos    = min(self._drop_indicator, len(self._cards))
         col    = pos%pr; row = pos//pr
         x      = MARGIN+col*cell_w-GAP//2
-        y0     = MARGIN+row*cell_h-4
-        y1     = y0+cell_h-GAP+8
+        y      = MARGIN+row*cell_h
         p = QPainter(self)
-        p.setPen(QPen(QColor(_TV['acc']), 3))
-        p.drawLine(x,y0,x,y1)
-        p.drawLine(x-5,y0+6,x,y0); p.drawLine(x+5,y0+6,x,y0)
-        p.drawLine(x-5,y1-6,x,y1); p.drawLine(x+5,y1-6,x,y1)
+        _paint_drop_marker(p, x - _DROP_THICKNESS/2.0, y, self._card_h)
         p.end()
 
     def _pos_from_point(self, pt):
@@ -5532,7 +5580,9 @@ class MergeOrderWidget(QWidget):
 
         # ── Links: Steuerung wie ManagePanel ─────────────────────────
         self._left_w = QWidget(); self._left_w.setObjectName("mergeLeftW")
-        self._left_w.setMinimumWidth(220)
+        # Wide enough that the primary action still fits at the narrowest the
+        # splitter allows — "Zusammenfuehren (n)" needs ~200px of button.
+        self._left_w.setMinimumWidth(236)
         ol = QVBoxLayout(self._left_w); ol.setContentsMargins(0,0,0,0); ol.setSpacing(0)
 
         self._title_w = QWidget(); self._title_w.setObjectName("mergeTitleW")
@@ -5606,7 +5656,10 @@ class MergeOrderWidget(QWidget):
         # until the sidebar was scrolled.
         self._actions_w = QWidget(); self._actions_w.setObjectName("mergeActionsW")
         al = QVBoxLayout(self._actions_w)
-        al.setContentsMargins(10, 8, 22, 10); al.setSpacing(5)
+        # No 22px right inset here: that one exists in the scroll area above to
+        # clear its scrollbar, and copying it made "Zusammenfuehren (n)" wider
+        # than its button.
+        al.setContentsMargins(10, 8, 10, 10); al.setSpacing(5)
 
         self._section(al, tr("OEFFNEN"))
         self._total = QLabel("")
@@ -5644,7 +5697,7 @@ class MergeOrderWidget(QWidget):
         rl.addWidget(self._scroll, 1)
         splitter.addWidget(self._right_w)
 
-        splitter.setSizes([220, 500])
+        splitter.setSizes([236, 500])
         splitter.setStretchFactor(0,0); splitter.setStretchFactor(1,1)
         root.addWidget(splitter, 1)
 
@@ -6490,27 +6543,62 @@ class PageViewerPanel(QWidget):
             AppState.get().status_message.emit(f"Speicherfehler: {e}")
 
     def _save_as_current(self):
-        """Ctrl+Shift+S — aktuellen Tab unter neuem Namen speichern."""
+        """Ctrl+Shift+S — save under a new name.
+
+        With pages picked in the page manager this saves *those pages only*; it
+        used to write the whole document and ignore the selection entirely. The
+        selection is honoured only while the manager is actually on screen, so a
+        selection left behind from an earlier visit cannot silently truncate an
+        ordinary Save As."""
         tab = self._current()
         if not tab: return
+        uids     = tab.selected_uids() if tab.in_manage_mode() else []
+        subset   = bool(uids) and len(uids) < len(tab.model.order)
+        stem, ext = os.path.splitext(tab.pdf_path)
+        suggested = f"{stem}_auswahl{ext or '.pdf'}" if subset else tab.pdf_path
+        title = tr('Auswahl speichern als ({p0} Seiten)').format(p0=len(uids)) \
+                if subset else tr("Speichern als")
         path, _ = QFileDialog.getSaveFileName(
-            self, tr("Speichern als"), tab.pdf_path, tr("PDF Dateien (*.pdf)"))
+            self, title, suggested, tr("PDF Dateien (*.pdf)"))
         if not path: return
         try:
-            tab.save_to(path)
-            # Tab-Pfad aktualisieren und Tab umbenennen
-            tab.pdf_path = path
-            tab.single.pdf_path = path
-            tab.model.foreign_src = {uid: (path, orig)
-                                     for uid, (old_path, orig) in tab.model.foreign_src.items()}
-            idx  = self.tabs.indexOf(tab)
+            tab.save_to(path, uids=uids if subset else None)
             name = os.path.basename(path)
-            disp = name if len(name) <= 22 else name[:19] + "..."
-            self.tabs.setTabText(idx, f"  {disp}  ")
+            if subset:
+                # An export of part of the document — the tab still shows the
+                # whole thing, so it keeps its own file.
+                AppState.get().status_message.emit(
+                    tr('{p0} Seite(n) gespeichert als: {p1}').format(p0=len(uids), p1=name))
+                return
+            self._retarget_tab(tab, path)
             AppState.get().open_pdf(path)
             AppState.get().status_message.emit(tr('Gespeichert als: {p0}').format(p0=name))
         except Exception as e:
             AppState.get().status_message.emit(f"Speicherfehler: {e}")
+
+    def _retarget_tab(self, tab, path):
+        """Point a tab at the file just written for it.
+
+        The model must be re-based, not just re-pathed. save_to() writes the
+        pages in display order with rotations baked in, so in the new file page
+        i *is* order position i — while src/foreign_src still held indexes into
+        the old sources and rotations still asked for a turn already applied.
+        Re-pathing alone made a reordered or rotated document show the wrong
+        pages after Save As."""
+        model = tab.model
+        tab.pdf_path        = path
+        tab.single.pdf_path = path
+        model.src         = {uid: i for i, uid in enumerate(model.order)}
+        model.foreign_src = {}
+        model.rotations   = {}
+        if tab._manage_panel is not None:
+            tab._manage_panel.pdf_path = path
+            tab._manage_panel.grid.pdf_path = path
+        idx  = self.tabs.indexOf(tab)
+        name = os.path.basename(path)
+        disp = name if len(name) <= 22 else name[:19] + "..."
+        if idx >= 0:
+            self.tabs.setTabText(idx, f"  {disp}  ")
 
     def _on_tab_changed(self, idx):
         # ── Always clean up manage layout when switching file tabs ────────────
