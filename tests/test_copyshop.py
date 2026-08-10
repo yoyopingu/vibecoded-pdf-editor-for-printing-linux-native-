@@ -2,9 +2,13 @@
 """
 CopyShop regression suite — self-contained, dependency-free (no pytest needed).
 
-Run with the app's venv so PyQt6 / pypdfium2 / pikepdf / reportlab are present:
+Run it with the system interpreter, which already has PyQt6 / pypdfium2 /
+pikepdf / reportlab / img2pdf:
 
-    ~/.local/share/copyshop_pdf_suite/venv/bin/python tests/test_copyshop.py
+    python3 tests/test_copyshop.py
+
+(It used to say "use the installed app's venv". That install is gone — the app
+runs from this repo now, so there is no second copy to drift out of sync.)
 
 It tests the SOURCE tree (this repo), generates its own fixture PDFs in a temp
 dir, and prints a PASS/FAIL summary. Exit code 0 = all passed.
