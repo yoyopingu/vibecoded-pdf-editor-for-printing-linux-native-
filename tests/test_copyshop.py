@@ -840,6 +840,142 @@ def test_preview_opens_files_separately():
     vp.deleteLater()
 
 
+def _send_key(target, key, mods=None):
+    """Deliver a key the way a real press arrives: ShortcutOverride first, so
+    app-level filters and focused widgets get their say."""
+    from PyQt6.QtCore import Qt as _Qt, QEvent as _QE
+    from PyQt6.QtGui import QKeyEvent
+    mods = mods if mods is not None else _Qt.KeyboardModifier.NoModifier
+    for t in (_QE.Type.ShortcutOverride, _QE.Type.KeyPress, _QE.Type.KeyRelease):
+        _app.sendEvent(target, QKeyEvent(t, key, mods))
+    _spin(5, 0.0)
+
+
+def test_merge_preview_hides_the_app_sidebar():
+    """The preview brings its own sidebar. The app's tool nav must step aside
+    while it is up — the two used to stack, and the left one offered tools that
+    do not apply here. It has to come back when the preview closes."""
+    from tools.page_viewer import PageViewerPanel, MergeOrderWidget
+    vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
+    shown = []
+    vp.hide_sidebar = lambda: shown.append(False)
+    vp.show_sidebar = lambda: shown.append(True)
+
+    vp.show_merge_tab([FX["normal"], FX["single"]])
+    _spin(20, 0.01)
+    assert isinstance(vp.tabs.currentWidget(), MergeOrderWidget)
+    assert shown and shown[-1] is False, f"sidebar not hidden ({shown})"
+
+    vp.tabs.currentWidget()._do_cancel()
+    _spin(20, 0.01)
+    assert shown[-1] is True, f"sidebar not restored after cancel ({shown})"
+
+    # …and it stays away only for that tab
+    vp.open_file(FX["normal"]); _spin(30, 0.01)
+    vp.show_merge_tab([FX["single"], FX["framed"]]); _spin(20, 0.01)
+    assert shown[-1] is False, "sidebar not hidden for a second preview"
+    vp.tabs.setCurrentIndex(0); _spin(20, 0.01)
+    assert shown[-1] is True, "sidebar not restored when switching to a PDF tab"
+    vp.deleteLater()
+
+
+def test_merge_preview_thumbnails_behave_like_the_page_manager():
+    """The file grid is the page grid for files, so the same gestures apply:
+    clicking empty space clears the selection, and the drop marker rises through
+    the row without bouncing as the cursor passes the last thumbnail."""
+    from PyQt6.QtCore import Qt as _Qt, QPoint, QPointF, QEvent as _QE
+    from PyQt6.QtGui import QMouseEvent
+    from tools.page_viewer import MergeOrderWidget, MARGIN, GAP
+    paths = [FX["normal"], FX["single"], FX["framed"], FX["mixed"]]
+    w = MergeOrderWidget(paths); w.resize(950, 650); w.show()
+    _spin(40, 0.02)
+    g = w._grid
+
+    # clicking empty background unpicks
+    g._selected = {0, 2}; g._update_selection()
+    empty = QPointF(g.width() - 25, g.height() - 25)
+    for t in (_QE.Type.MouseButtonPress, _QE.Type.MouseButtonRelease):
+        _app.sendEvent(g, QMouseEvent(t, empty, empty, _Qt.MouseButton.LeftButton,
+                                      _Qt.MouseButton.LeftButton,
+                                      _Qt.KeyboardModifier.NoModifier))
+    _spin(5, 0.0)
+    assert not g._selected, f"clicking empty space left {sorted(g._selected)} picked"
+
+    # drop position never goes backwards as the cursor sweeps right
+    n = len(g.get_paths())
+    cell_w = g._card_w + 16 + GAP
+    seq = [g._pos_from_point(QPoint(x, MARGIN + 10))
+           for x in range(MARGIN, MARGIN + int((n + 2) * cell_w), 7)]
+    assert seq == sorted(seq), f"drop position bounces: {seq}"
+    assert seq[-1] == n, f"sweeping past the end gives {seq[-1]}, expected {n}"
+    assert max(seq) <= n, f"drop position {max(seq)} exceeds {n} files"
+
+
+def test_merge_preview_answers_the_page_manager_shortcuts():
+    """Ctrl+C / X / V / Z did nothing here while working one view over, because
+    this view registered three lone QShortcuts instead of the shared filter."""
+    from PyQt6.QtCore import Qt as _Qt
+    from tools.page_viewer import MergeOrderWidget
+    C = _Qt.KeyboardModifier.ControlModifier
+    paths = [FX["normal"], FX["single"], FX["framed"]]
+    w = MergeOrderWidget(paths); w.resize(950, 650); w.show()
+    _spin(40, 0.02)
+    g = w._grid
+    g.setFocus()
+
+    _send_key(g, _Qt.Key.Key_A, C)
+    assert len(g._selected) == 3, "Ctrl+A"
+    _send_key(g, _Qt.Key.Key_D, C)
+    assert not g._selected, "Ctrl+D"
+
+    g._selected = {1}; g._update_selection()
+    _send_key(g, _Qt.Key.Key_C, C)
+    _send_key(g, _Qt.Key.Key_V, C)
+    assert len(g.get_paths()) == 4, f"Ctrl+C/Ctrl+V gave {len(g.get_paths())} files"
+    assert g.get_paths().count(FX["single"]) == 2, "the copied file was not pasted"
+
+    _send_key(g, _Qt.Key.Key_X, C)
+    assert len(g.get_paths()) == 3, "Ctrl+X did not cut"
+    _send_key(g, _Qt.Key.Key_Z, C)
+    assert len(g.get_paths()) == 4, "Ctrl+Z did not undo the cut"
+
+    g._selected = {0}; g._update_selection()
+    _send_key(g, _Qt.Key.Key_Delete)
+    assert len(g.get_paths()) == 3, "Delete"
+    _send_key(g, _Qt.Key.Key_Z, C)
+    assert len(g.get_paths()) == 4, "Ctrl+Z did not undo the delete"
+
+    # a drag is undoable too
+    order = g.get_paths()
+    g._selected = {0}; g.handle_drop(0, 3)
+    _spin(5, 0.0)
+    assert g.get_paths() != order, "drag did not reorder"
+    _send_key(g, _Qt.Key.Key_Z, C)
+    assert g.get_paths() == order, "Ctrl+Z did not undo the drag"
+
+    # typing in the selection box keeps its own Ctrl+A
+    w.sel_edit.setFocus(); w.sel_edit.setText("1,2"); _spin(5, 0.0)
+    before = set(g._selected)
+    _send_key(w.sel_edit, _Qt.Key.Key_A, C)
+    assert g._selected == before, "Ctrl+A in the text field hijacked the file selection"
+
+
+def test_merge_preview_has_no_rotate_button():
+    """Rotating a whole file means nothing, and the zoom-reset button was
+    wearing the page manager's rotate-left glyph, so it read as one. Same fix
+    the page manager already had: label it 1:1."""
+    from tools.page_viewer import MergeOrderWidget, PageGrid
+    w = MergeOrderWidget([FX["normal"], FX["single"]])
+    labels = [b.text() for b in w._zoom_btns]
+    assert "↺" not in labels and "↻" not in labels, \
+        f"the merge view still shows a rotate glyph: {labels}"
+    assert "1:1" in labels, f"zoom reset is missing: {labels}"
+    assert not hasattr(w._grid, "rotate_selected"), \
+        "the file grid should not offer rotation at all"
+    # the page manager keeps its real rotate buttons
+    assert hasattr(PageGrid, "rotate_selected")
+
+
 def test_preview_reports_files_it_could_not_convert():
     """A file that fails to convert is dropped from the merge. The user has to
     be told which one, or they get a document quietly missing pages — the

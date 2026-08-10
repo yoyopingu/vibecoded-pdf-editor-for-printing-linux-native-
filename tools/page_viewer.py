@@ -5231,8 +5231,9 @@ class FileGrid(QWidget):
     """Grid of FileCards — the file-level twin of PageGrid: same zoom, same
     Ctrl/Shift selection, same drag & drop, and PDF thumbnails come off the same
     shared render queue instead of a thread per card."""
-    order_changed     = pyqtSignal()
-    selection_changed = pyqtSignal(int)   # pos of the card that was clicked
+    order_changed          = pyqtSignal()
+    order_about_to_change  = pyqtSignal()  # fired before a drag reorders the list
+    selection_changed      = pyqtSignal(int)   # pos of the card that was clicked
 
     def __init__(self, paths, parent=None):
         super().__init__(parent)
@@ -5394,25 +5395,53 @@ class FileGrid(QWidget):
         pr     = self._per_row()
         cell_w = self._card_w+16+GAP; cell_h = self._card_h+28+GAP
         pos    = min(self._drop_indicator, len(self._cards))
-        col    = pos%pr; row = pos//pr
-        x      = MARGIN+col*cell_w-GAP//2
-        y      = MARGIN+row*cell_h
         p = QPainter(self)
-        _paint_drop_marker(p, x - _DROP_THICKNESS/2.0, y, self._card_h)
+        if pr == 1:
+            y = MARGIN + pos*cell_h - GAP//2
+            _paint_drop_marker(p, MARGIN, y - _DROP_THICKNESS/2.0,
+                               self._cards[0].width(), horizontal=True)
+        else:
+            col = pos%pr; row = pos//pr
+            x   = MARGIN+col*cell_w-GAP//2
+            y   = MARGIN+row*cell_h
+            _paint_drop_marker(p, x - _DROP_THICKNESS/2.0, y, self._card_h)
         p.end()
 
     def _pos_from_point(self, pt):
+        # Same rule as PageGrid._pos_from_point, including the past-the-end
+        # guard. Clamping the cell index to n-1 first and only then applying the
+        # half-cell test made the marker flip between "before" and "after" the
+        # last card as the cursor swept across the empty space beyond it.
         if not self._cards: return 0
+        n      = len(self._cards)
         pr     = self._per_row()
         cell_w = self._card_w+16+GAP; cell_h = self._card_h+28+GAP
         rel_x  = pt.x()-MARGIN; rel_y = pt.y()-MARGIN
-        col    = max(0,min(rel_x//cell_w,pr-1))
-        row    = max(0,rel_y//cell_h)
-        pos    = min(row*pr+col,len(self._cards)-1)
-        if rel_x-col*cell_w > cell_w//2: pos+=1
-        return min(pos,len(self._cards))
+        if pr == 1:
+            for i in range(n):
+                top    = MARGIN + i*cell_h
+                bottom = top + self._card_h
+                if pt.y() < (top + bottom) // 2:
+                    return i
+            return n
+        col    = max(0, min(rel_x//cell_w, pr-1))
+        row    = max(0, rel_y//cell_h)
+        pos    = row*pr + col
+        if pos >= n:
+            return n
+        if rel_x - col*cell_w > cell_w//2:
+            pos += 1
+        return min(pos, n)
 
     # ── selection (Ctrl toggles, Shift selects a range — as in PageGrid) ──────
+    def mousePressEvent(self, e):
+        # Click on empty background clears the selection, as in PageGrid. The
+        # file grid simply had no handler, so a picked thumbnail could not be
+        # unpicked by clicking beside it.
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.deselect_all()
+        super().mousePressEvent(e)
+
     def _on_click(self, pos):
         mods  = QApplication.keyboardModifiers()
         shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
@@ -5450,6 +5479,9 @@ class FileGrid(QWidget):
     # ── drag & drop ───────────────────────────────────────────────────────────
     def handle_drop(self, from_pos, to_pos, multi=False):
         self._drop_indicator = -1; self.update()
+        # Let the owner snapshot before the list changes, so a drag is undoable
+        # like every other reorder.
+        self.order_about_to_change.emit()
         if multi:
             picked = [self._paths[i] for i in sorted(self._selected)
                       if 0 <= i < len(self._paths)]
@@ -5529,6 +5561,28 @@ class FileGrid(QWidget):
 
     def get_paths(self): return list(self._paths)
 
+    def insert_paths(self, at, paths):
+        """Insert files at a position and leave them selected — the file-level
+        twin of pasting pages into the page manager."""
+        paths = [p for p in paths if p]
+        if not paths: return
+        at = max(0, min(at, len(self._paths)))
+        self._paths[at:at] = list(paths)
+        self._selected = set(range(at, at + len(paths)))
+        self._last_selected  = at
+        self._last_click_pos = at
+        self._rebuild(); self.order_changed.emit()
+        self.selection_changed.emit(self._last_selected)
+
+    def set_state(self, paths, selected):
+        """Restore a previous list and selection wholesale (undo / redo)."""
+        self._paths    = list(paths)
+        self._selected = {i for i in selected if 0 <= i < len(self._paths)}
+        self._last_selected  = min(self._selected) if self._selected else -1
+        self._last_click_pos = self._last_selected if self._selected else None
+        self._rebuild(); self.order_changed.emit()
+        self.selection_changed.emit(self._last_selected)
+
     def get_selected_info(self):
         if not self._selected: return tr("Keine Auswahl")
         sel = sorted(self._selected)
@@ -5536,17 +5590,147 @@ class FileGrid(QWidget):
         return tr('{p0} Dateien ausgewaehlt').format(p0=len(sel))
 
 
+class MergeShortcutFilter(QObject):
+    """App-level keys for the merge preview.
+
+    Deliberately the same set, and the same mechanics, as ManageShortcutFilter:
+    the two views show thumbnails and are meant to answer to the same keys.
+    Like that one it stands down for modal dialogs and for text fields, so
+    Ctrl+A in the selection box still selects the text."""
+    def __init__(self, widget, parent=None):
+        super().__init__(parent)
+        self.w = widget
+
+    def _live(self):
+        return self.w.isVisible() and not self.w._busy
+
+    def eventFilter(self, obj, event):
+        if QApplication.activeModalWidget() is not None:
+            return False
+        t = event.type()
+        if t == QEvent.Type.ShortcutOverride:
+            if not self._live():
+                return False
+            if isinstance(QApplication.focusWidget(), QLineEdit):
+                return False
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier and \
+               event.key() in (Qt.Key.Key_A, Qt.Key.Key_C, Qt.Key.Key_V,
+                               Qt.Key.Key_X, Qt.Key.Key_Z, Qt.Key.Key_Y,
+                               Qt.Key.Key_D):
+                event.accept()
+            return False
+
+        if t != QEvent.Type.KeyPress or not self._live():
+            return False
+        if isinstance(QApplication.focusWidget(), QLineEdit):
+            return False
+
+        k     = event.key()
+        mods  = event.modifiers()
+        ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+
+        if k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and not ctrl:
+            self.w._remove(); return True
+        if ctrl:
+            if k == Qt.Key.Key_A: self.w._grid.select_all();   return True
+            if k == Qt.Key.Key_D: self.w._grid.deselect_all(); return True
+            if k == Qt.Key.Key_C: self.w._copy();  return True
+            if k == Qt.Key.Key_X: self.w._cut();   return True
+            if k == Qt.Key.Key_V: self.w._paste(); return True
+            if k == Qt.Key.Key_Z and not shift: self.w._undo(); return True
+            if (k == Qt.Key.Key_Z and shift) or k == Qt.Key.Key_Y:
+                self.w._redo(); return True
+        return False
+
+
 class MergeOrderWidget(QWidget):
     merge_confirmed = pyqtSignal(list)
     open_separately = pyqtSignal(list)
     cancelled       = pyqtSignal()
+
+    # Shared between merge previews, like ManagePanel._shared_clipboard
+    _shared_clipboard: list = []
 
     def __init__(self, file_paths, parent=None):
         super().__init__(parent)
         self._busy        = False
         self.source_paths = list(file_paths)   # what the tab was opened with
         self.tmp_dir      = None               # set by PageViewerPanel
+        self._history     = []
+        self._redo_stack  = []
+        self._key_filter  = None
         self._setup(file_paths)
+        self.destroyed.connect(self._cleanup_filter)
+
+    # ── keyboard ─────────────────────────────────────────────────────────────
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self._key_filter is None:
+            self._key_filter = MergeShortcutFilter(self)
+            QApplication.instance().installEventFilter(self._key_filter)
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self._cleanup_filter()
+
+    def _cleanup_filter(self):
+        if getattr(self, "_key_filter", None) is not None:
+            app = QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(self._key_filter)
+            self._key_filter = None
+
+    # ── clipboard / history, mirroring the page manager ──────────────────────
+    def _save_history(self):
+        self._history.append((self._grid.get_paths(), set(self._grid._selected)))
+        del self._history[:-40]
+        self._redo_stack.clear()
+
+    def _copy(self):
+        picked = [self._grid.get_paths()[i] for i in sorted(self._grid._selected)
+                  if 0 <= i < len(self._grid.get_paths())]
+        if not picked:
+            self.status.setText(tr("Zuerst Dateien auswaehlen.")); return
+        MergeOrderWidget._shared_clipboard = picked
+        self.status.setText(tr('{p0} Datei(en) kopiert.').format(p0=len(picked)))
+
+    def _cut(self):
+        if not self._grid._selected:
+            self.status.setText(tr("Zuerst Dateien auswaehlen.")); return
+        self._copy()
+        self._save_history()
+        self._grid.remove_selected()
+        self._on_order_changed()
+
+    def _paste(self):
+        clip = MergeOrderWidget._shared_clipboard
+        if not clip:
+            self.status.setText(tr("Zwischenablage ist leer.")); return
+        at = (max(self._grid._selected) + 1) if self._grid._selected \
+             else len(self._grid.get_paths())
+        self._save_history()
+        self._grid.insert_paths(at, clip)
+        self._on_order_changed()
+        self.status.setText(tr('{p0} Datei(en) eingefuegt.').format(p0=len(clip)))
+
+    def _undo(self):
+        if not self._history:
+            self.status.setText(tr("Nichts rueckgaengig zu machen.")); return
+        self._redo_stack.append((self._grid.get_paths(), set(self._grid._selected)))
+        paths, sel = self._history.pop()
+        self._grid.set_state(paths, sel)
+        self._on_order_changed()
+        self.status.setText(tr("Rueckgaengig."))
+
+    def _redo(self):
+        if not self._redo_stack:
+            self.status.setText(tr("Nichts zu wiederholen.")); return
+        self._history.append((self._grid.get_paths(), set(self._grid._selected)))
+        paths, sel = self._redo_stack.pop()
+        self._grid.set_state(paths, sel)
+        self._on_order_changed()
+        self.status.setText(tr("Wiederhergestellt."))
 
     def _sep(self):
         f = QFrame()
@@ -5612,13 +5796,19 @@ class MergeOrderWidget(QWidget):
         self._info.setObjectName("dimLabel")
         ll.addWidget(self._info); ll.addWidget(self._sep())
 
+        # Zoom only. The reset button used to be labelled "↺", which is the page
+        # manager's rotate-left icon — so it read as "turn this thumbnail", an
+        # action that means nothing for a whole file. Same fix as was already
+        # made one view over: call it what it is.
         self._section(ll, tr("ANSICHT"))
         zoom_row = QHBoxLayout(); zoom_row.setSpacing(4)
         self._zoom_btns = []
-        for text, fn in [("−", lambda: self._grid.zoom_out()),
-                         ("+", lambda: self._grid.zoom_in()),
-                         ("↺", lambda: self._grid.zoom_reset())]:
-            b = QPushButton(text); b.setFixedSize(30, 26)
+        for text, tip, fn in [
+                ("−",   "Thumbnails verkleinern",  lambda: self._grid.zoom_out()),
+                ("+",   "Thumbnails vergroessern", lambda: self._grid.zoom_in()),
+                ("1:1", "Zoom zuruecksetzen",      lambda: self._grid.zoom_reset())]:
+            b = QPushButton(text); b.setFixedSize(32, 26)
+            b.setToolTip(tr(tip))
             b.clicked.connect(fn)
             zoom_row.addWidget(b); self._zoom_btns.append(b)
         self._zoom_hint_lbl = QLabel(tr("Thumbnails"))
@@ -5637,7 +5827,11 @@ class MergeOrderWidget(QWidget):
         ll.addWidget(self._sep())
 
         self._section(ll, tr("OPERATIONEN"))
-        ll.addWidget(self._btn(tr("Entfernen  (Entf)"), self._remove))
+        ll.addWidget(self._btn(tr("Entfernen  (Entf)"),       self._remove))
+        ll.addWidget(self._btn(tr("Kopieren  (Strg+C)"),      self._copy))
+        ll.addWidget(self._btn(tr("Ausschneiden  (Strg+X)"),  self._cut))
+        ll.addWidget(self._btn(tr("Einfuegen  (Strg+V)"),     self._paste))
+        ll.addWidget(self._btn(tr("Rueckgaengig  (Strg+Z)"),  self._undo))
         ll.addWidget(self._sep())
 
         self._section(ll, tr("DATEI-INFO"))
@@ -5692,6 +5886,7 @@ class MergeOrderWidget(QWidget):
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._grid = FileGrid(file_paths)
         self._grid.order_changed.connect(self._on_order_changed)
+        self._grid.order_about_to_change.connect(self._save_history)
         self._grid.selection_changed.connect(self._on_select)
         self._scroll.setWidget(self._grid)
         rl.addWidget(self._scroll, 1)
@@ -5701,12 +5896,11 @@ class MergeOrderWidget(QWidget):
         splitter.setStretchFactor(0,0); splitter.setStretchFactor(1,1)
         root.addWidget(splitter, 1)
 
-        from PyQt6.QtGui import QShortcut, QKeySequence
-        for keys, fn in ((Qt.Key.Key_Delete, self._remove),
-                         ("Ctrl+A", lambda: self._grid.select_all()),
-                         ("Ctrl+D", lambda: self._grid.deselect_all())):
-            QShortcut(QKeySequence(keys), self).activated.connect(fn)
-
+        # Keys go through the same app-level filter the page manager uses (see
+        # MergeShortcutFilter, installed in showEvent), so this view answers to
+        # the same set. It used to register three lone QShortcuts, which is why
+        # Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+Z did nothing here while working one
+        # view over.
         self._on_order_changed()
         _register_themed(self)
         self._apply_theme()
@@ -5803,14 +5997,19 @@ class MergeOrderWidget(QWidget):
         self._info.setText(tr('Datei {p0} von {p1}').format(p0=pos + 1, p1=len(paths)))
 
     def _move_up(self):
+        if self._grid._selected: self._save_history()
         self._grid.move_up()
         self._on_order_changed()
 
     def _move_down(self):
+        if self._grid._selected: self._save_history()
         self._grid.move_down()
         self._on_order_changed()
 
     def _remove(self):
+        if not self._grid._selected:
+            self.status.setText(tr("Zuerst Dateien auswaehlen.")); return
+        self._save_history()
         self._grid.remove_selected()
         self._on_order_changed()
 
@@ -6647,7 +6846,20 @@ class PageViewerPanel(QWidget):
             self._manage_btn.setEnabled(False)
             self._print_btn.setEnabled(False)
             self._viewer_info.setText(tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
+            w.setFocus()
         else:
             self._manage_btn.setEnabled(False)
             self._print_btn.setEnabled(False)
             self._viewer_info.setText("")
+        self._sync_sidebar()
+
+    def _sync_sidebar(self):
+        """The merge preview brings its own sidebar. The app's tool nav sitting
+        next to it made two stacked sidebars, the left one offering tools that
+        do not apply to the view — so it steps aside for that tab, exactly as it
+        does for the page manager."""
+        w = self.tabs.currentWidget()
+        if isinstance(w, MergeOrderWidget):
+            if self.hide_sidebar: self.hide_sidebar()
+        elif self._manage_splitter_widget is None:   # manage mode owns it there
+            if self.show_sidebar: self.show_sidebar()
