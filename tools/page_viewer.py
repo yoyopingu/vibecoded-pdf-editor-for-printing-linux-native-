@@ -3684,7 +3684,16 @@ class PrintDialog(QDialog):
 
         out.addWidget(_lbl(tr("Farbe:")), 1, 0)
         self.color_combo = QComboBox()
-        self.color_combo.addItems([tr("Farbe"), tr("Graustufen")])
+        # "Drucker-Standard" sends no colour option at all, so the queue's own
+        # setting decides — that is what lets a job be re-routed or configured
+        # from somewhere else. Every other PDF viewer on Linux behaves this way.
+        self.color_combo.addItem(tr("Drucker-Standard"), "auto")
+        self.color_combo.addItem(tr("Farbe"),            "color")
+        self.color_combo.addItem(tr("Graustufen"),       "mono")
+        self.color_combo.setToolTip(tr(
+            "Drucker-Standard: keine Vorgabe senden — der Drucker bzw. die "
+            "Warteschlange entscheidet.\n"
+            "Die Farbinformation bleibt in jedem Fall in der Datei erhalten."))
         out.addWidget(self.color_combo, 1, 1)
 
         out.addWidget(_lbl(tr("Farbkonvertierung:")), 2, 0)
@@ -3700,7 +3709,8 @@ class PrintDialog(QDialog):
                "→ sRGB: Vor dem Druck in sRGB umrechnen"))
         out.addWidget(self.colorconv_combo, 2, 1)
         self.color_combo.currentIndexChanged.connect(
-            lambda i: self.colorconv_combo.setEnabled(i == 0))
+            lambda _: self.colorconv_combo.setEnabled(
+                self.color_combo.currentData() != "mono"))
 
         duplex_row = QHBoxLayout()
         duplex_row.setContentsMargins(0, 0, 0, 0)
@@ -4031,36 +4041,39 @@ class PrintDialog(QDialog):
             self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
 
             # ── Color ─────────────────────────────────────────────────────────
+            # Same lesson as duplex above: Qt's colour query is not to be trusted
+            # on driverless/IPP queues. It reports defaultColorMode() ==
+            # GrayScale for an EPSON ET-8500 and for both Xerox colour presses
+            # here, and the old code turned that into "open in Graustufen" *and*
+            # disabled the control — so a colour press printed monochrome and the
+            # user could not switch it back.
+            #
+            # The control is therefore always enabled and always opens on
+            # "Drucker-Standard", which sends no colour option at all. Nothing is
+            # forced, nothing is destroyed, and the queue (or whoever picks the
+            # settings downstream) decides. A mono-only printer is worth a hint,
+            # never a lock.
+            self.color_combo.setEnabled(True)
+            self.color_combo.blockSignals(True)
+            self.color_combo.setCurrentIndex(0)          # "Drucker-Standard"
+            self.color_combo.blockSignals(False)
+            mono_only = False
             if valid:
                 try:
-                    color_modes = info.supportedColorModes()
-                    can_color = any(m == QPrinter.ColorMode.Color for m in color_modes)
-                except AttributeError:
-                    try:
-                        can_color = info.defaultColorMode() == QPrinter.ColorMode.Color
-                    except AttributeError:
-                        can_color = True
-                self.color_combo.setEnabled(can_color)
-                # Default to the printer's OWN colour default (e.g. a queue set
-                # to monochrome opens in Graustufen; the user can still switch).
-                default_gray = False
-                try:
-                    default_gray = (info.defaultColorMode()
-                                    == QPrinter.ColorMode.GrayScale)
+                    modes = info.supportedColorModes()
+                    mono_only = bool(modes) and all(
+                        m == QPrinter.ColorMode.GrayScale for m in modes)
                 except Exception:
-                    pass
-                self.color_combo.blockSignals(True)
-                self.color_combo.setCurrentIndex(
-                    0 if (can_color and not default_gray) else 1)
-                self.color_combo.blockSignals(False)
-                self.colorconv_combo.setEnabled(
-                    can_color and self.color_combo.currentIndex() == 0)
-                self.color_combo.setToolTip(
-                    "" if can_color else tr("Dieser Drucker druckt nur in Graustufen."))
-            else:
-                self.color_combo.setEnabled(True)
-                self.color_combo.setToolTip("")
-                self.colorconv_combo.setEnabled(self.color_combo.currentIndex() == 0)
+                    mono_only = False
+            self.color_combo.setToolTip(
+                tr("Dieser Drucker meldet nur Graustufen — die Farbe bleibt in "
+                   "der Datei erhalten und kann anderswo gedruckt werden.")
+                if mono_only else tr(
+                    "Drucker-Standard: keine Vorgabe senden — der Drucker bzw. "
+                    "die Warteschlange entscheidet.\n"
+                    "Die Farbinformation bleibt in jedem Fall in der Datei erhalten."))
+            self.colorconv_combo.setEnabled(
+                self.color_combo.currentData() != "mono")
 
             # ── Hardware margins (determines "Fit Page" / "Shrink" behaviour) ──
             self._hw_margin_mm = 3.0  # safe default
@@ -4245,7 +4258,7 @@ class PrintDialog(QDialog):
             return
 
         copies    = self.copies_spin.value()
-        grayscale = self.color_combo.currentIndex() == 1
+        color_mode = self.color_combo.currentData() or "auto"
         colorconv = self.colorconv_combo.currentIndex()
         collate   = self.collate_check.isChecked()
         duplex    = self.duplex_check.isChecked()
@@ -4319,7 +4332,7 @@ class PrintDialog(QDialog):
             if shutil.which("lp"):
                 try:
                     skipped = self._print_via_gs(
-                        pages_to_print, copies, grayscale, collate, duplex,
+                        pages_to_print, copies, color_mode, collate, duplex,
                         duplex_edge, colorconv, printer_name, scale_idx,
                         paper_key, orient_idx, hw_margin_mm, _report)
                     obj = self_ref()
@@ -4342,7 +4355,7 @@ class PrintDialog(QDialog):
             # Pre-render pages in background (pdfium, no QPrinter); draw on GUI thread.
             try:
                 rendered, skipped = self._prerender_for_qt(
-                    pages_to_print, grayscale, scale_idx, orient_idx,
+                    pages_to_print, color_mode, scale_idx, orient_idx,
                     paper_key, qt_dpi, hw_margin_mm, _report)
             except Exception as e:
                 errors.append(f"Qt render: {e}")
@@ -4355,7 +4368,7 @@ class PrintDialog(QDialog):
             obj = self_ref()
             if obj is not None:
                 obj._print_qt_send.emit((
-                    rendered, skipped, pages_to_print, copies, grayscale,
+                    rendered, skipped, pages_to_print, copies, color_mode,
                     collate, duplex, duplex_edge, printer_name, paper_key,
                     orient_idx))
 
@@ -4455,7 +4468,7 @@ class PrintDialog(QDialog):
         with open(dest_path, "wb") as f:
             writer.write(f)
 
-    def _print_via_gs(self, pages, copies, grayscale, collate, duplex,
+    def _print_via_gs(self, pages, copies, color_mode, collate, duplex,
                       duplex_edge, colorconv, printer_name, scale_idx,
                       paper_key, orient_idx, hw_margin_mm, report):
         """Full-quality print via Ghostscript + CUPS/lp.
@@ -4569,11 +4582,17 @@ class PrintDialog(QDialog):
                         gs_cmd.append("-dPDFFitPage")   # safe fallback
                 # scale_idx == 1 (100 %): FIXEDMEDIA without -dPDFFitPage → 1:1
 
-                # Colour handling
-                if grayscale:
-                    gs_cmd += ["-sColorConversionStrategy=Gray",
-                                "-dProcessColorModel=/DeviceGray"]
-                elif colorconv == 1:
+                # Colour handling.
+                # "Graustufen" deliberately does NOT convert the PDF here. It
+                # used to, and that destroyed the colour in the spooled file:
+                # the job was monochrome for good, so a queue that was later
+                # re-routed, or settings picked on another machine, could never
+                # bring the colour back. Mono is requested as a CUPS job option
+                # instead (see print-color-mode below) and the printer does the
+                # conversion, exactly as Evince, Chrome and Acrobat do it. The
+                # explicit "Farbkonvertierung" choices below stay, because there
+                # the user is asking for the data itself to be converted.
+                if colorconv == 1:
                     gs_cmd += ["-sColorConversionStrategy=CMYK",
                                 "-dProcessColorModel=/DeviceCMYK"]
                 elif colorconv == 2:
@@ -4587,7 +4606,7 @@ class PrintDialog(QDialog):
                 # Only when a colour conversion was actually asked for, and only
                 # once Ghostscript reported success — otherwise there is nothing
                 # meaningful to compare against.
-                converted = grayscale or colorconv in (1, 2)
+                converted = colorconv in (1, 2)
                 blackout = (_gs_blacked_out(sub_tmp, norm_tmp)
                             if (converted and r.returncode == 0
                                 and os.path.getsize(norm_tmp) > 100)
@@ -4676,11 +4695,13 @@ class PrintDialog(QDialog):
             # monochrome must still print in colour when the user picks "Farbe").
             # print-color-mode is the driver-independent IPP attribute;
             # ColorModel=Gray is kept as a fallback for older PPD-only drivers.
-            if grayscale:
+            if color_mode == "mono":
                 cmd += ["-o", "print-color-mode=monochrome",
                         "-o", "ColorModel=Gray"]
-            else:
+            elif color_mode == "color":
                 cmd += ["-o", "print-color-mode=color"]
+            # "auto": send no colour option at all, so the queue's own default
+            # applies and the decision can still be made downstream.
 
             # Collation via standard IPP multiple-document-handling attribute
             if copies > 1:
@@ -4704,7 +4725,7 @@ class PrintDialog(QDialog):
                     try: os.unlink(f)
                     except Exception: pass
 
-    def _prerender_for_qt(self, pages, grayscale, scale_idx, orient_idx,
+    def _prerender_for_qt(self, pages, color_mode, scale_idx, orient_idx,
                           paper_key, qt_dpi, hw_margin_mm, report):
         """Rasterise PDF pages via pypdfium2 in background.
 
@@ -4768,8 +4789,10 @@ class PrintDialog(QDialog):
                         bm  = pdfpage.render(scale=max(0.5, scale))
                         pil = bm.to_pil().convert("RGB")
 
-                    if grayscale:
-                        pil = pil.convert("L").convert("RGB")
+                    # No convert("L") here either: the QPrinter colour mode
+                    # below carries the request, and throwing the colour away in
+                    # the raster made this path just as irreversible as the
+                    # Ghostscript one.
                     if rot:
                         pil = pil.rotate(-rot, expand=True)
 
@@ -4787,7 +4810,7 @@ class PrintDialog(QDialog):
             raise RuntimeError(tr("Keine Seiten konnten gerendert werden."))
         return rendered, skipped
 
-    def _qt_send_to_printer(self, rendered, skipped, pages, copies, grayscale,
+    def _qt_send_to_printer(self, rendered, skipped, pages, copies, color_mode,
                              collate, duplex, duplex_edge, printer_name,
                              paper_key, orient_idx):
         """Draw pre-rendered images to QPrinter.  MUST run on the GUI thread."""
@@ -4807,8 +4830,10 @@ class PrintDialog(QDialog):
                 printer.setDuplex(
                     QPrinter.DuplexMode.DuplexShortSide if duplex_edge == "short"
                     else QPrinter.DuplexMode.DuplexLongSide)
-            if grayscale:
+            if color_mode == "mono":
                 printer.setColorMode(QPrinter.ColorMode.GrayScale)
+            elif color_mode == "color":
+                printer.setColorMode(QPrinter.ColorMode.Color)
 
             _lp_to_qt = {
                 "A4": QPrinter.PageSize.A4,   "A3": QPrinter.PageSize.A3,

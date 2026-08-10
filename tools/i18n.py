@@ -428,6 +428,11 @@ _EN: dict[str, str] = {
     "Ghostscript-Fehler": "Ghostscript error",
     "Ghostscript hat keine Ausgabedatei erzeugt.": "Ghostscript produced no output file.",
     "Konvertierte Seiten prüfen …": "Verifying converted pages …",
+    "Drucker-Standard": "Printer default",
+    "Drucker-Standard: keine Vorgabe senden — der Drucker bzw. die Warteschlange entscheidet.\nDie Farbinformation bleibt in jedem Fall in der Datei erhalten.":
+        "Printer default: send no preference — the printer or queue decides.\nThe colour information is kept in the file either way.",
+    "Dieser Drucker meldet nur Graustufen — die Farbe bleibt in der Datei erhalten und kann anderswo gedruckt werden.":
+        "This printer reports greyscale only — the colour stays in the file and can be printed elsewhere.",
     "Aktuelle Seite kann nicht ermittelt werden — bitte »Alle Seiten« oder einen Bereich waehlen.":
         "Cannot determine the current page — please choose \u00abAll pages\u00bb or a range.",
     "Hinweis: Der Fallback kann die gewaehlte Farbraum-Umwandlung nicht ausfuehren — es wird ohne sie gedruckt.":
