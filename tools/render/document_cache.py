@@ -1,5 +1,5 @@
 """
-A small registry of open pypdfium2 documents.
+A small registry of open pypdfium2 documents, and of the pages inside them.
 
 Rendering a page used to reparse the whole file. Every thumbnail, every page
 turn and every tool preview called ``pdfium.PdfDocument(path)``, pulled one page
@@ -21,6 +21,29 @@ Close pages explicitly like that. A document that is never closed keeps every
 page ever loaded from it registered until the garbage collector gets round to
 it — measured at ~125 live pdfium page handles during a scroll, versus 1 when
 pages are closed as they are finished with.
+
+
+Why there is a page cache as well
+---------------------------------
+Caching the *document* only moved the cost down one level: ``doc[index]`` is
+``FPDF_LoadPage``, which parses that page's content stream, and the viewer threw
+the result away after every single render. On an A0 poster (3370x2384pt, 20 MB)
+that is, measured per page, per render:
+
+    page 0   351 ms      page 1  1444 ms      page 2  104 ms      page 3  212 ms
+
+against 20-230 ms to actually rasterise a window of the same page once it is
+loaded. Panning at deep zoom paid the parse again on every step; page 1 cost a
+second and a half to look at, every time. :func:`open_page` keeps the loaded
+page instead, so the second look at a page costs the render and nothing else.
+
+The cache is deliberately tiny — :data:`MAX_PAGES` — because a loaded page is
+not small: the same poster's pages measured 60-800 MB resident each. Four is
+enough for what the viewer actually does (the page on screen, its neighbours,
+and whatever a pre-render is warming) and bounds the worst case.
+
+Pages belong to their document, so a handle going out of service closes its
+pages first; nothing in :data:`_pages` can outlive the document it came from.
 
 
 Locking
@@ -55,6 +78,10 @@ Lock order
 Bookkeeping collects the documents that need closing and closes them after the
 registry lock is released. That is what keeps this deadlock-free, since closing
 is itself a pdfium call.
+
+``_pages_lock`` is a leaf: it is taken under either of the other two and never
+holds anything itself, and no pdfium call is ever made while it is held. Page
+eviction follows the same collect-then-close shape as document eviction.
 """
 
 import logging
@@ -66,6 +93,12 @@ from contextlib import contextmanager
 # How many documents stay open. Small on purpose: each one holds a parsed PDF
 # and an open file descriptor, and the viewer only ever works on a few at a time.
 MAX_DOCUMENTS = 8
+
+# How many *pages* stay loaded, across all documents. Much smaller than the
+# document cap: a parsed page of a poster-sized PDF measured 60-800 MB resident,
+# where the document itself was 24 MB. Four covers the page on screen, the two
+# it can be turned to, and one being pre-rendered.
+MAX_PAGES = 4
 
 # Every pdfium call in the process goes through this. See "Locking" above for
 # the measurements behind it; do not narrow it without repeating them.
@@ -100,6 +133,24 @@ class DocumentHandle:
 # is only ever held for bookkeeping — never across a parse, a render or a close.
 _registry: "OrderedDict" = OrderedDict()
 _registry_lock = threading.Lock()
+
+# (document key, page index) -> loaded page, least-recently-used order. See
+# "Why there is a page cache as well" above. Guarded by _pages_lock, a leaf.
+_pages: "OrderedDict" = OrderedDict()
+_pages_lock = threading.Lock()
+
+
+def _forget_pages(key):
+    """Drop a document's pages from the page cache, without closing them.
+
+    Closing is the document's job: ``PdfDocument.close()`` closes the pages
+    loaded from it, and a retired handle that is still in use has its close
+    deferred to the last user — so closing pages here would be closing them out
+    from under a render that is still going.
+    """
+    with _pages_lock:
+        for k in [k for k in _pages if k[0] == key]:
+            _pages.pop(k, None)
 
 
 def _stat_key(path):
@@ -138,6 +189,7 @@ def _retire_locked(handle, doomed):
     lock and nobody is about to take it.
     """
     handle.retired = True
+    _forget_pages(handle.key)
     if handle.users == 0:
         doomed.append(handle.doc)
 
@@ -230,6 +282,68 @@ def page_document(path):
         _checkin(handle)
 
 
+@contextmanager
+def open_page(path, index):
+    """Yield a loaded page of `path`, with the pdfium locks held.
+
+    The page stays loaded afterwards — do not close it, and do not keep a
+    reference to it past the block. Anything derived from it (a textpage, a
+    bitmap's parent) must still be closed by the caller as before.
+
+    This is :func:`page_document` plus the page cache; use it wherever a render
+    or a text extraction needs one page, which is nearly everywhere. Fall back
+    to page_document only when the whole document is the subject.
+    """
+    handle = _checkout(path)
+    if handle is None:
+        # Not cacheable (nothing to stat): open, use, close, like before.
+        import pypdfium2 as pdfium
+        with PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(path)
+            page = None
+            try:
+                page = doc[index]
+                yield page
+            finally:
+                for obj in (page, doc):
+                    try:
+                        if obj is not None:
+                            obj.close()
+                    except Exception:
+                        logging.debug("document_cache: close failed", exc_info=True)
+        return
+    try:
+        with PDFIUM_LOCK:
+            with handle.lock:
+                cache_key = (handle.key, index)
+                with _pages_lock:
+                    page = _pages.get(cache_key)
+                    if page is not None:
+                        _pages.move_to_end(cache_key)
+                if page is None:
+                    page = handle.doc[index]        # FPDF_LoadPage: the expensive bit
+                    doomed = []
+                    with _pages_lock:
+                        _pages[cache_key] = page
+                        _pages.move_to_end(cache_key)
+                        # max(1, ...): the page just checked out is the newest,
+                        # so a cap of at least one can never evict the one this
+                        # caller is about to render.
+                        while len(_pages) > max(1, MAX_PAGES):
+                            doomed.append(_pages.popitem(last=False)[1])
+                    # Closing is a pdfium call, so it happens out here — the
+                    # page lock is a leaf and nothing pdfium ever runs under it.
+                    for victim in doomed:
+                        try:
+                            victim.close()
+                        except Exception:
+                            logging.debug("document_cache: page close failed",
+                                          exc_info=True)
+                yield page
+    finally:
+        _checkin(handle)
+
+
 def get_handle(path):
     """The :class:`DocumentHandle` for `path`, opening the document if needed."""
     handle = _checkout(path)
@@ -250,6 +364,28 @@ def get_document(path):
     return get_handle(path).doc
 
 
+def release(path):
+    """Drop everything cached for `path` — the parsed document and its loaded
+    pages. Called when the tab showing it closes.
+
+    Handles still in use are retired rather than closed, exactly as eviction
+    does, so this can never pull a document out from under a render in flight.
+    """
+    doomed = []
+    with _registry_lock:
+        try:
+            target = os.path.abspath(path)
+        except (TypeError, ValueError):
+            return 0
+        keys = [k for k in _registry if k[0] == target]
+        for k in keys:
+            handle = _registry.pop(k, None)
+            if handle is not None:
+                _retire_locked(handle, doomed)
+    _close_docs(doomed)
+    return len(keys)
+
+
 def close_all():
     """Close every cached document. Called on shutdown.
 
@@ -262,15 +398,21 @@ def close_all():
         _registry.clear()
         for handle in handles:
             _retire_locked(handle, doomed)
+    with _pages_lock:
+        _pages.clear()          # closed with their documents, below
     _close_docs(doomed)
 
 
 def stats():
     """Snapshot of the registry, for diagnostics and tests."""
+    with _pages_lock:
+        pages = len(_pages)
     with _registry_lock:
         return {
             "open": len(_registry),
             "max": MAX_DOCUMENTS,
             "paths": [h.path for h in _registry.values()],
             "in_use": sum(1 for h in _registry.values() if h.users),
+            "pages": pages,
+            "pages_max": MAX_PAGES,
         }

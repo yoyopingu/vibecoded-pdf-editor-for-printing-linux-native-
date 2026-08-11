@@ -139,31 +139,29 @@ def pil_to_qpixmap(pil) -> QPixmap:
 # Returns QImage (NOT QPixmap) so it is safe to call from any thread.
 # QPixmap must only be created on the GUI thread.
 
-def _render_image(pdf_path, page_index, width, rotation=0):
-    """Render a PDF page to QImage. Safe to call from background threads."""
+def _render_image(pdf_path, page_index, width, rotation=0, should_cancel=None):
+    """Render a whole PDF page to a QImage `width` pixels across (before
+    rotation). Safe to call from background threads.
+
+    Returns a placeholder rather than None when the page cannot be rendered:
+    callers put the result straight into a label. A cancelled render is the one
+    case that comes back None, because nobody is waiting for it.
+    """
     try:
-        from tools.render.document_cache import page_document
-        # The document comes from the cache and stays open; only the page is
-        # ours to close. page_document holds that document's own lock for the
-        # duration — see tools/render/document_cache.py on why the lock is per
-        # document rather than one for all of pdfium.
-        with page_document(pdf_path) as doc:
-            page = doc[page_index]
-            try:
-                scale = width / page.get_width()
-                bm    = page.render(scale=scale)
-                pil   = bm.to_pil()
-            finally:
-                page.close()
-        if rotation:
-            pil = pil.rotate(-rotation, expand=True)
-        if pil.mode != "RGB":
-            pil = pil.convert("RGB")
-        raw = pil.tobytes()
-        return QImage(raw, pil.width, pil.height,
-                      pil.width * 3, QImage.Format.Format_RGB888).copy()
+        from tools.render.raster import render_window
+        from tools.render.region import page_px_size, page_size_pt
+        w_pt, h_pt = page_size_pt(pdf_path, page_index)
+        scale = width / w_pt
+        px_w, px_h = page_px_size(w_pt, h_pt, scale, rotation)
+        img = render_window(pdf_path, page_index, px_w, px_h,
+                            rotation=rotation, should_cancel=should_cancel)
+        if img is not None:
+            return img
+        if should_cancel is not None and should_cancel():
+            return None
+        raise RuntimeError("render failed")
     except Exception:
-        img = QImage(max(1, width), max(1, int(width * 1.414)),
+        img = QImage(max(1, int(width)), max(1, int(width * 1.414)),
                      QImage.Format.Format_RGB32)
         img.fill(QColor("#2a3a5a"))
         return img
@@ -376,7 +374,10 @@ class _ThumbTask:
         key = (self._path, self._pidx, self._rot, self._w)
         img = _ThumbnailCache.get(key)
         if img is None:
-            img = _render_image(self._path, self._pidx, self._w, self._rot)
+            img = _render_image(self._path, self._pidx, self._w, self._rot,
+                                should_cancel=lambda: not self._active)
+            if img is None:
+                return                    # cancelled mid-render
             if self._active:
                 _ThumbnailCache.put(key, img)
         if self._active and self._signals is not None:
@@ -602,8 +603,12 @@ class _RegionRenderTask:
         try:
             from tools.render.region import render_region, page_chars
             px0, py0, w, h = self._rect
+            # The cancel is checked between render slices, so a window this
+            # task no longer wants is abandoned in single-digit milliseconds
+            # rather than after the whole thing has been drawn.
             img = render_region(self._path, self._orig, self._scale,
-                                px0, py0, w, h, self._rot)
+                                px0, py0, w, h, self._rot,
+                                should_cancel=lambda: not self._active)
             if img is None or not self._active:
                 return
             try:
@@ -642,6 +647,32 @@ def _rotate_char_boxes(chars, rot, w, h):
     return out
 
 
+def _target_scale(avail_w, avail_h, zoom, page_w_pt, page_h_pt, fallback=1.0):
+    """Pixels per point a page should be rendered at to fill `avail_w` x
+    `avail_h` at `zoom`, with MAX_RENDER_PX applied.
+
+    One function, called from both the GUI thread (deciding whether the cached
+    render is good enough) and the render thread (deciding what to render). The
+    two used to compute it separately, and any disagreement between them — a
+    snapped scale against an unsnapped one, say — is a page that re-renders on
+    every repaint, because the render never lands on the scale that was asked
+    for.
+
+    Snapped, because the only scales that can be rendered are the ones that put
+    a whole number of pixels across the page; see snap_scale in
+    tools/render/region.py.
+    """
+    if page_w_pt <= 0 or page_h_pt <= 0:
+        return fallback
+    from tools.render.region import snap_scale
+    pad = 16
+    fit = min((avail_w - pad) / page_w_pt, (avail_h - pad) / page_h_pt)
+    return snap_scale(page_w_pt, page_h_pt,
+                      min(fit * zoom,
+                          MAX_RENDER_PX / page_w_pt,
+                          MAX_RENDER_PX / page_h_pt))
+
+
 class _PageRenderTask:
     """Renders the full single-page view, submitted to _RenderQueue.
 
@@ -649,7 +680,7 @@ class _PageRenderTask:
     the result in _FullPageCache but emits nothing, warming the cache.
     """
     def __init__(self, gen, path, orig, rot, avail_w, avail_h, zoom,
-                 signals=None):
+                 signals=None, stand_in_shown=False):
         self._gen    = gen
         self._path   = path
         self._orig   = orig
@@ -659,17 +690,19 @@ class _PageRenderTask:
         self._zoom   = zoom
         self._sig    = signals   # None → pre-render (cache-only) mode
         self._active = True
+        # The caller already put the scaled cache entry on screen and is only
+        # waiting for the real render. Emitting the same stand-in again from
+        # here would repeat a smooth scale of a multi-megapixel image on the
+        # render thread — and delay the render the caller is waiting for by
+        # exactly as long as that takes.
+        self._stand_in_shown = stand_in_shown
 
     def cancel(self): self._active = False
 
     def target_scale(self, page_w_pt, page_h_pt, fallback=1.0):
         """Pixels per point this page should be rendered at, cap included."""
-        if page_w_pt <= 0 or page_h_pt <= 0:
-            return fallback
-        pad = 16
-        fit = min((self._aw - pad) / page_w_pt, (self._ah - pad) / page_h_pt)
-        return min(fit * self._zoom,
-                   MAX_RENDER_PX / page_w_pt, MAX_RENDER_PX / page_h_pt)
+        return _target_scale(self._aw, self._ah, self._zoom,
+                             page_w_pt, page_h_pt, fallback)
 
     def _emit(self, img, pw, ph, scale, chars, provisional):
         if self._sig is None or not self._active:
@@ -713,76 +746,51 @@ class _PageRenderTask:
                                  for ch, x, y, x2, y2 in raw_chars]
                 self._emit(img, pw, ph, wanted, raw_chars, False)
                 return
-            self._emit(
-                img.scaled(max(1, int(img.width()  * ratio)),
-                           max(1, int(img.height() * ratio)),
-                           Qt.AspectRatioMode.IgnoreAspectRatio,
-                           Qt.TransformationMode.SmoothTransformation),
-                pw, ph, wanted,
-                [(ch, x*ratio, y*ratio, x2*ratio, y2*ratio)
-                 for ch, x, y, x2, y2 in raw_chars],
-                True)
+            if not self._stand_in_shown:
+                self._emit(
+                    img.scaled(max(1, int(img.width()  * ratio)),
+                               max(1, int(img.height() * ratio)),
+                               Qt.AspectRatioMode.IgnoreAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation),
+                    pw, ph, wanted,
+                    [(ch, x*ratio, y*ratio, x2*ratio, y2*ratio)
+                     for ch, x, y, x2, y2 in raw_chars],
+                    True)
             # …and on to the real render.
 
         try:
-            from tools.render.document_cache import page_document
-            # The document is cached and stays open; page_document holds that
-            # document's own lock here (see tools/render/document_cache.py).
-            # Only the page and its textpage are ours to close.
-            with page_document(self._path) as doc:
-                if not self._active: return
-                pdfpage   = doc[self._orig]
-                textpage  = None
-                try:
-                    raw_w_pt  = pdfpage.get_width()
-                    raw_h_pt  = pdfpage.get_height()
-                    # The bitmap gets turned by self._rot below, so a quarter turn
-                    # swaps the page's width and height. Everything downstream — the
-                    # fit, the zoom percentage, the "Masse" readout — has to see the
-                    # page as it ends up on screen, not as it sits in the file. It
-                    # used to be told the original dimensions, so a page turned 90°
-                    # was fitted into a portrait box and still measured as portrait.
-                    quarter = self._rot % 180 == 90
-                    page_w_pt, page_h_pt = ((raw_h_pt, raw_w_pt) if quarter
-                                            else (raw_w_pt, raw_h_pt))
+            from tools.render.raster import render_window
+            from tools.render.region import page_chars, page_px_size, page_size_pt
 
-                    # Exactly the scale the fast-path above asked for, so the
-                    # result lands on the cache entry it was compared against
-                    # instead of a hair off it, which would re-render forever.
-                    scale = self.target_scale(page_w_pt, page_h_pt)
+            raw_w_pt, raw_h_pt = page_size_pt(self._path, self._orig)
+            # The bitmap comes out of pdfium already turned by self._rot, so a
+            # quarter turn swaps the page's width and height. Everything
+            # downstream — the fit, the zoom percentage, the "Masse" readout —
+            # has to see the page as it ends up on screen, not as it sits in the
+            # file. It used to be told the original dimensions, so a page turned
+            # 90° was fitted into a portrait box and still measured as portrait.
+            quarter = self._rot % 180 == 90
+            page_w_pt, page_h_pt = ((raw_h_pt, raw_w_pt) if quarter
+                                    else (raw_w_pt, raw_h_pt))
 
-                    bm  = pdfpage.render(scale=scale)
-                    pil = bm.to_pil()
-                finally:
-                    # The document outlives this task now, so its pages have to
-                    # be handed back explicitly.
-                    if textpage is not None:
-                        try: textpage.close()
-                        except Exception: pass
-                    try: pdfpage.close()
-                    except Exception: pass
+            # Exactly the scale the fast-path above asked for, so the result
+            # lands on the cache entry it was compared against instead of a hair
+            # off it, which would re-render forever.
+            scale = self.target_scale(page_w_pt, page_h_pt)
+            px_w, px_h = page_px_size(raw_w_pt, raw_h_pt, scale, self._rot)
+
+            img = render_window(self._path, self._orig, px_w, px_h,
+                                rotation=self._rot,
+                                should_cancel=lambda: not self._active)
+            if img is None or not self._active:
+                return
 
             # Text boxes come from the shared cache, which walks the textpage
             # once per page and scales the result afterwards. Doing it here, per
             # render, was 62% of the cost of rendering a dense page — 215ms of
             # Python looping over 15,000 characters to recompute coordinates
             # that only needed multiplying.
-            #
-            # Outside the page_document block on purpose: it takes the same
-            # pdfium lock, which is not reentrant.
-            from tools.render.region import page_chars
             raw_chars = page_chars(self._path, self._orig, scale, self._rot)
-
-            # PIL → QImage: direct buffer copy (no PNG encode/decode — ~20x faster)
-            if self._rot:
-                pil = pil.rotate(-self._rot, expand=True)
-            if pil.mode != "RGB":
-                pil = pil.convert("RGB")
-            raw = pil.tobytes()
-            img = QImage(raw, pil.width, pil.height,
-                         pil.width * 3, QImage.Format.Format_RGB888).copy()
-
-            if not self._active: return
 
             # A display render is the exact one for the current zoom, so it
             # takes the slot; a pre-render only fills an empty one.
@@ -1264,6 +1272,13 @@ class SinglePageView(QWidget):
         self._size_retry_timer = QTimer()
         self._size_retry_timer.setSingleShot(True)
         self._size_retry_timer.timeout.connect(self._render)
+        # Re-aims the pre-render window at wherever the user has got to. Single
+        # shot and restarted on every render, so holding the arrow key down
+        # queues one round of pre-rendering at the end, not one per page.
+        self._prerender_timer = QTimer()
+        self._prerender_timer.setSingleShot(True)
+        self._prerender_timer.timeout.connect(self._prerender_all)
+        self._prerender_aim = None   # page the window was last aimed at
         # Background render infrastructure
         self._render_gen     = 0
         self._render_task    = None          # current active _PageRenderTask
@@ -1404,17 +1419,25 @@ class SinglePageView(QWidget):
     def _display_scale(self, zoom):
         """Pixels per point the page is shown at. No ceiling: past
         MAX_RENDER_PX the page is not rendered in one piece any more, it is
-        rendered a window at a time, so the zoom is free to keep going."""
+        rendered a window at a time, so the zoom is free to keep going.
+
+        Snapped to a scale that puts a whole number of pixels across the page,
+        which is the only kind that can be rendered — see snap_scale in
+        tools/render/region.py. Without it the scale laid out with and the scale
+        rendered at differ in the seventh decimal, and every pan reads as a new
+        zoom and re-renders instead of blitting.
+        """
         if self._page_w_pt <= 0 or self._page_h_pt <= 0:
             return None
         avail_w = self._view.width()
         avail_h = self._view.height()
         if avail_w < 16 or avail_h < 16:
             return None
+        from tools.render.region import snap_scale
         pad = 16
         fit = min((avail_w - pad) / self._page_w_pt,
                   (avail_h - pad) / self._page_h_pt)
-        return fit * zoom
+        return snap_scale(self._page_w_pt, self._page_h_pt, fit * zoom)
 
     def _capped_display_size(self, zoom):
         """Size in pixels (w, h) the page occupies on screen at `zoom`, or
@@ -1428,7 +1451,7 @@ class SinglePageView(QWidget):
         scale = self._display_scale(zoom)
         if scale is None:
             return None, None
-        return self._page_w_pt * scale, self._page_h_pt * scale
+        return self._page_px(scale)
 
     def _use_region_rendering(self, scale):
         """Is the page at this scale too large to render in one piece?"""
@@ -1604,6 +1627,22 @@ class SinglePageView(QWidget):
 
     # ── Window rendering, for zooms past MAX_RENDER_PX ───────────────────────
 
+    def _known_page_size(self, src_path, orig, rot):
+        """(w, h) in points of the page as displayed, from whatever has already
+        measured it — (0, 0) if nothing has.
+
+        Both sources are dictionary lookups. Neither ever parses: see
+        _ensure_page_dims on why this must not touch pdfium.
+        """
+        from tools.render.region import cached_page_size_pt
+        size = cached_page_size_pt(src_path, orig)
+        if size is not None:
+            w, h = size
+            return (h, w) if rot % 180 == 90 else (w, h)
+        # _FullPageCache stores the dimensions already turned, and keys on the
+        # rotation, so this needs no swap of its own.
+        return _FullPageCache.get_dims(src_path, orig, rot)
+
     def _ensure_page_dims(self, src_path, orig, rot):
         """Keep _page_w_pt/_page_h_pt describing the page *as displayed*.
 
@@ -1613,10 +1652,17 @@ class SinglePageView(QWidget):
         render finishes, so the first render after a rotation was laid out for
         the page's old shape.
 
+        Turning to a *different* page used to leave them at zero — next_page
+        clears them deliberately — and at zoom, zero dimensions mean _render()
+        cannot tell that the page needs window rendering. It fell back to
+        rendering the whole sheet in one bitmap, clamped to MAX_RENDER_PX: the
+        most expensive render there is, and not the zoom that was asked for, so
+        the view stayed on a stand-in. Taking the size from a cache that already
+        knows it puts the new page straight into the right mode.
+
         Deliberately does no I/O: this runs on the GUI thread inside _render(),
         and asking pdfium for the size would queue behind the render worker's
-        lock and stall the window. A quarter turn is a swap; anything else waits
-        for the render to report, exactly as before.
+        lock and stall the window.
         """
         key = (src_path, orig)
         if (self._dims_key == key and self._dims_rot is not None
@@ -1624,6 +1670,14 @@ class SinglePageView(QWidget):
             if (rot % 180) != (self._dims_rot % 180):
                 self._page_w_pt, self._page_h_pt = self._page_h_pt, self._page_w_pt
                 self._leave_region_mode()   # measured against the old shape
+        elif self._dims_key != key or self._page_w_pt <= 0 or self._page_h_pt <= 0:
+            # A different page: whatever window is rendered belongs to the old
+            # one, and blitting it here would show the wrong page at the right
+            # scroll position.
+            self._leave_region_mode()
+            w_pt, h_pt = self._known_page_size(src_path, orig, rot)
+            if w_pt > 0 and h_pt > 0:
+                self._page_w_pt, self._page_h_pt = w_pt, h_pt
         self._dims_key = key
         self._dims_rot = rot
 
@@ -1641,6 +1695,16 @@ class SinglePageView(QWidget):
         rendering per step made a complex page crawl."""
         self._zoom_timer.start(ms)
 
+    def _page_px(self, scale):
+        """The sheet's size on screen in whole pixels at `scale`.
+
+        The same number the renderer works to, so the window it produces lands
+        exactly where the view expects it. _page_w_pt/_page_h_pt already
+        describe the page as displayed, hence rotation=0 here.
+        """
+        from tools.render.region import page_px_size
+        return page_px_size(self._page_w_pt, self._page_h_pt, scale, 0)
+
     def _page_origin(self, page_px_w, page_px_h):
         """Where the sheet's top-left corner sits in widget coordinates."""
         avail_w = float(self._view.width())
@@ -1654,8 +1718,7 @@ class SinglePageView(QWidget):
         if self._region_img is None or self._region_rect is None:
             return False
         px0, py0, _, _ = self._region_rect
-        page_px_w = self._page_w_pt * self._region_scale
-        page_px_h = self._page_h_pt * self._region_scale
+        page_px_w, page_px_h = self._page_px(self._region_scale)
         ox, oy = self._page_origin(page_px_w, page_px_h)
         chars = [(ch, ox + x0, oy + y0, ox + x1, oy + y1)
                  for ch, x0, y0, x1, y1 in self._region_chars]
@@ -1668,8 +1731,7 @@ class SinglePageView(QWidget):
 
     def _show_region(self, src_path, orig, rot, scale, avail_w, avail_h):
         from tools.render.region import region_for_viewport, covers
-        page_px_w = self._page_w_pt * scale
-        page_px_h = self._page_h_pt * scale
+        page_px_w, page_px_h = self._page_px(scale)
         # Clamp the scroll to the page as it is at this zoom before deciding
         # what is visible, or the window is computed for a position the view
         # cannot actually be at.
@@ -1762,12 +1824,21 @@ class SinglePageView(QWidget):
         self._blit_region()
         QTimer.singleShot(0, self._update_color_label)
 
-    def _render_preview(self):
+    def _render_preview(self, schedule_settle=True):
         """Schnelle Qt-Skalierung als Vorschau während Zoom-Debounce.
 
         Never renders. This runs on every wheel click of a zoom or a scroll, and
         the exact render is the settle timer's job — one at the end of the
         gesture instead of one per click.
+
+        `schedule_settle=False` is for the one caller that *is* the settle:
+        _render() shows a stand-in on a cache miss while its own exact render is
+        already in flight. Re-arming the timer there meant _render() ran again
+        120 ms later, cancelled the render it had just started, and started
+        another — so any page taking longer than 120 ms to render never finished
+        one. That is every complex page: the view sat on an interpolated
+        stand-in indefinitely while the render thread threw away the same work
+        eight times a second.
         """
         avail_w = float(self._view.width())
         avail_h = float(self._view.height())
@@ -1779,8 +1850,7 @@ class SinglePageView(QWidget):
             # The old whole-page branch stretched the entire sheet on every
             # wheel click — at 3.8x that is an 11-megapixel scale per click, of
             # which one screenful is kept.
-            page_px_w = self._page_w_pt * scale
-            page_px_h = self._page_h_pt * scale
+            page_px_w, page_px_h = self._page_px(scale)
             self._scroll_x = max(0.0, min(self._scroll_x, max(0.0, page_px_w - avail_w)))
             self._scroll_y = max(0.0, min(self._scroll_y, max(0.0, page_px_h - avail_h)))
             from tools.render.region import covers
@@ -1791,7 +1861,8 @@ class SinglePageView(QWidget):
                 self._blit_region()          # already have these pixels
             else:
                 self._region_preview(scale, page_px_w, page_px_h)
-            self._schedule_settle()
+            if schedule_settle:
+                self._schedule_settle()
             return
 
         # Page dimensions not known yet (nothing rendered): extrapolate.
@@ -1829,11 +1900,28 @@ class SinglePageView(QWidget):
         self._pikepdf_path = None
         n = len(model.order)
         self._tot_lbl.setText(f"/ {n}")
+        self._prerender_aim = None   # a new file: re-aim even at the same index
         QTimer.singleShot(0, self._render)
         # Give the canvas focus so arrow keys work without needing a click first
         QTimer.singleShot(0, self._view.setFocus)
-        # Kick off background pre-rendering after the first page is shown
-        QTimer.singleShot(400, self._prerender_all)
+
+    def stop_background_work(self):
+        """Cancel every render this view has outstanding and stop it asking for
+        more. Called when the tab closes; safe to call twice."""
+        for timer in (self._zoom_timer, self._size_retry_timer,
+                      self._prerender_timer):
+            try: timer.stop()
+            except Exception: pass
+        for task in list(self._prerender_tasks):
+            try: task.cancel()
+            except Exception: pass
+        self._prerender_tasks.clear()
+        for name in ("_render_task", "_region_task"):
+            task = getattr(self, name, None)
+            if task is not None:
+                try: task.cancel()
+                except Exception: pass
+                setattr(self, name, None)
 
     def _prerender_all(self):
         """Pre-render a window of pages around the current position.
@@ -1846,6 +1934,13 @@ class SinglePageView(QWidget):
         if not _prerender_enabled:
             return
         if not self.pdf_path or not self.model:
+            return
+        # A zoom or scroll is still in flight. Speculative work belongs after
+        # the gesture, not in the middle of it: the page the user is actually
+        # looking at is about to be rendered, and a pre-render started now holds
+        # the render thread when that happens.
+        if self._zoom_timer.isActive():
+            self._prerender_timer.start(350)
             return
         # Skip pre-rendering if the system is low on free RAM (< 512 MB)
         try:
@@ -1925,6 +2020,19 @@ class SinglePageView(QWidget):
         # as it used to be, and at deep zoom that misplaces the whole window.
         self._ensure_page_dims(src_path, orig, rot)
 
+        # Pre-rendering used to run once, 400 ms after the file opened, over a
+        # window around page 1 — so it warmed the pages the user had already
+        # seen and never the ones ahead of them. Ten pages in, every turn was a
+        # cold render again. Re-aiming it here covers every way the page can
+        # change, since they all end up in _render().
+        #
+        # Only when the page changes, though: _render() also runs on every zoom
+        # settle and every resize, and starting speculative work in the middle
+        # of a gesture is exactly the waste the settle timer exists to avoid.
+        if self._prerender_aim != self._current:
+            self._prerender_aim = self._current
+            self._prerender_timer.start(350)
+
         # ── Too big to render whole: render the window instead ────────────────
         scale = self._display_scale(self._zoom)
         if self._use_region_rendering(scale):
@@ -1943,13 +2051,8 @@ class SinglePageView(QWidget):
             ratio = 1.0
             target_scale = cached_scale
             if page_w_pt > 0 and page_h_pt > 0 and cached_scale > 0:
-                pad = 16
-                fit_scale    = min((avail_w - pad) / page_w_pt,
-                                   (avail_h - pad) / page_h_pt)
-                target_scale = fit_scale * self._zoom
-                target_scale = min(target_scale,
-                                   MAX_RENDER_PX / page_w_pt,
-                                   MAX_RENDER_PX / page_h_pt)
+                target_scale = _target_scale(avail_w, avail_h, self._zoom,
+                                             page_w_pt, page_h_pt, cached_scale)
                 ratio = target_scale / cached_scale
             final = _good_enough(cached_scale, target_scale)
             # Qt-scale the cached pixmap to the requested zoom (GUI thread — fast)
@@ -1987,9 +2090,13 @@ class SinglePageView(QWidget):
                 self._render_task = None
             self._render_gen += 1
             if not final:
+                # stand_in_shown: the scaled cache entry is already on screen,
+                # put there a few lines up. The task would otherwise smooth-scale
+                # the same multi-megapixel image again on the render thread and
+                # emit an identical frame, delaying the render being waited for.
                 task = _PageRenderTask(self._render_gen, src_path, orig, rot,
                                        avail_w, avail_h, self._zoom,
-                                       self._render_signals)
+                                       self._render_signals, stand_in_shown=True)
                 self._render_task = task
                 _render_queue.submit(task, 0)   # P0: active page, preempts low-pri
             return
@@ -2003,7 +2110,9 @@ class SinglePageView(QWidget):
         gen = self._render_gen
 
         if self._last_pm is not None and self._last_zoom > 0:
-            self._render_preview()
+            # No settle timer: the exact render is submitted below, and _render()
+            # *is* the settle. See _render_preview.
+            self._render_preview(schedule_settle=False)
         else:
             # No previous render — show a scaled-up thumbnail for instant feedback
             thumb_img = _ThumbnailCache.get_any(src_path, orig, rot)
@@ -2085,6 +2194,17 @@ class SinglePageView(QWidget):
             self._render_task = None
         self._view.set_page(pm, display_chars, off_x, off_y)
         self._apply_zoom_labels(pm, page_w_pt, page_h_pt)
+
+        # The dimensions have only just arrived, and they may say this page is
+        # too big to be shown in one bitmap at this zoom — which is exactly the
+        # case _render() could not judge before the render, on a page nothing
+        # had measured yet. What it produced is the whole sheet clamped to
+        # MAX_RENDER_PX, i.e. not the zoom asked for, so ask again now that the
+        # answer is knowable. _show_region emits through a different signal, so
+        # this cannot come back round a second time.
+        if (not provisional and page_w_pt > 0
+                and self._use_region_rendering(self._display_scale(self._zoom))):
+            QTimer.singleShot(0, self._render)
 
         QTimer.singleShot(0, self._update_color_label)
 
@@ -5407,6 +5527,15 @@ class PdfTab(QWidget):
         self._manage_widget = None
         self._manage_panel  = None
 
+    def cancel_render_work(self):
+        """Stop everything this tab has on the render queue.
+
+        Closing a tab cancelled its jobs.py work but nothing on _RenderQueue, so
+        a pre-render for a document nobody is looking at any more went on holding
+        the one render thread — and the pdfium lock with it — while the tab the
+        user switched to waited behind it."""
+        self.single.stop_background_work()
+
     def _load(self):
         """Load the document, or raise.
 
@@ -7057,8 +7186,17 @@ class PageViewerPanel(QWidget):
         except Exception:
             pass
         if isinstance(w, PdfTab):
+            w.cancel_render_work()
             _ThumbnailCache.evict_tab(w.pdf_path)
             _FullPageCache.evict_tab(w.pdf_path)
+            # …and the parsed document behind them. A loaded page of a
+            # poster-sized PDF is hundreds of megabytes; holding one for a tab
+            # that is gone is the largest single thing this app can leak.
+            try:
+                from tools.render.document_cache import release
+                release(w.pdf_path)
+            except Exception:
+                logging.exception("close: releasing the cached document failed")
         elif isinstance(w, MergeOrderWidget):
             # Closing the preview discards its conversions — unless one is still
             # running, in which case the worker is still writing in there.

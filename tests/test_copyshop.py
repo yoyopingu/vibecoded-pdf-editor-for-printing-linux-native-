@@ -2392,11 +2392,20 @@ def test_zoom_gesture_renders_once_not_once_per_step():
         originals[name] = cls.run
         def mk(o):
             def run(self):
-                started.append(1)
+                # This document only: pre-renders left over from an earlier
+                # test's viewer run on the same shared queue, and counting them
+                # would make this measure the suite's timing, not the gesture.
+                if getattr(self, "_path", None) == src:
+                    started.append(1)
                 return o(self)
             return run
         cls.run = mk(cls.run)
     try:
+        # Other tests use this same document and share this queue; work they
+        # left behind would be counted against this gesture.
+        pv._render_queue.cancel_queued(0)
+        _spin(20, 0.005)
+        del started[:]
         for _ in range(12):
             sv._zoom_in()
             _spin(3, 0.0)          # faster than the settle timer
@@ -2542,7 +2551,7 @@ def test_deep_zoom_is_correct_for_a_rotated_page():
     """Window rendering maps the visible rectangle back through the page
     manager's rotation; get that inverse wrong and the page comes out scrambled
     or shows the wrong corner."""
-    from tools.render.region import render_region, displayed_page_px
+    from tools.render.region import render_region
     src = _fine_detail_pdf()
     vp, sv = _open_single_view(src)
     try:
@@ -2747,6 +2756,187 @@ def test_document_cache_never_closes_a_document_in_use():
         still_open = False
     assert not still_open, "an evicted document was left open after its last user"
     dc.close_all()
+
+
+def test_a_slow_page_still_finishes_one_render():
+    """A page that takes longer to render than the settle interval used to never
+    finish a render at all.
+
+    _render() showed a stand-in through _render_preview(), which armed the settle
+    timer; the settle timer is _render(); 120 ms later it ran again, cancelled
+    the render it had started and started another. Every complex page — which is
+    exactly the case the window rendering exists for — sat on an interpolated
+    stand-in for as long as it was looked at, while the render thread threw the
+    same work away eight times a second."""
+    import tools.page_viewer as pv
+    from tools.page_viewer import _FullPageCache
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src)
+    started = []
+    original = pv._PageRenderTask.run
+
+    def slow_run(self):
+        if getattr(self, "_path", None) == src and self._sig is not None:
+            started.append(1)
+            time.sleep(0.25)          # comfortably past the 120 ms settle
+        return original(self)
+
+    pv._PageRenderTask.run = slow_run
+    try:
+        # Earlier tests use this same document and leave work on the shared
+        # queue; it would be counted as this view's.
+        pv._render_queue.cancel_queued(0)
+        _spin(20, 0.005)
+        del started[:]
+        _FullPageCache.invalidate()   # force the cache-miss path, stand-in and all
+        assert sv._last_pm is not None, "the stand-in path needs a previous render"
+        sv._render()
+        assert _settle(vp, lambda: sv._render_task is None
+                       and not sv._showing_provisional, tries=400), \
+            f"never settled on a real render ({len(started)} renders started)"
+        assert len(started) <= 2, \
+            f"{len(started)} renders for one page: they are cancelling each other"
+    finally:
+        pv._PageRenderTask.run = original
+        vp.deleteLater(); _app.processEvents()
+    return f"{len(started)} render(s)"
+
+
+def _count_page_loads():
+    """Spy on FPDF_LoadPage. Returns (restore, loaded) where `loaded` collects
+    the page indexes asked for."""
+    import pypdfium2 as _pdfium
+    loaded = []
+    real = _pdfium.PdfDocument.__getitem__
+
+    def spy(self, i):
+        loaded.append(i)
+        return real(self, i)
+
+    _pdfium.PdfDocument.__getitem__ = spy
+
+    def restore():
+        _pdfium.PdfDocument.__getitem__ = real
+    return restore, loaded
+
+
+def _heavy_page_pdf():
+    """One page with enough vector work on it that rendering takes long enough
+    to be interrupted — a few thousand strokes, which is an ordinary map or
+    layout plan and nothing exotic."""
+    p = os.path.join(_TMP, "heavy_render.pdf")
+    if not os.path.exists(p):
+        c = canvas.Canvas(p, pagesize=A4)
+        c.setLineWidth(0.2)
+        for i in range(6000):
+            c.setStrokeColorRGB((i % 7) / 7, (i % 5) / 5, (i % 3) / 3)
+            c.line((i * 7) % 595, (i * 13) % 842, (i * 29) % 595, (i * 37) % 842)
+        c.showPage(); c.save()
+    return p
+
+
+def test_a_page_is_loaded_once_not_once_per_render():
+    """Caching the document only moved the cost down a level: every render still
+    called FPDF_LoadPage and threw the parse away afterwards. On a poster-sized
+    page that was 351 ms — 1444 ms for the worst page of the file measured —
+    paid again on every pan, every zoom step and every page turn back."""
+    from tools.render import document_cache as dc
+    from tools.render.region import render_region
+    dc.close_all()
+    restore, loaded = _count_page_loads()
+    try:
+        for i in range(5):
+            img = render_region(FX["framed"], 0, 2.0, i * 20, 0, 200, 150)
+            assert img is not None and img.width() == 200
+        assert loaded.count(0) == 1, \
+            f"page 0 was loaded {loaded.count(0)}x for 5 window renders"
+
+        # …and the cache is bounded, or a long document would hold every page
+        # it ever showed. A loaded page is not small.
+        del loaded[:]
+        for i in range(dc.MAX_PAGES + 3):
+            render_region(_cache_fixture(_TMP, "many.pdf", dc.MAX_PAGES + 3, "M"),
+                          i, 1.0, 0, 0, 60, 60)
+        assert dc.stats()["pages"] <= dc.MAX_PAGES, dc.stats()
+    finally:
+        restore()
+        dc.close_all()
+    assert dc.stats()["pages"] == 0, "close_all left pages loaded"
+
+
+def test_a_render_in_flight_can_be_abandoned():
+    """A render used to be one uninterruptible call into pdfium: 130-550 ms on a
+    complex page, during which the render thread held the process-wide pdfium
+    lock. Turning the page meant waiting for a pre-render nobody wanted to
+    finish first. pdfium's progressive API renders in slices instead, and the
+    cancel is checked between them."""
+    from tools.render.raster import render_window
+    from tools.render.region import page_px_size, page_size_pt
+    src = _heavy_page_pdf()
+    w_pt, h_pt = page_size_pt(src, 0)
+    px = page_px_size(w_pt, h_pt, 2.0)
+
+    checks = [0]
+    t0 = time.perf_counter()
+    whole = render_window(src, 0, *px, should_cancel=lambda: checks.__setitem__(0, checks[0] + 1))
+    full_ms = (time.perf_counter() - t0) * 1000
+    assert whole is not None and (whole.width(), whole.height()) == px
+    assert checks[0] > 3, \
+        f"the render was one uninterruptible call (cancel asked {checks[0]}x)"
+
+    stop = [0]
+    def cancel_second_time():
+        stop[0] += 1
+        return stop[0] >= 2
+
+    t0 = time.perf_counter()
+    out = render_window(src, 0, *px, should_cancel=cancel_second_time)
+    stop_ms = (time.perf_counter() - t0) * 1000
+    assert out is None, "a cancelled render still produced an image"
+    assert stop_ms < full_ms / 2, \
+        f"cancelling took {stop_ms:.0f} ms of the {full_ms:.0f} ms render"
+    return f"{full_ms:.0f} ms render, cancelled in {stop_ms:.0f} ms"
+
+
+def test_closing_a_tab_releases_the_parsed_document():
+    """A loaded page of a big PDF is hundreds of megabytes. Keeping the document
+    and its pages parsed for a tab the user has closed is the largest single
+    thing this app can hold on to for no reason."""
+    from tools.page_viewer import PageViewerPanel
+    from tools.render import document_cache as dc
+    dc.close_all()
+    vp = PageViewerPanel(); vp.resize(900, 700); vp.show()
+    try:
+        vp.open_file(FX["normal"])
+        _settle(vp, lambda: vp.tabs.count() and dc.stats()["open"], tries=200)
+        assert dc.stats()["open"] >= 1, "the file was never parsed"
+        vp._close_tab(vp.tabs.indexOf(vp.tabs.currentWidget()))
+        _app.processEvents()
+        paths = dc.stats()["paths"]
+        assert not any(os.path.samefile(p, FX["normal"])
+                       for p in paths if os.path.exists(p)), \
+            f"the closed document is still cached: {paths}"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+        dc.close_all()
+
+
+def test_the_prerender_window_follows_the_reader():
+    """Pre-rendering ran once, 400 ms after the file opened, over a window around
+    page 1 — so it warmed pages the user had already seen and never the ones
+    ahead of them. Ten pages in, every turn was a cold render again."""
+    from tools.page_viewer import _FullPageCache
+    vp, sv = _open_single_view(FX["booklet32"])
+    try:
+        _settle(vp, lambda: sv._prerender_tasks, tries=200)
+        sv.go_to(20)
+        assert _settle(vp, lambda: any(
+            _FullPageCache.get(sv.pdf_path, i, 0,
+                               sv._view.width(), sv._view.height()) is not None
+            for i in (21, 22)), tries=400), \
+            "nothing ahead of page 20 was pre-rendered"
+    finally:
+        vp.deleteLater(); _app.processEvents()
 
 
 def test_render_paths_go_through_the_document_cache():

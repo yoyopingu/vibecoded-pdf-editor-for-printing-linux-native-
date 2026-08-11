@@ -26,14 +26,24 @@ through a 300x300 window with no margin at all comes out identical to the same
 area of a full-page render (max channel difference 1). Only the outermost pixel
 or two of the window can differ, and the window is drawn with a margin beyond
 the viewport, so those pixels are off screen.
+
+Whole pixels
+------------
+A page is a whole number of pixels across, decided by :func:`page_px_size`, and
+:func:`snap_scale` is what the viewer uses so that the scale it lays out with is
+the scale that can actually be rendered. Both exist because pdfium's
+interruptible render (see ``tools.render.raster``) states the page's size in
+integer device pixels rather than as a matrix, so a scale of "1.187 pixels per
+point" is really "5527 pixels across". Snapping the two together up front is
+what keeps a pan from being mistaken for a zoom: the viewer asks for the scale
+it was given back, to the bit, and the already-rendered window still counts as
+covering the viewport.
 """
 
 import logging
 import math
 
-from PyQt6.QtGui import QImage
-
-from tools.render.document_cache import _stat_key, page_document
+from tools.render.document_cache import _stat_key
 
 
 def _revision(path):
@@ -56,86 +66,67 @@ def page_size_pt(path, page_index):
     key = (_revision(path), page_index)
     size = _page_sizes.get(key)
     if size is None:
-        with page_document(path) as doc:
-            page = doc[page_index]
-            try:
-                size = (page.get_width(), page.get_height())
-            finally:
-                page.close()
+        from tools.render.document_cache import open_page
+        with open_page(path, page_index) as page:
+            size = (page.get_width(), page.get_height())
         if len(_page_sizes) > 256:
             _page_sizes.clear()
         _page_sizes[key] = size
     return size
 
 
-def displayed_page_px(page_w_pt, page_h_pt, scale, rotation):
-    """Size of the whole page in pixels as it appears on screen, i.e. after the
-    page manager's rotation has been applied."""
-    w, h = page_w_pt * scale, page_h_pt * scale
+def cached_page_size_pt(path, page_index):
+    """:func:`page_size_pt` if it has already been measured, else None.
+
+    For the GUI thread, which must not be the one to find out: measuring means
+    loading the page, which queues behind the render worker's lock and stalls
+    the window for as long as that render takes.
+    """
+    return _page_sizes.get((_revision(path), page_index))
+
+
+def page_px_size(page_w_pt, page_h_pt, scale, rotation=0):
+    """Size of the whole page in whole pixels as it appears on screen, i.e.
+    with the page manager's rotation applied.
+
+    Whole pixels, not a float: this is the number handed to pdfium as the page's
+    device size, and the same number the viewer lays out and scrolls against.
+    They have to be the one number or the two drift apart by a fraction of a
+    pixel and every pan looks like a change of scale.
+    """
+    w = max(1, int(round(page_w_pt * scale)))
+    h = max(1, int(round(page_h_pt * scale)))
     return (h, w) if rotation % 180 == 90 else (w, h)
 
 
-def _unrotated_rect(px0, py0, w, h, rotation, page_px_w, page_px_h):
-    """Map a rectangle in displayed pixel space back to the unrotated page.
+def snap_scale(page_w_pt, page_h_pt, scale):
+    """The nearest scale to `scale` that puts a whole number of pixels across
+    the page's long axis, so that asking for it twice renders the same grid.
 
-    (page_px_w, page_px_h) is the *unrotated* page size in pixels. Rotation is
-    the quarter-turn clockwise that the rendered bitmap gets afterwards, so this
-    is its inverse; see _rotate_char_boxes in page_viewer for the same mapping
-    applied to text boxes.
+    Snapping on the longer side keeps the relative error smallest; the other
+    axis is within half a pixel over the whole page, which at these sizes is a
+    part in ten thousand.
     """
-    r = rotation % 360
-    if r == 90:      # displayed (x, y) came from unrotated (y, page_px_h - x)
-        return py0, page_px_h - (px0 + w), h, w
-    if r == 180:
-        return page_px_w - (px0 + w), page_px_h - (py0 + h), w, h
-    if r == 270:     # displayed (x, y) came from unrotated (page_px_w - y, x)
-        return page_px_w - (py0 + h), px0, h, w
-    return px0, py0, w, h
+    if scale <= 0 or page_w_pt <= 0 or page_h_pt <= 0:
+        return scale
+    longest = max(page_w_pt, page_h_pt)
+    return max(1, int(round(longest * scale))) / longest
 
 
-def render_region(path, page_index, scale, px0, py0, w, h, rotation=0):
+def render_region(path, page_index, scale, px0, py0, w, h, rotation=0,
+                  should_cancel=None):
     """Render the displayed-space rectangle (px0, py0, w, h) at `scale`.
 
     Coordinates are pixels in the displayed page, whose full size is
-    displayed_page_px(...). Returns a QImage exactly w x h, or None on failure.
+    page_px_size(...). Returns a QImage exactly w x h, or None if the render
+    failed or `should_cancel` asked for it to stop.
     """
-    import pypdfium2 as pdfium
-    import pypdfium2.raw as pdfium_c
-
-    w = max(1, int(w)); h = max(1, int(h))
-    px0 = int(px0); py0 = int(py0)
-    with page_document(path) as doc:
-        page = doc[page_index]
-        try:
-            page_px_w = page.get_width()  * scale
-            page_px_h = page.get_height() * scale
-            ux, uy, uw, uh = _unrotated_rect(px0, py0, w, h, rotation,
-                                             page_px_w, page_px_h)
-            uw = max(1, int(round(uw))); uh = max(1, int(round(uh)))
-            bitmap = pdfium.PdfBitmap.new_native(
-                uw, uh, pdfium_c.FPDFBitmap_BGRA, rev_byteorder=False)
-            bitmap.fill_rect((255, 255, 255, 255), 0, 0, uw, uh)
-            # Integer translation, so every window samples the same pixel grid:
-            # two windows of the same page at the same scale always agree where
-            # they overlap.
-            matrix = pdfium_c.FS_MATRIX(scale, 0, 0, scale,
-                                        -float(int(round(ux))), -float(int(round(uy))))
-            clip = pdfium_c.FS_RECTF(0, 0, uw, uh)
-            pdfium_c.FPDF_RenderPageBitmapWithMatrix(
-                bitmap, page, matrix, clip, pdfium_c.FPDF_ANNOT)
-            pil = bitmap.to_pil().convert("RGB")
-        finally:
-            page.close()
-
-    if rotation % 360:
-        pil = pil.rotate(-(rotation % 360), expand=True)
-    if pil.size != (w, h):
-        # Only ever off by a pixel from the rounding above.
-        pil = pil.crop((0, 0, w, h)) if (pil.size[0] >= w and pil.size[1] >= h) \
-              else pil.resize((w, h))
-    raw = pil.tobytes()
-    return QImage(raw, pil.width, pil.height,
-                  pil.width * 3, QImage.Format.Format_RGB888).copy()
+    from tools.render.raster import render_window
+    page_w_pt, page_h_pt = page_size_pt(path, page_index)
+    page_px_w, page_px_h = page_px_size(page_w_pt, page_h_pt, scale, rotation)
+    return render_window(path, page_index, page_px_w, page_px_h,
+                         (int(px0), int(py0), max(1, int(w)), max(1, int(h))),
+                         rotation=rotation, should_cancel=should_cancel)
 
 
 # Character boxes at scale 1, per (path, page). They scale linearly, so the
@@ -151,10 +142,10 @@ def page_chars(path, page_index, scale, rotation=0):
     key = (_revision(path), page_index)
     unit = _unit_chars.get(key)
     if unit is None:
+        from tools.render.document_cache import open_page
         unit = []
         try:
-            with page_document(path) as doc:
-                page = doc[page_index]
+            with open_page(path, page_index) as page:
                 textpage = None
                 try:
                     h_pt = page.get_height()
@@ -169,7 +160,6 @@ def page_chars(path, page_index, scale, rotation=0):
                     if textpage is not None:
                         try: textpage.close()
                         except Exception: pass
-                    page.close()
         except Exception:
             logging.debug("region: text extraction failed", exc_info=True)
             unit = []
@@ -182,26 +172,24 @@ def page_chars(path, page_index, scale, rotation=0):
     r = rotation % 360
     if r and scaled:
         from tools.page_viewer import _rotate_char_boxes
-        with page_document(path) as doc:
-            page = doc[page_index]
-            try:
-                w = page.get_width() * scale
-                h = page.get_height() * scale
-            finally:
-                page.close()
-        scaled = _rotate_char_boxes(scaled, r, w, h)
+        # page_size_pt, not the page itself. Loading the page here to ask for
+        # two numbers that never change cost a full FPDF_LoadPage on every pan
+        # of a rotated page — 351 ms a step on the poster this was measured on,
+        # for a width and a height already in a dict.
+        page_w_pt, page_h_pt = page_size_pt(path, page_index)
+        scaled = _rotate_char_boxes(scaled, r, page_w_pt * scale, page_h_pt * scale)
     return scaled
 
 
 def _visible_span(page_px, avail, scroll):
     """The part of one axis of the page that is on screen, as whole pixels.
 
-    Rounded outwards, and the page's own extent rounded up: the page is a
-    fractional number of pixels wide, and truncating that left the window one
-    pixel short of the page's last column at the far corner — a hairline of
-    background down the edge of the sheet.
+    Rounded outwards. The page's extent is a whole number of pixels (see
+    :func:`page_px_size`); it is rounded up here as well because callers may
+    still pass a float, and one pixel short of the page's last column shows as
+    a hairline of background down the edge of the sheet.
     """
-    extent = int(math.ceil(page_px))
+    extent = max(1, int(math.ceil(page_px)))
     if page_px <= avail:
         return 0, extent, extent
     lo = max(0, int(math.floor(scroll)))
