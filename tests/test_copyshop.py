@@ -2142,6 +2142,116 @@ def test_tools_see_the_page_manager():
         f"the inserted blank belongs on the inside of the cover, got {got[1]}"
 
 
+def _cache_fixture(tmp, name, n_pages, label):
+    p = os.path.join(tmp, name)
+    c = canvas.Canvas(p, pagesize=A4)
+    for i in range(n_pages):
+        c.setFont("Helvetica", 40); c.drawCentredString(300, 400, f"{label}{i}"); c.showPage()
+    c.save()
+    return p
+
+
+def _count_parses():
+    """Context-manager-ish spy returning (restore, parsed_paths)."""
+    import pypdfium2 as _pdfium
+    parsed = []
+    real = _pdfium.PdfDocument
+    class _Spy(real):
+        def __init__(self, inp, *a, **k):
+            if isinstance(inp, str): parsed.append(inp)
+            super().__init__(inp, *a, **k)
+    _pdfium.PdfDocument = _Spy
+    def restore(): _pdfium.PdfDocument = real
+    return restore, parsed
+
+
+def test_document_cache_reuses_and_reloads():
+    """The point of the cache: parse a file once, not once per page. And a file
+    that changed on disk must not come back from it — the page manager rewrites
+    its temp PDFs constantly, sometimes within the same millisecond."""
+    from tools.render import document_cache as dc
+    tmp = tempfile.mkdtemp(dir=_TMP)
+    dc.close_all()
+    a = _cache_fixture(tmp, "a.pdf", 2, "A")
+
+    restore, parsed = _count_parses()
+    try:
+        for _ in range(6):
+            with dc.page_document(a) as doc:
+                assert len(doc) == 2
+        assert parsed.count(a) == 1, f"parsed {parsed.count(a)}x for 6 opens"
+
+        time.sleep(0.01)
+        _cache_fixture(tmp, "a.pdf", 3, "B")      # same path, new revision
+        with dc.page_document(a) as doc:
+            assert len(doc) == 3, "an edited file came back from the cache"
+        assert parsed.count(a) == 2, "the new revision was not parsed"
+        assert dc.stats()["open"] == 1, "the superseded revision was left open"
+
+        for i in range(dc.MAX_DOCUMENTS + 4):     # push past the cap
+            with dc.page_document(_cache_fixture(tmp, f"x{i}.pdf", 1, "X")):
+                pass
+        assert dc.stats()["open"] <= dc.MAX_DOCUMENTS, dc.stats()
+    finally:
+        restore()
+        dc.close_all()
+    assert dc.stats()["open"] == 0, "close_all left documents open"
+
+
+def test_document_cache_never_closes_a_document_in_use():
+    """Eviction drops a handle from the registry at once but must leave the
+    close to its last user. Closing a document mid-render is a use-after-free in
+    pdfium, i.e. a crash with no Python traceback to find it by."""
+    from tools.render import document_cache as dc
+    tmp = tempfile.mkdtemp(dir=_TMP)
+    dc.close_all()
+    keep = _cache_fixture(tmp, "keep.pdf", 1, "K")
+
+    handle = dc._checkout(keep)          # stand in for being inside page_document
+    try:
+        for i in range(dc.MAX_DOCUMENTS + 3):
+            with dc.page_document(_cache_fixture(tmp, f"e{i}.pdf", 1, "E")):
+                pass
+        assert handle.retired, "the handle should have been evicted by now"
+        assert handle.users == 1, f"users={handle.users}"
+        with handle.lock:                # still usable while checked out
+            page = handle.doc[0]
+            try:
+                assert page.get_width() > 0
+            finally:
+                page.close()
+    finally:
+        dc._checkin(handle)
+
+    try:
+        handle.doc[0]
+        still_open = True
+    except Exception:
+        still_open = False
+    assert not still_open, "an evicted document was left open after its last user"
+    dc.close_all()
+
+
+def test_render_paths_go_through_the_document_cache():
+    """_render_image used to open and close the whole PDF for every single page.
+    Five pages of one file should now cost one parse."""
+    from tools.page_viewer import _render_image
+    from tools.render import document_cache as dc
+    dc.close_all()
+    restore, parsed = _count_parses()
+    try:
+        for i in range(5):
+            img = _render_image(FX["normal"], i, 90)
+            assert not img.isNull() and img.width() == 90
+            # not the "could not render" fill
+            assert (img.pixel(img.width() // 2, img.height() // 2) & 0xFFFFFF) != 0x2A3A5A
+        n = parsed.count(FX["normal"])
+        assert n == 1, f"the file was parsed {n}x for 5 page renders"
+    finally:
+        restore()
+        dc.close_all()
+
+
 def _pdfium_dims(path, index=0):
     doc = pdfium.PdfDocument(path)
     try:

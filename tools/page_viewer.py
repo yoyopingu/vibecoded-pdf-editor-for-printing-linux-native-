@@ -67,11 +67,17 @@ def _parse_positions(text, n):
 
 
 # ── Global pypdfium2 serialisation lock ──────────────────────────────────────
-# libpdfium's FreeType font cache is NOT thread-safe: concurrent calls to
-# FPDF_LoadPage from different threads corrupt the heap.  All pypdfium2
-# rendering must be serialised through this lock.  The background pool threads
-# still keep the GUI non-blocking; they just queue behind each other.
-_pdfium_lock = threading.Lock()
+# libpdfium is not thread-safe, and not only per document: two threads
+# rendering two *different* documents corrupt the heap (measurements in
+# tools/render/document_cache.py). Every pdfium call in the process is
+# serialised through this one lock.
+#
+# It now lives in the document cache and is re-exported here, so that documents
+# opened ad hoc — by the tools, the print path — and the cached ones the viewer
+# renders from are mutually exclusive with each other. Imported eagerly on
+# purpose: the cache module itself pulls in nothing heavier than the standard
+# library, and defers importing pypdfium2 exactly as this module does.
+from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 
 
 def pil_to_qpixmap(pil) -> QPixmap:
@@ -90,16 +96,19 @@ def pil_to_qpixmap(pil) -> QPixmap:
 def _render_image(pdf_path, page_index, width, rotation=0):
     """Render a PDF page to QImage. Safe to call from background threads."""
     try:
-        import pypdfium2 as pdfium
-        with _pdfium_lock:
-            doc = pdfium.PdfDocument(pdf_path)
+        from tools.render.document_cache import page_document
+        # The document comes from the cache and stays open; only the page is
+        # ours to close. page_document holds that document's own lock for the
+        # duration — see tools/render/document_cache.py on why the lock is per
+        # document rather than one for all of pdfium.
+        with page_document(pdf_path) as doc:
+            page = doc[page_index]
             try:
-                page  = doc[page_index]
                 scale = width / page.get_width()
                 bm    = page.render(scale=scale)
                 pil   = bm.to_pil()
             finally:
-                doc.close()
+                page.close()
         if rotation:
             pil = pil.rotate(-rotation, expand=True)
         if pil.mode != "RGB":
@@ -319,8 +328,9 @@ class _ThumbTask:
 
 
 # ── Single-thread priority render queue ─────────────────────────────────────
-# _pdfium_lock serialises ALL libpdfium calls, so multiple render threads just
-# contend on that lock — only one does real work at a time anyway.
+# One worker, not a pool: ordering matters more than parallelism here, and most
+# of a queue's work is on the document the user is looking at — where pdfium's
+# per-document lock would serialise the threads again anyway.
 # A single thread with a priority heap gives better ordering at lower overhead:
 #   priority 0 = active page (user is watching)
 #   priority 1 = visible thumbnails
@@ -450,6 +460,13 @@ def shutdown_render_queue(timeout: float = 2.0):
         _render_queue.shutdown(timeout)
     except Exception:
         pass          # never let shutdown noise mask the real exit path
+    try:
+        # Only after the worker has stopped: closing a document that a render
+        # is still inside would be exactly the thing the handle locks prevent.
+        from tools.render.document_cache import close_all
+        close_all()
+    except Exception:
+        pass
 
 
 atexit.register(shutdown_render_queue)
@@ -550,51 +567,61 @@ class _PageRenderTask:
                 return
 
         try:
-            import pypdfium2 as pdfium
-            # Serialise ALL pypdfium2 calls: libpdfium's FreeType font cache
-            # is not thread-safe across concurrent FPDF_LoadPage calls.
-            with _pdfium_lock:
+            from tools.render.document_cache import page_document
+            # The document is cached and stays open; page_document holds that
+            # document's own lock here (see tools/render/document_cache.py).
+            # Only the page and its textpage are ours to close.
+            with page_document(self._path) as doc:
                 if not self._active: return
-                doc       = pdfium.PdfDocument(self._path)
                 pdfpage   = doc[self._orig]
-                raw_w_pt  = pdfpage.get_width()
-                raw_h_pt  = pdfpage.get_height()
-                # The bitmap gets turned by self._rot below, so a quarter turn
-                # swaps the page's width and height. Everything downstream — the
-                # fit, the zoom percentage, the "Masse" readout — has to see the
-                # page as it ends up on screen, not as it sits in the file. It
-                # used to be told the original dimensions, so a page turned 90°
-                # was fitted into a portrait box and still measured as portrait.
-                quarter = self._rot % 180 == 90
-                page_w_pt, page_h_pt = ((raw_h_pt, raw_w_pt) if quarter
-                                        else (raw_w_pt, raw_h_pt))
-
-                pad     = 16
-                scale_w = (self._aw - pad) / page_w_pt
-                scale_h = (self._ah - pad) / page_h_pt
-                fit     = min(scale_w, scale_h)
-                scale   = fit * self._zoom
-                MAX_PX  = 4000
-                if page_w_pt * scale > MAX_PX: scale = MAX_PX / page_w_pt
-                if page_h_pt * scale > MAX_PX: scale = MAX_PX / page_h_pt
-
-                bm  = pdfpage.render(scale=scale)
-                pil = bm.to_pil()
-
-                raw_chars = []
+                textpage  = None
                 try:
-                    textpage = pdfpage.get_textpage()
-                    for i in range(textpage.count_chars()):
-                        ch = textpage.get_text_range(i, 1)
-                        if not ch: continue
-                        r = textpage.get_charbox(i, loose=False)
-                        raw_chars.append((ch,
-                            r[0] * scale,
-                            (raw_h_pt - r[3]) * scale,
-                            r[2] * scale,
-                            (raw_h_pt - r[1]) * scale))
-                except Exception:
-                    pass
+                    raw_w_pt  = pdfpage.get_width()
+                    raw_h_pt  = pdfpage.get_height()
+                    # The bitmap gets turned by self._rot below, so a quarter turn
+                    # swaps the page's width and height. Everything downstream — the
+                    # fit, the zoom percentage, the "Masse" readout — has to see the
+                    # page as it ends up on screen, not as it sits in the file. It
+                    # used to be told the original dimensions, so a page turned 90°
+                    # was fitted into a portrait box and still measured as portrait.
+                    quarter = self._rot % 180 == 90
+                    page_w_pt, page_h_pt = ((raw_h_pt, raw_w_pt) if quarter
+                                            else (raw_w_pt, raw_h_pt))
+
+                    pad     = 16
+                    scale_w = (self._aw - pad) / page_w_pt
+                    scale_h = (self._ah - pad) / page_h_pt
+                    fit     = min(scale_w, scale_h)
+                    scale   = fit * self._zoom
+                    MAX_PX  = 4000
+                    if page_w_pt * scale > MAX_PX: scale = MAX_PX / page_w_pt
+                    if page_h_pt * scale > MAX_PX: scale = MAX_PX / page_h_pt
+
+                    bm  = pdfpage.render(scale=scale)
+                    pil = bm.to_pil()
+
+                    raw_chars = []
+                    try:
+                        textpage = pdfpage.get_textpage()
+                        for i in range(textpage.count_chars()):
+                            ch = textpage.get_text_range(i, 1)
+                            if not ch: continue
+                            r = textpage.get_charbox(i, loose=False)
+                            raw_chars.append((ch,
+                                r[0] * scale,
+                                (raw_h_pt - r[3]) * scale,
+                                r[2] * scale,
+                                (raw_h_pt - r[1]) * scale))
+                    except Exception:
+                        pass
+                finally:
+                    # The document outlives this task now, so its pages have to
+                    # be handed back explicitly.
+                    if textpage is not None:
+                        try: textpage.close()
+                        except Exception: pass
+                    try: pdfpage.close()
+                    except Exception: pass
 
             # PIL → QImage: direct buffer copy (no PNG encode/decode — ~20x faster)
             if self._rot:
