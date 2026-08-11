@@ -709,19 +709,21 @@ def test_save_as_honours_the_page_selection():
     assert tab.pdf_path == full, "Save As did not retarget the tab"
 
     # The model must resolve to exactly what is in the file it now points at.
-    on_disk = _page_labels(full)
+    on_disk = _pdfium_page_text(full)
     resolved = []
     for uid in tab.model.order:
         p, o = tab.model.page_source(uid, tab.pdf_path)
-        resolved.append(_page_labels(p)[o])
+        resolved.append(_pdfium_page_text(p)[o])
     assert resolved == on_disk, f"model {resolved} vs file {on_disk} after Save As"
     assert resolved == list(reversed(["PAGE 1", "PAGE 2", "PAGE 3", "PAGE 4", "PAGE 5"])), \
         resolved
     vp.deleteLater()
 
 
-def _page_labels(path):
-    """The visible text of each page, used to tell pages apart by identity."""
+def _pdfium_page_text(path):
+    """The text layer of each page, read through pdfium (which sees an OCR
+    layer that pypdf's extract_text can miss). Named apart from _page_labels
+    below — two helpers with one name silently shadowed each other."""
     doc = pdfium.PdfDocument(path)
     try:
         return [doc[i].get_textpage().get_text_range().strip()
@@ -964,14 +966,14 @@ def test_ocr_produces_a_searchable_pdf():
     im.save(png)
     scan = os.path.join(tmp, "scan.pdf")
     with open(scan, "wb") as f: f.write(img2pdf.convert(png))
-    assert not _page_labels(scan)[0], "fixture already has a text layer"
+    assert not _pdfium_page_text(scan)[0], "fixture already has a text layer"
 
     out = os.path.join(tmp, "ocr.pdf")
     result, summary = _run_ocr(scan, out, lang, False, False, lambda m: None)
     assert result.endswith(".pdf"), f"OCR returned {result}, expected a PDF"
     assert os.path.isfile(result) and os.path.getsize(result) > 0
     assert len(PdfReader(result, strict=False).pages) == 1
-    text = _page_labels(result)[0]
+    text = _pdfium_page_text(result)[0]
     assert "4711" in text, f"no searchable text layer (got {text!r})"
 
     # a language that is not installed says so, instead of failing obscurely
@@ -1195,17 +1197,21 @@ win.show()
 seen = []
 win._open_multi = lambda files: (seen.append(len(files)),
                                  print("MULTI", len(files), flush=True))
+raises = []
 _raise = win._raise_to_front
 def _raise_to_front(activation_token=""):
-    print("TOKEN", activation_token or "-", flush=True)
+    raises.append(activation_token)
+    print("TOKEN", activation_token or "-", "x%d" % len(raises), flush=True)
     _raise(activation_token)
 win._raise_to_front = _raise_to_front
-_open = win.open_paths
-def open_paths(paths):
-    _open(paths)
+# open_paths defers the actual open to the next event-loop turn, so report the
+# tab count from there rather than straight after the call.
+_fwd = win._open_forwarded
+def _open_forwarded(paths):
+    _fwd(paths)
     if len(paths) == 1:
-        print("TABS", win.viewer.tabs.count(), flush=True)
-win.open_paths = open_paths
+        print("TABS", win.viewer.tabs.count(), "raises=%d" % len(raises), flush=True)
+win._open_forwarded = _open_forwarded
 MAIN._listen_for_open_requests(win)
 print("READY", int(win._ipc_server.isListening()), flush=True)
 QTimer.singleShot(20000, lambda: os._exit(2))
@@ -1306,11 +1312,17 @@ def test_single_instance_forwards_files():
             assert MAIN._forward_to_running_instance([FX["single"]]) is True
         finally:
             os.environ.pop("XDG_ACTIVATION_TOKEN", None)
-        got = _expect_line(host, "TOKEN").split(maxsplit=1)[1]
+        got = _expect_line(host, "TOKEN").split()[1]
         assert got == "tok-abc123", f"activation token not forwarded (got {got!r})"
-        tabs = int(_expect_line(host, "TABS").split()[1])
+        tab_line = _expect_line(host, "TABS").split()
+        tabs = int(tab_line[1])
         # tabs == 2 also proves the token line was not mistaken for a path.
         assert tabs == 2, f"forwarded file did not become a second tab ({tabs})"
+        # Exactly one raise. A second, tokenless requestActivate() landing right
+        # behind the good one is what left the window blinking instead of
+        # coming forward on Wayland.
+        raises = int(tab_line[2].split("=")[1])
+        assert raises == 1, f"window was raised {raises}x for one delivery"
     finally:
         host.kill(); host.wait(timeout=10)
         MAIN._IPC_KEY = real_key
@@ -1321,24 +1333,33 @@ def test_open_paths_routes_by_count():
     Driven against the real method with a stand-in window, so it stays
     deterministic (a second MainWindow in this process is not)."""
     class FakeWindow:
+        # The real _open_forwarded, so the deferred hand-off is exercised too.
+        _open_forwarded = MAIN.MainWindow._open_forwarded
         def __init__(self):
-            self.raised = 0; self.opened = []; self.multi = None
+            self.raised = []; self.opened = []; self.multi = None
             self.viewer = self
-        def _raise_to_front(self): self.raised += 1
+        def _raise_to_front(self, activation_token=""):
+            self.raised.append(activation_token)
         def _switch(self, idx): pass
         def open_file(self, path): self.opened.append(path)
         def _open_multi(self, files): self.multi = list(files)
 
-    w = FakeWindow()
-    MAIN.MainWindow.open_paths(w, [FX["normal"]])
-    assert w.opened == [FX["normal"]] and w.multi is None and w.raised == 1
+    def _deliver(w, paths, token=""):
+        MAIN.MainWindow.open_paths(w, paths, token)
+        _spin(10, 0.0)      # open_paths defers the open by one event-loop turn
 
     w = FakeWindow()
-    MAIN.MainWindow.open_paths(w, [FX["normal"], FX["single"]])
+    _deliver(w, [FX["normal"]], "tok-1")
+    assert w.opened == [FX["normal"]] and w.multi is None
+    assert w.raised == ["tok-1"], f"raised {w.raised}, expected one raise with the token"
+
+    w = FakeWindow()
+    _deliver(w, [FX["normal"], FX["single"]])
     assert w.multi == [FX["normal"], FX["single"]] and w.opened == []
+    assert len(w.raised) == 1, f"raised {len(w.raised)}x for one delivery"
 
     w = FakeWindow()
-    MAIN.MainWindow.open_paths(w, [os.path.join(_TMP, "does_not_exist.pdf")])
+    _deliver(w, [os.path.join(_TMP, "does_not_exist.pdf")])
     assert w.opened == [] and w.multi is None, "missing files must be ignored"
 
 
@@ -2119,6 +2140,113 @@ def test_tools_see_the_page_manager():
         f"the back of the cover should carry page 31, got {got[0]}"
     assert got[1] == ("blank", 30), \
         f"the inserted blank belongs on the inside of the cover, got {got[1]}"
+
+
+def _pdfium_dims(path, index=0):
+    doc = pdfium.PdfDocument(path)
+    try:
+        return doc[index].get_width(), doc[index].get_height()
+    finally:
+        doc.close()
+
+
+def test_rotation_reaches_the_tools():
+    """A page turned in "Seiten verwalten" has to be turned for the tools too.
+    Three of them read AppState.current_pdf — the file on disk — instead of the
+    flattened view, so they measured and previewed the page in its original
+    orientation and produced a crop for the wrong side."""
+    from tools._base import displayed_pdf
+    from tools.all_tools import CropResizePanel, NUpPanel
+    tab, panel = _manage(3, "rot_tools.pdf")
+    st = AppState.get()
+    w0, h0 = _pdfium_dims(st.current_pdf)
+    assert h0 > w0, "fixture should start portrait"
+
+    panel.grid.rotate_selected(0)          # no-op: identity view, no rewrite
+    assert displayed_pdf(st.current_pdf) == st.current_pdf
+
+    tab.model.selected = {tab.model.order[0]}
+    panel.grid.rotate_selected(90)
+    flat = displayed_pdf(st.current_pdf)
+    assert flat != st.current_pdf, "rotation did not produce a flattened view"
+    assert PdfReader(flat, strict=False).pages[0].get("/Rotate") == 90
+    w1, h1 = _pdfium_dims(flat)
+    assert (round(w1), round(h1)) == (round(h0), round(w0)), \
+        f"rotated page measures {w1:.0f}x{h1:.0f}, expected {h0:.0f}x{w0:.0f}"
+
+    # Watch which file the panels actually open. current_pdf() was always
+    # correct — the bug was these three code paths reaching past it to
+    # AppState.current_pdf, so only the real call shows it.
+    opened = []
+    real = pdfium.PdfDocument
+    class _Spy(real):
+        def __init__(self, inp, *a, **k):
+            if isinstance(inp, str): opened.append(inp)
+            super().__init__(inp, *a, **k)
+    pdfium.PdfDocument = _Spy
+    try:
+        crop = CropResizePanel()
+        for label, call in (
+                ("crop margins",  lambda: crop._set_margins_for_size(595.0, 842.0)),
+                ("crop preview",  lambda: crop._render_preview(400, 500, 1.0)),
+                ("n-up preview",  lambda: NUpPanel()._render_preview(400, 500, 1.0))):
+            opened.clear()
+            call()
+            assert opened, f"{label} opened no document at all"
+            assert all(p == flat for p in opened), \
+                f"{label} read {[os.path.basename(p) for p in opened]}, not the rotated view"
+    finally:
+        pdfium.PdfDocument = real
+
+
+def test_rotation_reaches_the_preview():
+    """The single-page view turns the bitmap but used to keep the page's original
+    width and height, so a rotated page was fitted into a portrait box, measured
+    as portrait in the "Masse" readout, and drawn smaller than it should be."""
+    from tools.page_viewer import PageViewerPanel
+    vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
+    vp.open_file(FX["normal"])
+    _spin(60, 0.01)
+    tab = vp.tabs.currentWidget()
+    sv  = tab.single
+    _settle(vp, lambda: sv._page_w_pt > 0, tries=200)
+    portrait = (sv._page_w_pt, sv._page_h_pt)
+    assert portrait[1] > portrait[0], "fixture should start portrait"
+    area_before = sv._last_pm.width() * sv._last_pm.height()
+
+    tab._build_manage_once()
+    tab.model.selected = {tab.model.order[0]}
+    tab._manage_panel.grid.rotate_selected(90)
+    sv._current = 0
+    sv._render()
+    assert _settle(vp, lambda: sv._page_w_pt > portrait[0], tries=250), \
+        "the preview never picked up the rotation"
+    assert (round(sv._page_w_pt), round(sv._page_h_pt)) == \
+           (round(portrait[1]), round(portrait[0])), \
+        f"preview reports {sv._page_w_pt:.0f}x{sv._page_h_pt:.0f}, expected the swap"
+    pm = sv._last_pm
+    assert pm.width() > pm.height(), "the rendered page is not landscape"
+    # fitted to the same window, so it should not have shrunk
+    assert pm.width() * pm.height() > area_before * 0.9, \
+        "the rotated page was fitted into the old portrait box"
+    vp.deleteLater()
+
+
+def test_char_boxes_follow_a_rotated_page():
+    """Text rectangles are measured before the bitmap is turned; if they do not
+    turn with it, selecting text on a rotated page highlights the wrong place."""
+    from tools.page_viewer import _rotate_char_boxes
+    W, H = 400.0, 800.0
+    box = [("a", 10.0, 20.0, 30.0, 50.0)]      # near the top-left
+    assert _rotate_char_boxes(box, 0, W, H) == box
+    (_, x0, y0, x1, y1) = _rotate_char_boxes(box, 90, W, H)[0]
+    assert (x0, y0, x1, y1) == (H - 50.0, 10.0, H - 20.0, 30.0)
+    assert 0 <= x0 < x1 <= H and 0 <= y0 < y1 <= W, "90° box left the image"
+    (_, x0, y0, x1, y1) = _rotate_char_boxes(box, 180, W, H)[0]
+    assert (x0, y0, x1, y1) == (W - 30.0, H - 50.0, W - 10.0, H - 20.0)
+    (_, x0, y0, x1, y1) = _rotate_char_boxes(box, 270, W, H)[0]
+    assert (x0, y0, x1, y1) == (20.0, W - 30.0, 50.0, W - 10.0)
+    assert 0 <= x0 < x1 <= H and 0 <= y0 < y1 <= W, "270° box left the image"
 
 
 def _manage(n_pages=6, name="mgr.pdf"):

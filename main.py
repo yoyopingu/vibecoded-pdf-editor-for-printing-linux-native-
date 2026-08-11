@@ -968,6 +968,11 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1000, 640)
         self.resize(1280, 760)
         self._build()
+        # The startup file is opened here, synchronously, on purpose. Deferring
+        # it into the event loop spends the loop's first turn blocked on the
+        # open — and a launch that forwards a file in exactly that window has
+        # its connection dropped, so that file never arrives. Better to finish
+        # opening before the loop starts serving anything.
         if open_file:
             self._switch(0)
             self.viewer.open_file(open_file)
@@ -975,14 +980,28 @@ class MainWindow(QMainWindow):
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(100, lambda: self._open_multi(open_files))
 
-    def open_paths(self, paths):
+    def open_paths(self, paths, activation_token=""):
         """Open files in THIS window — one file becomes a tab, several go through
-        the open/merge chooser. Called when another launch forwards its files to
-        the running instance (see _listen_for_open_requests)."""
+        the merge preview. Called when another launch forwards its files to the
+        running instance (see _listen_for_open_requests).
+
+        Raises the window exactly once, carrying the launcher's activation
+        token. It used to be raised twice — once by the receiver with the token
+        and again here without one — and that second, unauthenticated request
+        landing right behind the good one is what left the window merely
+        blinking in the task bar instead of coming forward."""
         paths = [p for p in paths if os.path.isfile(p)]
         if not paths:
+            self._raise_to_front(activation_token)
             return
-        self._raise_to_front()
+        self._raise_to_front(activation_token)
+        # Let the raise reach the compositor before anything slow runs. Opening
+        # a non-PDF shells out to LibreOffice for seconds on this very thread,
+        # and a frozen window cannot come forward.
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._open_forwarded(paths))
+
+    def _open_forwarded(self, paths):
         if len(paths) == 1:
             self._switch(0)
             self.viewer.open_file(paths[0])
@@ -1243,6 +1262,10 @@ def _forward_to_running_instance(paths) -> bool:
     sock.flush()
     if sock.bytesToWrite():
         sock.waitForBytesWritten(2000)
+    # Disconnect from this side. Waiting for the receiver to hang up first looks
+    # tidier but does not work: the bytes only reach the other end's readyRead
+    # once this socket closes, so waiting for a close that the receiver is
+    # waiting on us for deadlocks until the timeout and the files never arrive.
     sock.disconnectFromServer()
     if sock.state() != QLocalSocket.LocalSocketState.UnconnectedState:
         sock.waitForDisconnected(1000)
@@ -1264,15 +1287,19 @@ def _listen_for_open_requests(win):
 
     def _serve(conn):
         if conn is None: return
-        buf = bytearray()
+        buf  = bytearray()
+        done = []
 
         def _read():
             # The sender terminates its list with a newline; without buffering
             # until then, a list split across packets would be parsed as two
             # messages and the path straddling the split would be lost.
+            if done:
+                return
             buf.extend(bytes(conn.readAll()))
             if not buf.endswith(b"\n"):
                 return
+            done.append(True)
             data = bytes(buf).decode("utf-8", "replace"); buf.clear()
             token = ""
             paths = []
@@ -1281,17 +1308,28 @@ def _listen_for_open_requests(win):
                     token = line[len(_IPC_TOKEN_PREFIX):]
                 elif line and os.path.isfile(line):
                     paths.append(line)
-            win._raise_to_front(token)
-            if paths:
-                win.open_paths(paths)
+            # open_paths does the raising, so the window is activated exactly
+            # once and with the token that came in with the files.
+            win.open_paths(paths, token)
             conn.disconnectFromServer()
+
+        def _finish():
+            # Drain whatever arrived together with the close. A launcher that
+            # writes and exits immediately can be gone before this side is even
+            # scheduled — and if the event loop was busy at that moment (opening
+            # the file the app was started with, say), the message was silently
+            # dropped and that launch did nothing at all.
+            _read()
+            conn.deleteLater()
 
         conn.readyRead.connect(_read)
         # Let Qt reap the socket on its own event loop — deleting it while the
         # server is torn down mid-signal can take the process with it.
-        conn.disconnected.connect(conn.deleteLater)
+        conn.disconnected.connect(_finish)
         if conn.bytesAvailable():
             _read()      # data that arrived before readyRead was connected
+        elif conn.state() == QLocalSocket.LocalSocketState.UnconnectedState:
+            _finish()    # already closed before we got here
 
     # A crashed instance leaves the socket file behind; removeServer clears it.
     QLocalServer.removeServer(_IPC_KEY)

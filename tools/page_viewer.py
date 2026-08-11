@@ -462,6 +462,28 @@ class _PageSignals(QObject):
     # generation, image, off_x, off_y, page_w_pt, page_h_pt, scale, chars
 
 
+def _rotate_char_boxes(chars, rot, w, h):
+    """Move character rectangles with the bitmap they were measured on.
+
+    `w`/`h` are the *unrotated* image size in pixels; PIL's rotate(-rot,
+    expand=True) turns the image clockwise by `rot`."""
+    rot %= 360
+    if rot == 0 or not chars:
+        return chars
+    out = []
+    for ch, x0, y0, x1, y1 in chars:
+        if rot == 90:      # (x, y) → (h - y, x)
+            nx0, ny0, nx1, ny1 = h - y1, x0, h - y0, x1
+        elif rot == 180:   # (x, y) → (w - x, h - y)
+            nx0, ny0, nx1, ny1 = w - x1, h - y1, w - x0, h - y0
+        elif rot == 270:   # (x, y) → (y, w - x)
+            nx0, ny0, nx1, ny1 = y0, w - x1, y1, w - x0
+        else:
+            nx0, ny0, nx1, ny1 = x0, y0, x1, y1
+        out.append((ch, min(nx0, nx1), min(ny0, ny1), max(nx0, nx1), max(ny0, ny1)))
+    return out
+
+
 class _PageRenderTask:
     """Renders the full single-page view, submitted to _RenderQueue.
 
@@ -535,8 +557,17 @@ class _PageRenderTask:
                 if not self._active: return
                 doc       = pdfium.PdfDocument(self._path)
                 pdfpage   = doc[self._orig]
-                page_w_pt = pdfpage.get_width()
-                page_h_pt = pdfpage.get_height()
+                raw_w_pt  = pdfpage.get_width()
+                raw_h_pt  = pdfpage.get_height()
+                # The bitmap gets turned by self._rot below, so a quarter turn
+                # swaps the page's width and height. Everything downstream — the
+                # fit, the zoom percentage, the "Masse" readout — has to see the
+                # page as it ends up on screen, not as it sits in the file. It
+                # used to be told the original dimensions, so a page turned 90°
+                # was fitted into a portrait box and still measured as portrait.
+                quarter = self._rot % 180 == 90
+                page_w_pt, page_h_pt = ((raw_h_pt, raw_w_pt) if quarter
+                                        else (raw_w_pt, raw_h_pt))
 
                 pad     = 16
                 scale_w = (self._aw - pad) / page_w_pt
@@ -559,15 +590,20 @@ class _PageRenderTask:
                         r = textpage.get_charbox(i, loose=False)
                         raw_chars.append((ch,
                             r[0] * scale,
-                            (page_h_pt - r[3]) * scale,
+                            (raw_h_pt - r[3]) * scale,
                             r[2] * scale,
-                            (page_h_pt - r[1]) * scale))
+                            (raw_h_pt - r[1]) * scale))
                 except Exception:
                     pass
 
             # PIL → QImage: direct buffer copy (no PNG encode/decode — ~20x faster)
             if self._rot:
                 pil = pil.rotate(-self._rot, expand=True)
+                # The character boxes were measured on the unturned bitmap and
+                # have to follow it round, or selecting text on a rotated page
+                # highlights the wrong place.
+                raw_chars = _rotate_char_boxes(raw_chars, self._rot,
+                                               raw_w_pt * scale, raw_h_pt * scale)
             if pil.mode != "RGB":
                 pil = pil.convert("RGB")
             raw = pil.tobytes()
@@ -6473,39 +6509,59 @@ class PageViewerPanel(QWidget):
                 return
 
         elif ext in OFFICE_EXTS:
+            # LibreOffice takes seconds to start, and this runs on the GUI
+            # thread. Say what is happening instead of just freezing.
+            self._viewer_info.setText(
+                tr('Konvertiere {p0} …').format(p0=os.path.basename(path)))
+            QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+            QApplication.processEvents()
             try:
-                import shutil, subprocess, tempfile
-                soffice = shutil.which("soffice") or shutil.which("libreoffice")
-                if not soffice:
-                    from PyQt6.QtWidgets import QMessageBox
-                    QMessageBox.warning(self, tr("LibreOffice fehlt"),
-                        tr("LibreOffice wird benoetigt um Office-Dateien zu oeffnen.\n"
-                        "Installation: sudo pacman -S libreoffice-still"))
-                    return
-                tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
-                import atexit, shutil as _shutil
-                atexit.register(_shutil.rmtree, tmp_dir, ignore_errors=True)
-                stem    = os.path.splitext(os.path.basename(path))[0]
-                r = subprocess.run(
-                    [soffice, "--headless", "--convert-to", "pdf",
-                     "--outdir", tmp_dir, path],
-                    capture_output=True, text=True, errors="replace", timeout=120)
-                converted = os.path.join(tmp_dir, stem + ".pdf")
-                if not os.path.isfile(converted):
-                    # LibreOffice benennt manchmal anders — suche erste PDF
-                    pdfs = [f for f in os.listdir(tmp_dir) if f.endswith(".pdf")]
-                    if not pdfs:
-                        from PyQt6.QtWidgets import QMessageBox
-                        QMessageBox.warning(self, tr("Konvertierung fehlgeschlagen"),
-                            r.stderr.strip()[:300] or "Unbekannter Fehler")
-                        return
-                    converted = os.path.join(tmp_dir, pdfs[0])
-                path = converted
-            except Exception as e:
-                from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, tr("Office-Konvertierung fehlgeschlagen"), str(e))
-                return
+                return self._open_office(path)
+            finally:
+                QApplication.restoreOverrideCursor()
+                self._update_toolbar()
 
+        return self._add_pdf_tab(path)
+
+    def _open_office(self, path):
+        """Convert an Office/text/vector document via LibreOffice, then open it."""
+        from PyQt6.QtWidgets import QMessageBox
+        import shutil, subprocess, tempfile, atexit
+        soffice = shutil.which("soffice") or shutil.which("libreoffice")
+        if not soffice:
+            QMessageBox.warning(self, tr("LibreOffice fehlt"),
+                tr("LibreOffice wird benoetigt um Office-Dateien zu oeffnen.\n"
+                   "Installation: sudo pacman -S libreoffice-still"))
+            return None
+        try:
+            tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
+            atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
+            stem = os.path.splitext(os.path.basename(path))[0]
+            r = subprocess.run(
+                [soffice, "--headless", "--convert-to", "pdf",
+                 "--outdir", tmp_dir, path],
+                capture_output=True, text=True, errors="replace", timeout=120)
+        except subprocess.TimeoutExpired:
+            QMessageBox.warning(self, tr("Konvertierung fehlgeschlagen"),
+                tr("LibreOffice hat nicht innerhalb von 120 Sekunden geantwortet."))
+            return None
+        except Exception as e:
+            QMessageBox.warning(self, tr("Office-Konvertierung fehlgeschlagen"), str(e))
+            return None
+        converted = os.path.join(tmp_dir, stem + ".pdf")
+        if not os.path.isfile(converted):
+            # LibreOffice benennt manchmal anders — suche erste PDF
+            pdfs = [f for f in os.listdir(tmp_dir) if f.endswith(".pdf")]
+            if not pdfs:
+                QMessageBox.warning(self, tr("Konvertierung fehlgeschlagen"),
+                                    (r.stderr or "").strip()[:300]
+                                    or tr("LibreOffice hat keine PDF erzeugt."))
+                return None
+            converted = os.path.join(tmp_dir, pdfs[0])
+        return self._add_pdf_tab(converted)
+
+    def _add_pdf_tab(self, path):
+        from PyQt6.QtWidgets import QMessageBox
         # A damaged, encrypted or truncated PDF makes this raise. Unhandled in a
         # slot, PyQt takes the whole process down — so a single bad file killed
         # the app instead of reporting one failed open.

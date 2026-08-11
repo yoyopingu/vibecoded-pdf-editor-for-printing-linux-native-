@@ -725,7 +725,10 @@ class CropResizePanel(BasePanel):
 
     def _set_margins_for_size(self, tw, th):
         """Set the four crop margins so the page is cropped/extended to (tw, th)."""
-        pdf_path = AppState.get().current_pdf
+        # self.current_pdf() — not AppState.current_pdf — so the page manager's
+        # rotations and reordering are reflected. Reading the file on disk meant
+        # a rotated page was measured and previewed in its original orientation.
+        pdf_path = self.current_pdf()
         if not pdf_path or not os.path.isfile(pdf_path):
             return
         try:
@@ -813,7 +816,10 @@ class CropResizePanel(BasePanel):
         return base_pil, pw, ph
 
     def _render_preview(self, avail_w, avail_h, zoom):
-        pdf_path = AppState.get().current_pdf
+        # self.current_pdf() — not AppState.current_pdf — so the page manager's
+        # rotations and reordering are reflected. Reading the file on disk meant
+        # a rotated page was measured and previewed in its original orientation.
+        pdf_path = self.current_pdf()
         if not pdf_path or not os.path.isfile(pdf_path):
             self._sel_info.setText("")
             return None, tr("Keine PDF geoeffnet")
@@ -3371,7 +3377,10 @@ class NUpPanel(BasePanel):
 
     def _render_preview(self, avail_w, avail_h, zoom):
         from PyQt6.QtGui import QBrush as _QB
-        pdf_path = AppState.get().current_pdf
+        # self.current_pdf() — not AppState.current_pdf — so the page manager's
+        # rotations and reordering are reflected. Reading the file on disk meant
+        # a rotated page was measured and previewed in its original orientation.
+        pdf_path = self.current_pdf()
         if not pdf_path or not os.path.isfile(pdf_path):
             return None, tr("Keine PDF geöffnet")
         page_idx, src_pw, src_ph, n_total = self._page_dims(pdf_path)

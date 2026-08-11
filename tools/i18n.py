@@ -411,6 +411,10 @@ _EN: dict[str, str] = {
     "Bilder": "Images",
     "Office & Text": "Office & Text",
     "Alle Dateien": "All files",
+    "Konvertiere {p0} …": "Converting {p0} …",
+    "LibreOffice hat nicht innerhalb von 120 Sekunden geantwortet.":
+        "LibreOffice did not respond within 120 seconds.",
+    "LibreOffice hat keine PDF erzeugt.": "LibreOffice produced no PDF.",
     "Datei nicht gefunden": "File not found",
     "Die Datei existiert nicht mehr:\n{p0}": "This file no longer exists:\n{p0}",
     "Format nicht unterstuetzt": "Format not supported",
