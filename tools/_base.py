@@ -577,7 +577,10 @@ class BasePanel(QWidget):
         return paths
 
     def pick_images(self) -> list:
+        # Same image list the rest of the app accepts, so this dialog cannot
+        # hide a format the converter handles (it was missing *.gif).
+        from tools.multi_open import IMAGE_EXTS
+        pattern = " ".join("*" + e for e in sorted(IMAGE_EXTS))
         paths, _ = QFileDialog.getOpenFileNames(
-            self, tr("Bilder öffnen"), "",
-            tr("Bilder (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.webp)"))
+            self, tr("Bilder öffnen"), "", tr("Bilder") + f" ({pattern})")
         return paths

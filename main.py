@@ -869,11 +869,11 @@ class TitleBar(QWidget):
 
         # Datei
         menu_file = mb.addMenu(tr("Datei"))
-        act_open = QAction(tr("PDF öffnen…"), self)
+        act_open = QAction(tr("Datei öffnen…"), self)
         act_open.setShortcut(QKeySequence("Ctrl+O"))
         act_open.triggered.connect(self._win._open_dialog)
         menu_file.addAction(act_open)
-        act_multi = QAction(tr("Mehrere PDFs öffnen…"), self)
+        act_multi = QAction(tr("Mehrere Dateien öffnen…"), self)
         act_multi.triggered.connect(self._win._open_multi_dialog)
         menu_file.addAction(act_multi)
         menu_file.addSeparator()
@@ -989,10 +989,30 @@ class MainWindow(QMainWindow):
         else:
             self._open_multi(paths)
 
-    def _raise_to_front(self):
+    def _raise_to_front(self, activation_token=""):
+        """Bring this window forward when another launch hands us its files.
+
+        On Wayland a compositor ignores raise_()/activateWindow() from a process
+        the user did not just interact with — that is focus-stealing prevention,
+        and it is why the file opened silently in the background. The launching
+        process is given an XDG activation token by the file manager; it hands
+        that token over with the paths, and Qt's Wayland plugin consumes it from
+        the environment on requestActivate(). X11 ignores the token and the
+        plain raise still works there."""
+        if activation_token:
+            os.environ["XDG_ACTIVATION_TOKEN"] = activation_token
         if self.isMinimized():
             self.showNormal()
-        self.show(); self.raise_(); self.activateWindow()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.requestActivate()
+        # If the compositor still refuses, at least mark the task bar entry so
+        # the window is not simply lost.
+        QApplication.alert(self)
+        os.environ.pop("XDG_ACTIVATION_TOKEN", None)
 
     def _open_multi(self, files):
         """Several files at once go straight to the merge preview, which offers
@@ -1113,15 +1133,20 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(idx)
 
     def _open_dialog(self):
+        # Every open path offers the same formats. This dialog used to filter to
+        # *.pdf even though the viewer converts images and Office documents on
+        # open, so the app hid files it was perfectly able to handle.
+        from tools.multi_open import file_dialog_filter
         path, _ = QFileDialog.getOpenFileName(
-            self, tr("PDF öffnen"), "", tr("PDF Dateien (*.pdf)"))
+            self, tr("Datei öffnen"), "", file_dialog_filter())
         if path:
             self._switch(0)
             self.viewer.open_file(path)
 
     def _open_multi_dialog(self):
+        from tools.multi_open import file_dialog_filter
         paths, _ = QFileDialog.getOpenFileNames(
-            self, tr("Mehrere PDFs öffnen"), "", tr("PDF Dateien (*.pdf)"))
+            self, tr("Mehrere Dateien öffnen"), "", file_dialog_filter())
         if paths:
             if len(paths) == 1:
                 self._switch(0)
@@ -1185,6 +1210,8 @@ def apply_theme_globally(theme: str):
 
 
 _IPC_KEY = "copyshop_pdf_suite_single_instance"
+# Marks a control line in the IPC message. A path can never begin with it.
+_IPC_TOKEN_PREFIX = "\x01token="
 
 
 def _forward_to_running_instance(paths) -> bool:
@@ -1197,9 +1224,17 @@ def _forward_to_running_instance(paths) -> bool:
     sock.connectToServer(_IPC_KEY)
     if not sock.waitForConnected(300):
         return False
+    # Hand over our XDG activation token as well. The compositor gave it to
+    # *this* process because the user just launched it, and it is the only thing
+    # that lets the already-running instance legitimately raise itself on
+    # Wayland. Sent as a control line so it can never be mistaken for a path.
+    lines = list(paths)
+    token = os.environ.get("XDG_ACTIVATION_TOKEN", "")
+    if token:
+        lines.insert(0, _IPC_TOKEN_PREFIX + token)
     # Always terminated by a newline so the receiver can tell "no files, just
     # raise the window" from a half-delivered message.
-    sock.write(("\n".join(paths) + "\n").encode("utf-8"))
+    sock.write(("\n".join(lines) + "\n").encode("utf-8"))
     # Make sure the bytes have actually left this process before the socket is
     # dropped: this call is immediately followed by the launcher exiting, and an
     # unflushed message means the file never opens in the running instance.
@@ -1239,8 +1274,14 @@ def _listen_for_open_requests(win):
             if not buf.endswith(b"\n"):
                 return
             data = bytes(buf).decode("utf-8", "replace"); buf.clear()
-            win._raise_to_front()
-            paths = [p for p in data.split("\n") if p and os.path.isfile(p)]
+            token = ""
+            paths = []
+            for line in data.split("\n"):
+                if line.startswith(_IPC_TOKEN_PREFIX):
+                    token = line[len(_IPC_TOKEN_PREFIX):]
+                elif line and os.path.isfile(line):
+                    paths.append(line)
+            win._raise_to_front(token)
             if paths:
                 win.open_paths(paths)
             conn.disconnectFromServer()

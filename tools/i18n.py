@@ -402,6 +402,60 @@ _EN: dict[str, str] = {
     "  ✗  Fehler  ": "  ✗  Error  ",
     "Konvertiere Dateien...": "Converting files...",
     "Fehler: Keine Dateien konvertiert": "Error: no files converted",
+    # ── Open dialogs / supported formats ──────────────────────────────────────
+    "Datei öffnen…": "Open File…",
+    "Mehrere Dateien öffnen…": "Open Multiple Files…",
+    "Datei öffnen": "Open File",
+    "Mehrere Dateien öffnen": "Open Multiple Files",
+    "Alle unterstuetzten Dateien": "All supported files",
+    "Bilder": "Images",
+    "Office & Text": "Office & Text",
+    "Alle Dateien": "All files",
+    "Datei nicht gefunden": "File not found",
+    "Die Datei existiert nicht mehr:\n{p0}": "This file no longer exists:\n{p0}",
+    "Format nicht unterstuetzt": "Format not supported",
+    'CopyShop kann "{p0}" nicht oeffnen.': 'CopyShop cannot open "{p0}".',
+    "Datei konnte nicht geoeffnet werden": "Could not open file",
+    "Ergebnis konnte nicht geoeffnet werden": "Could not open result",
+    "{p0}\n\n{p1}": "{p0}\n\n{p1}",
+    # ── Plugin manager ────────────────────────────────────────────────────────
+    "Plugin ist bereits installiert.": "Plugin is already installed.",
+    "Plugin ersetzen?": "Replace plugin?",
+    '"{p0}" ist bereits installiert. Ersetzen?': '"{p0}" is already installed. Replace it?',
+    "Installation fehlgeschlagen": "Installation failed",
+    "Installation fehlgeschlagen: {p0}": "Installation failed: {p0}",
+    "Ordner konnte nicht geoeffnet werden: {p0}\n{p1}":
+        "Could not open folder: {p0}\n{p1}",
+    # ── OCR ───────────────────────────────────────────────────────────────────
+    "✓  tesseract  —  erzeugt durchsuchbare PDFs\n"
+    "○  ocrmypdf fehlt  →  optional, bringt echtes Deskew "
+    "und PDF/A:  pip install ocrmypdf --break-system-packages":
+        "✓  tesseract  —  produces searchable PDFs\n"
+        "○  ocrmypdf missing  →  optional, adds true deskew "
+        "and PDF/A:  pip install ocrmypdf --break-system-packages",
+    "✗  Kein OCR-Programm  →  sudo pacman -S tesseract tesseract-data-deu":
+        "✗  No OCR program  →  sudo pacman -S tesseract tesseract-data-deu",
+    "Sprachpakete: {p0}": "Language packs: {p0}",
+    "Sprachpaket fehlt: {p0}\nVerfuegbar: {p1}\n"
+    "Installation z.B.:  sudo pacman -S tesseract-data-{p0}":
+        "Language pack missing: {p0}\nAvailable: {p1}\n"
+        "Install e.g.:  sudo pacman -S tesseract-data-{p0}",
+    "Seiten konnten nicht gerendert werden (poppler installiert?):\n{p0}":
+        "Could not render pages (is poppler installed?):\n{p0}",
+    "Das PDF enthaelt keine Seiten.": "This PDF has no pages.",
+    "Die Datei ist beschaedigt oder keine gueltige PDF.\n{p0}":
+        "This file is damaged or not a valid PDF.\n{p0}",
+    "Zeitueberschreitung bei Seite {p0}.": "Timed out on page {p0}.",
+    "Seite {p0}: {p1}": "Page {p0}: {p1}",
+    "tesseract beendet mit Code {p0}": "tesseract exited with code {p0}",
+    "OCR hat keine Seiten erzeugt.": "OCR produced no pages.",
+    "OCR abgeschlossen ({p0}) — {p1} Seite(n) erkannt":
+        "OCR complete ({p0}) — {p1} page(s) recognised",
+    ", {p0} bereits mit Text uebersprungen": ", {p0} already had text and were skipped",
+    "Deutsch": "German", "Englisch": "English", "Französisch": "French",
+    "Spanisch": "Spanish", "Italienisch": "Italian", "Niederländisch": "Dutch",
+    "Portugiesisch": "Portuguese", "Afrikaans": "Afrikaans", "Türkisch": "Turkish",
+    "Polnisch": "Polish", "Russisch": "Russian",
     "Ausschneiden  (Strg+X)": "Cut  (Ctrl+X)",
     "Zuerst Dateien auswaehlen.": "Select files first.",
     "Zwischenablage ist leer.": "Clipboard is empty.",

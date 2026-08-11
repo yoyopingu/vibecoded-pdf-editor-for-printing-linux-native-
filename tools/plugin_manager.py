@@ -84,15 +84,41 @@ class PluginManagerPanel(BasePanel):
                 p2=getattr(cls,'SUBTITLE','—')))
 
     def _install(self):
+        from PyQt6.QtWidgets import QMessageBox
         src, _ = QFileDialog.getOpenFileName(self,tr("Plugin auswählen"),"",tr("Python-Dateien (*.py)"))
         if not src: return
-        import shutil; os.makedirs(PLUGIN_DIR, exist_ok=True)
-        shutil.copy2(src, os.path.join(PLUGIN_DIR, os.path.basename(src)))
+        import shutil
+        dest = os.path.join(PLUGIN_DIR, os.path.basename(src))
+        # Every step here can fail on a real machine — an unreadable source, a
+        # read-only plugin folder — and an exception in a slot takes the app
+        # down rather than reporting a failed install.
+        if os.path.abspath(src) == os.path.abspath(dest):
+            self.log.log(tr("Plugin ist bereits installiert."))
+            return
+        if os.path.exists(dest):
+            if QMessageBox.question(
+                    self, tr("Plugin ersetzen?"),
+                    tr('"{p0}" ist bereits installiert. Ersetzen?').format(
+                        p0=os.path.basename(dest))) != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            os.makedirs(PLUGIN_DIR, exist_ok=True)
+            shutil.copy2(src, dest)
+        except Exception as e:
+            self.log.log(tr('Installation fehlgeschlagen: {p0}').format(p0=e), error=True)
+            QMessageBox.warning(self, tr("Installation fehlgeschlagen"), str(e))
+            return
         self.log.log(tr("Installiert. Nach Neustart aktiv."))
         self._refresh()
 
     def _open_folder(self):
-        import subprocess; os.makedirs(PLUGIN_DIR, exist_ok=True)
-        subprocess.Popen(["xdg-open", PLUGIN_DIR])
+        import subprocess
+        try:
+            os.makedirs(PLUGIN_DIR, exist_ok=True)
+            subprocess.Popen(["xdg-open", PLUGIN_DIR])
+        except Exception as e:
+            # No xdg-open on a bare desktop, or the folder cannot be created.
+            self.log.log(tr('Ordner konnte nicht geoeffnet werden: {p0}\n{p1}').format(
+                p0=PLUGIN_DIR, p1=e), error=True)
 
     def _run_action(self): return tr("Buttons oben verwenden.")

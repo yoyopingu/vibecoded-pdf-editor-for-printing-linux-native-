@@ -2228,19 +2228,7 @@ def _run_ocr(src, out, lang, deskew, skip, report):
         return out, tr('OCR abgeschlossen ({p0})').format(p0=lang)
 
     if shutil.which("tesseract"):
-        from pdf2image import convert_from_path
-        import pytesseract
-        report(tr("Rendere Seiten …"))
-        images = convert_from_path(src, dpi=300)
-        txt = ""
-        for i, img in enumerate(images):
-            report(tr('OCR Seite {p0} / {p1} …').format(p0=i + 1, p1=len(images)))
-            txt += tr('--- Seite {p0} ---\n').format(p0=i + 1)
-            txt += pytesseract.image_to_string(img, lang=lang) + "\n\n"
-        out_txt = os.path.splitext(out)[0] + ".txt"
-        with open(out_txt, "w", encoding="utf-8") as f:
-            f.write(txt)
-        return out_txt, tr('OCR abgeschlossen — Text gespeichert ({p0})').format(p0=lang)
+        return _ocr_with_tesseract(src, out, lang, deskew, skip, report)
 
     raise RuntimeError(tr(
         "Kein OCR-Programm gefunden.\n"
@@ -2248,23 +2236,157 @@ def _run_ocr(src, out, lang, deskew, skip, report):
         "           oder:  sudo pacman -S tesseract tesseract-data-deu"))
 
 
+def tesseract_langs():
+    """Language codes tesseract actually has data for. Empty when it cannot be
+    asked — the caller then falls back to the built-in list."""
+    if not shutil.which("tesseract"):
+        return []
+    try:
+        r = subprocess.run(["tesseract", "--list-langs"],
+                           capture_output=True, text=True, errors="replace", timeout=20)
+    except Exception:
+        return []
+    langs = [l.strip() for l in (r.stdout or "").splitlines()[1:] if l.strip()]
+    return [l for l in langs if l != "osd"]
+
+
+def _page_has_text(pdf_path, index):
+    """True when this page already carries extractable text."""
+    try:
+        import pypdfium2 as pdfium
+        with _pdfium_lock:
+            doc = pdfium.PdfDocument(pdf_path)
+            try:
+                return bool(doc[index].get_textpage().get_text_range().strip())
+            finally:
+                doc.close()
+    except Exception:
+        return False
+
+
+def _ocr_with_tesseract(src, out, lang, deskew, skip, report):
+    """OCR without ocrmypdf, using tesseract's own PDF renderer.
+
+    This used to dump a .txt file and call it done, which is not what the panel
+    offers — the point is a *searchable PDF*. Tesseract writes exactly that (the
+    scan with an invisible text layer over it), one page at a time, so the pages
+    are rendered, OCR'd and stitched back together here.
+    """
+    from pdf2image import convert_from_path
+    from pypdf import PdfReader, PdfWriter
+    import tempfile
+
+    available = tesseract_langs()
+    missing = [p for p in lang.split("+") if available and p not in available]
+    if missing:
+        raise RuntimeError(tr(
+            "Sprachpaket fehlt: {p0}\nVerfuegbar: {p1}\n"
+            "Installation z.B.:  sudo pacman -S tesseract-data-{p0}"
+        ).format(p0=", ".join(missing), p1=", ".join(available) or "—"))
+
+    report(tr("Rendere Seiten …"))
+    try:
+        images = convert_from_path(src, dpi=300)
+    except Exception as e:
+        raise RuntimeError(tr(
+            "Seiten konnten nicht gerendert werden (poppler installiert?):\n{p0}"
+        ).format(p0=e))
+    if not images:
+        raise RuntimeError(tr("Das PDF enthaelt keine Seiten."))
+
+    reader = PdfReader(src, strict=False)
+    writer = PdfWriter()
+    done = skipped = 0
+    with tempfile.TemporaryDirectory(prefix="copyshop_ocr_") as tmp:
+        for i, img in enumerate(images):
+            report(tr('OCR Seite {p0} / {p1} …').format(p0=i + 1, p1=len(images)))
+            if skip and _page_has_text(src, i):
+                # Same intent as ocrmypdf --skip-text: leave pages that are
+                # already searchable exactly as they are.
+                if i < len(reader.pages):
+                    writer.add_page(reader.pages[i])
+                    skipped += 1
+                    continue
+            png  = os.path.join(tmp, f"p{i:04d}.png")
+            base = os.path.join(tmp, f"o{i:04d}")
+            img.save(png)
+            cmd = ["tesseract", png, base, "-l", lang]
+            if deskew:
+                # Tesseract has no deskew, but PSM 1 runs orientation detection,
+                # which is what actually helps a rotated scan.
+                cmd += ["--psm", "1"]
+            cmd.append("pdf")
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True,
+                                   errors="replace", timeout=300)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(tr('Zeitueberschreitung bei Seite {p0}.').format(p0=i + 1))
+            page_pdf = base + ".pdf"
+            if r.returncode != 0 or not os.path.isfile(page_pdf):
+                raise RuntimeError(tr('Seite {p0}: {p1}').format(
+                    p0=i + 1, p1=(r.stderr or "").strip()[:300]
+                    or tr('tesseract beendet mit Code {p0}').format(p0=r.returncode)))
+            for page in PdfReader(page_pdf, strict=False).pages:
+                writer.add_page(page)
+            done += 1
+
+        if not writer.pages:
+            raise RuntimeError(tr("OCR hat keine Seiten erzeugt."))
+        tmp_out = os.path.join(tmp, "merged.pdf")
+        with open(tmp_out, "wb") as f:
+            writer.write(f)
+        shutil.move(tmp_out, out)
+
+    if not os.path.exists(out) or os.path.getsize(out) == 0:
+        raise RuntimeError(tr("OCR hat keine Ausgabedatei erzeugt."))
+    note = tr('OCR abgeschlossen ({p0}) — {p1} Seite(n) erkannt').format(p0=lang, p1=done)
+    if skipped:
+        note += tr(', {p0} bereits mit Text uebersprungen').format(p0=skipped)
+    return out, note
+
+
 class OcrPanel(BasePanel):
     TITLE         = "OCR -- Texterkennung"
     SUBTITLE      = "Gescannte PDFs durchsuchbar machen."
     OPENS_NEW_TAB = True
 
+    # Pretty names for the codes tesseract reports; anything else is shown raw.
+    _LANG_NAMES = {"deu": "Deutsch", "eng": "Englisch", "fra": "Französisch",
+                   "spa": "Spanisch", "ita": "Italienisch", "nld": "Niederländisch",
+                   "por": "Portugiesisch", "afr": "Afrikaans", "tur": "Türkisch",
+                   "pol": "Polnisch", "rus": "Russisch"}
+
     def build_ui(self, layout):
         has_ocr  = shutil.which("ocrmypdf") is not None
         has_tess = shutil.which("tesseract") is not None
-        layout.addWidget(make_label(
-            ("✓  ocrmypdf" if has_ocr  else "✗  ocrmypdf fehlt  →  pip install ocrmypdf --break-system-packages") + "\n" +
-            ("✓  tesseract" if has_tess else "✗  tesseract fehlt  →  sudo pacman -S tesseract tesseract-data-deu"),
-            dim=True))
+        langs    = tesseract_langs()
+        if has_ocr:
+            status = "✓  ocrmypdf"
+        elif has_tess:
+            # It works without ocrmypdf — say so instead of only showing a
+            # missing-dependency cross, which read as "OCR is broken".
+            status = tr("✓  tesseract  —  erzeugt durchsuchbare PDFs\n"
+                        "○  ocrmypdf fehlt  →  optional, bringt echtes Deskew "
+                        "und PDF/A:  pip install ocrmypdf --break-system-packages")
+        else:
+            status = tr("✗  Kein OCR-Programm  →  sudo pacman -S tesseract tesseract-data-deu")
+        if has_tess:
+            status += "\n" + tr('Sprachpakete: {p0}').format(p0=", ".join(langs) or "—")
+        layout.addWidget(make_label(status, dim=True))
+
         ob = QGroupBox(tr("EINSTELLUNGEN")); ol = QVBoxLayout(ob)
         self.lang = QComboBox()
-        for name, code in [(tr("Deutsch (deu)"), "deu"), (tr("Englisch (eng)"), "eng"),
-                            (tr("Deutsch + Englisch"), "deu+eng"), (tr("Französisch"), "fra")]:
-            self.lang.addItem(name, code)
+        # Only offer languages that are installed. The list was hard-coded and
+        # included "fra", so picking it on a machine without that pack failed.
+        for code in langs:
+            name = tr(self._LANG_NAMES.get(code, code))
+            self.lang.addItem(f"{name} ({code})", code)
+        if "deu" in langs and "eng" in langs:
+            self.lang.addItem(tr("Deutsch + Englisch"), "deu+eng")
+        if not langs:
+            self.lang.addItem(tr("Deutsch (deu)"), "deu")
+        idx = self.lang.findData("deu")
+        if idx >= 0: self.lang.setCurrentIndex(idx)
         ol.addLayout(row(tr("Sprache:"), self.lang))
         self.deskew = QCheckBox(tr("Seiten begradigen")); self.deskew.setChecked(True); ol.addWidget(self.deskew)
         self.skip   = QCheckBox(tr("Seiten mit Text ueberspringen")); self.skip.setChecked(True); ol.addWidget(self.skip)

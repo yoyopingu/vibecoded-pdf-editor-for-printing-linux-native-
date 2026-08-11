@@ -4939,16 +4939,32 @@ class PdfTab(QWidget):
         self._manage_panel  = None
 
     def _load(self):
+        """Load the document, or raise.
+
+        This used to swallow every failure into a log line, so a corrupt or
+        encrypted PDF opened a blank tab with model=None and no explanation —
+        and every feature downstream then had to survive a tab with no model.
+        Both construction sites report the exception instead."""
+        from pypdf import PdfReader
         try:
-            from pypdf import PdfReader
-            n = len(PdfReader(self.pdf_path, strict=False).pages)
-            self.model = PageModel(n)
-            self.single.load(self.pdf_path, self.model)
-            AppState.get().page_model   = self.model
-            AppState.get().current_page = 0
-            _set_active(self.pdf_path, 0)
+            reader = PdfReader(self.pdf_path, strict=False)
+            encrypted = reader.is_encrypted
+            n = len(reader.pages)
         except Exception as e:
             import logging; logging.error(f"PdfTab._load: {e}")
+            raise RuntimeError(tr('Die Datei ist beschaedigt oder keine gueltige PDF.\n{p0}')
+                               .format(p0=e)) from e
+        if encrypted:
+            raise RuntimeError(tr(
+                "Diese PDF ist passwortgeschützt.\n"
+                "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen."))
+        if n == 0:
+            raise RuntimeError(tr("Das PDF enthaelt keine Seiten."))
+        self.model = PageModel(n)
+        self.single.load(self.pdf_path, self.model)
+        AppState.get().page_model   = self.model
+        AppState.get().current_page = 0
+        _set_active(self.pdf_path, 0)
 
     def _on_page_changed(self, page_num):
         if self.model:
@@ -6420,23 +6436,29 @@ class PageViewerPanel(QWidget):
         return w if isinstance(w, PdfTab) else None
 
     def _open(self, path=None):
+        from PyQt6.QtWidgets import QMessageBox
+        from tools.multi_open import (IMAGE_EXTS, OFFICE_EXTS, PDF_EXT,
+                                      file_dialog_filter)
         if not path:
             path, _ = QFileDialog.getOpenFileName(
-                self, tr("Datei oeffnen"), "",
-                tr("Alle unterstuetzten Dateien ("
-                "*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp "
-                "*.docx *.doc *.xlsx *.xls *.pptx *.ppt "
-                "*.odt *.ods *.odp *.rtf *.pages);;"
-                "PDF (*.pdf);;"
-                "Bilder (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;"
-                "Office (*.docx *.doc *.xlsx *.xls *.pptx *.ppt *.odt *.ods *.odp *.rtf *.pages)"))
+                self, tr("Datei oeffnen"), "", file_dialog_filter())
         if not path: return
 
-        ext = os.path.splitext(path)[1].lower()
+        # Everything below assumes a readable file. Opening one that vanished
+        # between being picked and being read (a stale "recent file", a removed
+        # USB stick) used to fall through to the PDF parser and raise inside a
+        # slot, which aborts the process rather than showing anything.
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, tr("Datei nicht gefunden"),
+                                tr('Die Datei existiert nicht mehr:\n{p0}').format(p0=path))
+            return
 
-        IMAGE_EXTS  = {'.png','.jpg','.jpeg','.tif','.tiff','.bmp','.webp'}
-        OFFICE_EXTS = {'.docx','.doc','.xlsx','.xls','.pptx','.ppt',
-                       '.odt','.ods','.odp','.rtf','.pages'}
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in PDF_EXT | IMAGE_EXTS | OFFICE_EXTS:
+            QMessageBox.warning(
+                self, tr("Format nicht unterstuetzt"),
+                tr('CopyShop kann "{p0}" nicht oeffnen.').format(p0=ext or "?"))
+            return
 
         if ext in IMAGE_EXTS:
             try:
@@ -6484,7 +6506,17 @@ class PageViewerPanel(QWidget):
                 QMessageBox.warning(self, tr("Office-Konvertierung fehlgeschlagen"), str(e))
                 return
 
-        tab  = PdfTab(path)
+        # A damaged, encrypted or truncated PDF makes this raise. Unhandled in a
+        # slot, PyQt takes the whole process down — so a single bad file killed
+        # the app instead of reporting one failed open.
+        try:
+            tab = PdfTab(path)
+        except Exception as e:
+            import logging; logging.exception("open failed: %s", path)
+            QMessageBox.critical(
+                self, tr("Datei konnte nicht geoeffnet werden"),
+                tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
+            return
         name = os.path.basename(path)
         disp = name if len(name) <= 22 else name[:19] + "..."
         idx  = self.tabs.addTab(tab, f"  {disp}  ")
@@ -6492,10 +6524,15 @@ class PageViewerPanel(QWidget):
         AppState.get().open_pdf(path)
         self.tab_opened.emit()
         self.tabs_changed.emit()
+        return tab
 
     def open_file(self, path):
-        self._open(path)
-        # Persist last opened file for the "reopen on startup" setting
+        tab = self._open(path)
+        # Persist last opened file for the "reopen on startup" setting — but
+        # only when it actually opened. Remembering a file that failed meant the
+        # next start reopened it and failed again, every time.
+        if tab is None:
+            return
         try:
             from PyQt6.QtCore import QSettings
             QSettings("CopyShop", "PDFSuite").setValue("general/last_file", path)
@@ -6503,7 +6540,18 @@ class PageViewerPanel(QWidget):
             pass
 
     def _open_result_tab(self, path, title):
-        tab  = PdfTab(path)
+        # Reached from AppState.result_ready, i.e. from a tool that just wrote a
+        # file. If that file is unreadable this raises inside a slot and takes
+        # the process with it — the tool's own error handling never sees it.
+        try:
+            tab = PdfTab(path)
+        except Exception as e:
+            import logging; logging.exception("result tab failed: %s", path)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self, tr("Ergebnis konnte nicht geoeffnet werden"),
+                tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
+            return
         disp = title if len(title) <= 22 else title[:19] + "..."
         idx  = self.tabs.addTab(tab, f"  {disp}  ")
         self.tabs.setCurrentIndex(idx)

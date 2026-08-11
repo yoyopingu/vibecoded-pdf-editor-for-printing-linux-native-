@@ -851,6 +851,141 @@ def _send_key(target, key, mods=None):
     _spin(5, 0.0)
 
 
+def test_open_dialogs_offer_every_supported_format():
+    """The Datei menu filtered to *.pdf while the viewer happily converts images
+    and Office documents on open, so the picker hid files the app can handle.
+    Every open path now draws from one list."""
+    from tools.multi_open import (file_dialog_filter, ALL_EXTS, IMAGE_EXTS,
+                                  OFFICE_EXTS, classify)
+    flt = file_dialog_filter()
+    first = flt.split(";;")[0]
+    for ext in ALL_EXTS:
+        assert "*" + ext in first, f"{ext} missing from the dialog filter"
+        assert classify("x" + ext), f"{ext} is offered but classify() rejects it"
+    # formats verified against the actual converters on this machine
+    for ext in (".gif", ".webp", ".png", ".jpg", ".tif", ".bmp"):
+        assert ext in IMAGE_EXTS, f"{ext} should be a supported image"
+    for ext in (".txt", ".csv", ".html", ".svg", ".docx", ".odt"):
+        assert ext in OFFICE_EXTS, f"{ext} should be LibreOffice-convertible"
+    assert "(*)" in flt, "no all-files escape hatch"
+
+    # The Datei menu must hand that same filter to the picker. Captured from the
+    # real call rather than read out of the source, so a second hard-coded
+    # filter creeping back in is caught.
+    from PyQt6.QtWidgets import QFileDialog
+    seen = []
+    orig_one, orig_many = QFileDialog.getOpenFileName, QFileDialog.getOpenFileNames
+    QFileDialog.getOpenFileName  = staticmethod(lambda *a, **k: (seen.append(a[3]), ("", ""))[1])
+    QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: (seen.append(a[3]), ([], ""))[1])
+    try:
+        class _W:
+            _switch = lambda self, i: None
+            viewer  = None
+        MAIN.MainWindow._open_dialog(_W())
+        MAIN.MainWindow._open_multi_dialog(_W())
+    finally:
+        QFileDialog.getOpenFileName, QFileDialog.getOpenFileNames = orig_one, orig_many
+    assert len(seen) == 2, "the menu actions did not open a picker"
+    for used in seen:
+        for ext in (".png", ".docx", ".txt", ".gif"):
+            assert "*" + ext in used, \
+                f"the Datei menu picker hides {ext} — filter was {used[:80]!r}"
+
+
+def test_opening_a_bad_file_reports_instead_of_crashing():
+    """Every one of these used to end in an unhandled exception inside a Qt slot
+    — which aborts the process — or, for a corrupt PDF, in a blank tab with no
+    model and no explanation."""
+    from PyQt6.QtWidgets import QMessageBox, QFileDialog
+    from PyQt6.QtCore import QSettings
+    from tools.page_viewer import PageViewerPanel
+    said = []
+    orig_w, orig_c = QMessageBox.warning, QMessageBox.critical
+    QMessageBox.warning  = staticmethod(lambda *a, **k: said.append(a[1]))
+    QMessageBox.critical = staticmethod(lambda *a, **k: said.append(a[1]))
+    tmp = tempfile.mkdtemp(dir=_TMP)
+    try:
+        vp = PageViewerPanel(); vp.resize(800, 600); vp.show()
+
+        cases = []
+        missing = os.path.join(tmp, "gone.pdf")
+        cases.append(("missing file", missing))
+        odd = os.path.join(tmp, "notes.xyz"); open(odd, "w").write("hi")
+        cases.append(("unknown extension", odd))
+        broken = os.path.join(tmp, "broken.pdf")
+        open(broken, "wb").write(b"%PDF-1.4 truncated, not a real pdf")
+        cases.append(("corrupt pdf", broken))
+        cases.append(("encrypted pdf", FX["encrypted"]))
+
+        for label, path in cases:
+            before = len(said)
+            vp.open_file(path)
+            _spin(10, 0.01)
+            assert len(said) > before, f"{label}: opened with no message at all"
+        assert vp.tabs.count() == 0, \
+            f"{vp.tabs.count()} tab(s) opened for files that cannot be read"
+
+        # a failed open must not become the file reopened at next startup
+        s = QSettings("CopyShop", "PDFSuite")
+        s.setValue("general/last_file", "SENTINEL")
+        vp.open_file(broken); _spin(10, 0.01)
+        assert s.value("general/last_file") == "SENTINEL", \
+            "a file that failed to open was remembered for next startup"
+        vp.deleteLater()
+    finally:
+        QMessageBox.warning, QMessageBox.critical = orig_w, orig_c
+
+
+def test_ocr_produces_a_searchable_pdf():
+    """Without ocrmypdf the panel dumped a .txt file — but what it offers is a
+    searchable PDF. Tesseract writes exactly that; the pages just have to be
+    rendered, OCR'd and stitched back together."""
+    import shutil as _sh
+    from tools.all_tools import _run_ocr, tesseract_langs
+    if not _sh.which("tesseract"):
+        return "skipped — no tesseract"
+    langs = tesseract_langs()
+    lang = "deu" if "deu" in langs else (langs[0] if langs else None)
+    if not lang:
+        return "skipped — no language packs"
+
+    tmp = tempfile.mkdtemp(dir=_TMP)
+    # a "scan": an image-only PDF with no text layer
+    from PIL import ImageDraw, ImageFont
+    import img2pdf
+    def _font(sz):
+        for p in ("/usr/share/fonts/TTF/DejaVuSans.ttf",
+                  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+            if os.path.exists(p): return ImageFont.truetype(p, sz)
+        return ImageFont.load_default()
+    png = os.path.join(tmp, "scan.png")
+    im = Image.new("RGB", (1240, 1754), "white")
+    ImageDraw.Draw(im).text((100, 200), "Rechnung 4711", fill="black", font=_font(64))
+    im.save(png)
+    scan = os.path.join(tmp, "scan.pdf")
+    with open(scan, "wb") as f: f.write(img2pdf.convert(png))
+    assert not _page_labels(scan)[0], "fixture already has a text layer"
+
+    out = os.path.join(tmp, "ocr.pdf")
+    result, summary = _run_ocr(scan, out, lang, False, False, lambda m: None)
+    assert result.endswith(".pdf"), f"OCR returned {result}, expected a PDF"
+    assert os.path.isfile(result) and os.path.getsize(result) > 0
+    assert len(PdfReader(result, strict=False).pages) == 1
+    text = _page_labels(result)[0]
+    assert "4711" in text, f"no searchable text layer (got {text!r})"
+
+    # a language that is not installed says so, instead of failing obscurely
+    bogus = [c for c in ("fra", "spa", "ita", "rus") if c not in langs]
+    if bogus:
+        try:
+            _run_ocr(scan, os.path.join(tmp, "x.pdf"), bogus[0], False, False,
+                     lambda m: None)
+            assert False, "a missing language pack was not reported"
+        except RuntimeError as e:
+            assert "Sprachpaket" in str(e) or "Language pack" in str(e), str(e)
+    return f"searchable PDF via tesseract ({lang})"
+
+
 def test_merge_preview_hides_the_app_sidebar():
     """The preview brings its own sidebar. The app's tool nav must step aside
     while it is up — the two used to stack, and the left one offered tools that
@@ -1060,6 +1195,11 @@ win.show()
 seen = []
 win._open_multi = lambda files: (seen.append(len(files)),
                                  print("MULTI", len(files), flush=True))
+_raise = win._raise_to_front
+def _raise_to_front(activation_token=""):
+    print("TOKEN", activation_token or "-", flush=True)
+    _raise(activation_token)
+win._raise_to_front = _raise_to_front
 _open = win.open_paths
 def open_paths(paths):
     _open(paths)
@@ -1157,9 +1297,19 @@ def test_single_instance_forwards_files():
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     try:
         assert _expect_line(host, "READY") == "READY 1", "host is not listening"
-        # one file → a tab in the window that is already open
-        assert MAIN._forward_to_running_instance([FX["single"]]) is True
+        # one file → a tab in the window that is already open, and the launcher's
+        # XDG activation token travels with it. Without that token a Wayland
+        # compositor refuses to let the running instance raise itself, which is
+        # why the file used to open silently in the background.
+        os.environ["XDG_ACTIVATION_TOKEN"] = "tok-abc123"
+        try:
+            assert MAIN._forward_to_running_instance([FX["single"]]) is True
+        finally:
+            os.environ.pop("XDG_ACTIVATION_TOKEN", None)
+        got = _expect_line(host, "TOKEN").split(maxsplit=1)[1]
+        assert got == "tok-abc123", f"activation token not forwarded (got {got!r})"
         tabs = int(_expect_line(host, "TABS").split()[1])
+        # tabs == 2 also proves the token line was not mistaken for a path.
         assert tabs == 2, f"forwarded file did not become a second tab ({tabs})"
     finally:
         host.kill(); host.wait(timeout=10)

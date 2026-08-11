@@ -13,10 +13,36 @@ import os, shutil, subprocess
 from PyQt6.QtCore import QThread, pyqtSignal
 from tools.i18n import tr
 
-IMAGE_EXTS  = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
+# ── What this app can turn into a PDF ────────────────────────────────────────
+# The single source of truth. These sets and the dialog filter below are used by
+# every open path — the viewer's own button, the Datei menu, and the multi-file
+# preview — so a format can never be accepted by one and hidden by another.
+#
+# Images go through img2pdf (verified here: png incl. alpha and 16-bit, jpg,
+# tif, bmp, webp, gif). Everything in OFFICE_EXTS goes through LibreOffice,
+# which also handles plain text, csv, html and svg — those were convertible all
+# along but were missing from the lists, so the app refused files it could open.
+IMAGE_EXTS  = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp", ".gif"}
 OFFICE_EXTS = {".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
-               ".odt", ".ods", ".odp", ".rtf", ".pages"}
+               ".odt", ".ods", ".odp", ".odg", ".rtf", ".pages",
+               ".txt", ".csv", ".html", ".htm", ".svg"}
 PDF_EXT     = {".pdf"}
+
+ALL_EXTS = PDF_EXT | IMAGE_EXTS | OFFICE_EXTS
+
+
+def _pattern(exts):
+    return " ".join("*" + e for e in sorted(exts))
+
+
+def file_dialog_filter():
+    """Filter string for every "open a file" dialog in the app."""
+    return (tr("Alle unterstuetzten Dateien") + f" ({_pattern(ALL_EXTS)});;"
+            + f"PDF ({_pattern(PDF_EXT)});;"
+            + tr("Bilder") + f" ({_pattern(IMAGE_EXTS)});;"
+            + tr("Office & Text") + f" ({_pattern(OFFICE_EXTS)});;"
+            + tr("Alle Dateien") + " (*)")
+
 
 def classify(path):
     ext = os.path.splitext(path)[1].lower()
