@@ -2608,17 +2608,24 @@ def test_background_work_uses_one_mechanism():
     for. Everything fire-and-forget now goes through tools/jobs.py; _RenderQueue
     keeps its own loop for reasons written at its definition."""
     import ast, pathlib
+    # _RenderQueue's own worker is the documented exception, identified by the
+    # class it lives in. This used to be a line-number range, which every edit
+    # above it silently moved out from under.
+    ALLOWED_IN = {"_RenderQueue"}
     offenders = []
     for f in sorted(pathlib.Path(".").glob("tools/**/*.py")):
         tree = ast.parse(f.read_text())
+        enclosing = {}
+        for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+            for n in ast.walk(cls):
+                enclosing.setdefault(n, cls.name)
         for n in ast.walk(tree):
             if isinstance(n, ast.ClassDef):
                 bases = [getattr(b, "id", getattr(b, "attr", "")) for b in n.bases]
                 if any(b == "QThread" for b in bases):
                     offenders.append(f"{f}:{n.lineno} class {n.name}(QThread)")
             if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "Thread":
-                # _RenderQueue's own worker is the documented exception
-                if not (str(f).endswith("page_viewer.py") and 380 < n.lineno < 460):
+                if enclosing.get(n) not in ALLOWED_IN:
                     offenders.append(f"{f}:{n.lineno} threading.Thread(...)")
     assert not offenders, "background work outside tools/jobs.py:\n  " + "\n  ".join(offenders)
 
@@ -2800,6 +2807,53 @@ def test_a_slow_page_still_finishes_one_render():
         pv._PageRenderTask.run = original
         vp.deleteLater(); _app.processEvents()
     return f"{len(started)} render(s)"
+
+
+def test_a_narrower_thumbnail_is_shrunk_not_re_rendered():
+    """Rendering a thumbnail costs what walking the page's drawing costs, near
+    enough whatever size comes out — a 160x113 thumbnail of a page carrying
+    580,000 stroked segments measured 1221 ms against 1307 ms for the whole
+    sheet. Thumbnail widths are derived from the window's, so dragging it used
+    to re-render every card at every width it passed through."""
+    import tools.page_viewer as pv
+    from tools.page_viewer import (_ThumbTask, _ThumbnailCache,
+                                   _thumb_render_width)
+    _ThumbnailCache.invalidate()
+    rendered = []
+    original = pv._render_image
+
+    def spy(*a, **k):
+        rendered.append(a[2])          # the width asked of pdfium
+        return original(*a, **k)
+
+    pv._render_image = spy
+    try:
+        wide = _thumb_render_width(600)
+        _ThumbTask(0, 0, FX["normal"], 0, 0, wide, None).run()
+        assert rendered == [wide], rendered
+
+        # Anything at or below that width comes from the wide one.
+        for want in (wide, wide - 1, wide // 2, 64):
+            _ThumbTask(0, 0, FX["normal"], 0, 0, want, None).run()
+            img = _ThumbnailCache.get((FX["normal"], 0, 0, want))
+            assert img is not None and img.width() == want, \
+                f"width {want}: got {img and img.width()}"
+        assert rendered == [wide], \
+            f"a narrower thumbnail was rendered again, not shrunk: {rendered}"
+
+        # A wider one is a real render: stretching the cached image would show.
+        _ThumbTask(0, 0, FX["normal"], 0, 0, wide * 2, None).run()
+        assert rendered == [wide, wide * 2], \
+            f"a wider thumbnail was stretched from a smaller render: {rendered}"
+
+        # And the widths asked for land on a ladder, or none of the above ever
+        # gets a hit: the window changes them a pixel at a time.
+        assert len({_thumb_render_width(w) for w in range(300, 380)}) == 1, \
+            "thumbnail widths are not quantised"
+        assert _thumb_render_width(300) >= 300, "a thumbnail would be stretched"
+    finally:
+        pv._render_image = original
+        _ThumbnailCache.invalidate()
 
 
 def _count_page_loads():

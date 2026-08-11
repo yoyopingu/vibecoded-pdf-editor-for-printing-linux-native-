@@ -150,7 +150,13 @@ def cancel_all(wait_ms=2000):
         victims = list(_jobs)
     for job in victims:
         job.cancel()
-    QThreadPool.globalInstance().waitForDone(wait_ms)
+    # None once Qt itself has been torn down, which is the case on the atexit
+    # path: the pool is already gone, so there is nothing left to wait for.
+    # Calling waitForDone on it raised an AttributeError that came out as an
+    # error traceback on every exit without an event loop.
+    pool = QThreadPool.globalInstance()
+    if pool is not None:
+        pool.waitForDone(wait_ms)
     with _jobs_lock:
         _prune_locked()
     return len(victims)

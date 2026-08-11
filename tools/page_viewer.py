@@ -258,6 +258,27 @@ class _ThumbnailCache:
                     return v
         return None
 
+    @classmethod
+    def get_at_least(cls, path, pidx, rot, width):
+        """The narrowest cached image for this page that is still at least
+        `width` across, or None.
+
+        Shrinking one of those is supersampling — as good as rendering at the
+        smaller size, and on a heavy page not remotely the same price. Rendering
+        a thumbnail costs what walking the page's drawing costs, near enough
+        regardless of how few pixels come out: a 160x113 thumbnail of a page
+        with 580,000 stroked segments on it measured 1221 ms against 1307 ms for
+        the whole sheet at 1384x979. Widening the window changes the width every
+        thumbnail is wanted at, and that used to re-render every one of them.
+        """
+        best = None
+        with cls._lock:
+            for (p, pi, r, w), v in cls._store.items():
+                if p == path and pi == pidx and r == rot and w >= width:
+                    if best is None or w < best[0]:
+                        best = (w, v)
+        return best[1] if best else None
+
 
 # ── Module-level LRU full-page cache (thread-safe) ───────────────────────────
 
@@ -341,6 +362,23 @@ class _FullPageCache:
                 del cls._store[k]
 
     @classmethod
+    def get_at_least(cls, path, pidx, rot, width):
+        """The narrowest cached full-page render at least `width` across, or
+        None. Same argument as _ThumbnailCache.get_at_least, one size up: the
+        viewer has usually rendered this page already, and on a heavy page
+        shrinking that render is free where rendering it again is a second
+        walk over the whole drawing."""
+        best = None
+        with cls._lock:
+            for (p, pi, r, _aw, _ah), entry in cls._store.items():
+                if p == path and pi == pidx and r == rot:
+                    img = entry[0]
+                    if img.width() >= width and (best is None
+                                                 or img.width() < best.width()):
+                        best = img
+        return best
+
+    @classmethod
     def get_dims(cls, path, pidx, rot):
         """Return (page_w_pt, page_h_pt) from any cached entry for this page.
         Returns (0, 0) if not cached yet."""
@@ -352,6 +390,20 @@ class _FullPageCache:
 
 
 # ── Background thumbnail rendering ───────────────────────────────────────────
+
+def _thumb_render_width(width, cap=2400):
+    """Round a wanted thumbnail width up onto a coarse ladder.
+
+    Thumbnail widths are derived from the window's, so they change by a pixel
+    at a time as it is dragged — and every distinct width is a separate cache
+    key. Rounding up to a step means a resize lands on a width already rendered
+    and gets shrunk to fit (see _ThumbnailCache.get_at_least) instead of walking
+    the page's drawing again, which on a heavy page is over a second per card.
+    Up, never down, so the cached image is never stretched.
+    """
+    step = 128
+    return min(int(cap), max(step, -(-int(width) // step) * step))
+
 
 class _ThumbSignals(QObject):
     ready = pyqtSignal(int, int, QImage)   # generation, card_idx, image
@@ -374,8 +426,20 @@ class _ThumbTask:
         key = (self._path, self._pidx, self._rot, self._w)
         img = _ThumbnailCache.get(key)
         if img is None:
-            img = _render_image(self._path, self._pidx, self._w, self._rot,
-                                should_cancel=lambda: not self._active)
+            # Anything already rendered at this width or wider is a better
+            # source than pdfium: shrinking it is supersampling, and rendering
+            # again costs a full walk of the page's drawing whatever size the
+            # result is. See _ThumbnailCache.get_at_least.
+            bigger = (_ThumbnailCache.get_at_least(self._path, self._pidx,
+                                                   self._rot, self._w)
+                      or _FullPageCache.get_at_least(self._path, self._pidx,
+                                                     self._rot, self._w))
+            if bigger is not None:
+                img = bigger.scaledToWidth(
+                    self._w, Qt.TransformationMode.SmoothTransformation)
+            else:
+                img = _render_image(self._path, self._pidx, self._w, self._rot,
+                                    should_cancel=lambda: not self._active)
             if img is None:
                 return                    # cancelled mid-render
             if self._active:
@@ -2676,11 +2740,11 @@ class PageGrid(QWidget):
                         c_h = int(c_w * pw / ph) if rot in (90, 270) else int(c_w * ph / pw)
                     else:
                         c_h = int(c_w * CARD_H / CARD_W)
-                    render_w = min(int(c_w * 1.5), 2400)
+                    render_w = _thumb_render_width(c_w * 1.5)
                 else:
                     c_w      = self._card_w
                     c_h      = self._card_h
-                    render_w = max(self._card_w * 2, 200)
+                    render_w = _thumb_render_width(max(self._card_w * 2, 200))
 
                 self._card_render_widths.append(render_w)
 
@@ -5897,7 +5961,7 @@ class FileGrid(QWidget):
             e.ignore()
 
     def _render_w(self):
-        return max(self._card_w * 2, 200)
+        return _thumb_render_width(max(self._card_w * 2, 200))
 
     def _rebuild(self):
         if getattr(self, "_rebuilding", False):
