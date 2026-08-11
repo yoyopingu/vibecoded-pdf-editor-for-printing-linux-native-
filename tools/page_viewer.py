@@ -385,9 +385,30 @@ class _ThumbTask:
 
 
 # ── Single-thread priority render queue ─────────────────────────────────────
-# One worker, not a pool: ordering matters more than parallelism here, and most
-# of a queue's work is on the document the user is looking at — where pdfium's
-# per-document lock would serialise the threads again anyway.
+# The one place that does NOT use tools/jobs.py, on purpose. Three things it
+# needs that a QThreadPool does not give:
+#
+#   * Exactly one worker. pdfium is serialised by PDFIUM_LOCK anyway (see
+#     tools/render/document_cache.py — two threads rendering two *different*
+#     documents corrupt the heap), so extra pool threads would only queue on
+#     that lock while holding a thread and a part-built bitmap each. A pool of
+#     one is expressible, but then the pool buys nothing and costs the two
+#     behaviours below.
+#   * Preemption of the *running* task. When the user turns a page, the render
+#     already in flight for a thumbnail is cancelled mid-flight so the page they
+#     are looking at is not stuck behind it. QThreadPool has no notion of the
+#     currently-running runnable; this queue tracks it (self._running) and
+#     cancels it.
+#   * Exact removal of queued work by priority. cancel_queued() drops every
+#     pending pre-render in one pass. QThreadPool::tryTake needs a handle on
+#     each runnable and races with the worker picking one up; a heap the queue
+#     owns does not.
+#
+# Rebuilding those three on top of a pool would be more code than this loop, so
+# the loop stays. What it shares with jobs.py is what actually matters: the
+# thread is owned by a module-level singleton, every task has cancel(), and
+# shutdown() cancels and joins.
+#
 # A single thread with a priority heap gives better ordering at lower overhead:
 #   priority 0 = active page (user is watching)
 #   priority 1 = visible thumbnails
@@ -518,7 +539,17 @@ def shutdown_render_queue(timeout: float = 2.0):
     except Exception:
         pass          # never let shutdown noise mask the real exit path
     try:
-        # Only after the worker has stopped: closing a document that a render
+        # Pool jobs first: they emit into widgets, and main() deletes the window
+        # right after this. cancel_all waits for the pool to drain.
+        # int() matters: waitForDone takes milliseconds as an int, and a float
+        # raised a TypeError that the except below swallowed — shutdown quietly
+        # cancelled nothing at all until a test went looking.
+        from tools.jobs import cancel_all
+        cancel_all(int(timeout * 1000) if timeout else 2000)
+    except Exception:
+        logging.exception("shutdown: cancelling background jobs failed")
+    try:
+        # Only after the workers have stopped: closing a document that a render
         # is still inside would be exactly the thing the handle locks prevent.
         from tools.render.document_cache import close_all
         close_all()
@@ -3729,7 +3760,7 @@ class _PrintPreview(QWidget):
         import threading, weakref
         self_ref = weakref.ref(self)
 
-        def _bg():
+        def _bg(job):
             try:
                 import pypdfium2 as pdfium
                 with _pdfium_lock:
@@ -3751,7 +3782,7 @@ class _PrintPreview(QWidget):
                 pil.save(buf, "PNG")
                 data = buf.getvalue()
                 obj = self_ref()
-                if obj is not None:
+                if obj is not None and not job.cancelled:
                     try:
                         # Auto-queued to the GUI thread (widget lives there).
                         obj._render_ready.emit(token, data, pw_pt, ph_pt)
@@ -3759,7 +3790,8 @@ class _PrintPreview(QWidget):
                         pass   # widget was deleted
             except Exception:
                 pass
-        threading.Thread(target=_bg, daemon=True).start()
+        from tools.jobs import submit
+        self._render_job = submit(_bg, owner=self, name="print-preview-render")
 
     def _on_render_done(self, token, data, pw_pt, ph_pt):
         if token != self._render_token:
@@ -3912,6 +3944,20 @@ class PrintDialog(QDialog):
     Vollstaendiger Druckdialog mit allen gaengigen Optionen.
     Verwendet Qt QPrinter wenn verfuegbar, sonst Ghostscript/lp als Fallback.
     """
+
+    def done(self, result_code):
+        """Close down the background work this dialog started.
+
+        Printer enumeration and the print job itself run on the pool. Closing
+        the dialog used to leave them running against a widget on its way out;
+        they now stop at their next checkpoint and their results are dropped.
+        """
+        try:
+            from tools.jobs import cancel_owner
+            cancel_owner(self)
+        except Exception:
+            pass
+        super().done(result_code)
 
     # Delivers the async-enumerated printer list to the GUI thread.
     _printers_loaded = pyqtSignal(list, str)
@@ -4334,7 +4380,7 @@ class PrintDialog(QDialog):
         import threading, weakref
         self_ref = weakref.ref(self)
 
-        def _bg():
+        def _bg(job):
             names, default = [], ""
             try:
                 import subprocess
@@ -4362,12 +4408,13 @@ class PrintDialog(QDialog):
             except Exception:
                 pass
             obj = self_ref()
-            if obj is not None:
+            if obj is not None and not job.cancelled:
                 try:
                     obj._printers_loaded.emit(names, default)
                 except RuntimeError:
                     pass   # dialog closed
-        threading.Thread(target=_bg, daemon=True).start()
+        from tools.jobs import submit
+        submit(_bg, owner=self, name="printer-list")
 
     def _apply_printer_list(self, names, default):
         """Populate the combo from an enumerated printer list (GUI thread)."""
@@ -4782,7 +4829,7 @@ class PrintDialog(QDialog):
                 except RuntimeError:
                     pass
 
-        def _bg():
+        def _bg(job):
             errors = []
 
             # ── Primary: Ghostscript + lp/CUPS ───────────────────────────────
@@ -4818,18 +4865,19 @@ class PrintDialog(QDialog):
                 errors.append(f"Qt render: {e}")
                 msg = tr("Druckfehler:") + "\n" + "\n".join(errors)
                 obj = self_ref()
-                if obj is not None:
+                if obj is not None and not job.cancelled:
                     obj._print_failed.emit(msg)
                 return
 
             obj = self_ref()
-            if obj is not None:
+            if obj is not None and not job.cancelled:
                 obj._print_qt_send.emit((
                     rendered, skipped, pages_to_print, copies, color_mode,
                     collate, duplex, duplex_edge, printer_name, paper_key,
                     orient_idx))
 
-        threading.Thread(target=_bg, daemon=True).start()
+        from tools.jobs import submit
+        self._print_job = submit(_bg, owner=self, name="print-job")
 
     def _progress_pct(self, msg):
         """Map a status message to an approximate transfer-progress percentage.
@@ -6637,7 +6685,6 @@ class PageViewerPanel(QWidget):
         self.hide_sidebar       = None   # lambda: sidebar.setVisible(False)
         self.show_sidebar       = None   # lambda: sidebar.setVisible(True)
         self._pre_manage_idx    = None   # gespeicherter Stack-Index vor Manage-Modus
-        self._workers           = set()  # running ConvertWorkers, see _keep_worker
         self._setup_ui()
         AppState.get().result_ready.connect(self._open_result_tab)
         # Globaler Tab/Escape-Filter
@@ -7001,6 +7048,14 @@ class PageViewerPanel(QWidget):
 
     def _close_tab(self, idx):
         w = self.tabs.widget(idx)
+        # Whatever this tab (or a dialog it owns) put on the pool stops here.
+        try:
+            from tools.jobs import cancel_owner
+            cancel_owner(w)
+            for child in w.findChildren(QWidget):
+                cancel_owner(child)
+        except Exception:
+            pass
         if isinstance(w, PdfTab):
             _ThumbnailCache.evict_tab(w.pdf_path)
             _FullPageCache.evict_tab(w.pdf_path)
@@ -7083,43 +7138,33 @@ class PageViewerPanel(QWidget):
         widget.open_separately.connect(_on_separately)
         widget.cancelled.connect(_on_cancelled)
 
-    def _keep_worker(self, worker):
-        """Hold a reference to a running ConvertWorker until the thread has
-        really stopped.
-
-        This used to be a single `self._merge_worker = worker` attribute. A
-        second merge started while the first was converting overwrote it,
-        dropped the last reference to a QThread that was still inside run(),
-        and Qt answers that by aborting the process."""
-        self._workers.add(worker)
-        # QThread.finished — not the worker's own result signal, which fires
-        # while the thread is still winding down.
-        worker.finished.connect(lambda: self._workers.discard(worker))
-
     def _start_conversion(self, file_paths, merge_widget, on_done):
         """Convert the picked files to PDF in the merge tab's own temp dir and
         hand the results to `on_done(pdfs, failures)`. Shared by merge and
-        open-separately."""
-        from tools.multi_open import ConvertWorker
+        open-separately.
+
+        The conversion is a plain function on a pool job now. It used to be a
+        QThread whose reference the panel had to keep alive by hand, in a set,
+        until QThread.finished said the thread had really stopped — get that
+        wrong and Qt aborts the process. tools/jobs.py owns the job instead, and
+        it is tied to the merge tab so closing the tab stops it.
+        """
+        from tools.jobs import submit
+        from tools.multi_open import convert_files
         self._viewer_info.setText(tr("Konvertiere Dateien..."))
         # Tab-Titel via Widget-Referenz setzen (sicher gegen Index-Shifts)
         wi = self.tabs.indexOf(merge_widget)
         if wi >= 0:
             self.tabs.setTabText(wi, tr("  ⏳  Konvertiere...  "))
 
-        worker = ConvertWorker(file_paths, merge_widget.tmp_dir)
-        self._keep_worker(worker)
-        # A file that cannot be converted is dropped from the result. Collect
-        # those so the user is told which ones are missing — the chooser dialog
-        # used to show them and nothing else does. Both signals come from the
-        # same worker, so every error has arrived before `converted` does.
-        failures = []
-        worker.error.connect(
-            lambda i, msg: failures.append((file_paths[i], msg))
-            if 0 <= i < len(file_paths) else None)
-        worker.progress.connect(lambda i, text: self._viewer_info.setText(text))
-        worker.converted.connect(lambda pdfs: on_done(pdfs, failures))
-        worker.start()
+        # A file that cannot be converted is dropped from the result, so
+        # convert_files hands back which ones and why — the user is told rather
+        # than left with a document quietly missing pages.
+        return submit(
+            lambda job: convert_files(file_paths, merge_widget.tmp_dir, job),
+            owner=merge_widget, name="convert-files",
+            on_progress=self._viewer_info.setText,
+            on_done=lambda result: on_done(result[0], result[1]))
 
     def _report_conversion_failures(self, failures):
         """Never let files vanish from a merge in silence."""

@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QPlainTextEdit, QScrollArea, QApplication,
     QSizePolicy, QComboBox
 )
-from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal
 from PyQt6.QtGui import QFont
 from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
@@ -94,29 +94,6 @@ def displayed_pdf(base_path: str) -> str:
         except Exception: pass
     _VIEW_SNAPSHOTS[sig] = out
     return out
-
-
-class _AsyncWorker(QThread):
-    """Generic background worker used by BasePanel.run_async().
-
-    Runs ``work_fn(report)`` on a worker thread — where ``report(msg)`` emits a
-    progress string — and signals the result (or exception) back to the GUI
-    thread. Replaces the per-tool QThread subclasses (OCR, N-Up, …) that all
-    hand-rolled the same progress/finished/failed plumbing.
-    """
-    progress = pyqtSignal(str)
-    done     = pyqtSignal(object)   # result of work_fn
-    error    = pyqtSignal(object)   # the raised Exception
-
-    def __init__(self, work_fn):
-        super().__init__()
-        self._work_fn = work_fn
-
-    def run(self):
-        try:
-            self.done.emit(self._work_fn(self.progress.emit))
-        except Exception as e:   # noqa: BLE001 — reported to the GUI thread
-            self.error.emit(e)
 
 
 class ToolScrollArea(QScrollArea):
@@ -509,7 +486,8 @@ class BasePanel(QWidget):
         for the duration (optionally relabelled to ``busy_label``) and re-enabled
         afterwards. Call this from _run_action and ``return None``.
         """
-        if getattr(self, "_async_worker", None) is not None and self._async_worker.isRunning():
+        job = getattr(self, "_async_job", None)
+        if job is not None and not job.is_finished:
             raise RuntimeError(tr("Vorgang läuft bereits — bitte warten."))
 
         self._async_running = True
@@ -541,12 +519,17 @@ class BasePanel(QWidget):
             else:
                 self.log.log(str(exc), error=True)
 
-        worker = _AsyncWorker(work_fn)
-        self._async_worker = worker          # keep a reference so it isn't GC'd
-        worker.progress.connect(_progress)
-        worker.done.connect(_done)
-        worker.error.connect(_error)
-        worker.start()
+        # A pool job, not a QThread. The panel keeps a handle so it can tell
+        # whether work is still running and cancel it, but the job's lifetime no
+        # longer depends on that reference: tools/jobs.py owns it until run()
+        # has returned. _restore is also hung off `finished`, so a cancelled job
+        # still gives the button back.
+        from tools.jobs import submit
+        self._async_job = submit(
+            lambda job: work_fn(job.report),
+            owner=self, name=type(self).__name__,
+            on_progress=_progress, on_done=_done, on_error=_error,
+            on_finished=_restore)
 
     def save_pdf(self, caption="PDF speichern als") -> str:
         import tempfile, uuid

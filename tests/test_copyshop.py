@@ -616,6 +616,8 @@ def test_merge_tab_end_to_end():
 
 
 def _settle(vp, done, tries=600):
+    """Pump the event loop until `done()`. `vp` is unused — kept because most
+    callers pass the viewer they are waiting on, which reads better."""
     for _ in range(tries):
         _app.processEvents(); time.sleep(0.02)
         if done():
@@ -1164,10 +1166,12 @@ def test_preview_survives_fast_clicks():
 
     a._confirm()
     a._confirm(); a._do_open_separately(); a._do_cancel()   # all ignored: busy
-    assert len(vp._workers) == 1, f"{len(vp._workers)} workers after spamming one tab"
+    from tools.jobs import active_jobs
+    running = lambda: [j for j in active_jobs() if j.name == "convert-files"]
+    assert len(running()) == 1, f"{len(running())} jobs after spamming one tab"
     assert not a._btn_go.isEnabled() and not a._btn_single.isEnabled()
     b._confirm()                                            # second job, in parallel
-    assert len(vp._workers) == 2, "the running worker was dropped"
+    assert len(running()) == 2, "the running job was dropped"
 
     assert _settle(vp, lambda: not any(isinstance(vp.tabs.widget(i), MergeOrderWidget)
                                        for i in range(vp.tabs.count()))), \
@@ -1178,8 +1182,8 @@ def test_preview_survives_fast_clicks():
     assert len(set(outs)) == 2, "both merges wrote to the same file"
     pages = sorted(len(PdfReader(o, strict=False).pages) for o in outs)
     assert pages == [3, 6], f"merged page counts {pages}, expected [3, 6]"
-    _settle(vp, lambda: not vp._workers, tries=100)
-    assert not vp._workers, "finished workers were never released"
+    _settle(vp, lambda: not running(), tries=100)
+    assert not running(), "finished jobs were never released"
     vp.deleteLater()
 
 
@@ -2586,6 +2590,96 @@ def _count_parses():
     _pdfium.PdfDocument = _Spy
     def restore(): _pdfium.PdfDocument = real
     return restore, parsed
+
+
+def test_background_work_uses_one_mechanism():
+    """Structural guard. There were three ways to run work off the GUI thread:
+    QThread subclasses, bare threading.Thread(daemon=True), and _RenderQueue.
+    The bare threads were owned by nobody and could not be cancelled or waited
+    for. Everything fire-and-forget now goes through tools/jobs.py; _RenderQueue
+    keeps its own loop for reasons written at its definition."""
+    import ast, pathlib
+    offenders = []
+    for f in sorted(pathlib.Path(".").glob("tools/**/*.py")):
+        tree = ast.parse(f.read_text())
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ClassDef):
+                bases = [getattr(b, "id", getattr(b, "attr", "")) for b in n.bases]
+                if any(b == "QThread" for b in bases):
+                    offenders.append(f"{f}:{n.lineno} class {n.name}(QThread)")
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "Thread":
+                # _RenderQueue's own worker is the documented exception
+                if not (str(f).endswith("page_viewer.py") and 380 < n.lineno < 460):
+                    offenders.append(f"{f}:{n.lineno} threading.Thread(...)")
+    assert not offenders, "background work outside tools/jobs.py:\n  " + "\n  ".join(offenders)
+
+
+def test_a_job_outlives_the_reference_that_started_it():
+    """No worker may depend on a local staying in scope. Dropping every caller
+    reference to a running job must not free it — that is the crash class:
+    a QThread destroyed inside run() aborts the process."""
+    import gc, threading as _th
+    from tools import jobs
+    entered, release, finished = _th.Event(), _th.Event(), []
+    def work(job):
+        entered.set()
+        release.wait(5)
+        return "survived"
+    jobs.submit(work, name="orphan", on_done=finished.append)   # return value dropped
+    assert entered.wait(5), "the job never started"
+    gc.collect(); gc.collect()          # nothing local refers to it now
+    release.set()
+    assert _settle(None, lambda: finished == ["survived"], tries=300), \
+        f"the orphaned job did not deliver its result ({finished})"
+    assert jobs.cancel_all(2000) >= 0
+
+
+def test_jobs_are_cancelled_on_tab_close_and_on_shutdown():
+    """Every worker needs a cancellation path, reachable from tab close and from
+    app shutdown. A print job outliving its dialog used to emit into a widget
+    that was being deleted."""
+    import time as _t
+    from tools import jobs
+    import tools.page_viewer as pv
+    from tools.page_viewer import PageViewerPanel
+
+    def polling(sink):
+        """Work that notices cancellation, like the real job bodies do."""
+        def work(job):
+            for _ in range(600):
+                if job.cancelled:
+                    break
+                _t.sleep(0.005)
+            sink.append(job.cancelled)
+        return work
+
+    jobs.cancel_all(2000)
+    vp = PageViewerPanel(); vp.resize(600, 400); vp.show()
+    vp.open_file(FX["normal"]); _spin(40, 0.01)
+    tab = vp.tabs.currentWidget()
+
+    seen = []
+    jobs.submit(polling(seen), owner=tab, name="tab-work")
+    _spin(10, 0.01)
+    vp._close_tab(vp.tabs.indexOf(tab))          # closing the tab cancels it
+    assert _settle(vp, lambda: seen, tries=400), "the job never stopped"
+    assert seen == [True], f"tab close did not cancel its work ({seen})"
+
+    # …and the shutdown path cancels whatever is left. The render queue's own
+    # shutdown is stubbed out here: it is a one-way switch, and killing it would
+    # leave every later test with no renderer.
+    seen2 = []
+    jobs.submit(polling(seen2), owner=None, name="stray")
+    _spin(10, 0.01)
+    real_stop = pv._render_queue.shutdown
+    pv._render_queue.shutdown = lambda *a, **k: None
+    try:
+        pv.shutdown_render_queue(2.0)
+    finally:
+        pv._render_queue.shutdown = real_stop
+    assert seen2 == [True], f"shutdown did not cancel outstanding work ({seen2})"
+    assert not jobs.active_jobs(), "jobs still running after shutdown"
+    vp.deleteLater()
 
 
 def test_document_cache_reuses_and_reloads():

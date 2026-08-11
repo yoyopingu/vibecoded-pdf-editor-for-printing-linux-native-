@@ -10,7 +10,6 @@ Both are gone: the chooser could be clicked faster than it could hand over, and
 every extra click became another merge tab.
 """
 import os, shutil, subprocess
-from PyQt6.QtCore import QThread, pyqtSignal
 from tools.i18n import tr
 
 # ── What this app can turn into a PDF ────────────────────────────────────────
@@ -79,27 +78,27 @@ def convert_to_pdf(path, out_dir):
     raise RuntimeError(tr("Nicht unterstuetzt: {p0}").format(p0=os.path.basename(path)))
 
 
-class ConvertWorker(QThread):
-    # Deliberately NOT called "finished": that name belongs to QThread and
-    # shadowing it hides the only signal that says the thread has actually
-    # stopped — which is what a caller must wait for before dropping its last
-    # reference, or Qt aborts the process with "destroyed while still running".
-    progress  = pyqtSignal(int, str)
-    converted = pyqtSignal(list)
-    error     = pyqtSignal(int, str)
+def convert_files(paths, out_dir, job=None):
+    """Convert each path to PDF in `out_dir`. Returns (pdfs, failures).
 
-    def __init__(self, files, tmp_dir):
-        super().__init__()
-        self.files   = files
-        self.tmp_dir = tmp_dir
+    `pdfs` has one entry per input — the converted path, or None where it
+    failed — so callers can line results up with what they asked for. `failures`
+    is [(path, message)], because a file silently missing from a merge is worse
+    than one that says why.
 
-    def run(self):
-        results = []
-        for i, path in enumerate(self.files):
-            self.progress.emit(i, tr("Verarbeite: {p0}").format(p0=os.path.basename(path)))
-            try:
-                results.append(convert_to_pdf(path, self.tmp_dir))
-            except Exception as e:
-                self.error.emit(i, str(e))
-                results.append(None)
-        self.converted.emit(results)
+    Runs on a tools.jobs pool job; pass it as `job` for progress and to be able
+    to stop between files. This was a QThread subclass whose lifetime the caller
+    had to guarantee by hand; a plain function has no lifetime to get wrong.
+    """
+    pdfs, failures = [], []
+    for path in paths:
+        if job is not None and job.cancelled:
+            break
+        if job is not None:
+            job.report(tr("Verarbeite: {p0}").format(p0=os.path.basename(path)))
+        try:
+            pdfs.append(convert_to_pdf(path, out_dir))
+        except Exception as e:
+            failures.append((path, str(e)))
+            pdfs.append(None)
+    return pdfs, failures
