@@ -2142,6 +2142,165 @@ def test_tools_see_the_page_manager():
         f"the inserted blank belongs on the inside of the cover, got {got[1]}"
 
 
+def _fine_detail_pdf(name="fine_detail.pdf"):
+    """A page of small text — interpolation is measurable on it."""
+    p = os.path.join(_TMP, name)
+    if not os.path.exists(p):
+        c = canvas.Canvas(p, pagesize=A4)
+        c.setFont("Helvetica", 9)
+        for y in range(40, 800, 11):
+            c.drawString(30, y, "The quick brown fox jumps over the lazy dog 0123456789 " * 2)
+        c.showPage(); c.save()
+    return p
+
+
+def _open_single_view(path, w=1000, h=760):
+    """A viewer showing `path`, settled on its first real render."""
+    from tools.page_viewer import PageViewerPanel
+    vp = PageViewerPanel(); vp.resize(w, h); vp.show()
+    vp.open_file(path)
+    _settle(vp, lambda: vp.tabs.count() and vp.tabs.currentWidget().single._last_pm,
+            tries=300)
+    sv = vp.tabs.currentWidget().single
+    _settle(vp, lambda: sv._render_task is None
+            and not getattr(sv, "_showing_provisional", False), tries=300)
+    return vp, sv
+
+
+def _target_scale_of(sv, zoom):
+    pad = 16
+    fit = min((sv._view.width() - pad) / sv._page_w_pt,
+              (sv._view.height() - pad) / sv._page_h_pt)
+    import tools.page_viewer as _pv
+    cap = getattr(_pv, "MAX_RENDER_PX", 4000)   # default: the old inline literal
+    return min(fit * zoom, cap / sv._page_w_pt, cap / sv._page_h_pt)
+
+
+def _matches_pdfium(pm, path, page_index, scale):
+    """Is this pixmap the actual pdfium render at `scale`, pixel for pixel?"""
+    from PyQt6.QtGui import QImage as _QI
+    doc = pdfium.PdfDocument(path)
+    try:
+        pg = doc[page_index]
+        truth = pg.render(scale=scale).to_pil().convert("RGB")
+        pg.close()
+    finally:
+        doc.close()
+    img = pm.toImage().convertToFormat(_QI.Format.Format_RGB32)
+    if (img.width(), img.height()) != truth.size:
+        return False, f"{img.width()}x{img.height()} vs pdfium {truth.size[0]}x{truth.size[1]}"
+    tb = truth.tobytes()
+    total = img.width() * img.height()
+    bits = img.bits(); bits.setsize(total * 4); buf = bytes(bits)
+    acc = n = 0
+    for i in range(0, total * 4, 4 * 997):        # sample, ~1 in 1000 pixels
+        j = (i // 4) * 3
+        acc += abs(buf[i+2] - tb[j]) + abs(buf[i+1] - tb[j+1]) + abs(buf[i] - tb[j+2])
+        n += 1
+    mean = acc / max(1, n)
+    return mean < 0.5, f"mean channel difference {mean:.2f}"
+
+
+def test_zoom_settles_on_a_real_render_not_an_interpolation():
+    """The resting image must be an actual render at the zoom being shown.
+
+    It used to be whatever was cached, Qt-scaled: any zoom within 1.45x of the
+    cached scale was declared good enough and no real render was ever queued, so
+    the user was left looking at interpolated pixels. 1.3x and 1.4x sit squarely
+    in that old band."""
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src)
+    try:
+        for zoom in (1.3, 1.4):
+            sv._zoom = zoom
+            sv._render()
+            assert _settle(vp, lambda: sv._render_task is None
+                           and not getattr(sv, "_showing_provisional", False),
+                           tries=400), f"zoom {zoom} never settled"
+            ok, detail = _matches_pdfium(sv._last_pm, src, 0, _target_scale_of(sv, zoom))
+            assert ok, f"zoom {zoom} settled on an interpolated image — {detail}"
+    finally:
+        vp.deleteLater()
+
+
+def test_zoom_shows_a_provisional_image_before_the_real_one():
+    """Something sharp-ish has to be on screen immediately, flagged as a
+    stand-in, with the exact render queued behind it."""
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src)
+    try:
+        before = sv._last_pm.width()
+        sv._zoom = 1.3
+        sv._render()                      # synchronous part only
+        assert sv._last_pm.width() > before, "nothing was shown for the new zoom"
+        assert getattr(sv, "_showing_provisional", False), \
+            "the stand-in was not flagged provisional"
+        assert sv._render_task is not None, "no exact render was queued"
+        assert _settle(vp, lambda: not getattr(sv, "_showing_provisional", False),
+                       tries=400)
+        assert sv._render_task is None, "the task outlived the final render"
+    finally:
+        vp.deleteLater()
+
+
+def test_a_newer_zoom_cancels_the_render_still_in_flight():
+    """Requirement on the generation counter: a render overtaken by a newer
+    request must be cancelled, and must not be able to paint over the newer one
+    if it finishes anyway."""
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src)
+    try:
+        sv._zoom = 2.0
+        sv._render()
+        stale_task = sv._render_task
+        stale_gen  = sv._render_gen
+        assert stale_task is not None
+
+        sv._zoom = 3.0
+        sv._render()
+        assert not stale_task._active, "the overtaken render was not cancelled"
+        assert sv._render_gen > stale_gen, "the generation counter did not move"
+        assert sv._render_task is not stale_task
+
+        assert _settle(vp, lambda: sv._render_task is None
+                       and not getattr(sv, "_showing_provisional", False),
+                       tries=500), "never settled"
+        settled = sv._last_pm.width()
+
+        # A late emission carrying the stale generation must be ignored.
+        sv._on_page_ready(stale_gen, sv._last_pm.toImage().scaled(40, 40),
+                          0, 0, 100.0, 100.0, 1.0, [], False)
+        assert sv._last_pm.width() == settled, \
+            "a stale render was allowed to overwrite the current one"
+
+        ok, detail = _matches_pdfium(sv._last_pm, src, 0, _target_scale_of(sv, 3.0))
+        assert ok, f"did not settle on the newest zoom — {detail}"
+    finally:
+        vp.deleteLater()
+
+
+def test_render_cap_is_named_and_enforced():
+    """The 4000px ceiling is a placeholder until tiling exists; it should at
+    least be one named constant rather than a number sprinkled about."""
+    import tools.page_viewer as pv
+    assert isinstance(pv.MAX_RENDER_PX, int) and pv.MAX_RENDER_PX > 0
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src)
+    try:
+        sv._zoom = 40.0                    # far past the cap
+        sv._render()
+        _settle(vp, lambda: sv._render_task is None
+                and not getattr(sv, "_showing_provisional", False), tries=600)
+        pm = sv._last_pm
+        assert max(pm.width(), pm.height()) <= pv.MAX_RENDER_PX + 1, \
+            f"render {pm.width()}x{pm.height()} exceeds the cap"
+        # and it still settles on a real render rather than an upscale
+        ok, detail = _matches_pdfium(pm, src, 0, _target_scale_of(sv, 40.0))
+        assert ok, f"capped zoom settled on an interpolation — {detail}"
+    finally:
+        vp.deleteLater()
+
+
 def _cache_fixture(tmp, name, n_pages, label):
     p = os.path.join(tmp, name)
     c = canvas.Canvas(p, pagesize=A4)
