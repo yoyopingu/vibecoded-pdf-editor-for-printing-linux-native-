@@ -1,0 +1,32 @@
+# CopyShop PDF Suite — runtime dependencies
+#
+# Derived by scanning every `import` in main.py and tools/*.py, not from prose.
+# Versions are the floors the code is known to work against (what it is
+# developed on); newer releases are expected to be fine.
+#
+# NOTE: these are the *Python* dependencies only. The app also shells out to
+# system binaries that pip cannot install — ghostscript, poppler and (for OCR)
+# tesseract. See README.md.
+
+PyQt6>=6.6          # the entire UI; QtCore, QtGui, QtWidgets, QtNetwork, QtPrintSupport
+pypdf>=4.0          # page-level read/write: order, rotation, merge, split, save
+pikepdf>=8.0        # lower-level PDF surgery (linearise, layers, colour profiles)
+pypdfium2>=4.0      # page rasterising for the viewer, thumbnails and previews
+Pillow>=10.0        # image handling behind the renderers and converters
+img2pdf>=0.5        # image -> PDF without re-encoding
+reportlab>=4.0      # generated content: page numbers, cut marks, imposition
+pdf2image>=1.16     # PDF -> images for the OCR fallback (needs poppler)
+
+# ── Optional ─────────────────────────────────────────────────────────────────
+# Nothing below is imported by the app; leaving it out costs features, not
+# startup. Uncomment to install, or use `pip install .[ocr]`.
+#
+# ocrmypdf>=15.0    # OCR panel: found via PATH and run as a command, never
+#                   # imported. Without it the panel still produces searchable
+#                   # PDFs using tesseract directly; with it you additionally
+#                   # get true deskew and PDF/A output.
+#
+# pytesseract       # NOT required. It was used by an older OCR code path that
+#                   # only produced a .txt file; the current code drives the
+#                   # tesseract binary itself. Listed here only because the
+#                   # install notes in main.py's docstring still mention it.

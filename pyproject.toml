@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "copyshop-pdf-suite"
+version = "3.0.0"
+description = "PDF viewer, page manager and prepress toolkit for copy shops"
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+# 3.9 is the real floor: tools/i18n.py:41 annotates a module-level name with
+# `dict[str, str]`, and module-level annotations are evaluated at import, so
+# PEP 585 builtin generics have to exist. Nothing in the tree needs anything
+# newer — the syntax itself parses as far back as 3.7.
+requires-python = ">=3.9"
+dependencies = [
+    "PyQt6>=6.6",
+    "pypdf>=4.0",
+    "pikepdf>=8.0",
+    "pypdfium2>=4.0",
+    "Pillow>=10.0",
+    "img2pdf>=0.5",
+    "reportlab>=4.0",
+    "pdf2image>=1.16",
+]
+
+[project.optional-dependencies]
+# Run as a command, not imported. See requirements.txt.
+ocr = ["ocrmypdf>=15.0"]
+
+[project.scripts]
+copyshop-pdf = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+packages = ["tools"]
