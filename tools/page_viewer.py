@@ -7,7 +7,7 @@ Page Viewer v3.7
 - Seiten-Verwaltung unveraendert
 - Textauswahl + Kopieren (Strg+C)
 """
-import os, io, threading, heapq, atexit, logging
+import os, io, math, threading, heapq, atexit, logging
 from collections import OrderedDict
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -45,6 +45,28 @@ MAX_RENDER_PX = 4000
 # Two scales count as the same when they differ by less than this. Below it,
 # re-rendering buys nothing the eye can see.
 _SCALE_EPS = 0.01
+
+
+def _good_enough(cached_scale, wanted_scale):
+    """May a render made at `cached_scale` stand as the final image at
+    `wanted_scale`, or must the page be rendered again?
+
+    Only when it does not have to be enlarged. Shrinking a render made at a
+    higher scale is supersampling — the result is as sharp as a fresh render and
+    often smoother, because it averages several rendered pixels into each screen
+    pixel. Enlarging is the opposite: Qt has to invent the pixels, and that is
+    the blur this rule exists to keep off the screen.
+
+    So zooming out reuses what is already rendered and costs nothing, while
+    zooming in past what has been rendered triggers a real render. An earlier
+    rule reused anything within 1.45x, which meant enlarging by up to 45% and
+    left the page visibly soft; the rule after that re-rendered for any change
+    at all, including shrinking, and made zooming out on a complex page as
+    expensive as zooming in for no gain in what you see.
+    """
+    if cached_scale <= 0 or wanted_scale <= 0:
+        return False
+    return cached_scale >= wanted_scale * (1.0 - _SCALE_EPS)
 
 # How far the user may zoom in. Was 8x, which existed because the page was
 # rendered as one bitmap and MAX_RENDER_PX clamped the result — past roughly
@@ -648,10 +670,17 @@ class _PageRenderTask:
                 return           # pre-render mode: the cache is already warm
             wanted = self.target_scale(pw, ph, cached_scale)
             ratio  = wanted / cached_scale if cached_scale > 0 else 1.0
-            if abs(ratio - 1.0) <= _SCALE_EPS:
-                # The cached render *was* made at this scale — it is the real
-                # thing, not a stand-in. Nothing left to do.
-                self._emit(img, pw, ph, cached_scale, raw_chars, False)
+            if _good_enough(cached_scale, wanted):
+                # Rendered at this scale or finer: shrinking it is as sharp as
+                # rendering again, so this is the final image, not a stand-in.
+                if abs(ratio - 1.0) > _SCALE_EPS:
+                    img = img.scaled(max(1, int(img.width()  * ratio)),
+                                     max(1, int(img.height() * ratio)),
+                                     Qt.AspectRatioMode.IgnoreAspectRatio,
+                                     Qt.TransformationMode.SmoothTransformation)
+                    raw_chars = [(ch, x*ratio, y*ratio, x2*ratio, y2*ratio)
+                                 for ch, x, y, x2, y2 in raw_chars]
+                self._emit(img, pw, ph, wanted, raw_chars, False)
                 return
             self._emit(
                 img.scaled(max(1, int(img.width()  * ratio)),
@@ -693,21 +722,6 @@ class _PageRenderTask:
 
                     bm  = pdfpage.render(scale=scale)
                     pil = bm.to_pil()
-
-                    raw_chars = []
-                    try:
-                        textpage = pdfpage.get_textpage()
-                        for i in range(textpage.count_chars()):
-                            ch = textpage.get_text_range(i, 1)
-                            if not ch: continue
-                            r = textpage.get_charbox(i, loose=False)
-                            raw_chars.append((ch,
-                                r[0] * scale,
-                                (raw_h_pt - r[3]) * scale,
-                                r[2] * scale,
-                                (raw_h_pt - r[1]) * scale))
-                    except Exception:
-                        pass
                 finally:
                     # The document outlives this task now, so its pages have to
                     # be handed back explicitly.
@@ -717,14 +731,20 @@ class _PageRenderTask:
                     try: pdfpage.close()
                     except Exception: pass
 
+            # Text boxes come from the shared cache, which walks the textpage
+            # once per page and scales the result afterwards. Doing it here, per
+            # render, was 62% of the cost of rendering a dense page — 215ms of
+            # Python looping over 15,000 characters to recompute coordinates
+            # that only needed multiplying.
+            #
+            # Outside the page_document block on purpose: it takes the same
+            # pdfium lock, which is not reentrant.
+            from tools.render.region import page_chars
+            raw_chars = page_chars(self._path, self._orig, scale, self._rot)
+
             # PIL → QImage: direct buffer copy (no PNG encode/decode — ~20x faster)
             if self._rot:
                 pil = pil.rotate(-self._rot, expand=True)
-                # The character boxes were measured on the unturned bitmap and
-                # have to follow it round, or selecting text on a rotated page
-                # highlights the wrong place.
-                raw_chars = _rotate_char_boxes(raw_chars, self._rot,
-                                               raw_w_pt * scale, raw_h_pt * scale)
             if pil.mode != "RGB":
                 pil = pil.convert("RGB")
             raw = pil.tobytes()
@@ -1520,7 +1540,7 @@ class SinglePageView(QWidget):
             if max_sx > 0:
                 step_x = max(50.0, avail_w * 0.18)
                 self._scroll_x = max(0.0, min(self._scroll_x + (step_x if dx > 0 else -step_x), max_sx))
-                self._render_preview()
+                self._render_preview(); self._schedule_settle()
             e.accept()
             return
 
@@ -1540,13 +1560,13 @@ class SinglePageView(QWidget):
         if dy < 0:   # wheel down → scroll down, then next page
             if max_sy > 0 and self._scroll_y < max_sy - 0.5:
                 self._scroll_y = min(self._scroll_y + step, max_sy)
-                self._render_preview()
+                self._render_preview(); self._schedule_settle()
             elif self._render_task is None:
                 self.next_page()          # lands at top of next page (scroll_y=0)
         else:        # wheel up → scroll up, then prev page at its BOTTOM
             if self._scroll_y > 0.5:
                 self._scroll_y = max(self._scroll_y - step, 0.0)
-                self._render_preview()
+                self._render_preview(); self._schedule_settle()
             elif self._render_task is None:
                 self.prev_page(start_at_bottom=True)
         e.accept()
@@ -1583,6 +1603,12 @@ class SinglePageView(QWidget):
         self._region_img   = None
         self._region_rect  = None
         self._region_scale = 0.0
+
+    def _schedule_settle(self, ms=120):
+        """Render exactly, once the gesture stops. Zooming and scrolling both
+        show a cheap stand-in per step and let this fire once at the end —
+        rendering per step made a complex page crawl."""
+        self._zoom_timer.start(ms)
 
     def _page_origin(self, page_px_w, page_px_h):
         """Where the sheet's top-left corner sits in widget coordinates."""
@@ -1642,24 +1668,45 @@ class SinglePageView(QWidget):
 
     def _region_preview(self, scale, page_px_w, page_px_h):
         """Stretch whatever pixels we have to the new zoom, so the view is never
-        blank while a window renders."""
+        blank while a window renders.
+
+        Crops to what is on screen *before* scaling. Scaling first and cropping
+        never — which is what this did — meant a jump from 6x to 35x built a
+        16428x23205 pixmap, 381 megapixels, on the GUI thread: three gigabytes
+        and four seconds of freeze for an image of which all but one screenful
+        was thrown away. That was the stall, and the smeared over-zoomed frame
+        that flashed up before the real render landed.
+        """
         src_pm, src_rect, src_scale = None, None, 0.0
         if self._region_img is not None and self._region_scale > 0:
             src_pm, src_rect, src_scale = (self._region_img, self._region_rect,
                                            self._region_scale)
         elif self._last_pm is not None and self._page_w_pt > 0:
-            whole = (0, 0, self._last_pm.width(), self._last_pm.height())
-            src_pm, src_rect = self._last_pm, whole
+            src_pm = self._last_pm
+            src_rect = (0, 0, self._last_pm.width(), self._last_pm.height())
             src_scale = self._last_pm.width() / self._page_w_pt
         if src_pm is None or src_scale <= 0:
             return
         f = scale / src_scale
-        px0, py0, w, h = src_rect
-        pm = src_pm.scaled(max(1, int(w * f)), max(1, int(h * f)),
-                           Qt.AspectRatioMode.IgnoreAspectRatio,
-                           Qt.TransformationMode.FastTransformation)
+        rx, ry, _, _ = src_rect
+        avail_w = float(self._view.width()); avail_h = float(self._view.height())
+
+        # The visible slice, in the source image's own pixels.
+        vis_x = self._scroll_x if page_px_w > avail_w else 0.0
+        vis_y = self._scroll_y if page_px_h > avail_h else 0.0
+        sx = int(max(0, math.floor(vis_x / f) - rx))
+        sy = int(max(0, math.floor(vis_y / f) - ry))
+        sw = int(min(src_pm.width()  - sx, math.ceil(min(avail_w, page_px_w) / f) + 2))
+        sh = int(min(src_pm.height() - sy, math.ceil(min(avail_h, page_px_h) / f) + 2))
+        if sw <= 0 or sh <= 0:
+            return
+        crop = src_pm.copy(QRect(sx, sy, sw, sh))
+        pm = crop.scaled(max(1, int(sw * f)), max(1, int(sh * f)),
+                         Qt.AspectRatioMode.IgnoreAspectRatio,
+                         Qt.TransformationMode.FastTransformation)
         ox, oy = self._page_origin(page_px_w, page_px_h)
-        self._view.set_page(pm, [], int(ox + px0 * f), int(oy + py0 * f),
+        self._view.set_page(pm, [],
+                            int(ox + (rx + sx) * f), int(oy + (ry + sy) * f),
                             page_rect=(int(ox), int(oy),
                                        int(page_px_w), int(page_px_h)))
         self._showing_provisional = True
@@ -1685,43 +1732,50 @@ class SinglePageView(QWidget):
         QTimer.singleShot(0, self._update_color_label)
 
     def _render_preview(self):
-        """Schnelle Qt-Skalierung als Vorschau während Zoom-Debounce."""
-        if self._region_scale > 0 or self._use_region_rendering(
-                self._display_scale(self._zoom)):
-            # Window rendering: re-blit if the pixels are still good, otherwise
-            # stretch and queue. _render() decides which, cheaply.
-            self._render()
-            return
-        if self._last_pm is None or self._last_zoom <= 0:
-            return
-        avail_w = self._view.width()
-        avail_h = self._view.height()
+        """Schnelle Qt-Skalierung als Vorschau während Zoom-Debounce.
+
+        Never renders. This runs on every wheel click of a zoom or a scroll, and
+        the exact render is the settle timer's job — one at the end of the
+        gesture instead of one per click.
+        """
+        avail_w = float(self._view.width())
+        avail_h = float(self._view.height())
         if avail_w < 50 or avail_h < 50:
             return
-        # Use cap-aware target size to avoid overshooting when the MAX_RENDER_PX
-        # render cap is active (the linear ratio formula would produce a
-        # larger-than-possible target, breaking the scroll anchor).
-        new_w_cap, new_h_cap = self._capped_display_size(self._zoom)
-        if new_w_cap is not None:
-            new_w = max(1, int(new_w_cap))
-            new_h = max(1, int(new_h_cap))
-        else:
-            ratio = self._zoom / self._last_zoom
-            new_w = max(1, int(self._last_pm.width()  * ratio))
-            new_h = max(1, int(self._last_pm.height() * ratio))
+        scale = self._display_scale(self._zoom)
+        if scale is not None:
+            # One path for both modes: crop to what is on screen, then scale.
+            # The old whole-page branch stretched the entire sheet on every
+            # wheel click — at 3.8x that is an 11-megapixel scale per click, of
+            # which one screenful is kept.
+            page_px_w = self._page_w_pt * scale
+            page_px_h = self._page_h_pt * scale
+            self._scroll_x = max(0.0, min(self._scroll_x, max(0.0, page_px_w - avail_w)))
+            self._scroll_y = max(0.0, min(self._scroll_y, max(0.0, page_px_h - avail_h)))
+            from tools.render.region import covers
+            if (self._region_scale > 0
+                    and abs(self._region_scale - scale) <= scale * 1e-6
+                    and covers(self._region_rect, page_px_w, page_px_h,
+                               avail_w, avail_h, self._scroll_x, self._scroll_y)):
+                self._blit_region()          # already have these pixels
+            else:
+                self._region_preview(scale, page_px_w, page_px_h)
+            self._schedule_settle()
+            return
+
+        # Page dimensions not known yet (nothing rendered): extrapolate.
+        if self._last_pm is None or self._last_zoom <= 0:
+            return
+        ratio = self._zoom / self._last_zoom
+        new_w = max(1, int(self._last_pm.width()  * ratio))
+        new_h = max(1, int(self._last_pm.height() * ratio))
         pm = self._last_pm.scaled(new_w, new_h,
             Qt.AspectRatioMode.IgnoreAspectRatio,
             Qt.TransformationMode.FastTransformation)
         off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._scroll_x)
         off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._scroll_y)
         self._view.set_page(pm, [], off_x, off_y)
-        # Zoom label: physical % is proportional to displayed width.
-        # Use the cap-aware width so it doesn't jump when the cap activates.
-        if hasattr(self, '_phys_base') and self._last_pm.width() > 0:
-            est = round(self._phys_base * new_w / self._last_pm.width())
-            self._zoom_lbl.setText(f"{est}%")
-        else:
-            self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
+        self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
 
     def load(self, pdf_path, model):
         # Cancel any in-flight pre-render tasks from previous file
@@ -1847,16 +1901,16 @@ class SinglePageView(QWidget):
             return
         self._leave_region_mode()
 
-        # ── Something to look at now; the real render follows ─────────────────
-        # A cached render made at another zoom is Qt-scaled here so the page
-        # appears instantly, but that is interpolation and it is never allowed
-        # to be the final state — unless the cached render happens to be at
-        # exactly this scale, an exact render is queued below and replaces it.
+        # ── Something to look at now; the real render may follow ──────────────
+        # The cached render is resized to this zoom so the page appears at once.
+        # Whether that resize is the finished article or only a stand-in is
+        # _good_enough()'s call: shrinking is, enlarging is not.
         cached = _FullPageCache.get(src_path, orig, rot, avail_w, avail_h)
         if cached is not None:
             img, page_w_pt, page_h_pt, cached_scale, raw_chars = cached
             # Compute how much we need to scale the cached image for this zoom
             ratio = 1.0
+            target_scale = cached_scale
             if page_w_pt > 0 and page_h_pt > 0 and cached_scale > 0:
                 pad = 16
                 fit_scale    = min((avail_w - pad) / page_w_pt,
@@ -1866,9 +1920,9 @@ class SinglePageView(QWidget):
                                    MAX_RENDER_PX / page_w_pt,
                                    MAX_RENDER_PX / page_h_pt)
                 ratio = target_scale / cached_scale
-            exact = abs(ratio - 1.0) <= _SCALE_EPS
+            final = _good_enough(cached_scale, target_scale)
             # Qt-scale the cached pixmap to the requested zoom (GUI thread — fast)
-            if not exact:
+            if abs(ratio - 1.0) > _SCALE_EPS:
                 pm = QPixmap.fromImage(img).scaled(
                     max(1, int(img.width()  * ratio)),
                     max(1, int(img.height() * ratio)),
@@ -1890,18 +1944,18 @@ class SinglePageView(QWidget):
             self._last_zoom = self._zoom
             self._page_w_pt = page_w_pt   # needed by _capped_display_size
             self._page_h_pt = page_h_pt
-            self._showing_provisional = not exact
+            self._showing_provisional = not final
             self._view.set_page(pm, display_chars, off_x, off_y)
             self._apply_zoom_labels(pm, page_w_pt, page_h_pt)
             QTimer.singleShot(0, self._update_color_label)
-            # Whatever is on screen now came out of Qt's scaler unless it was
-            # already at this exact scale. Queue the real render — always, not
-            # just past some ratio — and let _on_page_ready replace it.
+            # Enlarged from a coarser render? Then this is a stand-in and the
+            # page has to be rendered properly. Shrunk from a finer one? Then it
+            # is already as good as a render and nothing more is needed.
             if self._render_task is not None:
                 self._render_task.cancel()
                 self._render_task = None
             self._render_gen += 1
-            if not exact:
+            if not final:
                 task = _PageRenderTask(self._render_gen, src_path, orig, rot,
                                        avail_w, avail_h, self._zoom,
                                        self._render_signals)

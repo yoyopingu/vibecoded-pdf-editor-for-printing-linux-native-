@@ -2156,7 +2156,11 @@ def _fine_detail_pdf(name="fine_detail.pdf"):
 
 def _open_single_view(path, w=1000, h=760):
     """A viewer showing `path`, settled on its first real render."""
-    from tools.page_viewer import PageViewerPanel
+    from tools.page_viewer import PageViewerPanel, _FullPageCache
+    # Start from a cold cache: these tests care about what happens when the
+    # cached render is coarser or finer than the zoom asked for, and a render
+    # left behind by an earlier test decides that for them.
+    _FullPageCache.invalidate()
     vp = PageViewerPanel(); vp.resize(w, h); vp.show()
     vp.open_file(path)
     _settle(vp, lambda: vp.tabs.count() and vp.tabs.currentWidget().single._last_pm,
@@ -2228,8 +2232,9 @@ def test_zoom_settles_on_a_real_render_not_an_interpolation():
 
 
 def test_zoom_shows_a_provisional_image_before_the_real_one():
-    """Something sharp-ish has to be on screen immediately, flagged as a
-    stand-in, with the exact render queued behind it."""
+    """Zooming *in* past what has been rendered has to show something at once,
+    flagged as a stand-in, with the real render queued behind it. (Zooming out
+    does not: shrinking a finer render is already as good as rendering.)"""
     src = _fine_detail_pdf()
     vp, sv = _open_single_view(src)
     try:
@@ -2333,6 +2338,108 @@ def test_deep_zoom_renders_the_window_not_the_whole_page():
                 diff = max(diff, abs((pa & 0xFF) - (pf & 0xFF)))
         assert diff <= 2, f"deep zoom is not a real render (max channel diff {diff})"
     finally:
+        vp.deleteLater()
+
+
+def test_zoom_gesture_does_not_build_page_sized_pixmaps():
+    """A fast zoom must stay cheap in both time and memory.
+
+    The stand-in used to be made by scaling the *whole page* to the new zoom and
+    only then showing one screenful of it: a spin of the wheel from 6x to 35x
+    built a 16428x23205 pixmap — 381 megapixels, three gigabytes — on the GUI
+    thread. That was seconds of freeze, and the smeared over-zoomed frame that
+    flashed up before the real render arrived. It crops first now."""
+    from tools.page_viewer import PdfPageCanvas
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src, w=1100, h=780)
+    biggest = [0, (0, 0)]
+    orig = PdfPageCanvas.set_page
+    def spy(self, pixmap, *a, **k):
+        if pixmap is not None:
+            n = pixmap.width() * pixmap.height()
+            if n > biggest[0]: biggest[0] = n; biggest[1] = (pixmap.width(), pixmap.height())
+        return orig(self, pixmap, *a, **k)
+    PdfPageCanvas.set_page = spy
+    try:
+        for _ in range(16):
+            sv._zoom_in()          # what a wheel click calls
+            _spin(3, 0.0)
+        assert sv._zoom > 20, f"the gesture only reached {sv._zoom:.1f}x"
+        w, h = biggest[1]
+        # a screenful, with room for the render margin — not a page
+        assert biggest[0] <= 12_000_000, \
+            f"a {w}x{h} = {biggest[0]/1e6:.0f} Mpx image was put on screen mid-gesture"
+    finally:
+        PdfPageCanvas.set_page = orig
+        vp.deleteLater()
+
+
+def test_zoom_gesture_renders_once_not_once_per_step():
+    """Every wheel click used to queue its own render of the page. On a complex
+    page that is seconds of work thrown away — the settle timer exists so the
+    exact render happens once, when the gesture stops."""
+    import tools.page_viewer as pv
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src, w=1100, h=780)
+    started = []
+    originals = {}
+    for name in ("_PageRenderTask", "_RegionRenderTask"):
+        cls = getattr(pv, name)
+        originals[name] = cls.run
+        def mk(o):
+            def run(self):
+                started.append(1)
+                return o(self)
+            return run
+        cls.run = mk(cls.run)
+    try:
+        for _ in range(12):
+            sv._zoom_in()
+            _spin(3, 0.0)          # faster than the settle timer
+        during = len(started)
+        assert during <= 2, f"{during} renders started during a 12-click gesture"
+        # …and the exact render still arrives once the gesture stops
+        assert _settle(vp, lambda: sv._render_task is not None
+                       or sv._region_task is not None
+                       or len(started) > during, tries=300), \
+            "the gesture was never followed by a render"
+        assert _settled_deep(vp, sv), "the view never settled"
+        assert len(started) <= during + 2, \
+            f"{len(started)} renders in total for one gesture"
+    finally:
+        for name, fn in originals.items():
+            getattr(pv, name).run = fn
+        vp.deleteLater()
+
+
+def test_zooming_out_reuses_the_finer_render():
+    """Shrinking a render made at a higher scale is supersampling — as sharp as
+    rendering again. Re-rendering for it made zooming out on a complex page as
+    slow as zooming in, for nothing visible."""
+    import tools.page_viewer as pv
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src, w=1100, h=780)
+    started = []
+    orig = pv._PageRenderTask.run
+    def counting(self):
+        started.append(1)
+        return orig(self)
+    pv._PageRenderTask.run = counting
+    try:
+        sv._zoom = 3.0                       # render fine once
+        sv._render()
+        assert _settled_deep(vp, sv)
+        assert started, "the zoom-in did not render"
+        started.clear()
+        for zoom in (2.4, 1.9, 1.5, 1.2, 1.0):
+            sv._zoom = zoom
+            sv._render()
+            assert _settled_deep(vp, sv), f"zoom {zoom} never settled"
+            assert not sv._showing_provisional, \
+                f"zoom {zoom} left a stand-in on screen"
+        assert not started, f"zooming out re-rendered {len(started)} times"
+    finally:
+        pv._PageRenderTask.run = orig
         vp.deleteLater()
 
 
