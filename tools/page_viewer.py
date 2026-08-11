@@ -34,15 +34,25 @@ MARGIN = 12
 # as a single bitmap, so without this a deep zoom asks pdfium for a gigapixel
 # image and the app stalls or runs out of memory.
 #
-# PLACEHOLDER. It is a cap on quality, not a real answer: past this zoom the
-# view has no more detail to show and starts magnifying pixels again. The real
-# fix is tiling — rendering only the region actually on screen, at the exact
-# scale, however far in the user has zoomed — after which this constant goes.
+# It is no longer a cap on quality. Past it the viewer stops rendering the page
+# in one piece and renders only the window on screen instead (see
+# tools/render/region.py and SinglePageView._show_region), at the exact scale,
+# however far in the user has zoomed. So this is the point where the strategy
+# changes, not a ceiling: below it a whole-page render is simpler and can be
+# cached and pre-rendered for page flipping; above it, it would be gigabytes.
 MAX_RENDER_PX = 4000
 
 # Two scales count as the same when they differ by less than this. Below it,
 # re-rendering buys nothing the eye can see.
 _SCALE_EPS = 0.01
+
+# How far the user may zoom in. Was 8x, which existed because the page was
+# rendered as one bitmap and MAX_RENDER_PX clamped the result — past roughly
+# 5x on A4 the picture stopped getting sharper, so more zoom would have been a
+# lie. Window rendering costs the same at any zoom, so the limit is now just a
+# question of what is useful.
+MAX_ZOOM = 40.0
+MIN_ZOOM = 0.1
 
 
 def _positions_to_str(positions):
@@ -506,6 +516,57 @@ class _PageSignals(QObject):
     # some other zoom, and the real one at this zoom is still coming.
 
 
+class _RegionSignals(QObject):
+    ready = pyqtSignal(int, QImage, int, int, float, list)
+    # generation, image, px0, py0, scale, chars
+    # px0/py0 locate the image in displayed page-pixel space; chars are in the
+    # same space, relative to the page's top-left corner.
+
+
+class _RegionRenderTask:
+    """Renders the part of a page that is on screen, at the exact zoom.
+
+    Used instead of _PageRenderTask once the whole page at this zoom would be a
+    bigger bitmap than MAX_RENDER_PX allows. Cost and memory are set by the size
+    of the window, not by the zoom, which is what lets the zoom go as deep as
+    the user likes.
+    """
+    def __init__(self, gen, path, orig, rot, scale, rect, signals):
+        self._gen    = gen
+        self._path   = path
+        self._orig   = orig
+        self._rot    = rot
+        self._scale  = scale
+        self._rect   = rect          # (px0, py0, w, h) in displayed page pixels
+        self._sig    = signals
+        self._active = True
+
+    def cancel(self): self._active = False
+
+    def run(self):
+        if not self._active:
+            return
+        try:
+            from tools.render.region import render_region, page_chars
+            px0, py0, w, h = self._rect
+            img = render_region(self._path, self._orig, self._scale,
+                                px0, py0, w, h, self._rot)
+            if img is None or not self._active:
+                return
+            try:
+                chars = page_chars(self._path, self._orig, self._scale, self._rot)
+            except Exception:
+                chars = []
+            if self._sig is not None and self._active:
+                self._sig.ready.emit(self._gen, img, int(px0), int(py0),
+                                     self._scale, chars)
+        except Exception:
+            import logging
+            logging.exception("region render failed")
+        finally:
+            self._active = False
+
+
 def _rotate_char_boxes(chars, rot, w, h):
     """Move character rectangles with the bitmap they were measured on.
 
@@ -837,17 +898,23 @@ class PdfPageCanvas(QWidget):
         self._dragging   = False
         self._offset_x   = 0
         self._offset_y   = 0
+        self._page_rect  = None   # sheet outline when the pixmap is a region
 
         self.setStyleSheet(f"background:{_TV['viewer_bg']};")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
 
-    def set_page(self, pixmap, chars, offset_x, offset_y):
+    def set_page(self, pixmap, chars, offset_x, offset_y, page_rect=None):
         """
         pixmap   — gerendertes QPixmap
         chars    — [(char, x0, y0, x1, y1), …] in Widget-Pixelkoordinaten
         offset_x/y — wo die Pixmap innerhalb des Widgets platziert wird
+        page_rect — (x, y, w, h) of the whole sheet in widget coords, when the
+                    pixmap is only the visible part of a page too large to
+                    render in one piece. The outline is drawn around this
+                    instead of around the pixmap, which would otherwise put a
+                    hairline through the middle of the page.
         """
         self._pixmap    = pixmap
         self._chars     = chars
@@ -855,10 +922,12 @@ class PdfPageCanvas(QWidget):
         self._sel_end   = -1
         self._offset_x  = offset_x
         self._offset_y  = offset_y
+        self._page_rect = page_rect
         self.update()
 
     def clear(self):
         self._pixmap = None
+        self._page_rect = None
         self._chars  = []
         self._sel_start = self._sel_end = -1
         self.update()
@@ -947,8 +1016,12 @@ class PdfPageCanvas(QWidget):
         # edge look burnt.
         p.setPen(QPen(QColor(0, 0, 0, 45), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(self._offset_x, self._offset_y,
-                   self._pixmap.width() - 1, self._pixmap.height() - 1)
+        if self._page_rect is not None:
+            rx, ry, rw, rh = self._page_rect
+            p.drawRect(int(rx), int(ry), int(rw) - 1, int(rh) - 1)
+        else:
+            p.drawRect(self._offset_x, self._offset_y,
+                       self._pixmap.width() - 1, self._pixmap.height() - 1)
 
         # Auswahl-Highlights
         if self._sel_start >= 0 and self._sel_end >= 0 and self._chars:
@@ -1146,6 +1219,17 @@ class SinglePageView(QWidget):
         # True while the page on screen is a stand-in scaled from another zoom.
         # Never the resting state: an exact render is in flight whenever it is set.
         self._showing_provisional = False
+        # Window rendering, used past MAX_RENDER_PX (see _show_region)
+        self._region_img     = None    # QPixmap of the rendered window
+        self._region_rect    = None    # (px0, py0, w, h) in displayed page pixels
+        self._region_scale   = 0.0
+        self._region_chars   = []
+        self._region_task    = None
+        self._region_signals = _RegionSignals()
+        self._region_signals.ready.connect(self._on_region_ready)
+        # Which page and rotation _page_w_pt/_page_h_pt currently describe
+        self._dims_key = None
+        self._dims_rot = None
         self._render_signals = _PageSignals()
         self._render_signals.ready.connect(self._on_page_ready)
         # Pre-render (background warm-up) state
@@ -1266,23 +1350,41 @@ class SinglePageView(QWidget):
 
     # ── Zoom-Methoden ─────────────────────────────────────────────────────────
 
-    def _capped_display_size(self, zoom):
-        """Return the actual pixel size (w, h) that the page renders at for
-        the given zoom, honouring MAX_RENDER_PX. Returns (None, None) if
-        page dimensions aren't known yet."""
+    def _display_scale(self, zoom):
+        """Pixels per point the page is shown at. No ceiling: past
+        MAX_RENDER_PX the page is not rendered in one piece any more, it is
+        rendered a window at a time, so the zoom is free to keep going."""
         if self._page_w_pt <= 0 or self._page_h_pt <= 0:
-            return None, None
+            return None
         avail_w = self._view.width()
         avail_h = self._view.height()
         if avail_w < 16 or avail_h < 16:
-            return None, None
+            return None
         pad = 16
         fit = min((avail_w - pad) / self._page_w_pt,
                   (avail_h - pad) / self._page_h_pt)
-        scale = fit * zoom
-        scale = min(scale, MAX_RENDER_PX / self._page_w_pt,
-                          MAX_RENDER_PX / self._page_h_pt)
+        return fit * zoom
+
+    def _capped_display_size(self, zoom):
+        """Size in pixels (w, h) the page occupies on screen at `zoom`, or
+        (None, None) if its dimensions are not known yet.
+
+        This is what the scroll limits and the zoom anchor are built on. It used
+        to clamp to MAX_RENDER_PX, because that really was as large as the page
+        could get — the render was one bitmap. With window rendering the page on
+        screen keeps growing, and clamping here would have pinned the scroll
+        range while the page kept getting bigger under it."""
+        scale = self._display_scale(zoom)
+        if scale is None:
+            return None, None
         return self._page_w_pt * scale, self._page_h_pt * scale
+
+    def _use_region_rendering(self, scale):
+        """Is the page at this scale too large to render in one piece?"""
+        if self._page_w_pt <= 0 or self._page_h_pt <= 0 or scale is None:
+            return False
+        return max(self._page_w_pt * scale,
+                   self._page_h_pt * scale) > MAX_RENDER_PX
 
     def _apply_zoom(self, new_zoom, mx=None, my=None):
         """
@@ -1299,14 +1401,14 @@ class SinglePageView(QWidget):
         avail_w = float(self._view.width())
         avail_h = float(self._view.height())
         if avail_w < 1 or avail_h < 1:
-            self._zoom = max(0.1, min(8.0, new_zoom))
+            self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, new_zoom))
             return
 
         if mx is None: mx = avail_w / 2.0
         if my is None: my = avail_h / 2.0
 
         old_zoom = self._zoom
-        self._zoom = max(0.1, min(8.0, float(new_zoom)))
+        self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, float(new_zoom)))
 
         if self._last_pm is None or self._last_zoom <= 0 or old_zoom <= 0:
             return
@@ -1383,7 +1485,7 @@ class SinglePageView(QWidget):
                 pad       = 16
                 fit_scale = min((avail_w - pad) / self._page_w_pt,
                                 (avail_h - pad) / self._page_h_pt)
-                self._zoom = max(0.1, min(8.0, actual_scale / fit_scale)) if fit_scale > 0 else 1.0
+                self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, actual_scale / fit_scale)) if fit_scale > 0 else 1.0
             else:
                 self._zoom = 1.0
         except Exception:
@@ -1449,8 +1551,147 @@ class SinglePageView(QWidget):
                 self.prev_page(start_at_bottom=True)
         e.accept()
 
+    # ── Window rendering, for zooms past MAX_RENDER_PX ───────────────────────
+
+    def _ensure_page_dims(self, src_path, orig, rot):
+        """Keep _page_w_pt/_page_h_pt describing the page *as displayed*.
+
+        Turning a page a quarter swaps its width and height, and everything
+        downstream — the scale, the scroll range, which part of the page the
+        window covers — is computed from them. They otherwise only change when a
+        render finishes, so the first render after a rotation was laid out for
+        the page's old shape.
+
+        Deliberately does no I/O: this runs on the GUI thread inside _render(),
+        and asking pdfium for the size would queue behind the render worker's
+        lock and stall the window. A quarter turn is a swap; anything else waits
+        for the render to report, exactly as before.
+        """
+        key = (src_path, orig)
+        if (self._dims_key == key and self._dims_rot is not None
+                and self._page_w_pt > 0 and self._page_h_pt > 0):
+            if (rot % 180) != (self._dims_rot % 180):
+                self._page_w_pt, self._page_h_pt = self._page_h_pt, self._page_w_pt
+                self._leave_region_mode()   # measured against the old shape
+        self._dims_key = key
+        self._dims_rot = rot
+
+    def _leave_region_mode(self):
+        if self._region_task is not None:
+            self._region_task.cancel()
+            self._region_task = None
+        self._region_img   = None
+        self._region_rect  = None
+        self._region_scale = 0.0
+
+    def _page_origin(self, page_px_w, page_px_h):
+        """Where the sheet's top-left corner sits in widget coordinates."""
+        avail_w = float(self._view.width())
+        avail_h = float(self._view.height())
+        return (max(0.0, (avail_w - page_px_w) / 2.0) - self._scroll_x,
+                max(0.0, (avail_h - page_px_h) / 2.0) - self._scroll_y)
+
+    def _blit_region(self):
+        """Put the rendered window on screen at the current scroll position.
+        No rendering — this is what makes panning inside the margin free."""
+        if self._region_img is None or self._region_rect is None:
+            return False
+        px0, py0, _, _ = self._region_rect
+        page_px_w = self._page_w_pt * self._region_scale
+        page_px_h = self._page_h_pt * self._region_scale
+        ox, oy = self._page_origin(page_px_w, page_px_h)
+        chars = [(ch, ox + x0, oy + y0, ox + x1, oy + y1)
+                 for ch, x0, y0, x1, y1 in self._region_chars]
+        self._view.set_page(self._region_img, chars,
+                            int(ox + px0), int(oy + py0),
+                            page_rect=(int(ox), int(oy),
+                                       int(page_px_w), int(page_px_h)))
+        self._apply_zoom_labels_for(page_px_w)
+        return True
+
+    def _show_region(self, src_path, orig, rot, scale, avail_w, avail_h):
+        from tools.render.region import region_for_viewport, covers
+        page_px_w = self._page_w_pt * scale
+        page_px_h = self._page_h_pt * scale
+        # Clamp the scroll to the page as it is at this zoom before deciding
+        # what is visible, or the window is computed for a position the view
+        # cannot actually be at.
+        self._scroll_x = max(0.0, min(self._scroll_x, max(0.0, page_px_w - avail_w)))
+        self._scroll_y = max(0.0, min(self._scroll_y, max(0.0, page_px_h - avail_h)))
+
+        same_scale = abs(self._region_scale - scale) <= scale * 1e-6
+        if same_scale and covers(self._region_rect, page_px_w, page_px_h,
+                                 avail_w, avail_h, self._scroll_x, self._scroll_y):
+            self._blit_region()          # already have these pixels
+            return
+
+        rect = region_for_viewport(page_px_w, page_px_h, avail_w, avail_h,
+                                   self._scroll_x, self._scroll_y)
+        # Something to look at while the window renders: whatever is already on
+        # screen, stretched to the new zoom. Provisional by definition — the
+        # render below replaces it.
+        self._region_preview(scale, page_px_w, page_px_h)
+
+        if self._region_task is not None:
+            self._region_task.cancel()
+        self._render_gen += 1
+        task = _RegionRenderTask(self._render_gen, src_path, orig, rot,
+                                 scale, rect, self._region_signals)
+        self._region_task = task
+        _render_queue.submit(task, 0)
+
+    def _region_preview(self, scale, page_px_w, page_px_h):
+        """Stretch whatever pixels we have to the new zoom, so the view is never
+        blank while a window renders."""
+        src_pm, src_rect, src_scale = None, None, 0.0
+        if self._region_img is not None and self._region_scale > 0:
+            src_pm, src_rect, src_scale = (self._region_img, self._region_rect,
+                                           self._region_scale)
+        elif self._last_pm is not None and self._page_w_pt > 0:
+            whole = (0, 0, self._last_pm.width(), self._last_pm.height())
+            src_pm, src_rect = self._last_pm, whole
+            src_scale = self._last_pm.width() / self._page_w_pt
+        if src_pm is None or src_scale <= 0:
+            return
+        f = scale / src_scale
+        px0, py0, w, h = src_rect
+        pm = src_pm.scaled(max(1, int(w * f)), max(1, int(h * f)),
+                           Qt.AspectRatioMode.IgnoreAspectRatio,
+                           Qt.TransformationMode.FastTransformation)
+        ox, oy = self._page_origin(page_px_w, page_px_h)
+        self._view.set_page(pm, [], int(ox + px0 * f), int(oy + py0 * f),
+                            page_rect=(int(ox), int(oy),
+                                       int(page_px_w), int(page_px_h)))
+        self._showing_provisional = True
+        self._apply_zoom_labels_for(page_px_w)
+
+    def _apply_zoom_labels_for(self, page_px_w):
+        """Zoom/size labels from the sheet's on-screen width."""
+        class _W:                      # _apply_zoom_labels only reads .width()
+            def __init__(self, w): self._w = int(w)
+            def width(self): return self._w
+        self._apply_zoom_labels(_W(page_px_w), self._page_w_pt, self._page_h_pt)
+
+    def _on_region_ready(self, gen, image, px0, py0, scale, chars):
+        if gen != self._render_gen:
+            return                      # overtaken by a newer zoom or scroll
+        self._region_img    = QPixmap.fromImage(image)
+        self._region_rect   = (px0, py0, image.width(), image.height())
+        self._region_scale  = scale
+        self._region_chars  = chars
+        self._region_task   = None
+        self._showing_provisional = False
+        self._blit_region()
+        QTimer.singleShot(0, self._update_color_label)
+
     def _render_preview(self):
         """Schnelle Qt-Skalierung als Vorschau während Zoom-Debounce."""
+        if self._region_scale > 0 or self._use_region_rendering(
+                self._display_scale(self._zoom)):
+            # Window rendering: re-blit if the pixels are still good, otherwise
+            # stretch and queue. _render() decides which, cheaply.
+            self._render()
+            return
         if self._last_pm is None or self._last_zoom <= 0:
             return
         avail_w = self._view.width()
@@ -1592,6 +1833,19 @@ class SinglePageView(QWidget):
         # Update page counter immediately
         self._num_lbl.setText(str(self._current + 1))
         self.page_changed.emit(self._current + 1)
+
+        # The page's dimensions have to be right *before* anything is computed
+        # from them. They used to arrive only with a finished render, so a page
+        # that had just been rotated — or not yet rendered at all — was measured
+        # as it used to be, and at deep zoom that misplaces the whole window.
+        self._ensure_page_dims(src_path, orig, rot)
+
+        # ── Too big to render whole: render the window instead ────────────────
+        scale = self._display_scale(self._zoom)
+        if self._use_region_rendering(scale):
+            self._show_region(src_path, orig, rot, scale, avail_w, avail_h)
+            return
+        self._leave_region_mode()
 
         # ── Something to look at now; the real render follows ─────────────────
         # A cached render made at another zoom is Qt-scaled here so the page

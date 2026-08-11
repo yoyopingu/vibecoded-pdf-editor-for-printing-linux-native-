@@ -2171,8 +2171,12 @@ def _target_scale_of(sv, zoom):
     pad = 16
     fit = min((sv._view.width() - pad) / sv._page_w_pt,
               (sv._view.height() - pad) / sv._page_h_pt)
-    import tools.page_viewer as _pv
-    cap = getattr(_pv, "MAX_RENDER_PX", 4000)   # default: the old inline literal
+    scale = getattr(sv, "_display_scale", None)
+    if scale is not None:               # uncapped: the page may exceed one bitmap
+        got = scale(zoom)
+        if got: return got
+    import tools.page_viewer as _pv     # older build: the render was clamped
+    cap = getattr(_pv, "MAX_RENDER_PX", 4000)
     return min(fit * zoom, cap / sv._page_w_pt, cap / sv._page_h_pt)
 
 
@@ -2279,24 +2283,177 @@ def test_a_newer_zoom_cancels_the_render_still_in_flight():
         vp.deleteLater()
 
 
-def test_render_cap_is_named_and_enforced():
-    """The 4000px ceiling is a placeholder until tiling exists; it should at
-    least be one named constant rather than a number sprinkled about."""
+def _settled_deep(vp, sv):
+    return _settle(vp, lambda: sv._render_task is None and sv._region_task is None
+                   and not getattr(sv, "_showing_provisional", False), tries=800)
+
+
+def test_deep_zoom_renders_the_window_not_the_whole_page():
+    """MAX_RENDER_PX used to clamp the render, so past about 5x on A4 the page
+    stopped getting sharper — the zoom control kept moving and the picture did
+    not. It is a switch now: above it only the part of the page on screen is
+    rendered, at the exact scale, so the page on screen keeps growing while the
+    bitmap stays the size of the window."""
     import tools.page_viewer as pv
+    from tools.render.region import render_region
     assert isinstance(pv.MAX_RENDER_PX, int) and pv.MAX_RENDER_PX > 0
     src = _fine_detail_pdf()
     vp, sv = _open_single_view(src)
     try:
-        sv._zoom = 40.0                    # far past the cap
+        seen = []
+        for zoom in (2.0, 12.0, 40.0):
+            sv._zoom = zoom
+            sv._render()
+            assert _settled_deep(vp, sv), f"zoom {zoom} never settled"
+            scale = _target_scale_of(sv, zoom)
+            page_px = max(sv._page_w_pt * scale, sv._page_h_pt * scale)
+            region  = sv._region_scale > 0
+            bitmap  = sv._region_img if region else sv._last_pm
+            seen.append((zoom, page_px, region, bitmap.width(), bitmap.height()))
+            assert max(bitmap.width(), bitmap.height()) <= pv.MAX_RENDER_PX + 1, \
+                f"zoom {zoom}: bitmap {bitmap.width()}x{bitmap.height()} is unbounded"
+
+        # the page really does keep growing past the old ceiling
+        assert seen[-1][1] > pv.MAX_RENDER_PX * 4, \
+            f"page at 40x is only {seen[-1][1]:.0f}px — still clamped"
+        assert not seen[0][2], "2x should still render the page in one piece"
+        assert seen[1][2] and seen[2][2], "deep zoom should render a window"
+
+        # and what is on screen is a real render at that exact scale
+        scale = _target_scale_of(sv, 40.0)
+        px0, py0, w, h = sv._region_rect
+        fresh = render_region(src, 0, scale, px0, py0, w, h, 0)
+        a = sv._region_img.toImage().convertToFormat(fresh.format())
+        assert (a.width(), a.height()) == (fresh.width(), fresh.height())
+        M = 8      # ignore the outermost pixels, which the window edge clips
+        diff = 0
+        for y in range(M, a.height() - M, 17):
+            for x in range(M, a.width() - M, 17):
+                pa, pf = a.pixel(x, y), fresh.pixel(x, y)
+                diff = max(diff, abs((pa & 0xFF) - (pf & 0xFF)))
+        assert diff <= 2, f"deep zoom is not a real render (max channel diff {diff})"
+    finally:
+        vp.deleteLater()
+
+
+def test_deep_zoom_memory_does_not_grow_with_zoom():
+    """The whole point: cost is set by the window, not the zoom. At 40x an A4
+    page would be some 450 megapixels as one bitmap."""
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src)
+    try:
+        sizes = []
+        for zoom in (10.0, 20.0, 40.0):
+            sv._zoom = zoom
+            sv._render()
+            assert _settled_deep(vp, sv), f"zoom {zoom} never settled"
+            assert sv._region_scale > 0, f"zoom {zoom} did not use window rendering"
+            sizes.append(sv._region_img.width() * sv._region_img.height())
+        assert max(sizes) < 4_000_000, f"window grew to {max(sizes)} px"
+        assert max(sizes) - min(sizes) < 200_000, \
+            f"window size varies with zoom: {sizes}"
+    finally:
+        vp.deleteLater()
+
+
+def test_panning_inside_the_margin_costs_no_render():
+    """The window is rendered larger than the viewport so a small pan is a blit,
+    not a re-render."""
+    from tools.render.region import REGION_MARGIN_PX
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src)
+    try:
+        sv._zoom = 20.0
         sv._render()
-        _settle(vp, lambda: sv._render_task is None
-                and not getattr(sv, "_showing_provisional", False), tries=600)
-        pm = sv._last_pm
-        assert max(pm.width(), pm.height()) <= pv.MAX_RENDER_PX + 1, \
-            f"render {pm.width()}x{pm.height()} exceeds the cap"
-        # and it still settles on a real render rather than an upscale
-        ok, detail = _matches_pdfium(pm, src, 0, _target_scale_of(sv, 40.0))
-        assert ok, f"capped zoom settled on an interpolation — {detail}"
+        assert _settled_deep(vp, sv)
+        assert sv._region_scale > 0
+        before_rect = sv._region_rect
+        renders = []
+        real = pv_module = None
+        import tools.page_viewer as pv_module
+        orig = pv_module._RegionRenderTask.run
+        def counting(self):
+            renders.append(1)
+            return orig(self)
+        pv_module._RegionRenderTask.run = counting
+        try:
+            sv._scroll_y += REGION_MARGIN_PX // 2      # inside the margin
+            sv._render()
+            _spin(10, 0.01)
+            assert not renders, "a pan inside the margin triggered a render"
+            assert sv._region_rect == before_rect, "the window was rebuilt anyway"
+
+            sv._scroll_y += REGION_MARGIN_PX * 4       # well outside it
+            sv._render()
+            assert _settled_deep(vp, sv)
+            assert renders, "a pan past the margin did not render"
+        finally:
+            pv_module._RegionRenderTask.run = orig
+    finally:
+        vp.deleteLater()
+
+
+def test_deep_zoom_window_always_covers_the_visible_sheet():
+    """Any part of the sheet on screen that the window does not cover shows as
+    background. The page is a fractional number of pixels wide, and truncating
+    that left the window one pixel short at the far corner."""
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src, w=1100, h=780)
+    try:
+        gaps = []
+        for zoom in (10.0, 25.0, 40.0):
+            sv._zoom = zoom
+            sv._render()
+            assert _settled_deep(vp, sv)
+            scale = sv._display_scale(zoom)
+            pw, ph = sv._page_w_pt * scale, sv._page_h_pt * scale
+            aw, ah = sv._view.width(), sv._view.height()
+            for fx in (0.0, 0.5, 1.0):
+                for fy in (0.0, 1.0):
+                    sv._scroll_x = fx * max(0.0, pw - aw)
+                    sv._scroll_y = fy * max(0.0, ph - ah)
+                    sv._render()
+                    assert _settled_deep(vp, sv)
+                    px0, py0, rw, rh = sv._region_rect
+                    ox, oy = sv._page_origin(pw, ph)
+                    l, t = ox + px0, oy + py0
+                    vl, vt = max(0.0, ox), max(0.0, oy)
+                    vr, vb = min(float(aw), ox + pw), min(float(ah), oy + ph)
+                    if not (l <= vl + 0.5 and t <= vt + 0.5
+                            and l + rw >= vr - 0.5 and t + rh >= vb - 0.5):
+                        gaps.append((zoom, fx, fy))
+        assert not gaps, f"the window left part of the sheet uncovered at {gaps}"
+    finally:
+        vp.deleteLater()
+
+
+def test_deep_zoom_is_correct_for_a_rotated_page():
+    """Window rendering maps the visible rectangle back through the page
+    manager's rotation; get that inverse wrong and the page comes out scrambled
+    or shows the wrong corner."""
+    from tools.render.region import render_region, displayed_page_px
+    src = _fine_detail_pdf()
+    vp, sv = _open_single_view(src)
+    try:
+        tab = vp.tabs.currentWidget()
+        tab._build_manage_once()
+        tab.model.selected = {tab.model.order[0]}
+        tab._manage_panel.grid.rotate_selected(90)
+        sv._zoom = 12.0
+        sv._render()
+        assert _settled_deep(vp, sv)
+        assert sv._region_scale > 0, "not in window mode"
+        assert sv._page_w_pt > sv._page_h_pt, "rotation did not reach the view"
+
+        scale = sv._region_scale
+        px0, py0, w, h = sv._region_rect
+        fresh = render_region(src, 0, scale, px0, py0, w, h, 90)
+        a = sv._region_img.toImage().convertToFormat(fresh.format())
+        diff = 0
+        for y in range(8, a.height() - 8, 13):
+            for x in range(8, a.width() - 8, 13):
+                diff = max(diff, abs((a.pixel(x, y) & 0xFF) - (fresh.pixel(x, y) & 0xFF)))
+        assert diff <= 2, f"rotated window render differs (max channel diff {diff})"
     finally:
         vp.deleteLater()
 
@@ -2488,7 +2645,11 @@ def test_rotation_reaches_the_preview():
     tab._manage_panel.grid.rotate_selected(90)
     sv._current = 0
     sv._render()
-    assert _settle(vp, lambda: sv._page_w_pt > portrait[0], tries=250), \
+    # Wait for the render, not for the dimensions: those are now corrected as
+    # soon as the rotation is seen, before anything has been re-rendered.
+    assert _settle(vp, lambda: sv._render_task is None
+                   and not getattr(sv, "_showing_provisional", False)
+                   and sv._page_w_pt > portrait[0], tries=250), \
         "the preview never picked up the rotation"
     assert (round(sv._page_w_pt), round(sv._page_h_pt)) == \
            (round(portrait[1]), round(portrait[0])), \
