@@ -32,7 +32,7 @@ class PdfTab(QWidget):
         # A tab builds its own children, so it is the one that names them; the
         # children only ever walk back up to ask which tab owns them. Imported
         # at call time to keep that one loop from being an import cycle.
-        from tools.page_viewer import SinglePageView
+        from tools.viewer.single_page import SinglePageView
         self.single = SinglePageView()
         self.single.page_changed.connect(self._on_page_changed)
         self._stack.addWidget(self.single)

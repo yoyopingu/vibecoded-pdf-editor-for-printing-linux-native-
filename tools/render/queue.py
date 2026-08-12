@@ -393,6 +393,17 @@ class _PageRenderTask:
 _prerender_enabled = True   # can be toggled via apply_performance_settings()
 
 
+def prerender_enabled():
+    """Whether speculative pre-rendering is on.
+
+    A function, not the flag itself: apply_performance_settings rebinds
+    _prerender_enabled, and a caller in another module that had imported the
+    name would go on reading the value it was bound to at import time. That
+    was one module when both lived in page_viewer, and is two now.
+    """
+    return _prerender_enabled
+
+
 def apply_performance_settings(prerender=True, render_threads=1,
                                 thumb_threads=1, cache_size=300,
                                 full_page_cache=6):
