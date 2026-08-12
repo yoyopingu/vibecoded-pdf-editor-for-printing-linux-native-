@@ -2815,7 +2815,10 @@ def test_a_narrower_thumbnail_is_shrunk_not_re_rendered():
     580,000 stroked segments measured 1221 ms against 1307 ms for the whole
     sheet. Thumbnail widths are derived from the window's, so dragging it used
     to re-render every card at every width it passed through."""
-    import tools.page_viewer as pv
+    # The module _ThumbTask resolves _render_image in, which is where the spy
+    # has to go — patching the re-export in tools.page_viewer would rebind a
+    # name nothing looks up.
+    import tools.render.queue as pv
     from tools.page_viewer import (_ThumbTask, _ThumbnailCache,
                                    _thumb_render_width)
     _ThumbnailCache.invalidate()
