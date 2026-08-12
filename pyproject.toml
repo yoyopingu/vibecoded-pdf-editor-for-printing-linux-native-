@@ -35,3 +35,10 @@ copyshop-pdf = "main:main"
 [tool.setuptools]
 py-modules = ["main"]
 packages = ["tools"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Eleven tests return a short string — "510 ms render, cancelled in 10 ms" —
+# which tests/run.py prints beside the PASS. pytest reads a non-None return as
+# a mistaken `assert`, which is a good default and wrong here.
+filterwarnings = ["ignore::pytest.PytestReturnNotNoneWarning"]

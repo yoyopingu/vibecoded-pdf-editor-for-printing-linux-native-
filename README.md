@@ -151,12 +151,31 @@ system-wide setup; they are optional and not needed to run from the repo.
 
 ## Tests
 
-Self-contained regression suite — no pytest, no fixtures on disk. It generates
-its own PDFs in a temp directory, runs headless, and exits non-zero on failure.
+Regression suite — no fixtures on disk. It generates its own PDFs in a temp
+directory, runs headless, and exits non-zero on failure.
 
 ```bash
-python3 tests/test_copyshop.py
+python3 tests/run.py              # everything, no pytest needed
+python3 tests/run.py zoom render  # only modules whose name matches
+pytest tests/ -x -k thumbnail     # if you have pytest
 ```
+
+Both runners see the same 90 tests. `tests/run.py` exists because the
+interpreter this app runs on has PyQt6, pypdfium2, pikepdf and reportlab but
+not necessarily pytest, and a suite the app's own machine cannot run is not
+much of a suite.
+
+One caveat, stated plainly: running all 90 in a *single* pytest process aborts
+in glibc's allocator about a third of the time, after every test has reported
+PASS. Each module on its own is clean (`pytest tests/test_render.py`), and
+`tests/run.py` is clean over the full suite — the same 90 tests, the same order,
+in one process — so this is something about the state pytest keeps alive across
+a long run, not a failing test. `tests/run.py` is the runner to trust for a
+full pass; pytest is the nicer one for working on a single module.
+
+The tests are grouped by subject — `test_viewer_zoom.py`, `test_printing.py`,
+`test_render.py` and so on — over `tests/support.py`, which holds the
+QApplication, the fixture PDFs and the helpers more than one subject uses.
 
 It tests the source tree in place, so run it from the repository root. Tests
 that need an external binary (OCR) skip themselves and say so when it is
