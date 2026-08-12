@@ -1,0 +1,155 @@
+"""
+Titlebar, moved out of main.py.
+"""
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
+from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtGui import QKeySequence, QAction
+from tools.i18n import tr, get_language
+
+
+class NavBtn(QPushButton):
+    def __init__(self, text, viewer=False, parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("viewerBtn" if viewer else "navBtn")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setProperty("active", "false")
+
+    def set_active(self, active: bool):
+        self.setProperty("active", "true" if active else "false")
+        self.style().unpolish(self); self.style().polish(self)
+
+
+class TitleBar(QWidget):
+    """Frameless custom title bar: drag area + menu bar + window controls."""
+
+    def __init__(self, window: "MainWindow", parent=None):
+        super().__init__(parent)
+        self._win = window
+        self._drag_pos = None
+        self.setObjectName("titleBar")
+        self.setFixedHeight(42)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 0, 4, 0)
+        layout.setSpacing(0)
+
+        # App title
+        title = QLabel(tr("CopyShop PDF Suite"))
+        title.setObjectName("titleBarLabel")
+        layout.addWidget(title)
+
+        layout.addSpacing(16)
+
+        # Menu bar embedded in title bar
+        self.menu_bar = self._build_menu()
+        layout.addWidget(self.menu_bar)
+
+        layout.addStretch()
+
+        # Window controls
+        for symbol, tip, slot in [
+            ("─", "Minimieren",    window.showMinimized),
+            ("□", "Maximieren",    self._toggle_max),
+            ("✕", "Schließen",     window.close),
+        ]:
+            btn = QPushButton(symbol)
+            btn.setObjectName("titleBarBtn")
+            btn.setToolTip(tr(tip))
+            btn.setFixedSize(42, 42)
+            btn.clicked.connect(slot)
+            layout.addWidget(btn)
+
+    def _build_menu(self):
+        from PyQt6.QtWidgets import QMenuBar
+        mb = QMenuBar(self)
+        mb.setObjectName("titleMenuBar")
+
+        # Datei
+        menu_file = mb.addMenu(tr("Datei"))
+        act_open = QAction(tr("Datei öffnen…"), self)
+        act_open.setShortcut(QKeySequence("Ctrl+O"))
+        act_open.triggered.connect(self._win._open_dialog)
+        menu_file.addAction(act_open)
+        act_multi = QAction(tr("Mehrere Dateien öffnen…"), self)
+        act_multi.triggered.connect(self._win._open_multi_dialog)
+        menu_file.addAction(act_multi)
+        menu_file.addSeparator()
+        # Saving belongs to the document, not to the page manager — it used to
+        # live only in that sidebar, so it was unreachable from the normal view
+        # even though Strg+S was already wired up there.
+        # Resolved when triggered, not now: the title bar is built before
+        # MainWindow creates .viewer.
+        act_save = QAction(tr("Speichern"), self)
+        act_save.setShortcut(QKeySequence("Ctrl+S"))
+        act_save.triggered.connect(lambda: self._win.viewer._save_current())
+        menu_file.addAction(act_save)
+        act_save_as = QAction(tr("Speichern unter…"), self)
+        act_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        act_save_as.triggered.connect(lambda: self._win.viewer._save_as_current())
+        menu_file.addAction(act_save_as)
+        menu_file.addSeparator()
+        act_quit = QAction(tr("Beenden"), self)
+        act_quit.setShortcut(QKeySequence("Ctrl+Q"))
+        act_quit.triggered.connect(self._win.close)
+        menu_file.addAction(act_quit)
+
+        # Einstellungen
+        menu_settings = mb.addMenu(tr("Einstellungen"))
+        act_appear = QAction(tr("Darstellung…"), self)
+        act_appear.triggered.connect(self._win._open_appearance)
+        menu_settings.addAction(act_appear)
+        act_perf = QAction(tr("Leistung…"), self)
+        act_perf.setShortcut(QKeySequence("Ctrl+,"))
+        act_perf.triggered.connect(self._win._open_performance)
+        menu_settings.addAction(act_perf)
+        act_general = QAction(tr("Allgemein…"), self)
+        act_general.triggered.connect(self._win._open_general)
+        menu_settings.addAction(act_general)
+
+        # Sprache submenu
+        menu_lang = menu_settings.addMenu(tr("Sprache"))
+        act_de = QAction(tr("Deutsch"), self)
+        act_de.setCheckable(True)
+        act_de.setChecked(get_language() == "de")
+        act_de.triggered.connect(lambda: self._win._set_language("de"))
+        menu_lang.addAction(act_de)
+        act_en = QAction(tr("English"), self)
+        act_en.setCheckable(True)
+        act_en.setChecked(get_language() == "en")
+        act_en.triggered.connect(lambda: self._win._set_language("en"))
+        menu_lang.addAction(act_en)
+
+        # Hilfe
+        menu_help = mb.addMenu(tr("Hilfe"))
+        act_about = QAction(tr("Über CopyShop PDF Suite"), self)
+        act_about.triggered.connect(self._win._show_about)
+        menu_help.addAction(act_about)
+
+        return mb
+
+    def _toggle_max(self):
+        if self._win.isMaximized():
+            self._win.showNormal()
+        else:
+            self._win.showMaximized()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = e.globalPosition().toPoint() - self._win.frameGeometry().topLeft()
+            e.accept()
+
+    def mouseMoveEvent(self, e):
+        if self._drag_pos and e.buttons() == Qt.MouseButton.LeftButton:
+            if self._win.isMaximized():
+                ratio = e.globalPosition().x() / max(1, self._win.width())
+                self._win.showNormal()
+                self._drag_pos = QPoint(int(self._win.width() * ratio), self.height() // 2)
+            self._win.move(e.globalPosition().toPoint() - self._drag_pos)
+            e.accept()
+
+    def mouseReleaseEvent(self, e):
+        self._drag_pos = None
+
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._toggle_max()
