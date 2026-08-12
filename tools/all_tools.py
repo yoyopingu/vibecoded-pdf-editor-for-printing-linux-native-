@@ -1,9 +1,14 @@
 """
-Alle Tool-Panels v3.3
-======================
-- Kein QFormLayout mehr — nur QHBoxLayout pro Zeile
-- setFixedWidth(220) auf Labels — garantiert sichtbar
-- Kein Abschneiden moeglich
+Alle Tool-Panels v3.3 — re-export shim.
+
+The panels themselves live in tools/panels/, one module each; this module
+imports them back so that ``from tools.all_tools import ...`` and
+``import tools.all_tools as T`` keep answering for every name they did when
+this file held all 3,502 lines of them.
+
+The wholesale Qt and stdlib imports below are no longer used by anything in
+this file. They stay because removing them would narrow what the module
+exports, and this module exists to export exactly what it used to.
 """
 import os, io, math, subprocess, shutil, logging
 from tools.page_viewer import (_TV, _register_themed, _pdfium_lock,
@@ -36,80 +41,18 @@ from tools.panels._cropmarks  import (_crop_mark_segments,
                                       _crop_marks_content_stream)
 from tools.panels._imposition import (_ROT_MATRIX, _slot_placement,
                                       _flatten_annots)
-from tools.panels.crop_resize import CropResizePanel
-from tools.panels.grayscale import _grey_retry_page, _grey_vector, GrayscalePanel
-from tools.panels.nup import _nup_slot_rects, _build_nup, NUpPanel
+from tools.panels.merge_split    import MergeSplitPanel
+from tools.panels.compress       import CompressPanel, _fmt
+from tools.panels.crop_resize    import CropResizePanel
+from tools.panels.page_numbers   import PageNumbersPanel
+from tools.panels.img_pdf        import ImgPdfPanel
+from tools.panels.grayscale      import GrayscalePanel, _grey_retry_page, _grey_vector
+from tools.panels.impose         import (ImposePanel, _booklet_sides,
+                                         _impose_page_size, _build_impose)
+from tools.panels.forms          import FormsPanel, _plain_ink, _flatten_form
+from tools.panels.ocr            import (OcrPanel, _run_ocr, tesseract_langs,
+                                         _page_has_text, _ocr_with_tesseract)
+from tools.panels.preflight      import PreflightPanel
+from tools.panels.layers         import LayersPanel
 from tools.panels.colour_profile import ColourProfilePanel
-from tools.panels.impose import ImposePanel, _booklet_sides, _impose_page_size, _build_impose
-from tools.panels.merge_split import MergeSplitPanel
-from tools.panels.ocr import _run_ocr, tesseract_langs, _page_has_text, _ocr_with_tesseract, OcrPanel
-from tools.panels.layers import LayersPanel
-from tools.panels.forms import _plain_ink, _flatten_form, FormsPanel
-from tools.panels.compress import CompressPanel, _fmt
-from tools.panels.preflight import PreflightPanel
-from tools.panels.page_numbers import PageNumbersPanel
-from tools.panels.img_pdf import ImgPdfPanel
-
-
-
-
-
-
-
-
-
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# GRAYSCALE
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+from tools.panels.nup            import NUpPanel, _nup_slot_rects, _build_nup

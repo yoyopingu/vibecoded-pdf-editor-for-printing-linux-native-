@@ -1,5 +1,5 @@
 """
-_build_impose, moved verbatim out of tools/all_tools.py.
+ImposePanel, moved verbatim out of tools/all_tools.py.
 See tools/panels/__init__.py.
 """
 from PyQt6.QtWidgets import QVBoxLayout, QSpinBox, QComboBox, QGroupBox, QCheckBox

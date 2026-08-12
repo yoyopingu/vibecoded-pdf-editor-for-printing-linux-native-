@@ -1,5 +1,5 @@
 """
-_fmt, moved verbatim out of tools/all_tools.py.
+CompressPanel, moved verbatim out of tools/all_tools.py.
 See tools/panels/__init__.py.
 """
 import os, subprocess, shutil
