@@ -87,7 +87,8 @@ class PdfTab(QWidget):
         """Create PageGrid + ManagePanel once and cache them for the lifetime of the tab."""
         if self._manage_panel is not None:
             return  # already built
-        from tools.page_viewer import ManagePanel, PageGrid
+        from tools.viewer.manage import ManagePanel
+        from tools.viewer.page_grid import PageGrid
         grid = PageGrid(self.model, self.pdf_path)
         grid_scroll = QScrollArea()
         grid_scroll.setWidgetResizable(True)
