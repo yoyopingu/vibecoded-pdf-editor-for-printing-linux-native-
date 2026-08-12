@@ -132,7 +132,7 @@ class PdfTab(QWidget):
         """Oeffnet den vollstaendigen Druckdialog."""
         if not self.model:
             return
-        from tools.page_viewer import PrintDialog
+        from tools.viewer.printing import PrintDialog
         dlg = PrintDialog(self.pdf_path, self.model, self)
         dlg.exec()
 
