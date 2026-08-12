@@ -1,5 +1,13 @@
 """
-Printing, moved verbatim out of tools/page_viewer.py.
+The print dialog, and the preview beside it.
+
+Paper size, orientation, duplex, colour mode, page ranges, copies and collation,
+resolved against what the printer says it can do, and then sent — through
+Ghostscript and lp where they exist, and through Qt where they do not.
+
+_gs_blacked_out is here because it belongs to the sending: Ghostscript will
+report success while turning a transparency group solid black, so every job is
+checked against the original before it goes to paper.
 """
 import os, io, logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QScrollArea, QDialog, QSpinBox, QLineEdit, QCheckBox

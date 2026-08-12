@@ -1,5 +1,12 @@
 """
-Single Page, moved verbatim out of tools/page_viewer.py.
+The one-page view — what the app shows by default.
+
+Turning pages, and the zoom. The zoom is where most of this module is: past
+MAX_RENDER_PX a page is no longer rendered as one bitmap but a window at a time
+at the exact scale, so the view has to track which window it is holding, whether
+that window still covers the viewport after a scroll, and what to put on screen
+in the meantime. A gesture shows a cheap stand-in per step and renders once,
+exactly, when it stops.
 """
 import math
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QSizePolicy

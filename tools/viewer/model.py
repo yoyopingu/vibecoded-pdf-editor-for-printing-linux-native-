@@ -1,5 +1,10 @@
 """
-Model, moved verbatim out of tools/page_viewer.py.
+What the document looks like right now.
+
+The order pages are in, which way each is turned, and which are selected —
+everything the page manager edits and the viewer, the tools and the print path
+read. It holds no widgets and no pdfium handles: reordering a document is a list
+operation here, and only becomes a file when something asks it to be saved.
 """
 from tools.i18n import tr
 

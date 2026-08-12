@@ -1,5 +1,10 @@
 """
-Panel, moved verbatim out of tools/page_viewer.py.
+The tab host — the widget main.py puts on screen.
+
+Opening files, closing tabs and everything that has to happen when one closes:
+the render work it started is cancelled, its thumbnails and page renders are
+dropped, and the parsed document behind them is released. A loaded page of a
+large PDF is hundreds of megabytes, so a tab that is gone must not keep one.
 """
 import os, atexit, logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFileDialog, QApplication, QSplitter, QLineEdit

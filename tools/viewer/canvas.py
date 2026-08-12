@@ -1,5 +1,9 @@
 """
-Canvas, moved verbatim out of tools/page_viewer.py.
+The widget a rendered page is painted on.
+
+Draws the pixmap, outlines the sheet, and owns the text selection: the character
+boxes that come back with a render, the drag that picks a range out of them, and
+the copy.
 """
 from PyQt6.QtWidgets import QWidget, QApplication, QMenu, QSizePolicy
 from PyQt6.QtCore import Qt, QRect

@@ -1,5 +1,14 @@
 """
-Caches, moved verbatim out of tools/page_viewer.py.
+What has already been rendered.
+
+Two LRUs of finished images, both keyed so that a page rewritten on disk cannot
+come back as its previous revision: thumbnails by (path, page, rotation, width),
+whole pages by (path, page, rotation, viewport bucket).
+
+Eviction is by priority, not by age. _set_active names the page the user is
+looking at, and _priority_evict drops other tabs first, then other pages of this
+tab, and the page on screen last of all — an LRU alone would happily evict the
+one image that is about to be painted.
 """
 import threading
 from collections import OrderedDict

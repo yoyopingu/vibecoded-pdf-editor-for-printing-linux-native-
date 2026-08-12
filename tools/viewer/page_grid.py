@@ -1,5 +1,10 @@
 """
-Page Grid, moved verbatim out of tools/page_viewer.py.
+The thumbnails of "Seiten verwalten".
+
+A card per page, laid out in a grid, with the drag and drop that reorders them
+and the marker showing where a dragged page will land. Thumbnails are rendered
+lazily for what is on screen — a 500-page document would otherwise queue 500
+renders to show twelve of them.
 """
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame, QApplication, QScrollArea, QSizePolicy
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer

@@ -1,5 +1,11 @@
 """
-Theme, moved verbatim out of tools/page_viewer.py.
+Colours, and the widgets that follow them.
+
+_TV is the live palette every viewer widget reads at paint time. It is mutated
+in place rather than rebound, so a widget holding a reference sees the change;
+set_viewer_theme swaps its contents and then re-styles every panel that
+registered itself with _register_themed. The registry is weak, so a closed tab
+does not keep its panels alive.
 """
 import logging
 from PyQt6.QtCore import Qt, QRectF

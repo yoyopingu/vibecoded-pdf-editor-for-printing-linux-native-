@@ -1,5 +1,16 @@
 """
-Images, moved verbatim out of tools/page_viewer.py.
+A whole page, as one image, plus the arithmetic of how big to make it.
+
+render_page / _render_image are the simple path — give me this page at this
+width — used for thumbnails and for anything that just needs a picture. Deep
+zoom does not come through here; it renders only the visible window, in
+tools/render/region.py.
+
+MAX_RENDER_PX is where the two meet: past it a whole-page bitmap is too large to
+be worth building, and the viewer switches to window rendering. _good_enough
+decides when an image already in hand can be scaled instead of re-rendered —
+shrinking a finer render is supersampling and looks the same, enlarging a
+coarser one does not.
 """
 import io
 from PyQt6.QtGui import QPixmap, QImage, QColor

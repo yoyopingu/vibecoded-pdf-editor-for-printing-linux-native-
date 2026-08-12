@@ -1,5 +1,9 @@
 """
-Merge, moved verbatim out of tools/page_viewer.py.
+The file-level grid, shown when several files are opened at once.
+
+The same idea as the page grid one level up: a card per file, dragged into the
+order they should be merged in, with a preview of each. Picking several files
+opens this instead of guessing which one was meant.
 """
 import os, logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QScrollArea, QSizePolicy, QSplitter, QLineEdit

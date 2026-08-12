@@ -1,5 +1,10 @@
 """
-Manage, moved verbatim out of tools/page_viewer.py.
+The toolbar over the page grid.
+
+Rotate, delete, insert, extract, select by range — the operations of "Seiten
+verwalten", and the shortcut filter that makes them reachable from the keyboard
+whatever has focus. The edits themselves go to the PageModel; this is the
+control surface over it.
 """
 import os
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QFileDialog, QApplication, QScrollArea, QLineEdit

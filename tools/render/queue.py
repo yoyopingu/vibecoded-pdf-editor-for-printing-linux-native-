@@ -1,5 +1,22 @@
 """
-Queue, moved verbatim out of tools/page_viewer.py.
+One thread, and what it renders next.
+
+Everything the viewer wants drawn is submitted here as a task with a priority:
+
+    0  the page on screen — the user is watching
+    1  thumbnails that are visible
+    2  pre-renders of pages they might turn to
+
+One worker, not a pool, because pdfium is serialised process-wide anyway (see
+tools/render/document_cache.py) — and because this queue can do two things a
+QThreadPool cannot: preempt the task that is *running* when a page turn arrives,
+and drop every queued pre-render in one pass. The reasoning is written out at
+_RenderQueue itself.
+
+The tasks are here too: a thumbnail, a whole page, and the window of a page at a
+zoom too deep to render whole. All three check for cancellation while they run,
+so a render nobody wants any more stops in single-digit milliseconds rather than
+holding the thread and the pdfium lock until it finishes.
 """
 import atexit, threading, heapq, logging
 from PyQt6.QtCore import Qt, pyqtSignal, QObject

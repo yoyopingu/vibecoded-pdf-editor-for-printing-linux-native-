@@ -1,5 +1,10 @@
 """
-Tab, moved verbatim out of tools/page_viewer.py.
+One open document.
+
+Owns the model, and switches between the single-page view and the page manager
+over it. It is also the anchor of the viewer's one reference cycle: a tab builds
+its children, and each child walks back up the parent chain to ask which tab
+owns it, so the tab imports them at call time and they import the tab normally.
 """
 import os, logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QFrame, QScrollArea, QStackedWidget
