@@ -1,0 +1,606 @@
+"""
+Page Grid, moved verbatim out of tools/page_viewer.py.
+"""
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame, QApplication, QScrollArea, QSizePolicy
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer
+from PyQt6.QtGui import QPixmap, QImage, QColor, QDrag, QPainter, QTransform
+from tools.i18n import tr
+from tools.render.caches import _FullPageCache, _ThumbnailCache
+from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
+from tools.viewer.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
+
+
+CARD_W = 110
+
+
+CARD_H = 155
+
+
+GAP    = 10
+
+
+MARGIN = 12
+
+
+class PageCard(QFrame):
+    clicked = pyqtSignal(int)
+
+    def __init__(self, display_pos, orig_idx, pixmap, rotation=0, parent=None,
+                 card_w=CARD_W, card_h=CARD_H):
+        super().__init__(parent)
+        self.display_pos = display_pos
+        self.orig_idx    = orig_idx
+        self._card_w     = card_w
+        self._card_h     = card_h
+        self.setFixedSize(card_w+16, card_h+28)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._selected            = False
+        self._drag_pos            = None
+        self._pending_ctrl_click  = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 2)
+        layout.setSpacing(2)
+
+        self.img = QLabel()
+        self.img.setFixedSize(card_w, card_h)
+        self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.img.setStyleSheet(
+            f"border:1px solid {_TV['border']};background:{_TV['card_bg']};border-radius:2px;")
+        if pixmap is not None:
+            if rotation:
+                pixmap = pixmap.transformed(QTransform().rotate(rotation))
+            pixmap = pixmap.scaled(card_w, card_h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            self.img.setPixmap(pixmap)
+        layout.addWidget(self.img)
+
+        num_size = max(9, min(13, card_w // 10))
+        self.num = QLabel(str(display_pos + 1))
+        self.num.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # border:none — QLabel is a QFrame, so without it the label picks up the
+        # selected card's 2px accent border and gets a box of its own.
+        self.num.setStyleSheet(
+            f"color:{_TV['dim']};font-size:{num_size}px;"
+            "background:transparent;border:none;")
+        layout.addWidget(self.num)
+        self._update_style()
+
+    def set_image(self, image: QImage):
+        """Called from the GUI thread with a freshly rendered QImage."""
+        pm = QPixmap.fromImage(image)
+        pm = pm.scaled(self._card_w, self._card_h,
+                       Qt.AspectRatioMode.KeepAspectRatio,
+                       Qt.TransformationMode.SmoothTransformation)
+        self.img.setPixmap(pm)
+
+    def set_selected(self, sel):
+        self._selected = sel
+        self._update_style()
+
+    def _update_style(self):
+        if self._selected:
+            self.setStyleSheet(
+                f"QFrame{{background:{_TV['sel_bg']};border:2px solid {_TV['acc']};border-radius:5px;}}")
+        else:
+            self.setStyleSheet(
+                "QFrame{background:transparent;border:2px solid transparent;"
+                "border-radius:5px;}")
+
+    def mousePressEvent(self, e):
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        self._drag_pos = e.position().toPoint()
+        mods  = QApplication.keyboardModifiers()
+        ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
+
+        # Ctrl+click on an already-selected card: don't deselect yet — wait to
+        # see if the user drags (multi-drag) or just releases (then deselect).
+        if ctrl and self._selected:
+            self._pending_ctrl_click = True
+        else:
+            self._pending_ctrl_click = False
+            self.clicked.emit(self.display_pos)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and getattr(self, '_pending_ctrl_click', False):
+            # No drag happened — process the deferred Ctrl+click now
+            self._pending_ctrl_click = False
+            self.clicked.emit(self.display_pos)
+
+    def mouseMoveEvent(self, e):
+        if not (e.buttons() & Qt.MouseButton.LeftButton): return
+        if self._drag_pos is None: return
+        if (e.position().toPoint() - self._drag_pos).manhattanLength() < 12: return
+
+        mods  = QApplication.keyboardModifiers()
+        ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
+
+        # Deferred Ctrl+click: card stays selected for multi-drag, no deselect
+        self._pending_ctrl_click = False
+
+        # Find parent grid
+        grid = self.parent()
+        while grid and not isinstance(grid, PageGrid):
+            grid = grid.parent()
+
+        # If card is not selected yet, select it now as single
+        if not self._selected:
+            self.clicked.emit(self.display_pos)
+
+        is_multi = (grid and self._selected and len(grid.model.selected) > 1)
+
+        drag = QDrag(self)
+        mime = QMimeData()
+        # Ctrl+drag = copy; plain drag = move
+        # Format: "copy_multi:<pos>", "copy:<pos>", "multi:<pos>", "<pos>"
+        if ctrl:
+            prefix = "copy_multi" if is_multi else "copy"
+        else:
+            prefix = "multi" if is_multi else ""
+        mime.setText(f"{prefix}:{self.display_pos}" if prefix else str(self.display_pos))
+        drag.setMimeData(mime)
+
+        if is_multi and grid:
+            n_sel = len(grid.model.selected)
+            pm = QPixmap(self.size())
+            pm.fill(QColor("#1e3a5a"))
+            from PyQt6.QtGui import QPainter as _P, QFont as _F
+            p = _P(pm); p.setPen(QColor("#eaeaea"))
+            f = _F(); f.setPointSize(11); f.setBold(True); p.setFont(f)
+            label = tr('+{p0} Seiten').format(p0=n_sel) if ctrl else tr('{p0} Seiten').format(p0=n_sel)
+            p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, label)
+            p.end()
+            drag.setPixmap(pm)
+        else:
+            pm = QPixmap(self.size())
+            self.render(pm)
+            if ctrl:
+                # Overlay a "+" to signal copy
+                from PyQt6.QtGui import QPainter as _P, QFont as _F
+                p = _P(pm); p.setPen(QColor("#4caf50"))
+                f = _F(); f.setPointSize(18); f.setBold(True); p.setFont(f)
+                p.drawText(pm.rect().adjusted(0, 0, -4, -4),
+                           Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, "+")
+                p.end()
+            drag.setPixmap(pm)
+
+        drag.setHotSpot(e.position().toPoint())
+        actions = Qt.DropAction.CopyAction | Qt.DropAction.MoveAction
+        drag.exec(actions)
+
+
+class PageGrid(QWidget):
+    order_changed     = pyqtSignal()
+    selection_changed = pyqtSignal()
+
+    def __init__(self, model, pdf_path, parent=None):
+        super().__init__(parent)
+        self.model    = model
+        self.pdf_path = pdf_path
+        self._cards   = []
+        self._card_render_widths = []   # render_w per card, parallel to _cards
+        self._drop_indicator = -1
+        self._last_click_pos   = None  # für Shift+Click Bereichsauswahl
+        self._card_w  = CARD_W   # zoombarer Thumbnail-Breite
+        self._card_h  = CARD_H   # zoombarer Thumbnail-Höhe
+        # Background thumbnail rendering
+        self._thumb_gen     = 0
+        self._thumb_tasks   = []        # active _ThumbTask objects
+        self._thumb_signals = _ThumbSignals()
+        self._thumb_signals.ready.connect(self._on_thumb_ready)
+        # Debounce timer for resize-triggered rebuilds in single-page mode
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._rebuild)
+        self._scroll_connected = False  # connect scrollbar only once
+        self.setAcceptDrops(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._rebuild()
+        _register_themed(self)
+
+    def _apply_theme(self):
+        self._rebuild()
+
+    def zoom_in(self):
+        step = 20 if self._card_w < 300 else 40 if self._card_w < 600 else 80
+        self._card_w = min(1400, self._card_w + step)
+        self._card_h = int(self._card_w * (CARD_H / CARD_W))
+        self._rebuild()
+
+    def zoom_out(self):
+        step = 20 if self._card_w <= 300 else 40 if self._card_w <= 600 else 80
+        self._card_w = max(60, self._card_w - step)
+        self._card_h = int(self._card_w * (CARD_H / CARD_W))
+        self._rebuild()
+
+    def zoom_reset(self):
+        self._card_w = CARD_W
+        self._card_h = CARD_H
+        self._rebuild()
+
+    def wheelEvent(self, e):
+        if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if e.angleDelta().y() > 0:
+                self.zoom_in()
+            else:
+                self.zoom_out()
+            e.accept()
+        else:
+            e.ignore()  # Scroll an ScrollArea weitergeben
+
+    def _per_row(self):
+        w = self.width() or 800  # Fallback wenn noch nicht gezeichnet
+        return max(1, (w - 2*MARGIN + GAP) // (self._card_w+16+GAP))
+
+    def _rebuild(self):
+        # Crash-Guard: verhindert doppelten Aufruf
+        if getattr(self, '_rebuilding', False):
+            return
+        self._rebuilding = True
+        try:
+            # Cancel all pending thumbnail tasks
+            for t in self._thumb_tasks:
+                t.cancel()
+            self._thumb_tasks.clear()
+            _render_queue.cancel_queued(1)
+            self._thumb_gen += 1
+            gen = self._thumb_gen
+
+            # Build a uid→pixmap map from the existing cards so we can reuse
+            # them as placeholders instead of going blank during re-renders.
+            old_cards = self._cards[:]
+            old_pm_by_uid = {}
+            for c in old_cards:
+                pm = c.img.pixmap()
+                if pm and not pm.isNull():
+                    old_pm_by_uid[c.orig_idx] = pm
+            self._cards.clear()
+
+            per_row   = self._per_row()
+            is_single = (per_row == 1)
+            grid_w    = max(100, self.width() or 800)
+            self._card_render_widths.clear()
+
+            for pos, uid in enumerate(self.model.order):
+                src_path, orig = self.model.page_source(uid, self.pdf_path)
+                rot            = self.model.get_rotation(uid)
+
+                if is_single:
+                    c_w = max(60, grid_w - 2*MARGIN - 16)
+                    pw, ph = _FullPageCache.get_dims(src_path, orig, rot)
+                    if pw > 0 and ph > 0:
+                        c_h = int(c_w * pw / ph) if rot in (90, 270) else int(c_w * ph / pw)
+                    else:
+                        c_h = int(c_w * CARD_H / CARD_W)
+                    render_w = _thumb_render_width(c_w * 1.5)
+                else:
+                    c_w      = self._card_w
+                    c_h      = self._card_h
+                    render_w = _thumb_render_width(max(self._card_w * 2, 200))
+
+                self._card_render_widths.append(render_w)
+
+                # Show cached image if available; otherwise use old placeholder.
+                # Tasks are NOT submitted here — _schedule_visible() does that
+                # lazily based on the scroll position (avoids flooding for big PDFs).
+                cached = _ThumbnailCache.get((src_path, orig, rot, render_w))
+                if cached is None:
+                    cached = _ThumbnailCache.get_any(src_path, orig, rot)
+
+                if cached is not None:
+                    pm = QPixmap.fromImage(cached).scaled(
+                        c_w, c_h,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation)
+                else:
+                    pm = old_pm_by_uid.get(uid)
+                    if pm is not None:
+                        pm = pm.scaled(c_w, c_h,
+                                       Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.FastTransformation)
+
+                card = PageCard(pos, uid, pm, 0, self, c_w, c_h)
+                card.set_selected(self.model.is_selected(pos))
+                card.clicked.connect(self._on_click)
+                self._cards.append(card)
+
+            # Destroy old cards after new ones are ready
+            for c in old_cards:
+                c.hide()
+                c.deleteLater()
+            self._relayout()
+            # Kick off thumbnail loading for currently visible cards only
+            QTimer.singleShot(0, self._connect_scroll)
+            QTimer.singleShot(0, self._schedule_visible)
+        finally:
+            self._rebuilding = False
+
+    def _on_thumb_ready(self, gen, cidx, image):
+        """GUI thread — receive rendered thumbnail from background worker."""
+        if gen != self._thumb_gen:
+            return   # stale
+        if cidx < 0 or cidx >= len(self._cards):
+            return
+        self._cards[cidx].set_image(image)
+
+    # ── Lazy thumbnail loading ────────────────────────────────────────────────
+
+    def _get_scroll_area(self):
+        """Return the QScrollArea this grid lives in, or None."""
+        from PyQt6.QtWidgets import QScrollArea
+        p = self.parent()           # viewport
+        if p is None: return None
+        p = p.parent()              # QScrollArea
+        return p if isinstance(p, QScrollArea) else None
+
+    def _connect_scroll(self):
+        """Connect the parent scroll-bar to _schedule_visible (once only)."""
+        if self._scroll_connected:
+            return
+        sa = self._get_scroll_area()
+        if sa is None:
+            return
+        sa.verticalScrollBar().valueChanged.connect(self._schedule_visible)
+        self._scroll_connected = True
+
+    def _schedule_visible(self, _=None):
+        """Submit thumb tasks only for cards visible in the scroll viewport.
+        A one-viewport buffer above and below is included so scrolling feels
+        instant.  Already-cached and already-scheduled cards are skipped."""
+        if not self._cards:
+            return
+        sa = self._get_scroll_area()
+        if sa is not None:
+            scroll_y    = sa.verticalScrollBar().value()
+            viewport_h  = sa.viewport().height() or 600
+            y_min = max(0, scroll_y - viewport_h)          # 1 vp above
+            y_max = scroll_y + 2 * viewport_h              # 2 vp below (scroll direction)
+        else:
+            y_min, y_max = 0, 9_999_999   # no scroll area — show all
+
+        gen      = self._thumb_gen
+        per_row  = self._per_row()
+        is_single = (per_row == 1)
+
+        if is_single:
+            # Cards stacked vertically; heights vary
+            y = MARGIN
+            for i, card in enumerate(self._cards):
+                card_h = card.height() or self._card_h
+                y_top, y_bot = y, y + card_h
+                y += card_h + GAP
+                if y_bot < y_min or y_top > y_max:
+                    continue
+                self._maybe_schedule(i, gen)
+        else:
+            # Uniform grid
+            cell_h  = self._card_h + 28 + GAP
+            row_min = max(0, int((y_min - MARGIN) // cell_h))
+            row_max = int((y_max - MARGIN) // cell_h) + 1
+            for i, card in enumerate(self._cards):
+                if i // per_row < row_min or i // per_row > row_max:
+                    continue
+                self._maybe_schedule(i, gen)
+
+    def _maybe_schedule(self, cidx, gen):
+        """Submit a thumb task for card[cidx] if its thumbnail isn't cached yet."""
+        if cidx >= len(self._cards) or cidx >= len(self._card_render_widths):
+            return
+        card     = self._cards[cidx]
+        render_w = self._card_render_widths[cidx]
+        uid      = card.orig_idx
+        src_path, orig = self.model.page_source(uid, self.pdf_path)
+        rot      = self.model.get_rotation(uid)
+        key      = (src_path, orig, rot, render_w)
+        if _ThumbnailCache.get(key) is not None:
+            return   # already cached
+        # Prune finished tasks, then check for an in-flight task for this card
+        self._thumb_tasks = [t for t in self._thumb_tasks if t._active]
+        for t in self._thumb_tasks:
+            if t._cidx == cidx:
+                return  # already in flight
+        task = _ThumbTask(gen, cidx, src_path, orig, rot,
+                          render_w, self._thumb_signals)
+        self._thumb_tasks.append(task)
+        _render_queue.submit(task, 1)   # P1: visible thumbnails
+
+    def _card_tops(self):
+        """Return a list of y-offsets for each card (single-page mode only)."""
+        tops = []
+        y = MARGIN
+        for card in self._cards:
+            tops.append(y)
+            y += card.height() + GAP
+        return tops
+
+    def _relayout(self):
+        if not self._cards:
+            self.setMinimumHeight(200); return
+        pr = self._per_row()
+        if pr == 1:
+            # Single-page mode: stack cards vertically, each filling full width
+            y = MARGIN
+            for card in self._cards:
+                card.move(MARGIN, y)
+                card.show()
+                y += card.height() + GAP
+            self.setMinimumHeight(y + MARGIN)
+        else:
+            cell_w = self._card_w+16+GAP
+            cell_h = self._card_h+28+GAP
+            rows   = (len(self._cards)+pr-1)//pr
+            for i, card in enumerate(self._cards):
+                card.move(MARGIN + i%pr*cell_w, MARGIN + i//pr*cell_h)
+                card.show()
+            self.setMinimumHeight(MARGIN + rows*cell_h + MARGIN)
+        self.update()
+
+    def resizeEvent(self, e):
+        # In single-page mode the card width must track the widget width.
+        # Debounce to avoid triggering _rebuild on every pixel of a drag-resize.
+        if self._per_row() == 1:
+            self._resize_timer.start(120)
+        else:
+            self._relayout()
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self._drop_indicator < 0 or not self._cards: return
+        pr = self._per_row()
+        p  = QPainter(self)
+        if pr == 1:
+            tops = self._card_tops()
+            idx  = min(self._drop_indicator, len(tops))
+            if idx < len(tops):
+                y = tops[idx] - GAP//2
+            else:
+                y = tops[-1] + self._cards[-1].height() + GAP//2
+            _paint_drop_marker(p, MARGIN, y - _DROP_THICKNESS/2.0,
+                               self._cards[0].width(), horizontal=True)
+        else:
+            cell_w = self._card_w+16+GAP
+            cell_h = self._card_h+28+GAP
+            pos    = min(self._drop_indicator, len(self._cards))
+            col    = pos % pr; row = pos // pr
+            x      = MARGIN + col*cell_w - GAP//2
+            y      = MARGIN + row*cell_h
+            _paint_drop_marker(p, x - _DROP_THICKNESS/2.0, y, self._card_h)
+        p.end()
+
+    def _pos_from_point(self, pt):
+        if not self._cards: return 0
+        n  = len(self._cards)
+        pr = self._per_row()
+        if pr == 1:
+            # Single-page mode: find which card the y coordinate falls in
+            tops = self._card_tops()
+            rel_y = pt.y()
+            for i, top in enumerate(tops):
+                bottom = top + self._cards[i].height()
+                if rel_y < (top + bottom) // 2:
+                    return i
+            return n
+        cell_w = self._card_w + 16 + GAP
+        cell_h = self._card_h + 28 + GAP
+        rel_x  = pt.x() - MARGIN
+        rel_y  = pt.y() - MARGIN
+        col    = max(0, min(rel_x // cell_w, pr - 1))
+        row    = max(0, rel_y // cell_h)
+        pos    = row * pr + col
+        if pos >= n:
+            return n
+        if rel_x - col * cell_w > cell_w // 2:
+            pos += 1
+        return min(pos, n)
+
+    def mousePressEvent(self, e):
+        # Klick auf leeren Hintergrund → Auswahl aufheben
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.model.deselect_all()
+            self._update_selection()
+            self.selection_changed.emit()
+        super().mousePressEvent(e)
+
+    def _on_click(self, pos):
+        mods  = QApplication.keyboardModifiers()
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+        ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
+
+        if shift and self._last_click_pos is not None:
+            # Bereichsauswahl: alle Seiten zwischen letztem Klick und jetzt
+            lo = min(self._last_click_pos, pos)
+            hi = max(self._last_click_pos, pos)
+            for i in range(lo, hi + 1):
+                uid = self.model.order[i]
+                self.model.selected.add(uid)
+        else:
+            self.model.select(pos, multi=ctrl)
+            self._last_click_pos = pos
+
+        self._update_selection()
+        self.selection_changed.emit()
+
+    def _update_selection(self):
+        for i, card in enumerate(self._cards):
+            card.set_selected(self.model.is_selected(i))
+
+    def handle_drop(self, from_pos, to_pos, multi=False, copy=False):
+        self._drop_indicator = -1; self.update()
+        if copy:
+            # Ctrl+drag: duplicate pages at destination, leave originals in place
+            if multi:
+                sel_uids = [u for u in self.model.order if u in self.model.selected]
+            else:
+                if 0 <= from_pos < len(self.model.order):
+                    sel_uids = [self.model.order[from_pos]]
+                else:
+                    sel_uids = []
+            insert_at = min(to_pos, len(self.model.order))
+            for i, uid in enumerate(sel_uids):
+                new_uid = self.model._new_uid()
+                src_path, orig = self.model.page_source(uid, self.pdf_path)
+                if src_path == self.pdf_path:
+                    self.model.src[new_uid] = orig
+                else:
+                    self.model.src[new_uid] = orig
+                    self.model.foreign_src[new_uid] = (src_path, orig)
+                rot = self.model.rotations.get(uid, 0)
+                if rot:
+                    self.model.rotations[new_uid] = rot
+                self.model.order.insert(insert_at + i, new_uid)
+        elif multi:
+            self.model.move_selection(to_pos)
+        else:
+            self.model.move(from_pos, to_pos)
+        self._rebuild(); self.order_changed.emit()
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasText(): e.acceptProposedAction()
+
+    def dragMoveEvent(self, e):
+        if not e.mimeData().hasText(): return
+        e.acceptProposedAction()
+        self._drop_indicator = self._pos_from_point(e.position().toPoint())
+        self.update()
+
+    def dragLeaveEvent(self, e):
+        self._drop_indicator = -1; self.update()
+
+    def dropEvent(self, e):
+        if not e.mimeData().hasText(): return
+        to_pos = self._drop_indicator
+        if to_pos < 0:
+            to_pos = self._pos_from_point(e.position().toPoint())
+        self._drop_indicator = -1; self.update()
+        text = e.mimeData().text()
+        e.acceptProposedAction()
+
+        if text.startswith("copy_multi:"):
+            try: self.handle_drop(int(text.split(":")[1]), to_pos, multi=True, copy=True)
+            except (ValueError, IndexError): return
+        elif text.startswith("copy:"):
+            try: self.handle_drop(int(text.split(":")[1]), to_pos, copy=True)
+            except (ValueError, IndexError): return
+        elif text.startswith("multi:"):
+            try: self.handle_drop(int(text.split(":")[1]), to_pos, multi=True)
+            except (ValueError, IndexError): return
+        else:
+            try: from_pos = int(text)
+            except Exception: return
+            self.handle_drop(from_pos, to_pos)
+
+    # Public
+    def rotate_selected(self, deg):
+        self.model.rotate_selected(deg); self._rebuild(); self.order_changed.emit()
+
+    def delete_selected(self):
+        self.model.delete_selected(); self._rebuild()
+        self.order_changed.emit(); self.selection_changed.emit()
+
+    def select_all(self):
+        self.model.select_all(); self._update_selection(); self.selection_changed.emit()
+
+    def deselect_all(self):
+        self.model.deselect_all(); self._update_selection(); self.selection_changed.emit()
