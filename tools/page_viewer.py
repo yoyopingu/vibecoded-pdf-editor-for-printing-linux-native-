@@ -26,6 +26,7 @@ from tools.app_state import AppState
 from tools.i18n      import tr
 
 # ── Moved out of this file; re-exported so existing imports keep working ──
+from tools.viewer.theme import _DARK_TV, _LIGHT_TV, _TV, _TOP_BTN_W, _PREV_BTN, _DROP_THICKNESS, _DROP_HALO, _paint_drop_marker, _theme_panels, _register_themed, set_viewer_theme
 from tools.render.queue import _thumb_render_width, _ThumbSignals, _ThumbTask, _RenderQueue, _render_queue, shutdown_render_queue, _PageSignals, _RegionSignals, _RegionRenderTask, _target_scale, _PageRenderTask, _prerender_enabled, apply_performance_settings
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough, pil_to_qpixmap, _render_image, render_page, _rotate_char_boxes
 from tools.render.caches import _active_path, _active_page, _set_active, _priority_evict, _ThumbnailCache, _FullPageCache
@@ -240,53 +241,14 @@ atexit.register(shutdown_render_queue)
 
 # ── Theme colours (updated by set_viewer_theme) ──────────────────────────────
 
-_DARK_TV = {
-    'viewer_bg':  '#111827',
-    'sidebar_bg': '#0f3460',
-    'panel_bg':   '#16213e',
-    'card_bg':    '#1a2a40',
-    'input_bg':   '#162a4a',
-    'border':     '#1e3a5a',
-    'input_brd':  '#2a4a70',
-    'hover':      '#1a4a80',
-    'text':       '#eaeaea',
-    'dim':        '#8892a4',
-    'vdim':       '#556070',
-    'acc':        '#4d8df5',
-    'btn_bg':     '#16213e',
-    'btn_brd':    '#2a4a70',
-    'sel_bg':     '#1a4a80',
-    'splitter':   '#1e3a5a',
-}
-_LIGHT_TV = {
-    'viewer_bg':  '#e8edf3',
-    'sidebar_bg': '#dce8f8',
-    'panel_bg':   '#ffffff',
-    'card_bg':    '#e4ecf6',
-    'input_bg':   '#ffffff',
-    'border':     '#b8cce0',
-    'input_brd':  '#98b4cc',
-    'hover':      '#c0d8f0',
-    'text':       '#0f1925',
-    'dim':        '#4a6080',
-    'vdim':       '#6888a0',
-    'acc':        '#1f6feb',
-    'btn_bg':     '#eef4fc',
-    'btn_brd':    '#98b4cc',
-    'sel_bg':     '#b0ccec',
-    'splitter':   '#b8cce0',
-}
 
-_TV: dict = dict(_DARK_TV)   # current live theme — mutated by set_viewer_theme()
 
 # Shared width for the viewer's top-bar buttons, so "Öffnen", "Seiten verwalten"
 # and "Drucken" line up as one set instead of three different sizes.
-_TOP_BTN_W = 132
 
 # Shared size for the small square controls around the preview (page ▲▼ and the
 # zoom cluster). They were 34×26 and 28×22 — near-identical but not quite, which
 # is exactly the kind of mismatch that reads as sloppy.
-_PREV_BTN = (34, 26)
 
 # ── Drop marker ──────────────────────────────────────────────────────────────
 # Where a dragged page or file will land. Drawn as a slim rounded blue slot the
@@ -294,56 +256,14 @@ _PREV_BTN = (34, 26)
 # outline of the pages being carried sliding into the gap. It used to be a line
 # with arrowheads barbed onto both ends, which looked like a crooked arrow
 # rather than a page.
-_DROP_THICKNESS = 7      # px across the slim axis
-_DROP_HALO      = 4      # px of glow around the body
 
-def _paint_drop_marker(p, x, y, length, horizontal=False):
-    """Paint the drop slot. (x, y) is its top-left; `length` runs along the
-    card edge it marks — the card height for a column of cards, the card width
-    for a row."""
-    w, h = (length, _DROP_THICKNESS) if horizontal else (_DROP_THICKNESS, length)
-    body = QRectF(x, y, w, h)
-    acc  = QColor(_TV['acc'])
-    halo = QColor(acc); halo.setAlpha(70)
-    p.save()
-    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(halo)
-    glow = body.adjusted(-_DROP_HALO, -_DROP_HALO, _DROP_HALO, _DROP_HALO)
-    r_glow = min(glow.width(), glow.height()) / 2.0
-    p.drawRoundedRect(glow, r_glow, r_glow)
-    p.setBrush(acc)
-    r_body = min(body.width(), body.height()) / 2.0
-    p.drawRoundedRect(body, r_body, r_body)
-    p.restore()
 
 
 import weakref as _weakref
-_theme_panels: list = []      # weakrefs to panels that have _apply_theme()
 
 
-def _register_themed(panel) -> None:
-    _theme_panels[:] = [r for r in _theme_panels if r() is not None]
-    _theme_panels.append(_weakref.ref(panel))
 
 
-def set_viewer_theme(theme: str) -> None:
-    """Update live theme colours and re-style all registered panels."""
-    _TV.clear()
-    _TV.update(_DARK_TV if theme == "dark" else _LIGHT_TV)
-    dead = []
-    for ref in _theme_panels:
-        obj = ref()
-        if obj is not None:
-            try:
-                obj._apply_theme()
-            except Exception:
-                import logging
-                logging.exception(f"_apply_theme failed on {obj!r}")
-        else:
-            dead.append(ref)
-    for d in dead:
-        _theme_panels.remove(d)
 
 
 # ── PDF-Seiten-Canvas mit Textauswahl ────────────────────────────────────────
