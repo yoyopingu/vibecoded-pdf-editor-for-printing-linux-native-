@@ -606,3 +606,31 @@ def test_preview_survives_fast_clicks():
     _settle(vp, lambda: not running(), tries=100)
     assert not running(), "finished jobs were never released"
     vp.deleteLater()
+
+
+def test_closing_a_merge_tab_deletes_its_conversion_directory():
+    """Opening several files converts them into a temp directory per tab, and
+    closing the tab is what removes it.
+
+    It never did. shutil was imported inside one method of the viewer module and
+    used at module level in two others, so the rmtree raised NameError straight
+    into `except Exception: pass` — every multi-file open left its converted
+    PDFs on disk until reboot, silently."""
+    import tempfile
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.merge import MergeOrderWidget
+
+    vp = PageViewerPanel(); vp.resize(900, 700); vp.show()
+    try:
+        w = MergeOrderWidget([FX["normal"], FX["single"]])
+        w.tmp_dir = tempfile.mkdtemp(prefix="copyshop_test_")
+        with open(os.path.join(w.tmp_dir, "converted.pdf"), "w") as fh:
+            fh.write("x")
+        idx = vp.tabs.addTab(w, "merge")
+        assert os.path.isdir(w.tmp_dir)
+        vp._close_tab(idx)
+        _spin(20, 0.0)
+        assert not os.path.isdir(w.tmp_dir), \
+            f"the conversion directory survived the tab: {w.tmp_dir}"
+    finally:
+        vp.deleteLater(); _app.processEvents()

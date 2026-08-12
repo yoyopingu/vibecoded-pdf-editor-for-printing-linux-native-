@@ -6,7 +6,7 @@ the render work it started is cancelled, its thumbnails and page renders are
 dropped, and the parsed document behind them is released. A loaded page of a
 large PDF is hundreds of megabytes, so a tab that is gone must not keep one.
 """
-import os, atexit, logging
+import os, shutil, atexit, logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFileDialog, QApplication, QSplitter, QLineEdit
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -433,7 +433,7 @@ class PageViewerPanel(QWidget):
     def _open_office(self, path):
         """Convert an Office/text/vector document via LibreOffice, then open it."""
         from PyQt6.QtWidgets import QMessageBox
-        import shutil, subprocess, tempfile, atexit
+        import subprocess, tempfile
         soffice = shutil.which("soffice") or shutil.which("libreoffice")
         if not soffice:
             QMessageBox.warning(self, tr("LibreOffice fehlt"),
