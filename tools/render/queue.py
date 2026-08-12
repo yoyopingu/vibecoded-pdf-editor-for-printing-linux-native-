@@ -1,7 +1,7 @@
 """
 Queue, moved verbatim out of tools/page_viewer.py.
 """
-import threading, heapq, logging
+import atexit, threading, heapq, logging
 from PyQt6.QtCore import Qt, pyqtSignal, QObject
 from PyQt6.QtGui import QImage
 from tools.render.caches import _FullPageCache, _ThumbnailCache
@@ -171,6 +171,13 @@ def shutdown_render_queue(timeout: float = 2.0):
         close_all()
     except Exception:
         pass
+
+
+# The backstop for anything that exits without an event loop — tests, scripts.
+# main() also wires this to QApplication.aboutToQuit, which runs first and is
+# what makes shutdown deterministic; this only has to catch the rest. It used
+# to sit in tools/page_viewer.py, a long way from the function it registers.
+atexit.register(shutdown_render_queue)
 
 
 class _PageSignals(QObject):

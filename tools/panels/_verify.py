@@ -6,7 +6,7 @@ Moved verbatim out of tools/all_tools.py; see tools/panels/__init__.py.
 """
 import logging
 
-from tools.page_viewer import _pdfium_lock
+from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.i18n       import tr
 
 

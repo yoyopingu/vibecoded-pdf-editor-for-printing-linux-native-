@@ -3,7 +3,7 @@ FormsPanel, moved verbatim out of tools/all_tools.py.
 See tools/panels/__init__.py.
 """
 import os, shutil
-from tools.page_viewer import _pdfium_lock
+from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QLineEdit, QGroupBox, QCheckBox, QScrollArea, QWidget, QFrame
 from tools._base import BasePanel
 from tools.i18n import tr

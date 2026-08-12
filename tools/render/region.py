@@ -171,7 +171,7 @@ def page_chars(path, page_index, scale, rotation=0):
               for ch, x0, y0, x1, y1 in unit]
     r = rotation % 360
     if r and scaled:
-        from tools.page_viewer import _rotate_char_boxes
+        from tools.render.images import _rotate_char_boxes
         # page_size_pt, not the page itself. Loading the page here to ask for
         # two numbers that never change cost a full FPDF_LoadPage on every pan
         # of a rotated page — 351 ms a step on the poster this was measured on,

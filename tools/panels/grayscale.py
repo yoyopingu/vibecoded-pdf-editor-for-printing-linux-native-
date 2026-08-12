@@ -3,7 +3,10 @@ GrayscalePanel, moved verbatim out of tools/all_tools.py.
 See tools/panels/__init__.py.
 """
 import os, subprocess, shutil, logging
-from tools.page_viewer import _TV, _register_themed, _pdfium_lock, _ThumbnailCache, _render_queue, _ThumbTask, _ThumbSignals
+from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
+from tools.render.caches import _ThumbnailCache
+from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
+from tools.viewer.theme import _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox, QRadioButton, QScrollArea, QWidget, QSlider, QApplication, QFrame, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap
