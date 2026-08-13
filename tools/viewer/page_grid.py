@@ -8,7 +8,8 @@ renders to show twelve of them.
 """
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame, QApplication, QScrollArea, QSizePolicy
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer
-from PyQt6.QtGui import QPixmap, QImage, QColor, QDrag, QPainter, QTransform
+from PyQt6.QtGui import (QPixmap, QImage, QColor, QDrag, QPainter, QTransform,
+                         QFont)
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
@@ -152,9 +153,8 @@ class PageCard(QFrame):
             n_sel = len(grid.model.selected)
             pm = QPixmap(self.size())
             pm.fill(QColor(_TV['border']))
-            from PyQt6.QtGui import QPainter as _P, QFont as _F
-            p = _P(pm); p.setPen(QColor(_TV['text']))
-            f = _F(); f.setPointSize(11); f.setBold(True); p.setFont(f)
+            p = QPainter(pm); p.setPen(QColor(_TV['text']))
+            f = QFont(); f.setPointSize(11); f.setBold(True); p.setFont(f)
             label = tr('+{p0} Seiten').format(p0=n_sel) if ctrl else tr('{p0} Seiten').format(p0=n_sel)
             p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, label)
             p.end()
@@ -164,9 +164,8 @@ class PageCard(QFrame):
             self.render(pm)
             if ctrl:
                 # Overlay a "+" to signal copy
-                from PyQt6.QtGui import QPainter as _P, QFont as _F
-                p = _P(pm); p.setPen(QColor(STATUS['copy']))
-                f = _F(); f.setPointSize(18); f.setBold(True); p.setFont(f)
+                p = QPainter(pm); p.setPen(QColor(STATUS['copy']))
+                f = QFont(); f.setPointSize(18); f.setBold(True); p.setFont(f)
                 p.drawText(pm.rect().adjusted(0, 0, -4, -4),
                            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, "+")
                 p.end()

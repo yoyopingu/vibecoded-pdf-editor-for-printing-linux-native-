@@ -325,8 +325,7 @@ class GrayscalePanel(BasePanel):
                     Qt.TransformationMode.FastTransformation))
         self._relayout_preview()
         if not hasattr(self, '_zoom_smooth_timer'):
-            from PyQt6.QtCore import QTimer as _QT
-            self._zoom_smooth_timer = _QT(); self._zoom_smooth_timer.setSingleShot(True)
+            self._zoom_smooth_timer = QTimer(); self._zoom_smooth_timer.setSingleShot(True)
             self._zoom_smooth_timer.timeout.connect(self._rezoom_smooth)
         self._zoom_smooth_timer.start(180)
 

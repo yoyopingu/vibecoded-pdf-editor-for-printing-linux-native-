@@ -9,7 +9,7 @@ from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
 from tools.theme import INK, PAPER, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QWidget, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from tools.app_state import AppState
 from tools._base import BasePanel
 from tools.i18n import tr
@@ -130,11 +130,10 @@ class NUpPanel(BasePanel):
         self._pane.refresh()
 
     def _setup(self):
-        from PyQt6.QtCore import Qt as _Qt
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        splitter = QSplitter(_Qt.Orientation.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         self._tool_splitter = splitter
 
         splitter.addWidget(self.build_tool_sidebar())
@@ -326,7 +325,6 @@ class NUpPanel(BasePanel):
         return _ThumbnailCache.get_any(pdf_path, page_idx, 0)
 
     def _render_preview(self, avail_w, avail_h, zoom):
-        from PyQt6.QtGui import QBrush as _QB
         # self.current_pdf() — not AppState.current_pdf — so the page manager's
         # rotations and reordering are reflected. Reading the file on disk meant
         # a rotated page was measured and previewed in its original orientation.
@@ -366,14 +364,14 @@ class NUpPanel(BasePanel):
         result = QPixmap(canvas_w, canvas_h); result.fill(QColor(_TV['card_bg']))
         painter = QPainter(result)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(_QB(QColor(PAPER))); painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(PAPER))); painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRect(0, 0, canvas_w - 1, canvas_h - 1)
         for row_i in range(rows):
             for col_i in range(cols):
                 sx = int((ml + col_i * (slot_w + gh)) * cs)
                 sy = int((mt + row_i * (slot_h + gv)) * cs)
                 sw = max(1, int(slot_w * cs)); sh = max(1, int(slot_h * cs))
-                painter.setBrush(_QB(QColor(200, 210, 230, 60)))
+                painter.setBrush(QBrush(QColor(200, 210, 230, 60)))
                 painter.setPen(QPen(QColor(120, 140, 180, 120), 1))
                 painter.drawRect(sx, sy, sw, sh)
                 pg = slot_pages[row_i * cols + col_i]
@@ -409,11 +407,11 @@ class NUpPanel(BasePanel):
     def _run_action(self):
         # Prepare on the UI thread (cheap: reads widget values + first page size),
         # then hand the heavy merge loop to a worker via the shared run_async().
-        import pikepdf as _pik
+        import pikepdf
         src_path = self.require_pdf()
         out_path = self.save_pdf(tr("N-Up PDF speichern als"))
         if not out_path: raise ValueError(tr("Kein Ausgabepfad."))
-        with _pik.open(src_path) as _doc:
+        with pikepdf.open(src_path) as _doc:
             n_total = len(_doc.pages)
             cols = self.cols.value(); rows = self.rows.value(); n_slot = cols * rows
             if self.src_combo.currentIndex() == 1:

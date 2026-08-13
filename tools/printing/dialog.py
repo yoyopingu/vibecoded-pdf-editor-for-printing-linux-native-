@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QPageLayout
 from tools.i18n import tr
 from tools.printing.preview import _PrintPreview
+from tools.render.images import pil_to_qpixmap
 from tools.printing import prefs
 from tools.printing.spool import (_PAPER_PTS, print_via_gs, prerender_for_qt)
 from tools.viewer.tab import PdfTab

@@ -91,8 +91,8 @@ class LayersPanel(BasePanel):
                 # Check before replacing: flattening layers runs the same
                 # pdfwrite path that can black a page out while exiting 0, and
                 # this one overwrites the file the user is about to be handed.
-                import pikepdf as _pk
-                with _pk.open(out) as _a, _pk.open(flat) as _b:
+                import pikepdf
+                with pikepdf.open(out) as _a, pikepdf.open(flat) as _b:
                     n_a, n_b = len(_a.pages), len(_b.pages)
                 damaged = (_verify_pages_intact(out, flat, range(min(n_a, n_b)), None)
                            if n_a == n_b else {0: tr("Seitenzahl")})

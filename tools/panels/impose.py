@@ -71,12 +71,12 @@ class ImposePanel(BasePanel):
             if booklet else "")
 
     def _run_action(self):
-        import pikepdf as _pik
+        import pikepdf
         src = self.require_pdf()
         out = self.save_pdf(tr("Ausgeschossene PDF speichern als"))
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
 
-        with _pik.open(src) as doc:
+        with pikepdf.open(src) as doc:
             n = len(doc.pages)
             if not n: raise ValueError(tr("Die PDF hat keine Seiten."))
             pw, ph = _impose_page_size(doc, self.norm_target.currentIndex())

@@ -26,11 +26,10 @@ class CropResizePanel(BasePanel):
     OPENS_NEW_TAB = True
 
     def _setup(self):
-        from PyQt6.QtCore import Qt as _Qt
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        splitter = QSplitter(_Qt.Orientation.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
         splitter.addWidget(self.build_tool_sidebar())
 
@@ -300,7 +299,6 @@ class CropResizePanel(BasePanel):
         if not pdf_path or not os.path.isfile(pdf_path):
             self._sel_info.setText("")
             return None, tr("Keine PDF geoeffnet")
-        from PyQt6.QtCore import Qt as _Qt2
         from PIL import Image as PILImage
 
         pages    = self._get_target_pages()
@@ -354,18 +352,18 @@ class CropResizePanel(BasePanel):
         # ("- erweitern", i.e. adding white space) the added strips belong to the
         # new page but carried no content, so they stayed the dark canvas colour
         # — the white space you were adding was invisible in the preview.
-        painter.setPen(_Qt2.PenStyle.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(PAPER)))
         painter.drawRect(rx, ry, cw_px, ch_px)
 
         def draw_ghost():
-            painter.setPen(_Qt2.PenStyle.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor(100, 140, 220, 45)))
             painter.drawRect(gx, gy, gw - 1, gh - 1)
             ghost_pen = QPen(QColor(120, 160, 255, 200), 1)
-            ghost_pen.setStyle(_Qt2.PenStyle.DashLine)
+            ghost_pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(ghost_pen)
-            painter.setBrush(_Qt2.BrushStyle.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(gx, gy, gw - 1, gh - 1)
 
         if do_scale:
@@ -380,7 +378,7 @@ class CropResizePanel(BasePanel):
             # beibehalten" the content is narrower than the page, and marking the
             # content made it look as if it filled the sheet.
             painter.setPen(QPen(QColor(_TV['acc']), 2))
-            painter.setBrush(_Qt2.BrushStyle.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
             if changed: draw_ghost()
         else:
@@ -392,7 +390,7 @@ class CropResizePanel(BasePanel):
             pm  = pil_to_qpixmap(pil)
             painter.drawPixmap(dst_x, dst_y, src_w, src_h, pm, src_x, src_y, src_w, src_h)
             painter.setPen(QPen(QColor(_TV['acc']), 2))
-            painter.setBrush(_Qt2.BrushStyle.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
             if changed: draw_ghost()
 
@@ -403,7 +401,7 @@ class CropResizePanel(BasePanel):
             tw, th = marks_size
             mx0 = (pw - tw) / 2; my0 = (ph - th) / 2
             rect = (mx0, my0, mx0 + tw, my0 + th)
-            painter.setPen(QPen(QColor(INK), 1)); painter.setBrush(_Qt2.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(INK), 1)); painter.setBrush(Qt.BrushStyle.NoBrush)
             for a, b, c, d in _crop_mark_segments([rect]):
                 painter.drawLine(int(rx + a * cs), int(ry + (ph - b) * cs),
                                  int(rx + c * cs), int(ry + (ph - d) * cs))
@@ -418,14 +416,14 @@ class CropResizePanel(BasePanel):
         return result, " -> ".join(parts)
 
     def _run_action(self):
-        import pikepdf as _pik
+        import pikepdf
         src_path = self.require_pdf()
         out = self.save_pdf("PDF speichern als")
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
 
         if self.apply_all.isChecked():
-            from pypdf import PdfReader as _PR
-            target_origs = set(range(len(_PR(src_path, strict=False).pages)))
+            from pypdf import PdfReader
+            target_origs = set(range(len(PdfReader(src_path, strict=False).pages)))
         else:
             target_pages = self._get_target_pages()
             if not target_pages: raise ValueError(tr("Keine Seiten ausgewaehlt."))
@@ -436,7 +434,7 @@ class CropResizePanel(BasePanel):
         marks_size = self._target_size_pt() if self._marks_only() else None
         if marks_size:
             tw, th = marks_size
-            pdf = _pik.open(src_path); n_changed = 0
+            pdf = pikepdf.open(src_path); n_changed = 0
             for i, page in enumerate(pdf.pages):
                 if i not in target_origs: continue
                 # Centre the marks on the *visible* page; on a rotated page the
@@ -446,14 +444,14 @@ class CropResizePanel(BasePanel):
                           else (tw, th))
                 x0 = bx0 + ((bx1 - bx0) - mw) / 2; y0 = by0 + ((by1 - by0) - mh) / 2
                 ops = _crop_marks_content_stream([(x0, y0, x0 + mw, y0 + mh)])
-                page.contents_add(_pik.Stream(pdf, ops))
+                page.contents_add(pikepdf.Stream(pdf, ops))
                 n_changed += 1
             pdf.save(out)
             self.open_result(out, os.path.basename(out))
             return tr('Schnittmarken auf {p0} Seite(n) gesetzt ({p1:.0f}×{p2:.0f} mm).').format(p0=n_changed, p1=tw / MM_TO_PT, p2=th / MM_TO_PT)
 
         do_scale = self.scale_check.isChecked()
-        pdf = _pik.open(src_path)
+        pdf = pikepdf.open(src_path)
         n_changed = 0
 
         def _apply_ctm(pg, m):
@@ -462,10 +460,10 @@ class CropResizePanel(BasePanel):
             contents = pg.get("/Contents")
             if contents is None: return
             old = (b" ".join(bytes(s.read_bytes()) for s in contents)
-                   if isinstance(contents, _pik.Array)
+                   if isinstance(contents, pikepdf.Array)
                    else bytes(contents.read_bytes()))
             hdr = ("q %.6f %.6f %.6f %.6f %.4f %.4f cm\n" % m).encode()
-            pg["/Contents"] = _pik.Stream(pdf, hdr + old + (chr(10) + "Q").encode())
+            pg["/Contents"] = pikepdf.Stream(pdf, hdr + old + (chr(10) + "Q").encode())
 
         for i, page in enumerate(pdf.pages):
             if i not in target_origs: continue
@@ -503,15 +501,15 @@ class CropResizePanel(BasePanel):
                 C = (1.0, 0.0, 0.0, 1.0, -l_pt, -b_pt)
             _apply_ctm(page, _mat_mul(R, C))
 
-            page.mediabox = _pik.Array([_pik.Real(0),_pik.Real(0),
-                                         _pik.Real(new_w),_pik.Real(new_h)])
+            page.mediabox = pikepdf.Array([pikepdf.Real(0),pikepdf.Real(0),
+                                         pikepdf.Real(new_w),pikepdf.Real(new_h)])
             # The rotation and the old boxes are now baked into the content —
             # leaving them behind used to hand every later tool (N-Up above all)
             # a page whose declared boxes no longer matched its content, which is
             # what pushed the content off-centre there. /CropBox and /Rotate are
             # inheritable, so they must be overwritten rather than deleted.
-            page.obj["/CropBox"] = _pik.Array([_pik.Real(0), _pik.Real(0),
-                                               _pik.Real(new_w), _pik.Real(new_h)])
+            page.obj["/CropBox"] = pikepdf.Array([pikepdf.Real(0), pikepdf.Real(0),
+                                               pikepdf.Real(new_w), pikepdf.Real(new_h)])
             page.obj["/Rotate"]  = 0
             for key in ("/TrimBox", "/BleedBox", "/ArtBox"):
                 if key in page.obj: del page.obj[key]

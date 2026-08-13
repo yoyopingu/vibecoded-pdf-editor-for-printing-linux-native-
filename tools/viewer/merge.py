@@ -8,7 +8,7 @@ opens this instead of guessing which one was meant.
 import os, logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QScrollArea, QSizePolicy, QSplitter, QLineEdit
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QObject, QEvent, QTimer
-from PyQt6.QtGui import QPixmap, QImage, QColor, QDrag, QPainter
+from PyQt6.QtGui import QPixmap, QImage, QColor, QDrag, QPainter, QFont
 from tools.i18n import tr
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
@@ -165,9 +165,8 @@ class FileCard(QFrame):
         drag.setMimeData(mime)
         if is_multi and grid:
             pm = QPixmap(self.size()); pm.fill(QColor(_TV['border']))
-            from PyQt6.QtGui import QPainter as _P, QFont as _F
-            p = _P(pm); p.setPen(QColor(_TV['text']))
-            f = _F(); f.setPointSize(11); f.setBold(True); p.setFont(f)
+            p = QPainter(pm); p.setPen(QColor(_TV['text']))
+            f = QFont(); f.setPointSize(11); f.setBold(True); p.setFont(f)
             p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter,
                        tr('{p0} Dateien').format(p0=len(grid._selected)))
             p.end()
