@@ -14,17 +14,14 @@ Verwendung:
 from PyQt6.QtCore import QObject, pyqtSignal
 from tools.i18n import tr
 
-# Farbpalette — wird von main.py bei Theme-Wechsel aktualisiert
-THEME = {
-    "BG":    "#151520",
-    "SIDE":  "#0e2d58",
-    "PANEL": "#1c2340",
-    "ACC":   "#4d8df5",
-    "TEXT":  "#e8eaf0",
-    "DIM":   "#7a8699",
-    "HOVER": "#1e4d82",
-    "LINE":  "#1e3354",
-}
+# The live palette a tool panel asks for by name, through theme_color(). Filled
+# from tools/theme.py — the single source — and updated in place by
+# apply_theme_globally when the theme changes. In place, not rebound: panels
+# read it through theme_color() at paint time, but the dict is also the thing
+# the shell mutates, and a rebind here would leave them on the old one.
+from tools.theme import SHELL_KEYS as _SHELL_KEYS, shell_colours as _shell_colours
+
+THEME = {k: _shell_colours("dark")[k] for k in _SHELL_KEYS}
 
 def theme_color(key: str) -> str:
     return THEME.get(key, "#000000")

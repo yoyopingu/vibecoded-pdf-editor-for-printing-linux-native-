@@ -6,68 +6,33 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import (QPixmap, QPainter, QColor, QPen, QBrush,
                          QIcon, QPolygon)
-
-
-# ── Farbpalette (Dunkel) ──────────────────────────────────────────────────────
-BG     = "#1a1a2e"
-
-
-SIDE   = "#0f3460"
-
-
-PANEL  = "#16213e"
-
-
-ACC    = "#3d82f0"
-
-
-TEXT   = "#eaeaea"
-
-
-DIM    = "#8892a4"
-
-
-HOVER  = "#1a4a80"
-
-
-LINE   = "#1e3a5a"
-
-
-_ACCENT = {
-    True:  ("#4d8df5", "#6ba1f8", "#3a76d8"),   # dark
-    False: ("#1f6feb", "#1a5fd0", "#1550b4"),   # light
-}
+from tools.theme import SHELL_KEYS, shell_colours
 
 
 def _build_style(dark: bool) -> str:
-    if dark:
-        _BG    = "#151520"; _PANEL = "#1c2340"; _TEXT  = "#e8eaf0"
-        _DIM   = "#7a8699"; _HOVER = "#1e4d82"; _LINE  = "#1e3354"
-        _IB    = "#1a2038"; _IBD   = "#2a4470"
-        _LB    = "#2a4470"
-        _SEL   = "#1e4d82"; _LHOV  = "#1a3050"
-        _TAB_B = "#151520"; _TAB_P = "#1c2340"
-        _SCB   = "#2e4e78"; _SCT   = "#151520"
-        _SB    = "#0e2d58"; _SB_LOGO = "#0b1e3a"
-        _NB_TEXT = "#7a8699"; _NB_HOV = "#162848"; _NB_ACT_TEXT = "#e8eaf0"
-        _VB_BG = "#162848"; _VB_HOV = "#1e3a60"
-        _BTN_DIS = "#2c2c3e"; _BTN_DIS_T = "#55607a"
-        _GB    = "#1a2038"   # group box bg
-    else:
-        _BG    = "#edf1f7"; _PANEL = "#ffffff"; _TEXT  = "#0d1a28"
-        _DIM   = "#556070"; _HOVER = "#d4e4f8"; _LINE  = "#c0d0e4"
-        _IB    = "#ffffff"; _IBD   = "#a8c0d8"
-        _LB    = "#a8c0d8"
-        _SEL   = "#d4e4f8"; _LHOV  = "#eaf2fc"
-        _TAB_B = "#edf1f7"; _TAB_P = "#ffffff"
-        _SCB   = "#a8c0d8"; _SCT   = "#e0eaf4"
-        _SB    = "#d8e8f8"; _SB_LOGO = "#bcd0ec"
-        _NB_TEXT = "#446080"; _NB_HOV = "#a8c8ec"; _NB_ACT_TEXT = "#0d1a28"
-        _VB_BG = "#c8ddf0"; _VB_HOV = "#b4ccec"
-        _BTN_DIS = "#c0cede"; _BTN_DIS_T = "#88a0b4"
-        _GB    = "#f6f9fd"
+    """The stylesheet for one theme, from the palette in tools/theme.py.
 
-    _ACC, _ACC_HOV, _ACC_PRS = _ACCENT[dark]
+    The colours were spelled out here as literals, a second copy of the same
+    values that _THEME_COLOURS held and a third dark blue away from the module
+    constants above them. The short local names are kept — they appear a few
+    hundred times in the sheet below, and `{_BG}` reads better than a lookup.
+    """
+    c = shell_colours("dark" if dark else "light")
+    _BG    = c["BG"];           _PANEL   = c["PANEL"];      _TEXT  = c["TEXT"]
+    _DIM   = c["DIM"];          _HOVER   = c["HOVER"];      _LINE  = c["LINE"]
+    _IB    = c["INPUT_BG"];     _IBD     = c["INPUT_BORDER"]
+    _LB    = c["LIST_BORDER"]
+    _SEL   = c["SELECTION"];    _LHOV    = c["LIST_HOVER"]
+    _TAB_B = c["TAB_BAR"];      _TAB_P   = c["TAB_PANE"]
+    _SCB   = c["SCROLL_BAR"];   _SCT     = c["SCROLL_TRACK"]
+    _SB    = c["SIDE"];         _SB_LOGO = c["SIDEBAR_LOGO"]
+    _NB_TEXT = c["NAV_TEXT"];   _NB_HOV  = c["NAV_HOVER"]
+    _NB_ACT_TEXT = c["NAV_ACTIVE_TEXT"]
+    _VB_BG = c["VIEW_BTN"];     _VB_HOV  = c["VIEW_BTN_HOVER"]
+    _BTN_DIS = c["BTN_DISABLED"]; _BTN_DIS_T = c["BTN_DISABLED_TEXT"]
+    _GB    = c["GROUP_BOX"]
+
+    _ACC, _ACC_HOV, _ACC_PRS = c["ACC"], c["ACC_HOVER"], c["ACC_PRESSED"]
     # Spelled out as rgba(): Qt reads a 9-character "#rrggbbaa" as "#aarrggbb"
     # and would silently take the alpha byte for the red channel.
     _r, _g, _b = (int(_ACC[1:][i:i+2], 16) for i in (0, 2, 4))
@@ -440,16 +405,6 @@ class AppStyle:
         return _Style(QStyleFactory.create("Fusion"))
 
 
-_THEME_COLOURS = {
-    "light": {"BG": "#edf1f7", "SIDE": "#d8e8f8", "PANEL": "#ffffff",
-              "ACC": "#1f6feb", "TEXT": "#0d1a28", "DIM": "#556070",
-              "HOVER": "#d4e4f8", "LINE": "#c0d0e4"},
-    "dark":  {"BG": "#151520", "SIDE": "#0e2d58", "PANEL": "#1c2340",
-              "ACC": "#4d8df5", "TEXT": "#e8eaf0", "DIM": "#7a8699",
-              "HOVER": "#1e4d82", "LINE": "#1e3354"},
-}
-
-
 def apply_theme_globally(theme: str):
     """Push `theme` into every place that holds colours: the app stylesheet, the
     viewer palette (_TV, which re-styles the registered panels) and
@@ -460,9 +415,20 @@ def apply_theme_globally(theme: str):
     preview area most visibly."""
     QApplication.instance().setStyleSheet(LIGHT_STYLE if theme == "light" else STYLE)
     import tools.app_state as _as
-    _as.THEME.update(_THEME_COLOURS["light" if theme == "light" else "dark"])
+    colours = shell_colours("light" if theme == "light" else "dark")
+    _as.THEME.update({k: colours[k] for k in SHELL_KEYS})
     from tools.theme import set_viewer_theme
     set_viewer_theme(theme)          # last: it re-runs every panel's _apply_theme
+
+
+# The icon's own colours. Fixed, not from the palette: this is a brand mark that
+# ends up in a task bar and a launcher, where the application's light or dark
+# setting means nothing. The blue is the one it has always been drawn in, which
+# is a slightly deeper accent than the interface uses.
+_ICON_INK   = "#1a1a2e"
+_ICON_PAPER = "#eaeaea"
+_ICON_FOLD  = "#cccccc"
+_ICON_ACC   = "#3d82f0"
 
 
 def app_icon():
@@ -476,21 +442,21 @@ def app_icon():
     icon_pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(icon_pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setBrush(QBrush(QColor("#1a1a2e")))
+    p.setBrush(QBrush(QColor(_ICON_INK)))
     p.setPen(Qt.PenStyle.NoPen)
     p.drawRoundedRect(0, 0, 64, 64, 10, 10)
-    p.setBrush(QBrush(QColor("#eaeaea")))
+    p.setBrush(QBrush(QColor(_ICON_PAPER)))
     p.drawRoundedRect(12, 8, 32, 42, 3, 3)
-    p.setBrush(QBrush(QColor("#1a1a2e")))
+    p.setBrush(QBrush(QColor(_ICON_INK)))
     p.drawPolygon(QPolygon([QPoint(36,8), QPoint(44,8), QPoint(44,16)]))
-    p.setBrush(QBrush(QColor("#cccccc")))
+    p.setBrush(QBrush(QColor(_ICON_FOLD)))
     p.drawPolygon(QPolygon([QPoint(36,8), QPoint(44,16), QPoint(36,16)]))
-    p.setPen(QPen(QColor(ACC), 2))
+    p.setPen(QPen(QColor(_ICON_ACC), 2))
     p.drawLine(18, 24, 38, 24)
     p.drawLine(18, 30, 38, 30)
     p.drawLine(18, 36, 30, 36)
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QBrush(QColor(ACC)))
+    p.setBrush(QBrush(QColor(_ICON_ACC)))
     p.drawEllipse(38, 42, 14, 14)
     p.end()
     return QIcon(icon_pm)
