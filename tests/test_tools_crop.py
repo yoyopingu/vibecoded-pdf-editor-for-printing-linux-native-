@@ -21,13 +21,13 @@ def test_crop_format_modes():
         mb = PdfReader(out).pages[0].mediabox
         return round(float(mb.width)/MM), round(float(mb.height)/MM), out
     from tools.i18n import tr
-    custom = lambda p: (p.fmt_combo.setCurrentText(tr("Benutzerdefiniert (mm)")),
-                        p.custom_w.setValue(150), p.custom_h.setValue(200))
+    custom = lambda p: (p.fmt.set_format(tr("Benutzerdefiniert (mm)")),
+                        p.fmt.set_custom_size(150, 200))
     w, h, out = run(1, custom)                      # marks-only: not resized
     assert (w, h) == (210, 297) and _brightest(out, 0) >= 250
     w, h, _ = run(0, custom)                         # scale: resized to custom
     assert abs(w-150) <= 1 and abs(h-200) <= 1
-    w, h, _ = run(0, lambda p: p.fmt_combo.setCurrentText("A5  (148x210mm)"))
+    w, h, _ = run(0, lambda p: p.fmt.set_format("A5  (148x210mm)"))
     assert abs(w-148) <= 1 and abs(h-210) <= 1
 
 
@@ -55,7 +55,7 @@ def test_crop_format_applies_per_page():
     _open(FX["mixed"])
     p = CropResizePanel(); p.apply_all.setChecked(True)
     p.scale_check.setChecked(True); p.keep_ratio.setChecked(True)
-    p.fmt_combo.setCurrentText("A5  (148x210mm)")
+    p.fmt.set_format("A5  (148x210mm)")
     out = os.path.join(_TMP, "crop_fmt.pdf")
     p.save_pdf = lambda *a, **k: out; p.open_result = lambda path, t="": None
     p._run_action()
@@ -71,7 +71,7 @@ def test_crop_format_applies_per_page():
         assert abs(L-R) < 0.4 and abs(B-Tp) < 0.4, f"page {i+1} not centred"
     # a manual edit after picking the format must still win
     p2 = CropResizePanel(); p2.apply_all.setChecked(True); p2.scale_check.setChecked(False)
-    p2.fmt_combo.setCurrentText("A5  (148x210mm)"); p2.ct.setValue(30.0)
+    p2.fmt.set_format("A5  (148x210mm)"); p2.ct.setValue(30.0)
     out2 = os.path.join(_TMP, "crop_fmt2.pdf")
     p2.save_pdf = lambda *a, **k: out2; p2.open_result = lambda path, t="": None
     p2._run_action()

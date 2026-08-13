@@ -12,7 +12,7 @@ from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from tools.app_state import AppState
 from tools._base import BasePanel
 from tools.i18n import tr
-from tools.panels._shared import MM_TO_PT, PAPER_SIZES_PT, _inherited_rotate, _visible_box, _visible_size, _mat_mul, _display_matrix, PreviewPane
+from tools.panels._shared import MM_TO_PT, PAPER_SIZES_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, _mat_mul, _display_matrix, PreviewPane
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
 
 
@@ -78,30 +78,12 @@ class CropResizePanel(BasePanel):
         # ── DIN-Format Schnellauswahl ────────────────────────────────
         fmt_grp = QGroupBox(tr("Format"))
         fg = QVBoxLayout(fmt_grp); fg.setSpacing(4); fg.setContentsMargins(6,8,6,6)
-        self.fmt_combo = QComboBox()
-        self.fmt_combo.addItem(tr("— Kein —"))
-        self.fmt_combo.addItems(list(PAPER_SIZES_PT.keys()))
-        self.fmt_combo.addItem(tr("Benutzerdefiniert (mm)"))
-        self.fmt_combo.currentIndexChanged.connect(self._apply_format)
-        fg.addWidget(self.fmt_combo)
-
-        # Custom width × height (mm) — only shown for "Benutzerdefiniert".
-        def cust(default):
-            s = QDoubleSpinBox(); s.setRange(10, 2000); s.setSuffix(" mm")
-            s.setDecimals(1); s.setFixedWidth(90)
-            s.setValue(default)                       # set BEFORE connecting
-            s.valueChanged.connect(self._apply_format)
-            return s
-        self.custom_w = cust(210.0)
-        self.custom_h = cust(297.0)
-        self._custom_row = QHBoxLayout(); self._custom_row.setSpacing(4)
-        cw_lbl = QLabel(tr("B")); cw_lbl.setObjectName("dimLabel")
-        ch_lbl = QLabel(tr("H")); ch_lbl.setObjectName("dimLabel")
-        self._custom_row.addWidget(cw_lbl); self._custom_row.addWidget(self.custom_w)
-        self._custom_row.addWidget(ch_lbl); self._custom_row.addWidget(self.custom_h)
-        self._custom_row.addStretch()
-        self._custom_w_lbl, self._custom_h_lbl = cw_lbl, ch_lbl
-        fg.addLayout(self._custom_row)
+        # Paper size, with the custom width x height row it brings with it.
+        # Shared with N-Up so the two offer the same formats — see
+        # PaperFormatSelector in tools/panels/_shared.py.
+        self.fmt = PaperFormatSelector(before=[tr("— Kein —")])
+        self.fmt.changed.connect(self._apply_format)
+        fg.addWidget(self.fmt)
 
         # What the chosen format does: resize the page, or only add cut marks.
         self.fmt_action = QComboBox()
@@ -154,7 +136,6 @@ class CropResizePanel(BasePanel):
         self._sel_info.setObjectName("dimLabel")
         self._sel_info.setWordWrap(True)
         layout.addWidget(self._sel_info)
-        self._update_custom_visibility()
 
     def _apply_theme(self):
         t = _TV
@@ -180,10 +161,7 @@ class CropResizePanel(BasePanel):
         for w in [self.ct, self.cb2, self.cl2, self.cr]: w.setValue(0.0)
         self._syncing = False
         # Formatauswahl zurücksetzen ohne _apply_format auszulösen
-        self.fmt_combo.blockSignals(True)
-        self.fmt_combo.setCurrentIndex(0)
-        self.fmt_combo.blockSignals(False)
-        self._update_custom_visibility()
+        self.fmt.reset()
         self._update_preview()
 
     def _sync_values(self, val):
@@ -197,17 +175,8 @@ class CropResizePanel(BasePanel):
         return self.fmt_action.currentIndex() == 1
 
     def _target_size_pt(self):
-        """Chosen target size (w_pt, h_pt) from the Format dropdown, or None for
-        '— Kein —'. Custom uses the mm spin boxes."""
-        txt = self.fmt_combo.currentText()
-        if txt == tr("Benutzerdefiniert (mm)"):
-            return self.custom_w.value() * MM_TO_PT, self.custom_h.value() * MM_TO_PT
-        return PAPER_SIZES_PT.get(txt)
-
-    def _update_custom_visibility(self):
-        show = self.fmt_combo.currentText() == tr("Benutzerdefiniert (mm)")
-        for w in (self.custom_w, self.custom_h, self._custom_w_lbl, self._custom_h_lbl):
-            w.setVisible(show)
+        """Chosen target size (w_pt, h_pt), or None for '— Kein —'."""
+        return self.fmt.target_size_pt()
 
     def _zero_margins(self):
         self._syncing = True
@@ -217,7 +186,6 @@ class CropResizePanel(BasePanel):
 
     def _apply_format(self):
         """React to Format / custom-size / action changes."""
-        self._update_custom_visibility()
         size = self._target_size_pt()
         if size is None or self._marks_only():
             # 'Kein', or marks-only: leave the page uncropped. In marks-only mode

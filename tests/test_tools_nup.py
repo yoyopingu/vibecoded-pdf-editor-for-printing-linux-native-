@@ -111,7 +111,7 @@ def test_nup_auto_format_keeps_margins():
     scaling the page down inside them — 10 mm requested is 10 mm on all four
     sides, not 10 mm at the sides and 14 mm top/bottom."""
     for fx in ("framed", "framed_rot90"):
-        out, _ = _nup(FX[fx], fmt=4, margins=10.0, name=f"auto_{fx}.pdf")
+        out, _ = _nup(FX[fx], fmt=None, margins=10.0, name=f"auto_{fx}.pdf")
         for m in _ink_margins(out):
             assert abs(m - 10.0) < 0.4, f"{fx}: margins {_ink_margins(out)} != 10 mm"
         d = pdfium.PdfDocument(FX[fx]); sw, sh = d[0].get_width(), d[0].get_height(); d.close()
@@ -125,7 +125,7 @@ def test_nup_rejects_impossible_margins():
     a 1 pt slot in the corner."""
     _open(FX["framed"])
     p = NUpPanel()
-    p.out_fmt.setCurrentIndex(0)                      # A4
+    p.out_fmt.set_format("A4  (210x297mm)")
     p.margin_l.setValue(120.0); p.margin_r.setValue(120.0)
     p.save_pdf = lambda *a, **k: os.path.join(_TMP, "never.pdf")
     _sync_async(p)

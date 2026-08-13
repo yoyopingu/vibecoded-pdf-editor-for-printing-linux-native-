@@ -152,12 +152,14 @@ def _ink_margins(path, i=0, scale=4):
     return (l/scale/MM, (W-r)/scale/MM, (H-b)/scale/MM, t/scale/MM)
 
 
-def _nup(src, *, cols=1, rows=1, fmt=0, margins=20.0, gaps=0.0, name="nup_c.pdf"):
+def _nup(src, *, cols=1, rows=1, fmt="A4  (210x297mm)", margins=20.0,
+         gaps=0.0, name="nup_c.pdf"):
     """Run the real N-Up panel over `src` and return the output path."""
     _open(src)
     p = NUpPanel()
     p.cols.setValue(cols); p.rows.setValue(rows)
-    p.out_fmt.setCurrentIndex(fmt)
+    # None means the sheet is sized from the source page and the grid.
+    p.out_fmt.set_format(p.AUTO_FORMAT if fmt is None else fmt)
     for w in (p.margin_t, p.margin_b, p.margin_l, p.margin_r): w.setValue(margins)
     p.gap_h.setValue(gaps); p.gap_v.setValue(gaps)
     out = os.path.join(_TMP, name); p.save_pdf = lambda *a, **k: out

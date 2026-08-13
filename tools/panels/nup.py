@@ -13,7 +13,7 @@ from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
 from tools.app_state import AppState
 from tools._base import BasePanel
 from tools.i18n import tr
-from tools.panels._shared import MM_TO_PT, _inherited_rotate, _visible_box, _visible_size, row, PreviewPane
+from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, row, PreviewPane
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
 from tools.panels._imposition import _ROT_MATRIX, _slot_placement, _flatten_annots
 
@@ -206,18 +206,22 @@ class NUpPanel(BasePanel):
         layout.addWidget(gb)
 
         ob = QGroupBox(tr("AUSGABEFORMAT")); ol = QVBoxLayout(ob)
-        self.out_fmt = QComboBox()
-        self.out_fmt.addItems([tr("DIN A4  (210 × 297 mm)"), tr("DIN A3  (297 × 420 mm)"),
-                                tr("DIN A5  (148 × 210 mm)"), tr("Letter  (216 × 279 mm)"),
-                                tr("Wie Quellseite × Raster  (automatisch)")])
+        # Same widget as Crop/Scale, so both offer the same paper sizes and both
+        # take a custom width x height. "Wie Quellseite × Raster" sits after the
+        # sizes because it is not one.
+        #
+        # Bound here, not on the class: tr() at class scope runs at import, and
+        # the language is only loaded once the QApplication exists.
+        self.AUTO_FORMAT = tr("Wie Quellseite × Raster  (automatisch)")
+        self.out_fmt = PaperFormatSelector(after=[self.AUTO_FORMAT])
         ol.addLayout(r(tr("Format:"), self.out_fmt))
         self.landscape = QCheckBox(tr("Querformat")); self.landscape.toggled.connect(self._update_preview)
         ol.addWidget(self.landscape)
-        def _fmt_changed(idx):
+        def _fmt_changed():
             # The auto format takes its orientation from the source page.
-            self.landscape.setEnabled(idx != 4)
+            self.landscape.setEnabled(self.out_fmt.special() != self.AUTO_FORMAT)
             self._update_preview()
-        self.out_fmt.currentIndexChanged.connect(_fmt_changed)
+        self.out_fmt.changed.connect(_fmt_changed)
         layout.addWidget(ob)
 
         ab = QGroupBox(tr("ABSTÄNDE")); al = QVBoxLayout(ab)
@@ -257,12 +261,11 @@ class NUpPanel(BasePanel):
     def _get_layout_params(self, src_pw, src_ph):
         PT   = MM_TO_PT
         cols = self.cols.value(); rows = self.rows.value()
-        fmt_idx = self.out_fmt.currentIndex()
-        fmt_map = {0:(210*PT,297*PT), 1:(297*PT,420*PT), 2:(148*PT,210*PT), 3:(216*PT,279*PT)}
+        sheet = self.out_fmt.target_size_pt()      # None = "Wie Quellseite × Raster"
         mt = self.margin_t.value() * PT; mb = self.margin_b.value() * PT
         ml = self.margin_l.value() * PT; mr = self.margin_r.value() * PT
         gh = self.gap_h.value() * PT;    gv = self.gap_v.value() * PT
-        if fmt_idx == 4:
+        if sheet is None:
             # "Wie Quellseite × Raster": size the sheet so that every slot is
             # exactly one source page and the margins/gaps are added *around*
             # them. They used to be carved out of a sheet of src×grid, so asking
@@ -272,7 +275,7 @@ class NUpPanel(BasePanel):
             out_w = src_pw * cols + ml + mr + gh * (cols - 1)
             out_h = src_ph * rows + mt + mb + gv * (rows - 1)
         else:
-            out_w, out_h = fmt_map[fmt_idx]
+            out_w, out_h = sheet
             # Only meaningful for the fixed paper sizes — the auto sheet already
             # follows the orientation of the source page.
             if self.landscape.isChecked(): out_w, out_h = out_h, out_w

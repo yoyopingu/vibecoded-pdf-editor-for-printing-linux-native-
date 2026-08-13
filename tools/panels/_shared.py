@@ -4,8 +4,8 @@ Helpers shared by more than one tool panel.
 Moved verbatim out of tools/all_tools.py; see tools/panels/__init__.py.
 """
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                             QSizePolicy, QWidget)
-from PyQt6.QtCore import Qt, QTimer, QEvent
+                             QSizePolicy, QWidget, QComboBox, QDoubleSpinBox)
+from PyQt6.QtCore import Qt, QTimer, QEvent, pyqtSignal
 from tools.app_state import AppState
 from tools.i18n      import tr
 
@@ -219,3 +219,105 @@ class PreviewPane(QWidget):
                 self._set_zoom(self.zoom * step)
                 return True
         return super().eventFilter(obj, event)
+
+
+class PaperFormatSelector(QWidget):
+    """A paper-size dropdown, with a width x height row that appears when the
+    user picks "Benutzerdefiniert (mm)".
+
+    Crop/Scale had this and N-Up did not, so the same choice was offered in one
+    tool and not the other. One widget now, and the paper list comes from
+    PAPER_SIZES_PT so both offer the same formats.
+
+    `before` and `after` are entries that are not paper — "— Kein —", "Wie
+    Quellseite × Raster" — placed at either end of the list. target_size_pt()
+    returns None when one of them is selected, and special() says which, so the
+    panel can do whatever that entry means.
+    """
+
+    changed = pyqtSignal()
+
+    def __init__(self, before=(), after=(), width_mm=210.0, height_mm=297.0,
+                 parent=None):
+        super().__init__(parent)
+        self._before = list(before)
+        self._after = list(after)
+        self._custom = tr("Benutzerdefiniert (mm)")
+
+        box = QVBoxLayout(self)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(4)
+
+        self.combo = QComboBox()
+        self.combo.addItems(self._before)
+        self.combo.addItems(list(PAPER_SIZES_PT.keys()))
+        self.combo.addItem(self._custom)
+        self.combo.addItems(self._after)
+        self.combo.currentIndexChanged.connect(self._on_combo)
+        box.addWidget(self.combo)
+
+        def spin(value):
+            s = QDoubleSpinBox()
+            s.setRange(10, 2000)
+            s.setSuffix(" mm")
+            s.setDecimals(1)
+            s.setFixedWidth(90)
+            s.setValue(value)                     # set BEFORE connecting
+            s.valueChanged.connect(lambda _=None: self.changed.emit())
+            return s
+
+        self.width_mm = spin(width_mm)
+        self.height_mm = spin(height_mm)
+        self._w_lbl = QLabel(tr("B")); self._w_lbl.setObjectName("dimLabel")
+        self._h_lbl = QLabel(tr("H")); self._h_lbl.setObjectName("dimLabel")
+        row = QHBoxLayout(); row.setSpacing(4)
+        row.addWidget(self._w_lbl); row.addWidget(self.width_mm)
+        row.addWidget(self._h_lbl); row.addWidget(self.height_mm)
+        row.addStretch()
+        box.addLayout(row)
+        self._sync_custom_row()
+
+    # ── what is selected ─────────────────────────────────────────────────────
+
+    def current_text(self):
+        return self.combo.currentText()
+
+    def is_custom(self):
+        return self.combo.currentText() == self._custom
+
+    def special(self):
+        """The selected non-paper entry, or None when a size is selected."""
+        txt = self.combo.currentText()
+        return txt if txt in self._before or txt in self._after else None
+
+    def target_size_pt(self):
+        """(width, height) in points, or None when a non-paper entry is chosen."""
+        if self.is_custom():
+            return (self.width_mm.value() * MM_TO_PT,
+                    self.height_mm.value() * MM_TO_PT)
+        return PAPER_SIZES_PT.get(self.combo.currentText())
+
+    # ── driving it ───────────────────────────────────────────────────────────
+
+    def set_format(self, text):
+        self.combo.setCurrentText(text)
+
+    def set_custom_size(self, width_mm, height_mm):
+        self.width_mm.setValue(width_mm)
+        self.height_mm.setValue(height_mm)
+
+    def reset(self):
+        """Back to the first entry, without telling anyone."""
+        self.combo.blockSignals(True)
+        self.combo.setCurrentIndex(0)
+        self.combo.blockSignals(False)
+        self._sync_custom_row()
+
+    def _on_combo(self, _idx):
+        self._sync_custom_row()
+        self.changed.emit()
+
+    def _sync_custom_row(self):
+        show = self.is_custom()
+        for w in (self.width_mm, self.height_mm, self._w_lbl, self._h_lbl):
+            w.setVisible(show)
