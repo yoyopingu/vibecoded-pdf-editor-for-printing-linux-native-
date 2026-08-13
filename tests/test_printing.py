@@ -26,9 +26,13 @@ def test_print_spools_exactly_what_was_asked_for():
     the order and rotation the viewer is showing — including page-manager edits
     that have not been saved to the file yet."""
     tab, dlg = _print_dialog()
+    from tools.printing.spool import write_subset_pdf
+
     def spool(tag):
         out = os.path.join(_TMP, f"spool_{tag}.pdf")
-        dlg._write_subset_pdf(dlg._get_pages(), out)
+        # The spooler itself, given the document and the pages the dialog
+        # resolved — which is exactly what the print job hands it.
+        write_subset_pdf(dlg.pdf_path, dlg.model, dlg._get_pages(), out)
         return _page_labels(out), out
 
     dlg.radio_range.setChecked(True); dlg.range_edit.setText("3-5, 8")
@@ -132,14 +136,17 @@ def test_print_never_destroys_colour_in_the_spooled_file():
             return R()
         return real(cmd, *a, **k)
 
+    from tools.printing.spool import print_via_gs
+
     expected = {"auto": [], "color": ["print-color-mode=color"],
                 "mono":  ["print-color-mode=monochrome", "ColorModel=Gray"]}
     for mode, want in expected.items():
         captured.clear(); captured["tag"] = mode
         subprocess.run = spy
         try:
-            dlg._print_via_gs([0], 1, mode, False, False, "long", 0,
-                              "test-printer", 0, "A4", 0, 3.0, lambda m: None)
+            print_via_gs(dlg.pdf_path, dlg.model,
+                         [0], 1, mode, False, False, "long", 0,
+                         "test-printer", 0, "A4", 0, 3.0, lambda m: None)
         finally:
             subprocess.run = real
         got = [o for o in captured["opts"]
