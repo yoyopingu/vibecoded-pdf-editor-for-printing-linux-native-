@@ -109,7 +109,7 @@ def test_rotation_reaches_the_preview():
 def test_char_boxes_follow_a_rotated_page():
     """Text rectangles are measured before the bitmap is turned; if they do not
     turn with it, selecting text on a rotated page highlights the wrong place."""
-    from tools.render.images import _rotate_char_boxes
+    from tools.render.region import _rotate_char_boxes
     W, H = 400.0, 800.0
     box = [("a", 10.0, 20.0, 30.0, 50.0)]      # near the top-left
     assert _rotate_char_boxes(box, 0, W, H) == box

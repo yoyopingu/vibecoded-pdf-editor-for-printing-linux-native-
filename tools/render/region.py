@@ -148,6 +148,28 @@ _unit_chars: "dict" = {}
 _UNIT_CHARS_MAX = 32
 
 
+def _rotate_char_boxes(chars, rot, w, h):
+    """Move character rectangles with the bitmap they were measured on.
+
+    `w`/`h` are the *unrotated* image size in pixels; PIL's rotate(-rot,
+    expand=True) turns the image clockwise by `rot`."""
+    rot %= 360
+    if rot == 0 or not chars:
+        return chars
+    out = []
+    for ch, x0, y0, x1, y1 in chars:
+        if rot == 90:      # (x, y) → (h - y, x)
+            nx0, ny0, nx1, ny1 = h - y1, x0, h - y0, x1
+        elif rot == 180:   # (x, y) → (w - x, h - y)
+            nx0, ny0, nx1, ny1 = w - x1, h - y1, w - x0, h - y0
+        elif rot == 270:   # (x, y) → (y, w - x)
+            nx0, ny0, nx1, ny1 = y0, w - x1, y1, w - x0
+        else:
+            nx0, ny0, nx1, ny1 = x0, y0, x1, y1
+        out.append((ch, min(nx0, nx1), min(ny0, ny1), max(nx0, nx1), max(ny0, ny1)))
+    return out
+
+
 def page_chars(path, page_index, scale, rotation=0):
     """Character boxes in displayed page-pixel space, relative to the page's
     top-left. Same shape as the boxes _PageRenderTask produces."""
@@ -181,7 +203,6 @@ def page_chars(path, page_index, scale, rotation=0):
               for ch, x0, y0, x1, y1 in unit]
     r = rotation % 360
     if r and scaled:
-        from tools.render.images import _rotate_char_boxes
         # page_size_pt, not the page itself. Loading the page here to ask for
         # two numbers that never change cost a full FPDF_LoadPage on every pan
         # of a rotated page — 351 ms a step on the poster this was measured on,

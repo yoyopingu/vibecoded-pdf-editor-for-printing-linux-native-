@@ -91,23 +91,3 @@ def _render_image(pdf_path, page_index, width, rotation=0, should_cancel=None):
         return img
 
 
-def _rotate_char_boxes(chars, rot, w, h):
-    """Move character rectangles with the bitmap they were measured on.
-
-    `w`/`h` are the *unrotated* image size in pixels; PIL's rotate(-rot,
-    expand=True) turns the image clockwise by `rot`."""
-    rot %= 360
-    if rot == 0 or not chars:
-        return chars
-    out = []
-    for ch, x0, y0, x1, y1 in chars:
-        if rot == 90:      # (x, y) → (h - y, x)
-            nx0, ny0, nx1, ny1 = h - y1, x0, h - y0, x1
-        elif rot == 180:   # (x, y) → (w - x, h - y)
-            nx0, ny0, nx1, ny1 = w - x1, h - y1, w - x0, h - y0
-        elif rot == 270:   # (x, y) → (y, w - x)
-            nx0, ny0, nx1, ny1 = y0, w - x1, y1, w - x0
-        else:
-            nx0, ny0, nx1, ny1 = x0, y0, x1, y1
-        out.append((ch, min(nx0, nx1), min(ny0, ny1), max(nx0, nx1), max(ny0, ny1)))
-    return out
