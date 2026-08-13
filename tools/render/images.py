@@ -14,6 +14,7 @@ coarser one does not.
 """
 import io
 from PyQt6.QtGui import QPixmap, QImage, QColor
+from tools.theme import _TV
 from tools.render.raster import render_window
 from tools.render.region import page_px_size, page_size_pt
 
@@ -89,7 +90,7 @@ def _render_image(pdf_path, page_index, width, rotation=0, should_cancel=None):
     except Exception:
         img = QImage(max(1, int(width)), max(1, int(width * 1.414)),
                      QImage.Format.Format_RGB32)
-        img.fill(QColor("#2a3a5a"))
+        img.fill(QColor(_TV['placeholder']))
         return img
 
 

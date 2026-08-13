@@ -274,6 +274,36 @@ def test_light_theme_reaches_every_colour_source():
         _app.setStyleSheet(old)
 
 
+def test_preview_canvas_follows_the_theme():
+    """The preview panes paint their own backdrop into a pixmap and put that
+    over the label. The backdrop was the dark card colour spelled out as a
+    literal, so in light mode the label underneath went light and the pixmap
+    covering it stayed dark — and nothing repainted it on a switch, because
+    _apply_theme only ever restyled the label."""
+    from tools.theme import _TV
+    from PyQt6.QtGui import QColor
+    old = _app.styleSheet()
+    try:
+        _open(FX["normal"])
+        p = NUpPanel(); p.resize(1000, 700); p.show()
+        _spin(30)
+        seen = {}
+        for theme in ("light", "dark"):
+            MAIN.apply_theme_globally(theme)
+            _spin(40)
+            img = p._preview.pixmap().toImage()
+            # bottom-right: the sheet is drawn to (w-1, h-1), so the last row
+            # and column are the only backdrop the N-Up preview leaves showing.
+            corner = QColor(img.pixel(img.width() - 1, img.height() - 1)).name()
+            assert corner == _TV["card_bg"], (theme, corner, _TV["card_bg"])
+            seen[theme] = corner
+        assert seen["light"] != seen["dark"], seen
+        p.hide()
+    finally:
+        MAIN.apply_theme_globally("dark")
+        _app.setStyleSheet(old)
+
+
 def test_clicking_a_number_field_selects_its_value():
     """Click a number field and the value is selected, ready to be typed over —
     then click again and the caret goes where you clicked, so it can be edited.

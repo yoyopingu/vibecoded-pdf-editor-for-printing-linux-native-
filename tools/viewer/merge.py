@@ -164,9 +164,9 @@ class FileCard(QFrame):
         mime.setText(f"multi:{self.pos}" if is_multi else str(self.pos))
         drag.setMimeData(mime)
         if is_multi and grid:
-            pm = QPixmap(self.size()); pm.fill(QColor("#1e3a5a"))
+            pm = QPixmap(self.size()); pm.fill(QColor(_TV['border']))
             from PyQt6.QtGui import QPainter as _P, QFont as _F
-            p = _P(pm); p.setPen(QColor("#eaeaea"))
+            p = _P(pm); p.setPen(QColor(_TV['text']))
             f = _F(); f.setPointSize(11); f.setBold(True); p.setFont(f)
             p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter,
                        tr('{p0} Dateien').format(p0=len(grid._selected)))

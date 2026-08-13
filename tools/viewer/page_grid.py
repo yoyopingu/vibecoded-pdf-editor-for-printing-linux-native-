@@ -12,7 +12,8 @@ from PyQt6.QtGui import QPixmap, QImage, QColor, QDrag, QPainter, QTransform
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
-from tools.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
+from tools.theme import (STATUS, _DROP_THICKNESS, _TV, _paint_drop_marker,
+                         _register_themed)
 
 
 CARD_W = 110
@@ -150,9 +151,9 @@ class PageCard(QFrame):
         if is_multi and grid:
             n_sel = len(grid.model.selected)
             pm = QPixmap(self.size())
-            pm.fill(QColor("#1e3a5a"))
+            pm.fill(QColor(_TV['border']))
             from PyQt6.QtGui import QPainter as _P, QFont as _F
-            p = _P(pm); p.setPen(QColor("#eaeaea"))
+            p = _P(pm); p.setPen(QColor(_TV['text']))
             f = _F(); f.setPointSize(11); f.setBold(True); p.setFont(f)
             label = tr('+{p0} Seiten').format(p0=n_sel) if ctrl else tr('{p0} Seiten').format(p0=n_sel)
             p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, label)
@@ -164,7 +165,7 @@ class PageCard(QFrame):
             if ctrl:
                 # Overlay a "+" to signal copy
                 from PyQt6.QtGui import QPainter as _P, QFont as _F
-                p = _P(pm); p.setPen(QColor("#4caf50"))
+                p = _P(pm); p.setPen(QColor(STATUS['copy']))
                 f = _F(); f.setPointSize(18); f.setBold(True); p.setFont(f)
                 p.drawText(pm.rect().adjusted(0, 0, -4, -4),
                            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, "+")

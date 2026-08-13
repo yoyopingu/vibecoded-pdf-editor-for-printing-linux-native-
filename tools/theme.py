@@ -46,6 +46,9 @@ PALETTE = {
             "VIEW_BTN":    "#162848", "VIEW_BTN_HOVER": "#1e3a60",
             "BTN_DISABLED": "#2c2c3e", "BTN_DISABLED_TEXT": "#55607a",
             "GROUP_BOX":   "#1a2038",
+            # White on the accent-coloured button, and the red the window's
+            # close button turns under the pointer.
+            "ON_ACCENT":   "#ffffff", "CLOSE_BTN": "#c0392b",
         },
         "viewer": {
             "viewer_bg":  "#111827",
@@ -64,6 +67,7 @@ PALETTE = {
             "btn_brd":    "#2a4a70",
             "sel_bg":     "#1a4a80",
             "splitter":   "#1e3a5a",
+            "placeholder": "#2a3a5a",
         },
     },
     "light": {
@@ -83,6 +87,7 @@ PALETTE = {
             "VIEW_BTN":    "#c8ddf0", "VIEW_BTN_HOVER": "#b4ccec",
             "BTN_DISABLED": "#c0cede", "BTN_DISABLED_TEXT": "#88a0b4",
             "GROUP_BOX":   "#f6f9fd",
+            "ON_ACCENT":   "#ffffff", "CLOSE_BTN": "#c0392b",
         },
         "viewer": {
             "viewer_bg":  "#e8edf3",
@@ -101,8 +106,31 @@ PALETTE = {
             "btn_brd":    "#98b4cc",
             "sel_bg":     "#b0ccec",
             "splitter":   "#b8cce0",
+            "placeholder": "#ccd8e8",
         },
     },
+}
+
+# Two things that do not follow the theme, because they do not describe the
+# application. They describe what comes out of the printer: the preview panes
+# paint a sheet of paper and the marks a blade will cut along, and paper is
+# white and ink is black whether or not you like your screen dark.
+#
+# The two previews disagreed about white — the N-Up sheet was #f5f5f5 and the
+# Crop/Scale sheet #ffffff, side by side in the same application.
+PAPER = "#ffffff"
+INK   = "#000000"
+
+# What a colour means rather than where it sits, so these hold across both
+# themes: each is a mid-tone chosen to stay legible on a near-black panel and
+# on a white one. The greyscale report paints its legend and its rows from
+# these, and a drag carrying a copy marks itself with `copy`.
+STATUS = {
+    "converted": "#3a8a3a",   # the page was turned grey
+    "forced":    "#2176ae",   # …because you told it to, not because it looked grey
+    "skipped":   "#e67e22",   # left alone
+    "colour":    "#c0392b",   # still colour, and will be billed as colour
+    "copy":      "#3a8a3a",   # the "+" on a drag that copies instead of moves
 }
 
 # The eight names that leave this module: theme_color() answers for these, and
@@ -122,22 +150,14 @@ def viewer_colours(theme):
 
 
 # Kept as names because the viewer and several panels import them directly.
-_DARK_TV = PALETTE["dark"]["viewer"]
+_DARK_TV  = PALETTE["dark"]["viewer"]
 _LIGHT_TV = PALETTE["light"]["viewer"]
-
-
 _TV: dict = dict(_DARK_TV)   # current live theme — mutated by set_viewer_theme()
 
-
 _TOP_BTN_W = 132
-
-
-_PREV_BTN = (34, 26)
-
+_PREV_BTN  = (34, 26)
 
 _DROP_THICKNESS = 7      # px across the slim axis
-
-
 _DROP_HALO      = 4      # px of glow around the body
 
 

@@ -5,7 +5,7 @@ and set cut marks. Shows the sheet it is about to produce.
 import os
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.images import pil_to_qpixmap
-from tools.theme import _TV, _register_themed
+from tools.theme import INK, PAPER, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QWidget, QSplitter
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
@@ -146,6 +146,11 @@ class CropResizePanel(BasePanel):
         self._preview.setStyleSheet(f"background:{t['card_bg']};")
         self._tool_splitter.setStyleSheet(
             f"QSplitter::handle{{background:{t['splitter']};width:2px;}}")
+        # The preview is a pixmap painted over that label, and it paints its own
+        # backdrop from the palette. Restyling the label alone left the previous
+        # theme's canvas sitting on top of the new one until something else
+        # happened to trigger a render. refresh() no-ops while hidden.
+        self._pane.refresh()
 
     def _on_sync_toggle(self, checked):
         if checked:
@@ -342,7 +347,7 @@ class CropResizePanel(BasePanel):
         gx = g_page_x + shift_x; gy = g_page_y + shift_y
 
         result = QPixmap(canvas_w, canvas_h)
-        result.fill(QColor("#1a2a40"))
+        result.fill(QColor(_TV['card_bg']))
         painter = QPainter(result)
 
         # Paint the resulting page as paper first. With negative margins
@@ -350,7 +355,7 @@ class CropResizePanel(BasePanel):
         # new page but carried no content, so they stayed the dark canvas colour
         # — the white space you were adding was invisible in the preview.
         painter.setPen(_Qt2.PenStyle.NoPen)
-        painter.setBrush(QBrush(QColor("#ffffff")))
+        painter.setBrush(QBrush(QColor(PAPER)))
         painter.drawRect(rx, ry, cw_px, ch_px)
 
         def draw_ghost():
@@ -398,7 +403,7 @@ class CropResizePanel(BasePanel):
             tw, th = marks_size
             mx0 = (pw - tw) / 2; my0 = (ph - th) / 2
             rect = (mx0, my0, mx0 + tw, my0 + th)
-            painter.setPen(QPen(QColor("#000000"), 1)); painter.setBrush(_Qt2.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(INK), 1)); painter.setBrush(_Qt2.BrushStyle.NoBrush)
             for a, b, c, d in _crop_mark_segments([rect]):
                 painter.drawLine(int(rx + a * cs), int(ry + (ph - b) * cs),
                                  int(rx + c * cs), int(ry + (ph - d) * cs))

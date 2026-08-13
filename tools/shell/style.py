@@ -31,6 +31,7 @@ def _build_style(dark: bool) -> str:
     _VB_BG = c["VIEW_BTN"];     _VB_HOV  = c["VIEW_BTN_HOVER"]
     _BTN_DIS = c["BTN_DISABLED"]; _BTN_DIS_T = c["BTN_DISABLED_TEXT"]
     _GB    = c["GROUP_BOX"]
+    _ON_ACC = c["ON_ACCENT"];   _CLOSE = c["CLOSE_BTN"]
 
     _ACC, _ACC_HOV, _ACC_PRS = c["ACC"], c["ACC_HOVER"], c["ACC_PRESSED"]
     # Spelled out as rgba(): Qt reads a 9-character "#rrggbbaa" as "#aarrggbb"
@@ -100,7 +101,7 @@ QPushButton#titleBarBtn {{
     font-size: 14px; min-width: 42px;
 }}
 QPushButton#titleBarBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
-QPushButton#titleBarBtn:last-child:hover {{ background: #c0392b; color: #ffffff; }}
+QPushButton#titleBarBtn:last-child:hover {{ background: {_CLOSE}; color: {_ON_ACC}; }}
 
 /* ── Sidebar ────────────────────────────────────────────── */
 QWidget#sidebar {{
@@ -136,7 +137,7 @@ QPushButton#viewerBtn[active="true"] {{ background: {_VB_HOV}; }}
 
 /* ── Buttons ────────────────────────────────────────────── */
 QPushButton#actionBtn {{
-    background: {_ACC}; color: #ffffff; border: none;
+    background: {_ACC}; color: {_ON_ACC}; border: none;
     border-radius: 7px; padding: 8px 20px;
     font-weight: bold; font-size: 13px; min-height: 32px;
     letter-spacing: 0.3px;
@@ -380,7 +381,7 @@ class AppStyle:
         from PyQt6.QtWidgets import QProxyStyle, QStyle, QStyleFactory
         from PyQt6.QtGui import QIcon, QPixmap, QPainter, QPen, QColor
 
-        def _cross(size=16, colour="#8892a4", alpha=255):
+        def _cross(size=16, colour=_ICON_CROSS, alpha=255):
             pm = QPixmap(size, size)
             pm.fill(Qt.GlobalColor.transparent)
             p = QPainter(pm)
@@ -398,7 +399,8 @@ class AppStyle:
                 if standardIcon == QStyle.StandardPixmap.SP_TabCloseButton:
                     icon = QIcon()
                     icon.addPixmap(_cross(alpha=190), QIcon.Mode.Normal)
-                    icon.addPixmap(_cross(colour="#e05260"), QIcon.Mode.Active)
+                    icon.addPixmap(_cross(colour=_ICON_CROSS_ACTIVE),
+                                   QIcon.Mode.Active)
                     return icon
                 return super().standardIcon(standardIcon, option, widget)
 
@@ -429,6 +431,13 @@ _ICON_INK   = "#1a1a2e"
 _ICON_PAPER = "#eaeaea"
 _ICON_FOLD  = "#cccccc"
 _ICON_ACC   = "#3d82f0"
+
+# The tab's close cross, and the red it turns under the pointer. Fixed for a
+# duller reason: AppStyle is installed once at startup and Qt caches what
+# standardIcon() hands back, so a themed value here would only ever be the theme
+# the application happened to start in. A mid grey reads on either background.
+_ICON_CROSS        = "#8892a4"
+_ICON_CROSS_ACTIVE = "#e05260"
 
 
 def app_icon():

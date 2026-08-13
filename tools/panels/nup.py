@@ -6,7 +6,7 @@ import os, math
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
-from tools.theme import _TV, _register_themed
+from tools.theme import INK, PAPER, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QWidget, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
@@ -169,6 +169,11 @@ class NUpPanel(BasePanel):
         self._preview.setStyleSheet(f"background:{t['card_bg']};")
         self._tool_splitter.setStyleSheet(
             f"QSplitter::handle{{background:{t['splitter']};width:2px;}}")
+        # The preview is a pixmap painted over that label, and it paints its own
+        # backdrop from the palette. Restyling the label alone left the previous
+        # theme's canvas sitting on top of the new one until something else
+        # happened to trigger a render. refresh() no-ops while hidden.
+        self._pane.refresh()
 
     def _update_preview(self):
         # Bridge for this panel's widget-value connections.
@@ -358,10 +363,10 @@ class NUpPanel(BasePanel):
             if img is None: any_pending = True
             pm_by_page[pg] = QPixmap.fromImage(img) if img is not None else None
 
-        result = QPixmap(canvas_w, canvas_h); result.fill(QColor("#1a2a40"))
+        result = QPixmap(canvas_w, canvas_h); result.fill(QColor(_TV['card_bg']))
         painter = QPainter(result)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(_QB(QColor("#f5f5f5"))); painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(_QB(QColor(PAPER))); painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRect(0, 0, canvas_w - 1, canvas_h - 1)
         for row_i in range(rows):
             for col_i in range(cols):
@@ -388,7 +393,7 @@ class NUpPanel(BasePanel):
                 painter.drawRect(off_x, off_y, pm_s.width()-1, pm_s.height()-1)
         if self.crop_marks.isChecked():
             params_t = (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows)
-            painter.setPen(QPen(QColor("#000000"), 1)); painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(INK), 1)); painter.setBrush(Qt.BrushStyle.NoBrush)
             for a, b, c, d in _crop_mark_segments(_nup_slot_rects(params_t, cols * rows)):
                 painter.drawLine(int(a * cs), int((out_h - b) * cs),
                                  int(c * cs), int((out_h - d) * cs))

@@ -6,7 +6,7 @@ import os, subprocess, shutil, logging
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
-from tools.theme import _TV, _register_themed
+from tools.theme import STATUS, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox, QRadioButton, QScrollArea, QWidget, QSlider, QApplication, QFrame, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap
@@ -202,10 +202,11 @@ class GrayscalePanel(BasePanel):
         self._gs_zoombar = zoom_bar
         zbl = QHBoxLayout(zoom_bar); zbl.setContentsMargins(8, 0, 8, 0); zbl.setSpacing(4)
         self._gs_legend_lbls = []
-        for color, text in [("#3a8a3a", tr("Grün = konvertiert")),
-                             ("#2176ae", tr("Blau = erzwungen")),
-                             ("#e67e22", tr("Orange = übersprungen")),
-                             ("#c0392b", tr("Rot = Farbe"))]:
+        for key, text in [("converted", tr("Grün = konvertiert")),
+                          ("forced",    tr("Blau = erzwungen")),
+                          ("skipped",   tr("Orange = übersprungen")),
+                          ("colour",    tr("Rot = Farbe"))]:
+            color = STATUS[key]
             dot = QLabel("■"); dot.setStyleSheet(f"color:{color};font-size:13px;background:transparent;")
             lbl = QLabel(text)
             self._gs_legend_lbls.append(lbl)
@@ -548,13 +549,13 @@ class GrayscalePanel(BasePanel):
             if i in self._already_grey:
                 color = "transparent"
             elif i in self._manual_skip:
-                color = "#e67e22"
+                color = STATUS["skipped"]
             elif i in self._manual_sel:
-                color = "#2176ae"
+                color = STATUS["forced"]
             elif i in self._grey_pages:
-                color = "#3a8a3a"
+                color = STATUS["converted"]
             else:
-                color = "#c0392b"
+                color = STATUS["colour"]
             frame.setStyleSheet(f"QFrame{{background:transparent;border:2px solid {color};border-radius:5px;}}")
         self._update_status_bar()
 
