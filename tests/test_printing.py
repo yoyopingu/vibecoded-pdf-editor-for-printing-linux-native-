@@ -421,3 +421,115 @@ def test_the_queue_answer_does_not_overwrite_a_deliberate_choice():
     finally:
         prefs.forget()
         dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+
+
+def _fake_qt_printer(page_size_id, duplex_mode):
+    """Make QPrinterInfo report a printer, so the Qt branch of
+    _on_printer_changed actually runs. Without one it is skipped entirely, and
+    a test that does not stand one up cannot see Qt overwrite anything."""
+    from contextlib import contextmanager
+    import PyQt6.QtPrintSupport as QPS
+    from PyQt6.QtPrintSupport import QPrinter
+    from PyQt6.QtGui import QPageSize
+
+    class _Info:
+        def isNull(self): return False
+        def supportedPageSizes(self):
+            return [QPageSize(QPageSize.PageSizeId.A4),
+                    QPageSize(QPageSize.PageSizeId.Letter),
+                    QPageSize(QPageSize.PageSizeId.A3)]
+        def defaultPageSize(self): return QPageSize(page_size_id)
+        def defaultDuplexMode(self): return duplex_mode
+        def supportedColorModes(self): return [QPrinter.ColorMode.Color]
+
+    @contextmanager
+    def ctx():
+        real = QPS.QPrinterInfo.printerInfo
+        QPS.QPrinterInfo.printerInfo = staticmethod(lambda name: _Info())
+        try:
+            yield
+        finally:
+            QPS.QPrinterInfo.printerInfo = real
+    return ctx()
+
+
+def test_the_queue_wins_over_qt_on_every_open_not_just_the_first():
+    """CUPS is asked in the background and the answer is cached for the session.
+    A cached answer is applied on the spot — so when the ask happened at the top
+    of _on_printer_changed, everything below it promptly overwrote the answer
+    with Qt's, and the dialog came back to Letter and two-sided on the second
+    and every later open. The first open looked right, which is what made it
+    easy to believe it was fixed.
+
+    Qt is consulted only because it answers instantly. It is the weakest source
+    and has to be applied first, not last."""
+    import tools.printing.dialog as dialog_mod
+    from PyQt6.QtPrintSupport import QPrinter
+    from PyQt6.QtGui import QPageSize
+    from tools.printing import prefs
+
+    queue = ("PageSize/Media Size: *A4 Letter A3\n"
+             "Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble\n")
+    prefs.forget()
+    dialog_mod._QUEUE_INFO_CACHE.clear()
+    opened = []
+    try:
+        with _fake_qt_printer(QPageSize.PageSizeId.Letter,
+                              QPrinter.DuplexMode.DuplexLongSide), _stub_queue(queue):
+            for attempt in range(3):
+                tab, dlg = _print_dialog(3, f"qt_vs_cups_{attempt}.pdf")
+                opened.append((tab, dlg))
+                _spin(60, 0.0)
+                dlg.printer_combo.blockSignals(True)
+                dlg.printer_combo.clear()
+                dlg.printer_combo.addItem("office", "office")
+                dlg.printer_combo.blockSignals(False)
+                dlg._on_printer_changed()
+                _spin(40, 0.0)
+                assert dlg.paper_combo.currentData() == "A4", (
+                    f"open {attempt + 1}: Qt's Letter beat the queue's A4")
+                assert dlg.duplex_check.isChecked() is False, (
+                    f"open {attempt + 1}: Qt's duplex beat the queue's one-sided")
+    finally:
+        prefs.forget()
+        for tab, dlg in opened:
+            dlg.deleteLater(); tab.deleteLater()
+        _app.processEvents()
+
+
+def test_a_remembered_setting_survives_qt_disagreeing_with_it():
+    """The restore happens in the same step as the queue defaults, so it was
+    overwritten the same way — which is why the two-sided setting in particular
+    never came back: Qt reports duplex for most office printers."""
+    import tools.printing.dialog as dialog_mod
+    from PyQt6.QtPrintSupport import QPrinter
+    from PyQt6.QtGui import QPageSize
+    from tools.printing import prefs
+
+    queue = ("PageSize/Media Size: *A4 Letter A3\n"
+             "Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble\n")
+    prefs.forget()
+    # Remembered: A3 and two-sided. The queue says A4/one-sided, Qt says
+    # Letter/one-sided. What the operator used last must win over both.
+    prefs.remember("office", {"paper": "A3", "duplex": True,
+                              "duplex_edge": "short"})
+    tab = dlg = None
+    try:
+        with _fake_qt_printer(QPageSize.PageSizeId.Letter,
+                              QPrinter.DuplexMode.DuplexNone), _stub_queue(queue):
+            dialog_mod._QUEUE_INFO_CACHE.clear()
+            tab, dlg = _print_dialog(3, "remembered_tab.pdf")
+            _spin(60, 0.0)
+            dlg.printer_combo.blockSignals(True)
+            dlg.printer_combo.clear()
+            dlg.printer_combo.addItem("office", "office")
+            dlg.printer_combo.blockSignals(False)
+            dlg._on_printer_changed()
+            _spin(40, 0.0)
+            assert dlg.paper_combo.currentData() == "A3", "forgot the paper"
+            assert dlg.duplex_check.isChecked() is True, "forgot two-sided"
+            assert dlg.duplex_edge_combo.currentData() == "short", "forgot the edge"
+    finally:
+        prefs.forget()
+        if dlg is not None:
+            dlg.deleteLater(); tab.deleteLater(); _app.processEvents()

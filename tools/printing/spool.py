@@ -102,6 +102,11 @@ def printer_options(printer_name, timeout=10):
             choices.append(choice)
         if keyword and choices:
             options[keyword] = (label or keyword, choices, default)
+    if not options:
+        # Worth a line in the log: if the queue answers nothing, the dialog
+        # falls back to Qt's guess and the user sees defaults they did not set.
+        logging.info("printer_options: %s reported no options (rc=%s)",
+                     printer_name, r.returncode)
     return options
 
 
@@ -172,6 +177,7 @@ def queue_defaults(printer_name):
         if default:
             found["duplex"] = default != "one-sided"
             found["duplex_edge"] = "short" if default.endswith("short-edge") else "long"
+    logging.info("queue_defaults: %s -> %s", printer_name, found or "nothing")
     return found
 
 

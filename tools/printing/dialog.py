@@ -732,7 +732,6 @@ class PrintDialog(QDialog):
             from PyQt6.QtGui import QPageSize
 
             printer_name = self.printer_combo.currentData()
-            self._load_queue_info(printer_name)
             have_info = printer_name and printer_name not in ("lp", "none")
             info = QPrinterInfo.printerInfo(printer_name) if have_info else None
             valid = info is not None and not info.isNull()
@@ -877,6 +876,16 @@ class PrintDialog(QDialog):
             self._sync_preview()
             # Everything above was the dialog setting itself up, not the user.
             self._settings_touched = False
+
+            # Last, not first. Everything above is what Qt believes, and Qt is
+            # the weakest source — it is consulted only because it answers
+            # instantly. Asking CUPS from the top of this method looked harmless
+            # while the answer arrived later, but the answer is cached for the
+            # session and a cached one is applied on the spot, after which every
+            # line above overwrote it. That is why the second and every later
+            # open came back to Letter and to two-sided, and why a remembered
+            # setting did not survive: the restore happens in the same step.
+            self._load_queue_info(printer_name)
 
         except Exception:
             import logging
