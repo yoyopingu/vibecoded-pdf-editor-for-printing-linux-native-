@@ -165,13 +165,18 @@ interpreter this app runs on has PyQt6, pypdfium2, pikepdf and reportlab but
 not necessarily pytest, and a suite the app's own machine cannot run is not
 much of a suite.
 
-One caveat, stated plainly: running all 90 in a *single* pytest process aborts
-in glibc's allocator about a third of the time, after every test has reported
-PASS. Each module on its own is clean (`pytest tests/test_render.py`), and
-`tests/run.py` is clean over the full suite — the same 90 tests, the same order,
-in one process — so this is something about the state pytest keeps alive across
-a long run, not a failing test. `tests/run.py` is the runner to trust for a
-full pass; pytest is the nicer one for working on a single module.
+One caveat, stated plainly: a full run in a single process dies of a heap fault
+maybe one time in five, deep into the suite and long after the tests it has
+already reported PASS. It is not a failing test — every test passes, and a
+crashed run is one that got most of the way through and then fell over. Both
+runners are affected, so this is the app or its libraries in a process that has
+built and destroyed the whole GUI ninety times, not the runner.
+
+What is reliable: **any single module**, under either runner, has never been
+seen to crash — `python3 tests/run.py render` or `pytest tests/test_render.py`.
+That is the way to work on something. For a full pass, expect to run it twice
+now and then. Chasing it further means ASAN or valgrind against Qt and pdfium,
+which has not been done.
 
 The tests are grouped by subject — `test_viewer_zoom.py`, `test_printing.py`,
 `test_render.py` and so on — over `tests/support.py`, which holds the
@@ -185,20 +190,43 @@ missing.
 
 ## Architecture
 
-`main.py` owns the application shell: the frameless window and title bar, the
-sidebar that switches between the viewer and the tool panels, settings, theming,
-and the single-instance IPC that hands files from a second launch to the running
-window.
+Four layers, and imports only ever point downwards.
 
-Everything else lives in `tools/`:
+**`tools/render/` — turning a PDF into pixels.** Depends on nothing above it.
 
 | Module | Responsibility |
 | --- | --- |
-| `page_viewer.py` | The viewer, and the largest module by far. Page rendering and its caches, the priority render queue, the single-page view, the thumbnail page manager (`PageGrid`/`ManagePanel`), the multi-file sort preview (`FileGrid`/`MergeOrderWidget`), `PageModel` (the in-memory page order, rotations and sources), tabs, and the print dialog. |
-| `all_tools.py` | Every tool panel: N-Up, imposition, compress, crop/scale, page numbers, image↔PDF, greyscale, forms, OCR, preflight, layers, colour profile. One class per sidebar entry. |
+| `document_cache.py` | Open documents and their parsed pages, both pooled. Loading a page of a large PDF costs hundreds of milliseconds and hundreds of megabytes, so neither is done twice. Also owns the process-wide pdfium lock: libpdfium is not thread-safe even across different documents. |
+| `raster.py` | One page, one bitmap, through pdfium's progressive API — so a render that is no longer wanted stops in milliseconds instead of finishing. |
+| `region.py` | What to render for a viewport, and the whole-pixel geometry both sides agree on. Past a certain zoom the viewer renders only the window on screen. |
+| `images.py` | Whole-page renders, and the arithmetic of what scale to render at. |
+| `caches.py` | The thumbnail and full-page LRUs, evicted by what the user is looking at rather than by age. |
+| `queue.py` | One worker, a priority heap, and the render tasks. A page turn preempts the thumbnail in flight. |
+
+**`tools/viewer/` — showing it.** One module per part: `theme`, `model`,
+`canvas`, `single_page`, `page_grid`, `manage`, `merge`, `printing`, `tab`,
+`panel`. `tools/page_viewer.py` re-exports them and carries the map.
+
+**`tools/panels/` — the tools.** One module per sidebar entry — N-Up,
+imposition, compress, crop/scale, page numbers, image↔PDF, greyscale, forms,
+OCR, preflight, layers, colour profile — over shared helpers in `_shared.py`,
+`_verify.py`, `_colour.py`, `_cropmarks.py` and `_imposition.py`.
+`tools/all_tools.py` re-exports them.
+
+**`tools/shell/` — everything around the documents.** `style` (palette,
+stylesheets, window icon), `settings` (persisted preferences and their
+dialogs), `titlebar`, `window` (`MainWindow` and the sidebar), and `instance`
+(a second launch hands its files to the running window). `main.py` is the entry
+point and nothing else.
+
+And the rest of `tools/`:
+
+| Module | Responsibility |
+| --- | --- |
 | `_base.py` | `BasePanel`, the contract every tool panel follows — current-file bar, log box, the run button, and `run_async()` for off-thread work. Also `displayed_pdf()`, which flattens the page manager's in-memory edits into a temp PDF so tools operate on what the user sees rather than what is on disk. |
+| `jobs.py` | The one mechanism for fire-and-forget background work: owned, cancellable, and waited for at shutdown. |
 | `app_state.py` | Small singleton holding the current document, page model and page, plus the signals other parts subscribe to (`pdf_changed`, `result_ready`, `status_message`). How a tool finds the open file without asking for one. |
-| `multi_open.py` | Which file formats can become a PDF, the file-dialog filter built from that list, and `ConvertWorker` — the background thread that runs img2pdf and LibreOffice. |
+| `multi_open.py` | Which file formats can become a PDF, the file-dialog filter built from that list, and the conversion that runs img2pdf and LibreOffice. |
 | `i18n.py` | `tr()` and the German→English string table. German source strings are the keys. |
 | `plugin_manager.py` | Discovers `BasePanel` subclasses in `plugins/`, and the panel for installing them. |
 

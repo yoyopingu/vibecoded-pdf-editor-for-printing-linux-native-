@@ -2,7 +2,9 @@
 Style, moved out of main.py.
 """
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtGui import (QPixmap, QPainter, QColor, QPen, QBrush,
+                         QIcon, QPolygon)
 
 
 # ── Farbpalette (Dunkel) ──────────────────────────────────────────────────────
@@ -460,3 +462,34 @@ def apply_theme_globally(theme: str):
     _as.THEME.update(_THEME_COLOURS["light" if theme == "light" else "dark"])
     from tools.page_viewer import set_viewer_theme
     set_viewer_theme(theme)          # last: it re-runs every panel's _apply_theme
+
+
+def app_icon():
+    """The window icon, drawn rather than shipped as a file.
+
+    A sheet of paper with a folded corner, three lines of text and the accent
+    dot. It was twenty-five lines in the middle of main(), between forwarding
+    the command line and opening the window.
+    """
+    icon_pm = QPixmap(64, 64)
+    icon_pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(icon_pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QBrush(QColor("#1a1a2e")))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawRoundedRect(0, 0, 64, 64, 10, 10)
+    p.setBrush(QBrush(QColor("#eaeaea")))
+    p.drawRoundedRect(12, 8, 32, 42, 3, 3)
+    p.setBrush(QBrush(QColor("#1a1a2e")))
+    p.drawPolygon(QPolygon([QPoint(36,8), QPoint(44,8), QPoint(44,16)]))
+    p.setBrush(QBrush(QColor("#cccccc")))
+    p.drawPolygon(QPolygon([QPoint(36,8), QPoint(44,16), QPoint(36,16)]))
+    p.setPen(QPen(QColor(ACC), 2))
+    p.drawLine(18, 24, 38, 24)
+    p.drawLine(18, 30, 38, 30)
+    p.drawLine(18, 36, 30, 36)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QBrush(QColor(ACC)))
+    p.drawEllipse(38, 42, 14, 14)
+    p.end()
+    return QIcon(icon_pm)
