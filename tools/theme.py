@@ -150,8 +150,8 @@ def viewer_colours(theme):
 
 
 # Kept as names because the viewer and several panels import them directly.
-_DARK_TV  = PALETTE["dark"]["viewer"]
-_LIGHT_TV = PALETTE["light"]["viewer"]
+_DARK_TV  = viewer_colours("dark")
+_LIGHT_TV = viewer_colours("light")
 _TV: dict = dict(_DARK_TV)   # current live theme — mutated by set_viewer_theme()
 
 _TOP_BTN_W = 132

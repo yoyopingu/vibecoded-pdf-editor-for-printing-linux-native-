@@ -2,7 +2,7 @@
 Persisted preferences, and the three dialogs over them — appearance,
 performance and general.
 """
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QDialog, QRadioButton, QCheckBox, QSpinBox, QFormLayout, QComboBox
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QDialog, QRadioButton, QCheckBox, QSpinBox, QFormLayout, QComboBox
 from PyQt6.QtCore import QSettings, pyqtSignal
 from tools.i18n import tr
 
@@ -103,12 +103,6 @@ class AppSettings:
 
     def last_file(self) -> str:
         return self._qs.value("general/last_file", "")
-
-
-def _dlg_sep():
-    f = QFrame(); f.setObjectName("separator")
-    f.setFrameShape(QFrame.Shape.HLine)
-    return f
 
 
 def _dlg_section(layout, title):
