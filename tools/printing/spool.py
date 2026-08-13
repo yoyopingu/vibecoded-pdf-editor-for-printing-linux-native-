@@ -64,6 +64,64 @@ def _gs_blacked_out(before, after, budget=60):
         return None
 
 
+def printer_options(printer_name, timeout=10):
+    """What one queue offers, as {keyword: (label, choices, default)}.
+
+    Parsed from `lpoptions -p NAME -l`, which is what CUPS documents as the way
+    to list a printer's own options, and reports one per line:
+
+        InputSlot/Media Source: Auto *Tray1 Tray2 Manual
+
+    The starred choice is the queue's default. Keywords are PPD names on a
+    driver queue (InputSlot, MediaType, OutputBin) and IPP names on a driverless
+    one (media-source, media-type), so callers ask for both spellings rather
+    than assuming which kind of queue this is.
+    """
+    import subprocess
+    options = {}
+    if not printer_name or printer_name in ("lp", "none"):
+        return options
+    try:
+        r = subprocess.run(["lpoptions", "-p", printer_name, "-l"],
+                           capture_output=True, text=True, errors="replace",
+                           timeout=timeout)
+    except Exception:
+        logging.debug("printer_options: lpoptions failed for %s", printer_name,
+                      exc_info=True)
+        return options
+    for line in r.stdout.splitlines():
+        head, sep, rest = line.partition(":")
+        if not sep:
+            continue
+        keyword, _, label = head.strip().partition("/")
+        choices, default = [], None
+        for choice in rest.split():
+            if choice.startswith("*"):
+                choice = choice[1:]
+                default = choice
+            choices.append(choice)
+        if keyword and choices:
+            options[keyword] = (label or keyword, choices, default)
+    return options
+
+
+# The paper tray, in the two spellings a queue may use for it. GTK's print
+# dialog and Qt's both key on InputSlot; driverless queues report media-source.
+PAPER_SOURCE_KEYWORDS = ("InputSlot", "media-source")
+
+
+def paper_sources(printer_name):
+    """(keyword, choices, default) for the paper tray, or None if the queue
+    does not offer a choice of one."""
+    options = printer_options(printer_name)
+    for keyword in PAPER_SOURCE_KEYWORDS:
+        if keyword in options:
+            _label, choices, default = options[keyword]
+            if len(choices) > 1:
+                return keyword, choices, default
+    return None
+
+
 def recenter_on_paper(src_path, dest_path, paper_w_pt, paper_h_pt):
     """Enlarge every page's media box to the full physical sheet size and
     centre the existing (already-scaled) content on it.
@@ -218,7 +276,7 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
 
 def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                   duplex_edge, colorconv, printer_name, scale_idx,
-                  paper_key, orient_idx, hw_margin_mm, report):
+                  paper_key, orient_idx, hw_margin_mm, report, paper_source=None):
     """Full-quality print via Ghostscript + CUPS/lp.
 
     GS normalises, embeds fonts, applies colour conversion AND pre-scales the
@@ -438,6 +496,16 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             else:
                 cmd += ["-o", "sides=two-sided-long-edge",
                         "-o", "Duplex=DuplexNoTumble"]
+        else:
+            # Say one-sided, rather than saying nothing. Sending nothing leaves
+            # the queue's own default in force, and a queue defaulted to duplex
+            # — which is the usual office setting, and what `lpoptions -d
+            # printer -o sides=two-sided-long-edge` leaves behind — then printed
+            # both sides however the box was left. Unticking it did nothing.
+            #
+            # Both spellings again, for the same reason as above. GTK's print
+            # dialog and Qt's CUPS plugin both send one-sided explicitly.
+            cmd += ["-o", "sides=one-sided", "-o", "Duplex=None"]
         # Force the colour mode explicitly so this job overrides the
         # printer's system-wide default (e.g. a queue whose default is
         # monochrome must still print in colour when the user picks "Farbe").
@@ -458,6 +526,12 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             cmd += ["-o", f"multiple-document-handling={mdc}"]
 
         cmd += ["-o", f"media={paper_key}"]
+        # The tray, under the keyword this queue actually uses — InputSlot on a
+        # driver queue, media-source on a driverless one. paper_source carries
+        # both, so nothing here has to guess which kind it is talking to.
+        if paper_source:
+            keyword, choice = paper_source
+            cmd += ["-o", f"{keyword}={choice}"]
         cmd.append(print_src)
 
         result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=60)

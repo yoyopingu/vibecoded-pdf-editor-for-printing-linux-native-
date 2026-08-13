@@ -7,7 +7,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 import pypdfium2 as pdfium
 from tools.panels._colour import _colour_histogram, _hist_stats
-from tests.support import _TMP, _page_labels
+from tests.support import FX, _TMP, _open, _page_labels
 
 
 def _print_dialog(n_pages=10, name="print_src.pdf"):
@@ -157,3 +157,104 @@ def test_print_never_destroys_colour_in_the_spooled_file():
         assert saturation(captured["file"]) == src_sat, \
             f"{mode}: the spooled file lost its colour — it cannot be recovered"
     return "auto / color / mono, colour intact"
+
+
+def _lp_options(**kw):
+    """Run the spooler with lp stubbed out, and return the -o options it sent."""
+    import subprocess
+    from tools.printing.spool import print_via_gs
+    from tools.viewer.model import PageModel
+
+    captured = []
+    real_run = subprocess.run
+
+    class _Ok:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def spy(cmd, *a, **k):
+        captured.append(cmd)
+        return _Ok() if cmd and cmd[0] == "lp" else real_run(cmd, *a, **k)
+
+    src = FX["normal"]
+    _open(src)
+    subprocess.run = spy
+    try:
+        print_via_gs(src, PageModel(5), [0], 1, "auto", True,
+                     kw.pop("duplex"), kw.pop("edge", "long"), 0,
+                     "test-printer", 0, "A4", 0, 3.0, lambda m: None, **kw)
+    finally:
+        subprocess.run = real_run
+    lp = [c for c in captured if c and c[0] == "lp"]
+    assert lp, "the job never reached lp"
+    return [lp[-1][i + 1] for i, x in enumerate(lp[-1]) if x == "-o"]
+
+
+def test_unticking_two_sided_says_one_sided():
+    """Saying nothing is not the same as saying no.
+
+    With the box unticked the job carried no sides option at all, so the
+    queue's own default decided — and a queue defaulted to duplex, which is the
+    usual office setting, printed both sides anyway. Unticking the box did
+    nothing at all.
+
+    Both spellings, as when it is on: the IPP attribute for driverless queues
+    and the PPD keyword for driver ones. GTK's print dialog and Qt's CUPS
+    plugin both send one-sided explicitly."""
+    off = _lp_options(duplex=False)
+    assert "sides=one-sided" in off, off
+    assert "Duplex=None" in off, off
+
+    long_edge = _lp_options(duplex=True, edge="long")
+    assert "sides=two-sided-long-edge" in long_edge, long_edge
+    assert "Duplex=DuplexNoTumble" in long_edge, long_edge
+
+    short_edge = _lp_options(duplex=True, edge="short")
+    assert "sides=two-sided-short-edge" in short_edge, short_edge
+    assert "Duplex=DuplexTumble" in short_edge, short_edge
+
+
+def test_the_chosen_paper_tray_reaches_lp():
+    """Under the keyword the queue itself uses — InputSlot on a driver queue,
+    media-source on a driverless one — and nothing at all when the user leaves
+    it on the printer's default."""
+    assert "InputSlot=Tray2" in _lp_options(duplex=False,
+                                            paper_source=("InputSlot", "Tray2"))
+    assert "media-source=tray-2" in _lp_options(
+        duplex=False, paper_source=("media-source", "tray-2"))
+    default = _lp_options(duplex=False, paper_source=None)
+    assert not [o for o in default if "InputSlot" in o or "media-source" in o], default
+
+
+def test_paper_sources_are_read_from_the_queue():
+    """Parsed from `lpoptions -p NAME -l`, which is what CUPS documents as the
+    way to ask. Both kinds of queue answer, in their own vocabulary."""
+    import subprocess
+    import tools.printing.spool as spool
+
+    def with_output(text):
+        real_run = subprocess.run
+
+        class _R:
+            stdout = text
+        subprocess.run = lambda *a, **k: _R()
+        try:
+            return spool.printer_options("q"), spool.paper_sources("q")
+        finally:
+            subprocess.run = real_run
+
+    opts, source = with_output(
+        "PageSize/Media Size: *A4 Letter\n"
+        "InputSlot/Media Source: Auto *Tray1 Tray2 Manual\n"
+        "Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble\n")
+    assert source == ("InputSlot", ["Auto", "Tray1", "Tray2", "Manual"], "Tray1"), source
+    assert "Duplex" in opts and opts["PageSize"][2] == "A4"
+
+    _opts, source = with_output(
+        "media-source/Media Source: *auto tray-1 tray-2\n")
+    assert source == ("media-source", ["auto", "tray-1", "tray-2"], "auto"), source
+
+    # A queue with one tray is not worth asking about.
+    _opts, source = with_output("InputSlot/Media Source: *Auto\n")
+    assert source is None, source

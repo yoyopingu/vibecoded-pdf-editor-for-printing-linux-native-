@@ -508,6 +508,10 @@ _EN: dict[str, str] = {
     "Ghostscript hat keine Ausgabedatei erzeugt.": "Ghostscript produced no output file.",
     "Konvertierte Seiten prüfen …": "Verifying converted pages …",
     "Drucker-Standard": "Printer default",
+    "Papierfach:": "Paper source:",
+    "  (Standard)": "  (default)",
+    "Aus welchem Schacht das Papier gezogen wird.\nDrucker-Standard: keine Vorgabe senden — die Warteschlange entscheidet.":
+        "Which tray the paper is drawn from.\nPrinter default: send no preference — the queue decides.",
     "Drucker-Standard: keine Vorgabe senden — der Drucker bzw. die Warteschlange entscheidet.\nDie Farbinformation bleibt in jedem Fall in der Datei erhalten.":
         "Printer default: send no preference — the printer or queue decides.\nThe colour information is kept in the file either way.",
     "Dieser Drucker meldet nur Graustufen — die Farbe bleibt in der Datei erhalten und kann anderswo gedruckt werden.":

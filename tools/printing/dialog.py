@@ -22,6 +22,7 @@ from tools.viewer.tab import PdfTab
 from tools.theme import _TV
 
 
+_PAPER_SOURCE_CACHE = {}     # printer -> (keyword, choices, default) | None
 _PRINTER_LIST_CACHE = None   # (names:list[str], default:str) — filled on first enumerate
 
 
@@ -237,6 +238,21 @@ class PrintDialog(QDialog):
         pg.addWidget(_lbl(tr("Papier:")), 3, 0)
         self.paper_combo = QComboBox()
         pg.addWidget(self.paper_combo, 3, 1)
+
+        # Which tray to draw from. The choices come from the queue itself, and
+        # a printer that offers only one is not asked about — see
+        # _apply_paper_sources. "Drucker-Standard" sends no tray at all, the
+        # same convention the colour selector uses and the one every native
+        # dialog follows.
+        pg.addWidget(_lbl(tr("Papierfach:")), 4, 0)
+        self.source_combo = QComboBox()
+        self.source_combo.addItem(tr("Drucker-Standard"), None)
+        self.source_combo.setToolTip(tr(
+            "Aus welchem Schacht das Papier gezogen wird.\n"
+            "Drucker-Standard: keine Vorgabe senden — die Warteschlange "
+            "entscheidet."))
+        self.source_combo.setEnabled(False)
+        pg.addWidget(self.source_combo, 4, 1)
 
         rl.addLayout(pg)
         rl.addWidget(_sep())
@@ -495,6 +511,45 @@ class PrintDialog(QDialog):
         from tools.jobs import submit
         submit(_bg, owner=self, name="printer-list")
 
+    def _load_paper_sources(self, printer_name):
+        """Ask the queue what trays it has, off the GUI thread.
+
+        lpoptions shells out to CUPS and can take a second or two on a network
+        queue — the same reason the printer list is fetched in the background.
+        """
+        self.source_combo.setEnabled(False)
+        while self.source_combo.count() > 1:
+            self.source_combo.removeItem(1)
+        if not printer_name or printer_name in ("lp", "none"):
+            return
+        cached = _PAPER_SOURCE_CACHE.get(printer_name, "miss")
+        if cached != "miss":
+            self._apply_paper_sources(printer_name, cached)
+            return
+        from tools.jobs import submit
+        from tools.printing.spool import paper_sources
+        submit(lambda job: paper_sources(printer_name),
+               owner=self, name="paper-sources",
+               on_done=lambda found, p=printer_name:
+                   self._apply_paper_sources(p, found))
+
+    def _apply_paper_sources(self, printer_name, found):
+        _PAPER_SOURCE_CACHE[printer_name] = found
+        if printer_name != self.printer_combo.currentData():
+            return                       # the user picked another printer
+        while self.source_combo.count() > 1:
+            self.source_combo.removeItem(1)
+        if not found:
+            # A queue with one tray, or none it will talk about. Offering a
+            # combo with a single entry would only be something else to read.
+            self.source_combo.setEnabled(False)
+            return
+        keyword, choices, default = found
+        for choice in choices:
+            label = choice + (tr("  (Standard)") if choice == default else "")
+            self.source_combo.addItem(label, (keyword, choice))
+        self.source_combo.setEnabled(True)
+
     def _apply_printer_list(self, names, default):
         """Populate the combo from an enumerated printer list (GUI thread)."""
         global _PRINTER_LIST_CACHE
@@ -537,6 +592,7 @@ class PrintDialog(QDialog):
             from PyQt6.QtGui import QPageSize
 
             printer_name = self.printer_combo.currentData()
+            self._load_paper_sources(printer_name)
             have_info = printer_name and printer_name not in ("lp", "none")
             info = QPrinterInfo.printerInfo(printer_name) if have_info else None
             valid = info is not None and not info.isNull()
@@ -786,6 +842,7 @@ class PrintDialog(QDialog):
                   self.scale_combo, self.paper_combo, self.orient_combo,
                   self.color_combo, self.colorconv_combo,
                   self.collate_check, self.duplex_check, self.duplex_edge_combo,
+                  self.source_combo,
                   self.radio_all, self.radio_current, self.radio_range,
                   self.range_edit]:
             w.setEnabled(not busy)
@@ -795,6 +852,9 @@ class PrintDialog(QDialog):
         # the checkbox after a job so it doesn't stay enabled when duplex is off.
         if not busy:
             self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
+            # Likewise the tray: a queue that offers no choice of one must not
+            # come back from a job with an empty combo suddenly enabled.
+            self.source_combo.setEnabled(self.source_combo.count() > 1)
 
     def _do_print(self):
         pages_to_print = self._get_pages()
@@ -815,6 +875,7 @@ class PrintDialog(QDialog):
         collate   = self.collate_check.isChecked()
         duplex    = self.duplex_check.isChecked()
         duplex_edge = self.duplex_edge_combo.currentData() or "long"
+        paper_source = self.source_combo.currentData()   # None = printer default
         scale_idx  = self.scale_combo.currentIndex()
         paper_key  = self.paper_combo.currentData() or "A4"
         orient_idx = self.orient_combo.currentIndex()
@@ -883,10 +944,10 @@ class PrintDialog(QDialog):
             # ── Primary: Ghostscript + lp/CUPS ───────────────────────────────
             if shutil.which("lp"):
                 try:
-                    skipped = print_via_gs(self.pdf_path, self.model, 
+                    skipped = print_via_gs(self.pdf_path, self.model,
                         pages_to_print, copies, color_mode, collate, duplex,
                         duplex_edge, colorconv, printer_name, scale_idx,
-                        paper_key, orient_idx, hw_margin_mm, _report)
+                        paper_key, orient_idx, hw_margin_mm, _report, paper_source=paper_source)
                     obj = self_ref()
                     if obj is not None:
                         obj._print_finished.emit(pages_to_print, copies, skipped)
@@ -1008,10 +1069,13 @@ class PrintDialog(QDialog):
 
             printer.setCopyCount(copies)
             printer.setCollateCopies(collate)
-            if duplex:
-                printer.setDuplex(
-                    QPrinter.DuplexMode.DuplexShortSide if duplex_edge == "short"
-                    else QPrinter.DuplexMode.DuplexLongSide)
+            # Set it either way: leaving it alone means the printer's own
+            # default decides, so a queue defaulted to duplex ignored the box
+            # being unticked. Same bug as the lp path, same fix.
+            printer.setDuplex(
+                (QPrinter.DuplexMode.DuplexShortSide if duplex_edge == "short"
+                 else QPrinter.DuplexMode.DuplexLongSide) if duplex
+                else QPrinter.DuplexMode.DuplexNone)
             if color_mode == "mono":
                 printer.setColorMode(QPrinter.ColorMode.GrayScale)
             elif color_mode == "color":
