@@ -7,7 +7,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 import pypdfium2 as pdfium
 from tools.panels._colour import _colour_histogram, _hist_stats
-from tests.support import FX, _TMP, _open, _page_labels
+from tests.support import FX, _TMP, _app, _open, _page_labels, _spin
 
 
 def _print_dialog(n_pages=10, name="print_src.pdf"):
@@ -258,3 +258,166 @@ def test_paper_sources_are_read_from_the_queue():
     # A queue with one tray is not worth asking about.
     _opts, source = with_output("InputSlot/Media Source: *Auto\n")
     assert source is None, source
+
+
+def _stub_queue(text):
+    """Run something with lpoptions answering `text`."""
+    import subprocess
+    from contextlib import contextmanager
+
+    @contextmanager
+    def ctx():
+        real = subprocess.run
+
+        class _R:
+            stdout = text
+        subprocess.run = lambda *a, **k: _R()
+        try:
+            yield
+        finally:
+            subprocess.run = real
+    return ctx()
+
+
+def test_queue_defaults_come_from_cups_not_qt():
+    """The dialog opened on Letter and on two-sided for a queue set to A4 and
+    one-sided in the desktop's printer settings.
+
+    Both defaults were read from QPrinterInfo, and on a CUPS queue that is not
+    reliable — the note on the duplex control already recorded
+    defaultDuplexMode() reporting DuplexNone for printers that plainly duplex.
+    The starred choice in `lpoptions -l` is what the queue is actually set to,
+    and it is what the desktop writes when the user sets one there."""
+    from tools.printing.spool import queue_defaults
+
+    with _stub_queue("PageSize/Media Size: *A4 Letter Legal\n"
+                     "Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble\n"):
+        assert queue_defaults("q") == {"paper": "A4", "duplex": False,
+                                       "duplex_edge": "long"}
+
+    with _stub_queue("PageSize/Media Size: A4 *Letter\n"
+                     "Duplex/2-Sided Printing: None DuplexNoTumble *DuplexTumble\n"):
+        assert queue_defaults("q") == {"paper": "Letter", "duplex": True,
+                                       "duplex_edge": "short"}
+
+    # A driverless queue says the same things in PWG/IPP vocabulary.
+    with _stub_queue("media/Media Size: *iso_a4_210x297mm na_letter_8.5x11in\n"
+                     "sides/2-Sided Printing: *one-sided two-sided-long-edge\n"):
+        assert queue_defaults("q") == {"paper": "A4", "duplex": False,
+                                       "duplex_edge": "long"}
+
+    # A PPD variant is still that size, and a queue that says nothing is not
+    # guessed at.
+    with _stub_queue("PageSize/Media Size: *A4.Borderless A4\n"):
+        assert queue_defaults("q") == {"paper": "A4"}
+    with _stub_queue("ColorModel/Color Mode: *RGB Gray\n"):
+        assert queue_defaults("q") == {}
+
+
+def test_the_dialog_reopens_on_what_was_used_last():
+    """It opened on the queue's defaults every time, so the same job printed the
+    same way all day meant re-picking the tray, the paper and the sides on every
+    document.
+
+    What was used last outranks the queue's default; the queue's default
+    outranks whatever Qt guessed. A printer never used before still opens on its
+    own settings."""
+    import tools.printing.dialog as dialog_mod
+    from tools.printing import prefs
+
+    queue = ("PageSize/Media Size: *A4 Letter A3\n"
+             "InputSlot/Media Source: Auto *Tray1 Tray2\n"
+             "Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble\n")
+
+    def opened():
+        tab, dlg = _print_dialog(3, "prefs_tab.pdf")
+        # Let the real printer-list fetch land first: it re-runs
+        # _on_printer_changed when it does, which would undo the stand-in queue
+        # set up below.
+        _spin(60, 0.0)
+        dialog_mod._QUEUE_INFO_CACHE.clear()
+        dlg.printer_combo.blockSignals(True)
+        dlg.printer_combo.clear()
+        dlg.printer_combo.addItem("office", "office")
+        dlg.printer_combo.blockSignals(False)
+        dlg._on_printer_changed()
+        _spin(40, 0.0)
+        return tab, dlg
+
+    prefs.forget()
+    try:
+        with _stub_queue(queue):
+            tab, dlg = opened()
+            assert dlg.paper_combo.currentData() == "A4", "ignored the queue's paper"
+            assert dlg.duplex_check.isChecked() is False, "ignored the queue's sides"
+
+            dlg.paper_combo.setCurrentIndex(dlg.paper_combo.findData("A3"))
+            dlg.duplex_check.setChecked(True)
+            dlg.source_combo.setCurrentIndex(dlg.source_combo.findData("Tray2"))
+            prefs.remember("office", dlg._current_settings())
+            dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+
+            tab2, dlg2 = opened()
+            assert dlg2.paper_combo.currentData() == "A3", "forgot the paper"
+            assert dlg2.duplex_check.isChecked() is True, "forgot the sides"
+            assert dlg2.source_combo.currentData() == "Tray2", "forgot the tray"
+            assert prefs.last_printer() == "office"
+            dlg2.deleteLater(); tab2.deleteLater(); _app.processEvents()
+    finally:
+        prefs.forget()
+
+
+def test_a_remembered_tray_survives_being_stored_and_read_back():
+    """The tray combo carried a (keyword, choice) tuple as its item data, and
+    QComboBox.findData compares Python objects by identity — so a tuple rebuilt
+    from parsed text never matched the one already in the combo, and the
+    remembered tray silently did not come back. Literals hide it: they are
+    interned, so a toy example works."""
+    from PyQt6.QtWidgets import QComboBox
+
+    parsed = "InputSlot Tray2".split()          # not interned, as from lpoptions
+    tuples = QComboBox()
+    tuples.addItem("Tray2", (parsed[0], parsed[1]))
+    assert tuples.findData(("InputSlot", "Tray2")) == -1, \
+        "tuple item data now matches by value — the workaround can be dropped"
+
+    strings = QComboBox()
+    strings.addItem("Tray2", parsed[1])
+    assert strings.findData("Tray2") == 0, "string item data must match by value"
+
+
+def test_the_queue_answer_does_not_overwrite_a_deliberate_choice():
+    """Asking CUPS what the queue defaults to happens in the background, and on
+    a network queue that takes a moment. If the operator has changed the paper
+    or the sides in the meantime, the answer must fill in blanks rather than
+    undo them."""
+    import tools.printing.dialog as dialog_mod
+    from tools.printing import prefs
+
+    queue = ("PageSize/Media Size: *A4 Letter A3\n"
+             "Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble\n")
+    prefs.forget()
+    tab, dlg = _print_dialog(3, "race_tab.pdf")
+    try:
+        _spin(60, 0.0)                       # the real printer list, out of the way
+        with _stub_queue(queue):
+            dialog_mod._QUEUE_INFO_CACHE.clear()
+            dlg.printer_combo.blockSignals(True)
+            dlg.printer_combo.clear()
+            dlg.printer_combo.addItem("office", "office")
+            dlg.printer_combo.blockSignals(False)
+            dlg._on_printer_changed()
+
+            # …the operator picks, before CUPS has answered
+            dlg.paper_combo.setCurrentIndex(dlg.paper_combo.findData("A3"))
+            dlg.duplex_check.setChecked(True)
+            assert dlg._settings_touched, "the change was not noticed"
+
+            _spin(40, 0.0)                   # now the answer lands
+            assert dlg.paper_combo.currentData() == "A3", \
+                "the queue default overwrote the operator's paper"
+            assert dlg.duplex_check.isChecked() is True, \
+                "the queue default overwrote the operator's sides"
+    finally:
+        prefs.forget()
+        dlg.deleteLater(); tab.deleteLater(); _app.processEvents()

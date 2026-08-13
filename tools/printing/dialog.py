@@ -15,6 +15,7 @@ from tools.app_state import AppState
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.printing.preview import _PrintPreview
+from tools.printing import prefs
 from tools.printing.spool import (_PAPER_PTS, _gs_blacked_out, print_via_gs,
                                   recenter_on_paper, write_subset_pdf,
                                   prerender_for_qt)
@@ -22,7 +23,7 @@ from tools.viewer.tab import PdfTab
 from tools.theme import _TV
 
 
-_PAPER_SOURCE_CACHE = {}     # printer -> (keyword, choices, default) | None
+_QUEUE_INFO_CACHE = {}       # printer -> {"sources": ..., "defaults": ...}
 _PRINTER_LIST_CACHE = None   # (names:list[str], default:str) — filled on first enumerate
 
 
@@ -252,7 +253,16 @@ class PrintDialog(QDialog):
             "Drucker-Standard: keine Vorgabe senden — die Warteschlange "
             "entscheidet."))
         self.source_combo.setEnabled(False)
+        self._source_keyword = None      # set once the queue has been asked
         pg.addWidget(self.source_combo, 4, 1)
+
+        # Asking CUPS what the queue defaults to happens in the background, and
+        # the user may well have changed something by the time it answers. This
+        # says whether they have, so the answer fills in blanks rather than
+        # overwriting a deliberate choice. _applying suppresses it while the
+        # dialog is setting the same widgets itself.
+        self._settings_touched = False
+        self._applying = False
 
         rl.addLayout(pg)
         rl.addWidget(_sep())
@@ -372,6 +382,18 @@ class PrintDialog(QDialog):
         self._print_finished.connect(self._finish)
         self._print_failed.connect(self._on_print_failed)
         self._print_qt_send.connect(lambda a: self._qt_send_to_printer(*a))
+
+        for widget, signal in (
+                (self.paper_combo, "currentIndexChanged"),
+                (self.orient_combo, "currentIndexChanged"),
+                (self.color_combo, "currentIndexChanged"),
+                (self.colorconv_combo, "currentIndexChanged"),
+                (self.scale_combo, "currentIndexChanged"),
+                (self.source_combo, "currentIndexChanged"),
+                (self.duplex_edge_combo, "currentIndexChanged"),
+                (self.collate_check, "toggled"),
+                (self.duplex_check, "toggled")):
+            getattr(widget, signal).connect(self._note_user_change)
 
         # All widgets created — populate printers (triggers _on_printer_changed)
         self._load_printers()
@@ -511,44 +533,156 @@ class PrintDialog(QDialog):
         from tools.jobs import submit
         submit(_bg, owner=self, name="printer-list")
 
-    def _load_paper_sources(self, printer_name):
-        """Ask the queue what trays it has, off the GUI thread.
+    def _note_user_change(self, *_):
+        if not self._applying:
+            self._settings_touched = True
 
-        lpoptions shells out to CUPS and can take a second or two on a network
-        queue — the same reason the printer list is fetched in the background.
+    def _load_queue_info(self, printer_name):
+        """Ask CUPS what this queue offers and defaults to, off the GUI thread.
+
+        One lpoptions call answers all of it: the trays, the default paper and
+        the default sides. It shells out and can take a second or two on a
+        network queue — the same reason the printer list is fetched in the
+        background.
         """
         self.source_combo.setEnabled(False)
         while self.source_combo.count() > 1:
             self.source_combo.removeItem(1)
         if not printer_name or printer_name in ("lp", "none"):
             return
-        cached = _PAPER_SOURCE_CACHE.get(printer_name, "miss")
-        if cached != "miss":
-            self._apply_paper_sources(printer_name, cached)
+        cached = _QUEUE_INFO_CACHE.get(printer_name)
+        if cached is not None:
+            self._apply_queue_info(printer_name, cached)
             return
         from tools.jobs import submit
-        from tools.printing.spool import paper_sources
-        submit(lambda job: paper_sources(printer_name),
-               owner=self, name="paper-sources",
-               on_done=lambda found, p=printer_name:
-                   self._apply_paper_sources(p, found))
+        from tools.printing.spool import paper_sources, queue_defaults
 
-    def _apply_paper_sources(self, printer_name, found):
-        _PAPER_SOURCE_CACHE[printer_name] = found
+        def _ask(job):
+            return {"sources": paper_sources(printer_name),
+                    "defaults": queue_defaults(printer_name)}
+
+        submit(_ask, owner=self, name="queue-info",
+               on_done=lambda info, p=printer_name: self._apply_queue_info(p, info))
+
+    def _apply_queue_info(self, printer_name, info):
+        _QUEUE_INFO_CACHE[printer_name] = info
         if printer_name != self.printer_combo.currentData():
             return                       # the user picked another printer
+        self._applying = True
+        try:
+            self._apply_queue_info_now(printer_name, info)
+        finally:
+            self._applying = False
+
+    def _apply_queue_info_now(self, printer_name, info):
+
+        # ── The trays ────────────────────────────────────────────────────────
         while self.source_combo.count() > 1:
             self.source_combo.removeItem(1)
-        if not found:
-            # A queue with one tray, or none it will talk about. Offering a
-            # combo with a single entry would only be something else to read.
+        found = info.get("sources")
+        if found:
+            keyword, choices, default = found
+            # The keyword is a property of the queue, not of the entry, so it
+            # is held here and only the choice goes in the combo. Item data has
+            # to be a plain string: QComboBox.findData compares Python objects
+            # by identity, so a tuple rebuilt from parsed text never matches the
+            # one that was stored — which is exactly what a remembered tray is.
+            self._source_keyword = keyword
+            for choice in choices:
+                label = choice + (tr("  (Standard)") if choice == default else "")
+                self.source_combo.addItem(label, choice)
+            self.source_combo.setEnabled(True)
+        else:
+            # A queue with one tray, or none it will talk about. A combo with a
+            # single entry would only be something else to read.
+            self._source_keyword = None
             self.source_combo.setEnabled(False)
+
+        # ── What the queue is set to ─────────────────────────────────────────
+        # Only where the user has not already said otherwise for this printer:
+        # what they used last outranks the queue's default, and the queue's
+        # default outranks whatever Qt guessed.
+        saved = prefs.for_printer(printer_name)
+        defaults = info.get("defaults") or {}
+        if self._settings_touched:
+            return                       # they have already said what they want
+        if "paper" in defaults and "paper" not in saved:
+            idx = self.paper_combo.findData(defaults["paper"])
+            if idx >= 0:
+                self.paper_combo.blockSignals(True)
+                self.paper_combo.setCurrentIndex(idx)
+                self.paper_combo.blockSignals(False)
+        if "duplex" in defaults and "duplex" not in saved:
+            self.duplex_check.setChecked(bool(defaults["duplex"]))
+            ei = self.duplex_edge_combo.findData(defaults.get("duplex_edge", "long"))
+            if ei >= 0:
+                self.duplex_edge_combo.setCurrentIndex(ei)
+            self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
+
+        self._restore_saved(printer_name)
+        self._update_margin_label()
+        self._sync_preview()
+
+    # ── Remembering what was used last ───────────────────────────────────────
+
+    def _current_settings(self):
+        """The dialog's settings, in the shape prefs stores them."""
+        return {
+            "paper":        self.paper_combo.currentData(),
+            "orientation":  self.orient_combo.currentIndex(),
+            "color":        self.color_combo.currentData(),
+            "colorconv":    self.colorconv_combo.currentIndex(),
+            "scale":        self.scale_combo.currentIndex(),
+            "collate":      self.collate_check.isChecked(),
+            "duplex":       self.duplex_check.isChecked(),
+            "duplex_edge":  self.duplex_edge_combo.currentData(),
+            "paper_source": ([self._source_keyword, self.source_combo.currentData()]
+                             if self._source_keyword and self.source_combo.currentData()
+                             else None),
+        }
+
+    def _restore_saved(self, printer_name):
+        """Re-apply what this printer was last used with.
+
+        Every field is optional and every one is checked against what the combo
+        actually offers now — a saved paper size or tray may simply not exist on
+        this queue any more, and a stale setting must not silently change what
+        gets printed.
+        """
+        saved = prefs.for_printer(printer_name)
+        if not saved:
             return
-        keyword, choices, default = found
-        for choice in choices:
-            label = choice + (tr("  (Standard)") if choice == default else "")
-            self.source_combo.addItem(label, (keyword, choice))
-        self.source_combo.setEnabled(True)
+
+        def _combo_by_data(combo, value):
+            if value is None:
+                return
+            idx = combo.findData(value)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+
+        def _combo_by_index(combo, value):
+            if isinstance(value, int) and 0 <= value < combo.count():
+                combo.setCurrentIndex(value)
+
+        self.paper_combo.blockSignals(True)
+        _combo_by_data(self.paper_combo, saved.get("paper"))
+        self.paper_combo.blockSignals(False)
+        _combo_by_index(self.orient_combo, saved.get("orientation"))
+        _combo_by_data(self.color_combo, saved.get("color"))
+        _combo_by_index(self.colorconv_combo, saved.get("colorconv"))
+        _combo_by_index(self.scale_combo, saved.get("scale"))
+        if isinstance(saved.get("collate"), bool):
+            self.collate_check.setChecked(saved["collate"])
+        if isinstance(saved.get("duplex"), bool):
+            self.duplex_check.setChecked(saved["duplex"])
+        _combo_by_data(self.duplex_edge_combo, saved.get("duplex_edge"))
+        self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
+        source = saved.get("paper_source")
+        # Only if this queue still uses the same keyword: a tray remembered from
+        # a driver queue means nothing on a driverless one.
+        if source and len(source) == 2 and source[0] == self._source_keyword:
+            _combo_by_data(self.source_combo, source[1])
+        self.colorconv_combo.setEnabled(self.color_combo.currentData() != "mono")
 
     def _apply_printer_list(self, names, default):
         """Populate the combo from an enumerated printer list (GUI thread)."""
@@ -567,10 +701,16 @@ class PrintDialog(QDialog):
             self.printer_combo.addItem(nm, nm)
         if self.printer_combo.count() == 0:
             self.printer_combo.addItem(tr("Kein Drucker gefunden"), "none")
-        if default:
-            idx = self.printer_combo.findData(default)
+        # The one used last, if it is still there; otherwise the system default.
+        # Reopening on the printer you actually print to is the whole point of
+        # remembering it.
+        for wanted in (prefs.last_printer(), default):
+            if not wanted:
+                continue
+            idx = self.printer_combo.findData(wanted)
             if idx >= 0:
                 self.printer_combo.setCurrentIndex(idx)
+                break
         self.printer_combo.blockSignals(False)
 
         self.printer_combo.currentIndexChanged.connect(self._on_printer_changed)
@@ -592,7 +732,7 @@ class PrintDialog(QDialog):
             from PyQt6.QtGui import QPageSize
 
             printer_name = self.printer_combo.currentData()
-            self._load_paper_sources(printer_name)
+            self._load_queue_info(printer_name)
             have_info = printer_name and printer_name not in ("lp", "none")
             info = QPrinterInfo.printerInfo(printer_name) if have_info else None
             valid = info is not None and not info.isNull()
@@ -735,6 +875,8 @@ class PrintDialog(QDialog):
 
             self._update_margin_label()
             self._sync_preview()
+            # Everything above was the dialog setting itself up, not the user.
+            self._settings_touched = False
 
         except Exception:
             import logging
@@ -875,7 +1017,8 @@ class PrintDialog(QDialog):
         collate   = self.collate_check.isChecked()
         duplex    = self.duplex_check.isChecked()
         duplex_edge = self.duplex_edge_combo.currentData() or "long"
-        paper_source = self.source_combo.currentData()   # None = printer default
+        choice = self.source_combo.currentData()         # None = printer default
+        paper_source = (self._source_keyword, choice) if choice else None
         scale_idx  = self.scale_combo.currentIndex()
         paper_key  = self.paper_combo.currentData() or "A4"
         orient_idx = self.orient_combo.currentIndex()
@@ -1027,6 +1170,15 @@ class PrintDialog(QDialog):
         self._set_printing(False)   # keep the dialog open so the user can retry
 
     def _finish(self, pages, copies, skipped):
+        # Remember how this was printed, so the next document opens on it.
+        # Here rather than at the moment of sending: settings that ended in an
+        # error are not the ones to come back to.
+        try:
+            prefs.remember(self.printer_combo.currentData(),
+                           self._current_settings())
+        except Exception:
+            logging.debug("print: could not remember the settings", exc_info=True)
+
         # Count what was actually sent, not what was asked for: a page that
         # could not be read was already dropped from the job, so reporting the
         # requested figure told the operator more sheets were coming than the

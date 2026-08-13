@@ -109,6 +109,71 @@ def printer_options(printer_name, timeout=10):
 # dialog and Qt's both key on InputSlot; driverless queues report media-source.
 PAPER_SOURCE_KEYWORDS = ("InputSlot", "media-source")
 
+# Page size, likewise: PPD queues name it PageSize with values like "A4" or
+# "A4.Borderless"; driverless queues name it media with PWG names like
+# "iso_a4_210x297mm". Both reduce to the keys the dialog's combo carries.
+PAGE_SIZE_KEYWORDS = ("PageSize", "media")
+_PWG_TO_KEY = {
+    "iso_a3": "A3", "iso_a4": "A4", "iso_a5": "A5", "iso_b5": "B5",
+    "jis_b4": "B4", "jis_b5": "B5", "iso_b4": "B4",
+    "na_letter": "Letter", "na_legal": "Legal", "na_executive": "Executive",
+    "na_foolscap": "Folio", "na_folio": "Folio",
+}
+
+
+def normalise_page_size(value):
+    """A queue's page-size value as the key the paper combo uses, or None.
+
+    `A4` and `A4.Borderless` are both A4 — the suffix is a PPD variant, not a
+    different sheet. `iso_a4_210x297mm` is the same size said the PWG way.
+    """
+    if not value:
+        return None
+    base = value.split(".")[0]
+    for known in ("A0", "A1", "A2", "A3", "A4", "A5", "A6", "B4", "B5",
+                  "Letter", "Legal", "Executive", "Folio"):
+        if base.lower() == known.lower():
+            return known
+    parts = value.lower().split("_")
+    if len(parts) >= 2:
+        return _PWG_TO_KEY.get("_".join(parts[:2]))
+    return None
+
+
+def queue_defaults(printer_name):
+    """What the queue itself is set to, as {"paper", "duplex", "duplex_edge"}.
+
+    Read from CUPS rather than from Qt. QPrinterInfo.defaultPageSize() and
+    defaultDuplexMode() are what this used to ask, and on a CUPS queue they are
+    not reliable — the note on the duplex control records defaultDuplexMode()
+    reporting DuplexNone for printers that plainly duplex. The starred choice in
+    `lpoptions -l` is the queue's effective default, and it is exactly what the
+    desktop's own printer settings write when the user sets one there.
+
+    Any key the queue does not answer for is left out rather than guessed.
+    """
+    options = printer_options(printer_name)
+    found = {}
+
+    for keyword in PAGE_SIZE_KEYWORDS:
+        if keyword in options:
+            key = normalise_page_size(options[keyword][2])
+            if key:
+                found["paper"] = key
+                break
+
+    if "Duplex" in options:                     # PPD: None / DuplexNoTumble / DuplexTumble
+        default = (options["Duplex"][2] or "").lower()
+        if default:
+            found["duplex"] = default != "none"
+            found["duplex_edge"] = "short" if "tumble" == default[6:] else "long"
+    elif "sides" in options:                    # IPP: one-sided / two-sided-*
+        default = (options["sides"][2] or "").lower()
+        if default:
+            found["duplex"] = default != "one-sided"
+            found["duplex_edge"] = "short" if default.endswith("short-edge") else "long"
+    return found
+
 
 def paper_sources(printer_name):
     """(keyword, choices, default) for the paper tray, or None if the queue
