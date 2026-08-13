@@ -12,6 +12,10 @@ turns a PDF into pixels lives in tools/render/. This module used to hold all
                       caches          thumbnail and full-page LRUs
                       queue           the priority queue and its render tasks
 
+    tools/printing/   dialog          what to print, on what, and how
+                      preview         the sheet as the printer will produce it
+                      spool           sending it: Ghostscript and lp, or Qt
+
     tools/viewer/     theme           colours, and the widgets that follow them
                       model           page order, rotation, selection
                       canvas          draws a page, selects text on it
@@ -19,7 +23,6 @@ turns a PDF into pixels lives in tools/render/. This module used to hold all
                       page_grid       the thumbnails of "Seiten verwalten"
                       manage          the toolbar over that grid
                       merge           the file-level grid, for several files
-                      printing        the print dialog and its preview
                       tab             one open document
                       panel           the tab host
 
@@ -65,6 +68,8 @@ from tools.viewer.page_grid   import (CARD_W, CARD_H, GAP, MARGIN, PageCard,
 from tools.viewer.manage      import ManageShortcutFilter, ManagePanel
 from tools.viewer.merge       import (FileCard, FileGrid, MergeShortcutFilter,
                                       MergeOrderWidget)
-from tools.viewer.printing    import _gs_blacked_out, _PrintPreview, PrintDialog
+from tools.printing.spool     import _gs_blacked_out
+from tools.printing.preview   import _PrintPreview
+from tools.printing.dialog    import PrintDialog
 from tools.viewer.tab         import PdfTab
 from tools.viewer.panel       import _ViewerKeyFilter, PageViewerPanel
