@@ -5,7 +5,7 @@ import os, time, tempfile
 from PyQt6.QtWidgets import QLabel
 from pypdf import PdfReader
 from tools.viewer.model import PageModel
-import main as MAIN
+import tools.app as MAIN
 from tests.support import FX, _TMP, _app, _pdfium_page_text, _settle, _spin
 
 

@@ -27,10 +27,11 @@ from tools.app_state import AppState
 from tools.viewer.model import PageModel
 from tools.panels.nup import NUpPanel
 
-# Not used here, and not removable: main pulls in PyQt6.QtNetwork, and loading
-# that extension module later — once the render threads are running — segfaults
-# inside the import machinery. Importing it now is the ordering that works.
-import main as MAIN                                            # noqa: F401
+# Not used here, and not removable: the entry-point module pulls in
+# PyQt6.QtNetwork, and loading that extension module later — once the render
+# threads are running — segfaults inside the import machinery. Importing it now
+# is the ordering that works.
+import tools.app as MAIN                                            # noqa: F401
 
 
 MM = 2.8346456693

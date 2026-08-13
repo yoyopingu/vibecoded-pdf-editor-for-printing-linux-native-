@@ -7,7 +7,7 @@ from tools.panels.crop_resize import CropResizePanel
 from tools.panels.grayscale import GrayscalePanel
 from tools.panels.nup import NUpPanel
 from tools.panels.page_numbers import PageNumbersPanel
-import main as MAIN
+import tools.app as MAIN
 import tools.shell.instance as INSTANCE
 from tests.support import FX, _TMP, _app, _open, _spin
 
@@ -19,7 +19,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer
 app = QApplication([])
-import main as MAIN
+import tools.app as MAIN
 import tools.shell.instance as INSTANCE
 INSTANCE._IPC_KEY = {key!r}   # own socket, so a real running app is untouched
 win = MAIN.MainWindow(open_file={src!r})
@@ -54,7 +54,7 @@ import sys, os
 sys.path.insert(0, {repo!r})
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 sys.argv = ["copyshop", {src!r}]
-import main as MAIN
+import tools.app as MAIN
 import tools.shell.instance as INSTANCE
 INSTANCE._IPC_KEY = {key!r}   # own socket, so a real running app is untouched
 from PyQt6.QtCore import QTimer

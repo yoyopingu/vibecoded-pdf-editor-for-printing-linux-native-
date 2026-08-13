@@ -223,8 +223,9 @@ OCR, preflight, layers, colour profile — over shared helpers in `_shared.py`,
 **`tools/shell/` — everything around the documents.** `style` (palette,
 stylesheets, window icon), `settings` (persisted preferences and their
 dialogs), `titlebar`, `window` (`MainWindow` and the sidebar), and `instance`
-(a second launch hands its files to the running window). `main.py` is the entry
-point and nothing else.
+(a second launch hands its files to the running window). `tools/app.py` is the
+entry point — `main.py` at the root is a launcher for running from a checkout,
+and is deliberately not installed.
 
 And the rest of `tools/`:
 

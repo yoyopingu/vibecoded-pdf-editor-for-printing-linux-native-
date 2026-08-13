@@ -7,7 +7,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from tools.app_state import AppState
 import pypdfium2 as pdfium
-import main as MAIN
+import tools.app as MAIN
 from tests.support import FX, _TMP, _app, _page_labels, _settle, _spin
 
 

@@ -30,11 +30,16 @@ dependencies = [
 ocr = ["ocrmypdf>=15.0"]
 
 [project.scripts]
-copyshop-pdf = "main:main"
+copyshop-pdf = "tools.app:main"
 
-[tool.setuptools]
-py-modules = ["main"]
-packages = ["tools"]
+[tool.setuptools.packages.find]
+# tools and every subpackage under it. An explicit list names one package and
+# setuptools does not recurse into it, so tools.panels, tools.printing,
+# tools.render, tools.shell and tools.viewer were left out of the wheel — it
+# says so itself, "Package 'tools.panels' is absent from the `packages`
+# configuration ... would be ignored", and whether it ships them anyway varies
+# by version.
+include = ["tools*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
