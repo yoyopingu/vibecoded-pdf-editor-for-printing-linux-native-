@@ -2,8 +2,9 @@
 """
 CopyShop regression suite — runs without pytest.
 
-    python3 tests/run.py               everything
-    python3 tests/run.py zoom render    only modules whose name contains one of these
+    python3 tests/run.py               everything, one process per module
+    python3 tests/run.py zoom render   only these, in this process
+    python3 tests/run.py --one-process everything in a single process
 
 pytest works too, and is the nicer way to run one test or read a failure:
 
@@ -12,6 +13,17 @@ pytest works too, and is the nicer way to run one test or read a failure:
 Both are kept. The system interpreter this app runs on has PyQt6, pypdfium2,
 pikepdf, reportlab and img2pdf but no pytest, so a suite that needed pytest
 would be a suite the app's own machine could not run.
+
+Why a process per module
+------------------------
+A full run in one process dies of a heap fault roughly three times in eight,
+deep in, after most of the tests have already reported PASS. Every test passes;
+a crashed run is one that got most of the way and fell over. A single module has
+never been seen to crash, under either runner — so a full pass is ten short
+processes rather than one long one, and it is reliable.
+
+That is a way around the fault, not a fix for it. --one-process is kept so the
+next person to look at it has the reproduction to hand.
 """
 import importlib
 import os
@@ -31,6 +43,27 @@ def modules(patterns):
     for f in sorted(HERE.glob("test_*.py")):
         if not patterns or any(p in f.stem for p in patterns):
             yield importlib.import_module(f"tests.{f.stem}")
+
+
+def isolated():
+    """One child process per module. Returns the exit code."""
+    import subprocess
+    mods = sorted(f.stem for f in HERE.glob("test_*.py"))
+    passed = failed = crashed = 0
+    for stem in mods:
+        r = subprocess.run([sys.executable, "-u", __file__, stem],
+                           capture_output=True, text=True)
+        sys.stdout.write(r.stdout)
+        for line in r.stdout.splitlines():
+            if line.strip().endswith("failed") and " passed, " in line:
+                p, f = line.split(" passed, ")
+                passed += int(p.strip()); failed += int(f.split()[0])
+        if r.returncode != 0:
+            crashed += 1
+            sys.stdout.write(f"  !! {stem} exited {r.returncode}\n{r.stderr[-800:]}\n")
+    print(f"\n{passed} passed, {failed} failed"
+          + (f", {crashed} module(s) crashed" if crashed else ""))
+    return 0 if not (failed or crashed) else 1
 
 
 def main(patterns):
@@ -60,4 +93,7 @@ def main(patterns):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    args = sys.argv[1:]
+    if not args:
+        raise SystemExit(isolated())
+    main([a for a in args if a != "--one-process"])

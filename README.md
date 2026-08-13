@@ -155,9 +155,9 @@ Regression suite — no fixtures on disk. It generates its own PDFs in a temp
 directory, runs headless, and exits non-zero on failure.
 
 ```bash
-python3 tests/run.py              # everything, no pytest needed
-python3 tests/run.py zoom render  # only modules whose name matches
-pytest tests/ -x -k thumbnail     # if you have pytest
+python3 tests/run.py               # everything, no pytest needed
+python3 tests/run.py zoom render   # only modules whose name matches
+pytest tests/test_render.py        # if you have pytest
 ```
 
 Both runners see the same 90 tests. `tests/run.py` exists because the
@@ -165,18 +165,20 @@ interpreter this app runs on has PyQt6, pypdfium2, pikepdf and reportlab but
 not necessarily pytest, and a suite the app's own machine cannot run is not
 much of a suite.
 
-One caveat, stated plainly: a full run in a single process dies of a heap fault
-maybe one time in five, deep into the suite and long after the tests it has
-already reported PASS. It is not a failing test — every test passes, and a
-crashed run is one that got most of the way through and then fell over. Both
-runners are affected, so this is the app or its libraries in a process that has
-built and destroyed the whole GUI ninety times, not the runner.
+One caveat, stated plainly. A full run in a *single* process dies of a heap
+fault about three times in eight — deep in, long after most tests have reported
+PASS. Every test passes; a crashed run is one that got most of the way and fell
+over. Both runners are affected, so it is the app or its libraries in a process
+that has built and destroyed the whole GUI ninety times, not the runner.
 
-What is reliable: **any single module**, under either runner, has never been
-seen to crash — `python3 tests/run.py render` or `pytest tests/test_render.py`.
-That is the way to work on something. For a full pass, expect to run it twice
-now and then. Chasing it further means ASAN or valgrind against Qt and pdfium,
-which has not been done.
+A single module has never been seen to crash, under either runner. So
+`python3 tests/run.py` with no arguments runs **one process per module**:
+8 clean runs out of 8, against 5 out of 8 for the same tests in one process.
+`--one-process` keeps the old behaviour, because the next person to look at
+this needs the reproduction.
+
+That is a way around the fault, not a fix. Chasing it properly means ASAN or
+valgrind against Qt and pdfium, which has not been done.
 
 The tests are grouped by subject — `test_viewer_zoom.py`, `test_printing.py`,
 `test_render.py` and so on — over `tests/support.py`, which holds the
