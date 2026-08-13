@@ -379,7 +379,6 @@ class AppStyle:
     @staticmethod
     def create():
         from PyQt6.QtWidgets import QProxyStyle, QStyle, QStyleFactory
-        from PyQt6.QtGui import QIcon, QPixmap, QPainter, QPen, QColor
 
         def _cross(size=16, colour=_ICON_CROSS, alpha=255):
             pm = QPixmap(size, size)

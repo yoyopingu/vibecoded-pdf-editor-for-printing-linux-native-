@@ -24,7 +24,7 @@ def _grey_retry_page(gs_bin, src, index, report):
     Isolating the page drops the surrounding transparency groups and shared
     resources that trip Ghostscript up, so this often succeeds where the whole
     document did not. Returns a one-page PDF path, or None."""
-    import subprocess, tempfile, pikepdf
+    import tempfile, pikepdf
     one = grey = None
     try:
         fd, one = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
@@ -62,7 +62,7 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
     spot) is mapped to DeviceGray, and images keep full resolution (no
     downsampling). Pages NOT selected are copied through unchanged. Runs on a
     worker thread (only paths/ints cross the boundary). Returns (out, summary)."""
-    import subprocess, tempfile, os, contextlib, pikepdf
+    import tempfile, contextlib, pikepdf
     report(tr("Ghostscript: Graustufen-Konvertierung …"))
     fd, grey_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
     repaired = {}          # bound before the try: the finally cleans it up

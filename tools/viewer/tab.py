@@ -66,7 +66,7 @@ class PdfTab(QWidget):
             encrypted = reader.is_encrypted
             n = len(reader.pages)
         except Exception as e:
-            import logging; logging.error(f"PdfTab._load: {e}")
+            logging.error(f"PdfTab._load: {e}")
             raise RuntimeError(tr('Die Datei ist beschaedigt oder keine gueltige PDF.\n{p0}')
                                .format(p0=e)) from e
         if encrypted:

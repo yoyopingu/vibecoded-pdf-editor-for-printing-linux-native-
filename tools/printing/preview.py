@@ -56,7 +56,6 @@ class _PrintPreview(QWidget):
         self.setStyleSheet(
             f"QWidget#printPreviewPanel{{background:{_TV['sidebar_bg']};}}")
 
-        from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton
         lyt = QVBoxLayout(self)
         lyt.setContentsMargins(10, 14, 10, 10)
         lyt.setSpacing(4)
@@ -250,7 +249,6 @@ class _PrintPreview(QWidget):
         return pw, ph
 
     def _redraw(self):
-        from PyQt6.QtCore import QRectF
         cw = self._canvas.width()
         ch = self._canvas.height()
         if cw < 20 or ch < 20:

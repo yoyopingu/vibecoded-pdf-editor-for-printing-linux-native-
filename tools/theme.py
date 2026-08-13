@@ -201,7 +201,6 @@ def set_viewer_theme(theme: str) -> None:
             try:
                 obj._apply_theme()
             except Exception:
-                import logging
                 logging.exception(f"_apply_theme failed on {obj!r}")
         else:
             dead.append(ref)

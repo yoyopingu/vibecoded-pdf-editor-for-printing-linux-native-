@@ -267,7 +267,6 @@ class MainWindow(QMainWindow):
 
     def _set_language(self, lang: str):
         set_language(lang)
-        import os
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def _open_appearance(self):

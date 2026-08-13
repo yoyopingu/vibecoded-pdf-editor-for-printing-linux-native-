@@ -532,7 +532,6 @@ class BasePanel(QWidget):
             on_finished=_restore)
 
     def save_pdf(self, caption="PDF speichern als") -> str:
-        import tempfile, uuid
         src = AppState.get().current_pdf
         stem = os.path.splitext(os.path.basename(src))[0] if src else "output"
         slug = caption.lower()
@@ -544,7 +543,6 @@ class BasePanel(QWidget):
         return os.path.join(tmp_dir, f"{stem}_{slug}_{uuid.uuid4().hex[:6]}.pdf")
 
     def save_dir(self) -> str:
-        import tempfile, uuid
         src = AppState.get().current_pdf
         stem = os.path.splitext(os.path.basename(src))[0] if src else "output"
         tmp_dir = os.path.join(tempfile.gettempdir(), "copyshop_output", f"{stem}_{uuid.uuid4().hex[:6]}")

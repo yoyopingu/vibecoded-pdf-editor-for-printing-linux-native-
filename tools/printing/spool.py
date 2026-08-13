@@ -333,7 +333,7 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
                 rendered.append((pil, page_orient, target_w, target_h))
 
             except Exception:
-                import logging; logging.exception("Qt render: page %d", pos + 1)
+                logging.exception("Qt render: page %d", pos + 1)
                 skipped.append(pos + 1)
     finally:
         for doc in pdfium_docs.values():
@@ -512,12 +512,10 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                         else:
                             printable_unrecentered = True
                     except Exception:
-                        import logging
                         logging.warning("Re-centre step failed; letting CUPS "
                                         "fit to printable area", exc_info=True)
                         printable_unrecentered = True
             else:
-                import logging
                 logging.warning("GS normalization failed (rc=%d): %s",
                                 r.returncode, r.stderr[:300])
 

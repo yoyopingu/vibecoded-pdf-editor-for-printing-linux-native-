@@ -335,7 +335,6 @@ class PageGrid(QWidget):
 
     def _get_scroll_area(self):
         """Return the QScrollArea this grid lives in, or None."""
-        from PyQt6.QtWidgets import QScrollArea
         p = self.parent()           # viewport
         if p is None: return None
         p = p.parent()              # QScrollArea

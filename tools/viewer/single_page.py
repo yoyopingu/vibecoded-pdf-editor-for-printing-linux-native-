@@ -217,7 +217,6 @@ class SinglePageView(QWidget):
         avail_h = self._view.height()
         if avail_w < 16 or avail_h < 16:
             return None
-        from tools.render.region import snap_scale
         pad = 16
         fit = min((avail_w - pad) / self._page_w_pt,
                   (avail_h - pad) / self._page_h_pt)
@@ -418,7 +417,6 @@ class SinglePageView(QWidget):
         Both sources are dictionary lookups. Neither ever parses: see
         _ensure_page_dims on why this must not touch pdfium.
         """
-        from tools.render.region import cached_page_size_pt
         size = cached_page_size_pt(src_path, orig)
         if size is not None:
             w, h = size
@@ -486,7 +484,6 @@ class SinglePageView(QWidget):
         exactly where the view expects it. _page_w_pt/_page_h_pt already
         describe the page as displayed, hence rotation=0 here.
         """
-        from tools.render.region import page_px_size
         return page_px_size(self._page_w_pt, self._page_h_pt, scale, 0)
 
     def _page_origin(self, page_px_w, page_px_h):
@@ -514,7 +511,6 @@ class SinglePageView(QWidget):
         return True
 
     def _show_region(self, src_path, orig, rot, scale, avail_w, avail_h):
-        from tools.render.region import region_for_viewport, covers
         page_px_w, page_px_h = self._page_px(scale)
         # Clamp the scroll to the page as it is at this zoom before deciding
         # what is visible, or the window is computed for a position the view
@@ -637,7 +633,6 @@ class SinglePageView(QWidget):
             page_px_w, page_px_h = self._page_px(scale)
             self._scroll_x = max(0.0, min(self._scroll_x, max(0.0, page_px_w - avail_w)))
             self._scroll_y = max(0.0, min(self._scroll_y, max(0.0, page_px_h - avail_h)))
-            from tools.render.region import covers
             if (self._region_scale > 0
                     and abs(self._region_scale - scale) <= scale * 1e-6
                     and covers(self._region_rect, page_px_w, page_px_h,

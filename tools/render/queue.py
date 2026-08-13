@@ -145,7 +145,7 @@ class _RenderQueue:
             try:
                 task.run()
             except Exception:
-                import logging; logging.exception("RenderQueue task error")
+                logging.exception("RenderQueue task error")
             finally:
                 with self._cond:
                     self._running = None      # clear while lock is held
@@ -184,7 +184,6 @@ def shutdown_render_queue(timeout: float = 2.0):
     try:
         # Only after the workers have stopped: closing a document that a render
         # is still inside would be exactly the thing the handle locks prevent.
-        from tools.render.document_cache import close_all
         close_all()
     except Exception:
         pass
@@ -229,7 +228,6 @@ class _RegionRenderTask:
         if not self._active:
             return
         try:
-            from tools.render.region import render_region, page_chars
             px0, py0, w, h = self._rect
             # The cancel is checked between render slices, so a window this
             # task no longer wants is abandoned in single-digit milliseconds
@@ -247,7 +245,6 @@ class _RegionRenderTask:
                 self._sig.ready.emit(self._gen, img, int(px0), int(py0),
                                      self._scale, chars)
         except Exception:
-            import logging
             logging.exception("region render failed")
         finally:
             self._active = False
@@ -270,7 +267,6 @@ def _target_scale(avail_w, avail_h, zoom, page_w_pt, page_h_pt, fallback=1.0):
     """
     if page_w_pt <= 0 or page_h_pt <= 0:
         return fallback
-    from tools.render.region import snap_scale
     pad = 16
     fit = min((avail_w - pad) / page_w_pt, (avail_h - pad) / page_h_pt)
     return snap_scale(page_w_pt, page_h_pt,
@@ -365,8 +361,6 @@ class _PageRenderTask:
             # …and on to the real render.
 
         try:
-            from tools.render.raster import render_window
-            from tools.render.region import page_chars, page_px_size, page_size_pt
 
             raw_w_pt, raw_h_pt = page_size_pt(self._path, self._orig)
             # The bitmap comes out of pdfium already turned by self._rot, so a

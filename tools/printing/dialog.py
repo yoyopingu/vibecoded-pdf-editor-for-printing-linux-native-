@@ -71,11 +71,7 @@ class PrintDialog(QDialog):
         self._setup()
 
     def _setup(self):
-        from PyQt6.QtWidgets import (
-            QGridLayout, QRadioButton, QComboBox, QSpinBox,
-            QLineEdit, QCheckBox, QLabel, QPushButton,
-            QVBoxLayout, QHBoxLayout, QFrame, QScrollArea, QWidget
-        )
+        from PyQt6.QtWidgets import QGridLayout, QRadioButton, QComboBox
 
         # Solid themed background. Without this the dialog inherits the system
         # palette; on a light desktop the transparent settings pane then shows
@@ -869,7 +865,6 @@ class PrintDialog(QDialog):
                     )
                     self._hw_margin_mm = max(0.0, margin)
                 except Exception:
-                    import logging
                     logging.warning("Hardware margin detection failed", exc_info=True)
 
             self._update_margin_label()
@@ -888,7 +883,6 @@ class PrintDialog(QDialog):
             self._load_queue_info(printer_name)
 
         except Exception:
-            import logging
             logging.warning("Printer capability query failed", exc_info=True)
 
     def _update_margin_label(self):

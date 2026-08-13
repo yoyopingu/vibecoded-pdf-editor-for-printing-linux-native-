@@ -75,8 +75,6 @@ def _render_image(pdf_path, page_index, width, rotation=0, should_cancel=None):
     case that comes back None, because nobody is waiting for it.
     """
     try:
-        from tools.render.raster import render_window
-        from tools.render.region import page_px_size, page_size_pt
         w_pt, h_pt = page_size_pt(pdf_path, page_index)
         scale = width / w_pt
         px_w, px_h = page_px_size(w_pt, h_pt, scale, rotation)

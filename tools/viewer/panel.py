@@ -79,7 +79,7 @@ class _ViewerKeyFilter(QObject):
             try:
                 self._vp._toggle_manage()
             except Exception as exc:
-                import logging; logging.error(f"_toggle_manage: {exc}", exc_info=True)
+                logging.error(f"_toggle_manage: {exc}", exc_info=True)
             return True
 
         # Nie abfangen wenn ein Textfeld fokussiert ist
@@ -94,7 +94,7 @@ class _ViewerKeyFilter(QObject):
                 if idx >= 0:
                     self._vp._close_tab(idx)
             except Exception as exc:
-                import logging; logging.error(f"_close_tab: {exc}", exc_info=True)
+                logging.error(f"_close_tab: {exc}", exc_info=True)
             return True
 
         # Ctrl+Tab → forward, Ctrl+Shift+Tab (reported as Ctrl+Backtab) → backward
@@ -102,13 +102,13 @@ class _ViewerKeyFilter(QObject):
             try:
                 self._vp._cycle_tab(forward=True)
             except Exception as exc:
-                import logging; logging.error(f"_cycle_tab: {exc}", exc_info=True)
+                logging.error(f"_cycle_tab: {exc}", exc_info=True)
             return True
         if ctrl and k == Qt.Key.Key_Backtab:
             try:
                 self._vp._cycle_tab(forward=False)
             except Exception as exc:
-                import logging; logging.error(f"_cycle_tab: {exc}", exc_info=True)
+                logging.error(f"_cycle_tab: {exc}", exc_info=True)
             return True
 
         # ── Zoom shortcuts — work regardless of which widget has focus ──────
@@ -126,7 +126,7 @@ class _ViewerKeyFilter(QObject):
                         elif k == Qt.Key.Key_Minus:                   grid.zoom_out()
                         elif k == Qt.Key.Key_0:                       grid.zoom_reset()
                     except Exception as exc:
-                        import logging; logging.error(f"manage zoom shortcut: {exc}", exc_info=True)
+                        logging.error(f"manage zoom shortcut: {exc}", exc_info=True)
                 else:
                     sv = tab.single
                     try:
@@ -135,14 +135,14 @@ class _ViewerKeyFilter(QObject):
                         elif k == Qt.Key.Key_0:                       sv._zoom_fit()
                         elif k == Qt.Key.Key_1:                       sv._zoom_actual_size()
                     except Exception as exc:
-                        import logging; logging.error(f"zoom shortcut: {exc}", exc_info=True)
+                        logging.error(f"zoom shortcut: {exc}", exc_info=True)
             return True
 
         if k == Qt.Key.Key_Escape:
             try:
                 self._vp._ensure_single_view()
             except Exception as exc:
-                import logging; logging.error(f"_ensure_single_view: {exc}", exc_info=True)
+                logging.error(f"_ensure_single_view: {exc}", exc_info=True)
             return True
         return False
 
@@ -218,7 +218,7 @@ class PageViewerPanel(QWidget):
                     if tab._manage_widget:
                         tab._manage_widget.setFocus()
                 except Exception:
-                    import logging, traceback
+                    import traceback
                     logging.error(traceback.format_exc())
                     if show_sb:
                         show_sb()  # always restore sidebar on failure
@@ -250,7 +250,6 @@ class PageViewerPanel(QWidget):
         layout.setSpacing(0)
 
         # Shortcuts
-        from PyQt6.QtGui import QKeySequence, QShortcut
         # Ctrl+S / Ctrl+Shift+S belong to the Datei menu actions, which are
         # window-scoped and so fire from a tool panel too. Registering them here
         # as well made both ambiguous, and Qt then delivers neither.
@@ -475,7 +474,7 @@ class PageViewerPanel(QWidget):
         try:
             tab = PdfTab(path)
         except Exception as e:
-            import logging; logging.exception("open failed: %s", path)
+            logging.exception("open failed: %s", path)
             QMessageBox.critical(
                 self, tr("Datei konnte nicht geoeffnet werden"),
                 tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
@@ -509,7 +508,7 @@ class PageViewerPanel(QWidget):
         try:
             tab = PdfTab(path)
         except Exception as e:
-            import logging; logging.exception("result tab failed: %s", path)
+            logging.exception("result tab failed: %s", path)
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(
                 self, tr("Ergebnis konnte nicht geoeffnet werden"),
@@ -539,7 +538,6 @@ class PageViewerPanel(QWidget):
             # poster-sized PDF is hundreds of megabytes; holding one for a tab
             # that is gone is the largest single thing this app can leak.
             try:
-                from tools.render.document_cache import release
                 release(w.pdf_path)
             except Exception:
                 logging.exception("close: releasing the cached document failed")
@@ -575,7 +573,7 @@ class PageViewerPanel(QWidget):
         """Preview for several picked files, shown as a tab in the same style as
         the page manager: sort them, then either merge them into one document or
         open them as separate tabs."""
-        import tempfile, logging
+        import tempfile
         file_paths = [p for p in file_paths if os.path.isfile(p)]
         if not file_paths:
             return
@@ -603,7 +601,6 @@ class PageViewerPanel(QWidget):
         self._viewer_info.setText(tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
 
         def _on_confirmed(paths):
-            import logging
             logging.debug(f"_on_confirmed empfangen: {len(paths)} Dateien")
             self._do_convert_and_merge(paths, widget)
 
@@ -654,7 +651,6 @@ class PageViewerPanel(QWidget):
         """Never let files vanish from a merge in silence."""
         if not failures:
             return
-        import logging
         from PyQt6.QtWidgets import QMessageBox
         detail = "\n".join(f"{os.path.basename(p)}  —  {m}" for p, m in failures)
         logging.error("conversion failed:\n%s", detail)
@@ -676,7 +672,6 @@ class PageViewerPanel(QWidget):
 
     def _do_convert_and_merge(self, file_paths, merge_widget):
         """Konvertiert Dateien und fuegt sie zusammen."""
-        import logging
         logging.debug(f"_do_convert_and_merge: {len(file_paths)} Dateien")
 
         def _on_done(pdfs, failures):
@@ -710,7 +705,6 @@ class PageViewerPanel(QWidget):
     def _do_convert_and_open(self, file_paths, merge_widget):
         """"Einzeln oeffnen" — same conversion as the merge, but every file
         becomes its own tab instead of one combined document."""
-        import logging
         logging.debug(f"_do_convert_and_open: {len(file_paths)} Dateien")
 
         def _on_done(pdfs, failures):

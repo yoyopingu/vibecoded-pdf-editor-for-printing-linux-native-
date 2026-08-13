@@ -976,7 +976,7 @@ class MergeOrderWidget(QWidget):
         if self._busy:
             return
         paths = self._grid.get_paths()
-        import logging; logging.debug(f"MergeOrderWidget._confirm: {paths}")
+        logging.debug(f"MergeOrderWidget._confirm: {paths}")
         if not paths:
             return
         self.set_busy(True)

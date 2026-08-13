@@ -620,7 +620,6 @@ class ManagePanel(QWidget):
     # ── Trennen ──────────────────────────────────────────────────────────────
     def _split_selection(self):
         """Save selected pages as a new PDF file and open in new tab."""
-        from PyQt6.QtWidgets import QFileDialog
         from pypdf import PdfReader, PdfWriter
         if not self.model.selected:
             self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
@@ -648,7 +647,6 @@ class ManagePanel(QWidget):
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _split_each(self):
-        from PyQt6.QtWidgets import QFileDialog
         from pypdf import PdfReader, PdfWriter
         out_dir = QFileDialog.getExistingDirectory(self, tr("Zielordner waehlen"))
         if not out_dir: return
@@ -674,7 +672,7 @@ class ManagePanel(QWidget):
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _split_n(self):
-        from PyQt6.QtWidgets import QFileDialog, QInputDialog
+        from PyQt6.QtWidgets import QInputDialog
         from pypdf import PdfReader, PdfWriter
         n, ok = QInputDialog.getInt(self, tr("Seiten pro Teil"),
                                     tr("Wie viele Seiten pro Datei?"), 1, 1, 9999)
