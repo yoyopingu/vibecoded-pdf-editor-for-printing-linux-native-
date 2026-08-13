@@ -92,7 +92,7 @@ _MAX_FORM_DEPTH = 8
 # document cache uses, so a file rewritten in place — which the page manager does
 # constantly — is never answered from a stale entry.
 _cache: "dict" = {}
-_CACHE_MAX = 256
+_CACHE_MAX = 512     # pages; a frozenset of a few short strings each
 
 
 def _revision(path):
@@ -173,6 +173,27 @@ def _scan(obj, found, pikepdf, depth=0, seen=None):
         logging.debug("colorspace: content scan failed", exc_info=True)
 
 
+def _page_names(page, pikepdf):
+    found = set()
+    _scan(page, found, pikepdf)
+    return frozenset(found)
+
+
+def _remember(key, names):
+    """Cache `names`, dropping the oldest entries once the cap is reached.
+
+    Not _cache.clear(): a document with more pages than the cap would wipe
+    everything it had just learned each time it filled up, so scanning a
+    300-page file left only its last few pages cached and the viewer went back
+    to reading page 1 from disk. Insertion order is good enough to decide what
+    to drop — these are read in page order.
+    """
+    _cache[key] = names
+    while len(_cache) > _CACHE_MAX:
+        _cache.pop(next(iter(_cache)))
+    return names
+
+
 def page_colorspaces(pdf_path, page_index):
     """The colour-space names one page uses, as a frozenset. Empty if it could
     not be read — callers must treat that as "unknown", never as "grey"."""
@@ -180,20 +201,14 @@ def page_colorspaces(pdf_path, page_index):
     hit = _cache.get(key)
     if hit is not None:
         return hit
-    found = set()
     try:
         import pikepdf
         with pikepdf.open(pdf_path) as pdf:
-            _scan(pdf.pages[page_index], found, pikepdf)
+            return _remember(key, _page_names(pdf.pages[page_index], pikepdf))
     except Exception:
         logging.debug("colorspace: %s page %s unreadable", pdf_path, page_index,
                       exc_info=True)
         return frozenset()
-    result = frozenset(found)
-    if len(_cache) >= _CACHE_MAX:
-        _cache.clear()
-    _cache[key] = result
-    return result
 
 
 def cached_page_colorspaces(pdf_path, page_index):
@@ -207,17 +222,28 @@ def cached_page_colorspaces(pdf_path, page_index):
 
 
 def document_colorspaces(pdf_path):
-    """Every colour-space name used anywhere in the document."""
+    """Every colour-space name used anywhere in the document.
+
+    One open for the whole file. Asking page_colorspaces in a loop meant a
+    pikepdf.open per page — 500 opens of the same file for a 500-page document,
+    where the answer for every page is behind the one handle already in hand.
+    Each page is put in the cache on the way past, so the viewer's label and the
+    greyscale scan get theirs for nothing afterwards.
+    """
+    revision = _revision(pdf_path)
     found = set()
     try:
         import pikepdf
         with pikepdf.open(pdf_path) as pdf:
-            n = len(pdf.pages)
+            for i, page in enumerate(pdf.pages):
+                key = (revision, i)
+                names = _cache.get(key)
+                if names is None:
+                    names = _remember(key, _page_names(page, pikepdf))
+                found |= names
     except Exception:
         logging.debug("colorspace: %s unreadable", pdf_path, exc_info=True)
         return frozenset()
-    for i in range(n):
-        found |= page_colorspaces(pdf_path, i)
     return frozenset(found)
 
 

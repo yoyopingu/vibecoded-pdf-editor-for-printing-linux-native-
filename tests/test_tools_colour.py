@@ -446,3 +446,68 @@ def test_colour_scan_does_not_degrade_on_a_large_content_stream():
     # spelling took tens of seconds on this input.
     assert elapsed < 3.0, f"{len(data)/1e6:.0f} MB took {elapsed:.1f} s"
     return f"{len(data)/1e6:.0f} MB in {elapsed*1000:.0f} ms"
+
+
+def _many_page_pdf(n_pages, name="cs_many.pdf"):
+    out = os.path.join(_TMP, name)
+    if not os.path.exists(out):
+        c = canvas.Canvas(out, pagesize=A4)
+        for i in range(n_pages):
+            c.setFillColorRGB(0.2, 0.4, 0.9)
+            c.rect(60, 600, 200, 100, fill=1, stroke=0)
+            c.setFont("Helvetica", 30); c.drawString(70, 400, f"page {i+1}")
+            c.showPage()
+        c.save()
+    return out
+
+
+def test_scanning_a_document_opens_it_once():
+    """The whole-document scan asked page_colorspaces in a loop, and every one
+    of those opened the file again — 300 opens of the same PDF for a 300-page
+    job, where the answer for every page is behind the handle already in hand.
+    Measured at 12.5 s against 63 ms."""
+    import pikepdf
+    from tools.colorspace import document_colorspaces, _cache
+
+    src = _many_page_pdf(120)
+    _cache.clear()
+    opens = []
+    real_open = pikepdf.open
+    pikepdf.open = lambda *a, **k: (opens.append(a[0] if a else None),
+                                    real_open(*a, **k))[1]
+    try:
+        names = document_colorspaces(src)
+    finally:
+        pikepdf.open = real_open
+
+    assert "/DeviceRGB" in names, sorted(names)
+    assert len(opens) == 1, f"opened the file {len(opens)}x for 120 pages"
+
+
+def test_a_document_scan_leaves_every_page_cached():
+    """Each page is put in the cache on the way past, so the viewer's label and
+    the greyscale scan get theirs for nothing afterwards."""
+    import pikepdf
+    from tools.colorspace import document_colorspaces, cached_page_colorspaces, _cache
+
+    src = _many_page_pdf(120)
+    _cache.clear()
+    document_colorspaces(src)
+    for page in (0, 60, 119):
+        assert cached_page_colorspaces(src, page) is not None, \
+            f"page {page} was scanned but not remembered"
+
+
+def test_the_cache_drops_the_oldest_not_everything():
+    """A document with more pages than the cache used to wipe it each time it
+    filled, so scanning a long file left only its last few pages and the viewer
+    went back to reading page 1 off disk."""
+    from tools.colorspace import _remember, _cache, _CACHE_MAX
+
+    _cache.clear()
+    for i in range(_CACHE_MAX + 50):
+        _remember(("doc", i), frozenset({"/DeviceGray"}))
+    assert len(_cache) == _CACHE_MAX, len(_cache)
+    assert ("doc", _CACHE_MAX + 49) in _cache, "the newest entry was dropped"
+    assert ("doc", 49) not in _cache, "the oldest entry was kept"
+    assert ("doc", 60) in _cache, "everything was cleared instead of the oldest"
