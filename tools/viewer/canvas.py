@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QWidget, QApplication, QMenu, QSizePolicy
 from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtGui import QColor, QPainter, QPen, QKeySequence, QBrush, QCursor
 from tools.i18n import tr
-from tools.viewer.theme import _TV
+from tools.theme import _TV
 
 
 class PdfPageCanvas(QWidget):

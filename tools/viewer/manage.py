@@ -13,7 +13,7 @@ from tools.app_state import AppState
 from tools.i18n import tr
 from tools.viewer.model import _parse_positions, _positions_to_str
 from tools.viewer.tab import PdfTab
-from tools.viewer.theme import _TV, _register_themed
+from tools.theme import _TV, _register_themed
 
 
 class ManageShortcutFilter(QObject):

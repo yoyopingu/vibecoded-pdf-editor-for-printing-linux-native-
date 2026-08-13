@@ -12,7 +12,7 @@ from PyQt6.QtGui import QPixmap, QImage, QColor, QDrag, QPainter, QTransform
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
-from tools.viewer.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
+from tools.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
 
 
 CARD_W = 110

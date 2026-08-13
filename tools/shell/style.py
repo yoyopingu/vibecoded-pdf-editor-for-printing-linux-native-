@@ -460,7 +460,7 @@ def apply_theme_globally(theme: str):
     QApplication.instance().setStyleSheet(LIGHT_STYLE if theme == "light" else STYLE)
     import tools.app_state as _as
     _as.THEME.update(_THEME_COLOURS["light" if theme == "light" else "dark"])
-    from tools.page_viewer import set_viewer_theme
+    from tools.theme import set_viewer_theme
     set_viewer_theme(theme)          # last: it re-runs every panel's _apply_theme
 
 

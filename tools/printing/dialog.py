@@ -19,7 +19,7 @@ from tools.printing.spool import (_PAPER_PTS, _gs_blacked_out, print_via_gs,
                                   recenter_on_paper, write_subset_pdf,
                                   prerender_for_qt)
 from tools.viewer.tab import PdfTab
-from tools.viewer.theme import _TV
+from tools.theme import _TV
 
 
 _PRINTER_LIST_CACHE = None   # (names:list[str], default:str) — filled on first enumerate

@@ -14,7 +14,7 @@ from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.viewer.model import _parse_positions, _positions_to_str
 from tools.viewer.page_grid import CARD_H, CARD_W, GAP, MARGIN
-from tools.viewer.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
+from tools.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
 
 
 class FileCard(QFrame):

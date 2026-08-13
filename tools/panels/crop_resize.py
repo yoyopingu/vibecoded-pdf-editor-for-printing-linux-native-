@@ -5,7 +5,7 @@ See tools/panels/__init__.py.
 import os
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.images import pil_to_qpixmap
-from tools.viewer.theme import _TV, _register_themed
+from tools.theme import _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QWidget, QSplitter
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush

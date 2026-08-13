@@ -6,7 +6,7 @@ import os, math
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
-from tools.viewer.theme import _TV, _register_themed
+from tools.theme import _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QWidget, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor

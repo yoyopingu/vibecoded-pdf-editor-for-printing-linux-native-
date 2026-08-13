@@ -12,7 +12,7 @@ from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.images import pil_to_qpixmap
-from tools.viewer.theme import _TV
+from tools.theme import _TV
 
 
 class _PrintPreview(QWidget):

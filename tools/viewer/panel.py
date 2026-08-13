@@ -16,7 +16,7 @@ from tools.render.caches import _FullPageCache, _ThumbnailCache, _set_active
 from tools.render.document_cache import release
 from tools.viewer.merge import MergeOrderWidget
 from tools.viewer.tab import PdfTab
-from tools.viewer.theme import _TOP_BTN_W, _TV, _register_themed
+from tools.theme import _TOP_BTN_W, _TV, _register_themed
 
 
 class _ViewerKeyFilter(QObject):

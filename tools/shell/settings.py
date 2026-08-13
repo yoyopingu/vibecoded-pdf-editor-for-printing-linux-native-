@@ -245,7 +245,7 @@ class PerformanceDialog(QDialog):
         s.set_prerender(self._prerender_cb.isChecked())
         s.set_speed_preset(self._speed_combo.currentData())
         s.set_ram_percent(self._ram_spin.value())
-        from tools.page_viewer import apply_performance_settings
+        from tools.render.queue import apply_performance_settings
         apply_performance_settings(
             prerender       = s.prerender(),
             render_threads  = s.render_threads(),

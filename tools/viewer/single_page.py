@@ -19,7 +19,7 @@ from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask,
 from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
 from tools.viewer.tab import PdfTab
-from tools.viewer.theme import _PREV_BTN, _TV, _register_themed
+from tools.theme import _PREV_BTN, _TV, _register_themed
 
 
 # How far the user may zoom in. Was 8x, which existed because the page was

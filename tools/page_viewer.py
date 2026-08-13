@@ -16,7 +16,6 @@ turns a PDF into pixels lives in tools/render/. This module used to hold all
                       preview         the sheet as the printer will produce it
                       spool           sending it: Ghostscript and lp, or Qt
 
-    tools/viewer/     theme           colours, and the widgets that follow them
                       model           page order, rotation, selection
                       canvas          draws a page, selects text on it
                       single_page     the one-page view and its zoom
@@ -55,7 +54,7 @@ from tools.render.queue       import (_thumb_render_width, _ThumbSignals,
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 
 # ── The viewer ───────────────────────────────────────────────────────────────
-from tools.viewer.theme       import (_DARK_TV, _LIGHT_TV, _TV, _TOP_BTN_W,
+from tools.theme            import (_DARK_TV, _LIGHT_TV, _TV, _TOP_BTN_W,
                                       _PREV_BTN, _DROP_THICKNESS, _DROP_HALO,
                                       _paint_drop_marker, _theme_panels,
                                       _register_themed, set_viewer_theme)

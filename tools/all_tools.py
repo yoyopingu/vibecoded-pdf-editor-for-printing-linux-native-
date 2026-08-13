@@ -1,32 +1,16 @@
 """
 Alle Tool-Panels v3.3 — re-export shim.
 
-The panels themselves live in tools/panels/, one module each; this module
-imports them back so that ``from tools.all_tools import ...`` and
-``import tools.all_tools as T`` keep answering for every name they did when
-this file held all 3,502 lines of them.
+The panels live in tools/panels/, one module each; this imports them back so
+that ``from tools.all_tools import ...`` and ``import tools.all_tools as T``
+keep working.
 
-The wholesale Qt and stdlib imports below are no longer used by anything in
-this file. They stay because removing them would narrow what the module
-exports, and this module exists to export exactly what it used to.
+It used to re-export the viewer's internals too — the leftover header from when
+this file held all 3,502 lines of the panels. Nothing used any of those 57
+names, but importing this module pulled in fourteen viewer and printing
+modules, the whole print dialog among them, to provide them. The panels name
+what they need directly.
 """
-import os, io, math, subprocess, shutil, logging
-from tools.page_viewer import (_TV, _register_themed, _pdfium_lock,
-                               _ThumbnailCache, _render_queue,
-                               _ThumbTask, _ThumbSignals, pil_to_qpixmap)
-from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox,
-    QListWidget, QListWidgetItem, QRadioButton, QTextEdit,
-    QScrollArea, QWidget, QSlider, QApplication, QFileDialog, QFrame,
-    QSizePolicy, QSplitter, QGridLayout
-)
-from PyQt6.QtCore import Qt, QTimer, QEvent
-from PyQt6.QtGui import (QPixmap, QImage, QKeySequence, QShortcut,
-                         QPainter, QPen, QColor, QBrush)
-from tools.app_state import AppState, theme_color
-from tools._base     import BasePanel, FileDropList, make_label, make_separator, LogBox, CurrentFileBar
-from tools.i18n      import tr
 
 # ── Shared helpers, now in tools/panels/ ─────────────────────────────────────
 # Imported rather than defined here, and re-exported: this module is a shim.
