@@ -4,7 +4,8 @@ Helpers shared by more than one tool panel.
 Moved verbatim out of tools/all_tools.py; see tools/panels/__init__.py.
 """
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                             QSizePolicy, QWidget, QComboBox, QDoubleSpinBox)
+                             QSizePolicy, QWidget, QComboBox, QDoubleSpinBox,
+                             QCheckBox)
 from PyQt6.QtCore import Qt, QTimer, QEvent, pyqtSignal
 from tools.app_state import AppState
 from tools.i18n      import tr
@@ -233,6 +234,11 @@ class PaperFormatSelector(QWidget):
     Quellseite × Raster" — placed at either end of the list. target_size_pt()
     returns None when one of them is selected, and special() says which, so the
     panel can do whatever that entry means.
+
+    Querformat belongs here rather than beside it: the orientation is part of
+    which sheet you asked for, so target_size_pt() answers with it applied and
+    no caller has to remember to swap. It is disabled for the entries that are
+    not paper, where there is nothing to turn.
     """
 
     changed = pyqtSignal()
@@ -275,6 +281,11 @@ class PaperFormatSelector(QWidget):
         row.addWidget(self._h_lbl); row.addWidget(self.height_mm)
         row.addStretch()
         box.addLayout(row)
+
+        self.landscape = QCheckBox(tr("Querformat"))
+        self.landscape.toggled.connect(lambda _=None: self.changed.emit())
+        box.addWidget(self.landscape)
+
         self._sync_custom_row()
 
     # ── what is selected ─────────────────────────────────────────────────────
@@ -291,11 +302,17 @@ class PaperFormatSelector(QWidget):
         return txt if txt in self._before or txt in self._after else None
 
     def target_size_pt(self):
-        """(width, height) in points, or None when a non-paper entry is chosen."""
+        """(width, height) in points with Querformat applied, or None when a
+        non-paper entry is chosen."""
         if self.is_custom():
-            return (self.width_mm.value() * MM_TO_PT,
+            size = (self.width_mm.value() * MM_TO_PT,
                     self.height_mm.value() * MM_TO_PT)
-        return PAPER_SIZES_PT.get(self.combo.currentText())
+        else:
+            size = PAPER_SIZES_PT.get(self.combo.currentText())
+        if size is None:
+            return None
+        w, h = size
+        return (h, w) if self.landscape.isChecked() else (w, h)
 
     # ── driving it ───────────────────────────────────────────────────────────
 
@@ -321,3 +338,5 @@ class PaperFormatSelector(QWidget):
         show = self.is_custom()
         for w in (self.width_mm, self.height_mm, self._w_lbl, self._h_lbl):
             w.setVisible(show)
+        # Nothing to turn when the entry is not a sheet.
+        self.landscape.setEnabled(self.special() is None)

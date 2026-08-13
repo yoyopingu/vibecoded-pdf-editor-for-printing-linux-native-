@@ -7,7 +7,8 @@ from PIL import Image
 import pypdfium2 as pdfium
 from tools.panels.crop_resize import CropResizePanel
 from tools.panels._cropmarks import _crop_mark_segments
-from tests.support import FX, MM, _TMP, _brightest, _ink_margins, _nup, _open
+from tests.support import (FX, MM, _TMP, _brightest, _ink_margins, _nup,
+                           _open, _sync_async)
 
 
 def test_crop_format_modes():
@@ -160,3 +161,47 @@ def test_crop_trims_the_edge_you_see():
     # the frame's left edge is gone, the other three are still there
     L, R, B, Tp = _ink_margins(out)
     assert R < 0.5 and B < 0.5 and Tp < 0.5, f"wrong edges trimmed: {L:.2f} {R:.2f} {B:.2f} {Tp:.2f}"
+
+
+def test_crop_format_can_be_landscape():
+    """Querformat turns the chosen sheet, in Crop/Scale as in N-Up. It lives on
+    the shared format widget, so neither tool can have it without the other."""
+    def sheet(landscape):
+        _open(FX["framed"])
+        p = CropResizePanel(); p.log.log = lambda *a, **k: None
+        p.fmt.set_format("A5  (148x210mm)")
+        p.fmt.landscape.setChecked(landscape)
+        out = os.path.join(_TMP, f"crop_landscape_{landscape}.pdf")
+        p.save_pdf = lambda *a, **k: out
+        cap = {}
+        p.open_result = lambda path, t="": cap.update(p=path)
+        _sync_async(p); p._run_action()
+        d = pdfium.PdfDocument(cap.get("p", out))
+        w, h = d[0].get_width(), d[0].get_height()
+        d.close()
+        return w, h
+
+    pw, ph = sheet(False)
+    lw, lh = sheet(True)
+    assert ph > pw, f"A5 upright should be portrait, got {pw:.0f}x{ph:.0f}"
+    assert lw > lh, f"Querformat should give landscape, got {lw:.0f}x{lh:.0f}"
+    assert abs(lw - ph) < 1 and abs(lh - pw) < 1, \
+        "Querformat did something other than swap the two sides"
+
+
+def test_querformat_is_off_for_entries_that_are_not_a_sheet():
+    """'— Kein —' in Crop and 'Wie Quellseite × Raster' in N-Up are not paper,
+    so there is nothing to turn and the box says so."""
+    from tools.panels.nup import NUpPanel
+    from tools.i18n import tr
+    c = CropResizePanel()
+    c.fmt.set_format(tr("— Kein —"))
+    assert not c.fmt.landscape.isEnabled()
+    c.fmt.set_format("A4  (210x297mm)")
+    assert c.fmt.landscape.isEnabled()
+
+    n = NUpPanel()
+    n.out_fmt.set_format(n.AUTO_FORMAT)
+    assert not n.out_fmt.landscape.isEnabled()
+    n.out_fmt.set_format("A4  (210x297mm)")
+    assert n.out_fmt.landscape.isEnabled()

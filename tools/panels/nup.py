@@ -213,15 +213,11 @@ class NUpPanel(BasePanel):
         # Bound here, not on the class: tr() at class scope runs at import, and
         # the language is only loaded once the QApplication exists.
         self.AUTO_FORMAT = tr("Wie Quellseite × Raster  (automatisch)")
+        # Querformat comes with it — the selector disables it for the auto
+        # entry, whose orientation follows the source page.
         self.out_fmt = PaperFormatSelector(after=[self.AUTO_FORMAT])
         ol.addLayout(r(tr("Format:"), self.out_fmt))
-        self.landscape = QCheckBox(tr("Querformat")); self.landscape.toggled.connect(self._update_preview)
-        ol.addWidget(self.landscape)
-        def _fmt_changed():
-            # The auto format takes its orientation from the source page.
-            self.landscape.setEnabled(self.out_fmt.special() != self.AUTO_FORMAT)
-            self._update_preview()
-        self.out_fmt.changed.connect(_fmt_changed)
+        self.out_fmt.changed.connect(self._update_preview)
         layout.addWidget(ob)
 
         ab = QGroupBox(tr("ABSTÄNDE")); al = QVBoxLayout(ab)
@@ -275,10 +271,7 @@ class NUpPanel(BasePanel):
             out_w = src_pw * cols + ml + mr + gh * (cols - 1)
             out_h = src_ph * rows + mt + mb + gv * (rows - 1)
         else:
-            out_w, out_h = sheet
-            # Only meaningful for the fixed paper sizes — the auto sheet already
-            # follows the orientation of the source page.
-            if self.landscape.isChecked(): out_w, out_h = out_h, out_w
+            out_w, out_h = sheet          # Querformat already applied
         # NOT clamped: a slot can come out zero or negative when the margins and
         # gaps exceed the sheet. Callers must check (the run refuses, the preview
         # says so) — clamping it to 1pt used to squeeze the whole page into a
