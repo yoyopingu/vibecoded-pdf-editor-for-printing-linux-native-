@@ -272,3 +272,62 @@ def test_light_theme_reaches_every_colour_source():
     finally:
         MAIN.apply_theme_globally("dark")
         _app.setStyleSheet(old)
+
+
+def test_clicking_a_number_field_selects_its_value():
+    """Click a number field and the value is selected, ready to be typed over —
+    then click again and the caret goes where you clicked, so it can be edited.
+
+    Every other application does this. This one put a caret between two digits,
+    so changing 20 to 5 meant selecting by hand or three backspaces.
+
+    Text fields are deliberately left alone: a file path or a page range is
+    usually edited, not replaced."""
+    from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSpinBox, QDoubleSpinBox, QLineEdit
+    from PyQt6.QtCore import Qt, QPoint
+    from PyQt6.QtTest import QTest
+    from tools.shell.inputs import install
+
+    filt = install(_app)
+    w = QWidget(); lay = QVBoxLayout(w)
+    spin = QDoubleSpinBox(); spin.setRange(0, 999); spin.setValue(20.0)
+    other = QSpinBox(); other.setRange(0, 999); other.setValue(7)
+    path = QLineEdit("/home/somebody/a file.pdf")
+    for x in (spin, other, path):
+        lay.addWidget(x)
+    # Other tests in this process have left windows around; without activating
+    # this one the click never delivers focus to it. And focus has to start
+    # somewhere else, or showing the window hands it to the first spin box and
+    # the test measures that rather than the click.
+    w.show(); w.raise_(); w.activateWindow()
+    path.setFocus(); _spin(4, 0.0)
+    assert not spin.lineEdit().hasFocus()
+
+    def click(widget):
+        le = widget.lineEdit() if hasattr(widget, "lineEdit") else widget
+        QTest.mouseClick(le, Qt.MouseButton.LeftButton,
+                         pos=QPoint(6, le.height() // 2))
+        _spin(6, 0.0)
+
+    try:
+        click(spin)
+        assert spin.lineEdit().selectedText(), "first click selected nothing"
+
+        QTest.keyClicks(spin.lineEdit(), "5"); _spin(4, 0.0)
+        assert spin.lineEdit().text() == "5", \
+            f"typing did not replace the value ({spin.lineEdit().text()!r})"
+
+        click(spin)
+        assert spin.lineEdit().selectedText() == "", \
+            "the second click re-selected everything — the field cannot be edited"
+
+        click(other)
+        assert other.lineEdit().selectedText(), "moving to another field selected nothing"
+
+        click(path)
+        assert path.selectedText() == "", "a text field should not select-all"
+    finally:
+        _app.removeEventFilter(filt)
+        import tools.shell.inputs as _inputs
+        _inputs._filter = None
+        w.deleteLater(); _app.processEvents()

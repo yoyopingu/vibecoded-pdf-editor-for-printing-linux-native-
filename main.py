@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import QApplication
 
 from tools.i18n           import load_language
 from tools.render.queue   import shutdown_render_queue, apply_performance_settings
+from tools.shell.inputs   import install as install_number_field_behaviour
 from tools.shell.instance import (_forward_to_running_instance,
                                   _listen_for_open_requests)
 from tools.shell.settings import (AppSettings, _ram_percent_to_pages,
@@ -72,6 +73,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("CopyShop PDF Suite")
     app.setStyle(AppStyle.create())
+
+    # Click a number field and its value is selected, ready to be typed over.
+    install_number_field_behaviour(app)
 
     # Stop the render worker before anything gets torn down, so a task can't
     # finish and emit into receivers we are about to delete below.
