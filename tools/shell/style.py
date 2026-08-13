@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import (QPixmap, QPainter, QColor, QPen, QBrush,
                          QIcon, QPolygon)
-from tools.theme import SHELL_KEYS, shell_colours
+from tools.theme import SHELL_KEYS, set_viewer_theme, shell_colours
 
 
 def _build_style(dark: bool) -> str:
@@ -416,7 +416,6 @@ def apply_theme_globally(theme: str):
     import tools.app_state as _as
     colours = shell_colours("light" if theme == "light" else "dark")
     _as.THEME.update({k: colours[k] for k in SHELL_KEYS})
-    from tools.theme import set_viewer_theme
     set_viewer_theme(theme)          # last: it re-runs every panel's _apply_theme
 
 

@@ -43,7 +43,7 @@ covering the viewport.
 import logging
 import math
 
-from tools.render.document_cache import _stat_key
+from tools.render.document_cache import _stat_key, open_page
 
 
 def _revision(path):
@@ -80,7 +80,6 @@ def page_size_pt(path, page_index):
     key = (_revision(path), page_index)
     size = _page_sizes.get(key)
     if size is None:
-        from tools.render.document_cache import open_page
         with open_page(path, page_index) as page:
             size = (page.get_width(), page.get_height())
         _remember(_page_sizes, key, size, _PAGE_SIZES_MAX)
@@ -176,7 +175,6 @@ def page_chars(path, page_index, scale, rotation=0):
     key = (_revision(path), page_index)
     unit = _unit_chars.get(key)
     if unit is None:
-        from tools.render.document_cache import open_page
         unit = []
         try:
             with open_page(path, page_index) as page:

@@ -15,8 +15,9 @@ from tools.i18n import tr
 from tools.printing.preview import _PrintPreview
 from tools.render.images import pil_to_qpixmap
 from tools.printing import prefs
-from tools.printing.spool import (_PAPER_PTS, print_via_gs, prerender_for_qt)
-from tools.viewer.tab import PdfTab
+from tools.printing.spool import (_PAPER_PTS, print_via_gs, prerender_for_qt,
+                                  paper_sources, queue_defaults)
+from tools.viewer.tab_base import owning_tab
 from tools.theme import _TV
 
 
@@ -408,9 +409,7 @@ class PrintDialog(QDialog):
 
         Shared by the preview and the print job so they can never disagree
         about which page "Aktuelle Seite" means."""
-        parent = self.parent()
-        while parent is not None and not isinstance(parent, PdfTab):
-            parent = parent.parent()
+        parent = owning_tab(self.parent())
         if parent is not None and getattr(parent, "single", None) is not None:
             pos = parent.single._current
             if 0 <= pos < len(self.model.order):
@@ -548,7 +547,6 @@ class PrintDialog(QDialog):
             self._apply_queue_info(printer_name, cached)
             return
         from tools.jobs import submit
-        from tools.printing.spool import paper_sources, queue_defaults
 
         def _ask(job):
             return {"sources": paper_sources(printer_name),

@@ -111,3 +111,49 @@ def test_no_local_import_repeats_the_module_s_own():
                 if top.get(name) == (mod, a.name):
                     dupes.append(f"{f.relative_to(REPO)}:{node.lineno} re-imports {name}")
     assert not dupes, "local imports the module already has:\n  " + "\n  ".join(dupes)
+
+
+def test_no_module_imports_itself_in_a_circle():
+    """Four cycles used to run through tools.viewer.tab and tools.render, and
+    each one was held together by function-level imports that existed only to
+    postpone the loop past module load. They are broken structurally now — a
+    marker base class in tools/viewer/tab_base.py, and a geometry helper filed
+    where its caller lives — so the graph should stay acyclic on its own.
+
+    Deferred imports count here. An import inside a function is still a
+    dependency; hiding it from the module loader does not make the design
+    acyclic, it makes the cycle harder to see."""
+    graph = {}
+    for f in _sources():
+        mod = str(f.relative_to(REPO).with_suffix("")).replace("/", ".")
+        mod = mod.removesuffix(".__init__")
+        tree = ast.parse(f.read_text())
+        targets, seen = set(), set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Import, ast.ImportFrom)) or id(node) in seen:
+                continue
+            seen.add(id(node))
+            if isinstance(node, ast.ImportFrom):
+                if node.module and node.module.startswith("tools"):
+                    targets.add(node.module)
+            else:
+                targets.update(a.name for a in node.names if a.name.startswith("tools"))
+        graph[mod] = targets
+
+    cycles, stack, state = [], [], {}
+    def visit(node):
+        state[node] = "open"
+        stack.append(node)
+        for nxt in sorted(graph.get(node, ())):
+            if nxt not in graph:
+                continue
+            if state.get(nxt) == "open":
+                cycles.append(" -> ".join(stack[stack.index(nxt):] + [nxt]))
+            elif nxt not in state:
+                visit(nxt)
+        stack.pop()
+        state[node] = "done"
+    for mod in sorted(graph):
+        if mod not in state:
+            visit(mod)
+    assert not cycles, "import cycles:\n  " + "\n  ".join(sorted(set(cycles)))

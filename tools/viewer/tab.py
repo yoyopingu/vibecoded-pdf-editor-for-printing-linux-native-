@@ -13,6 +13,7 @@ from tools.app_state import AppState
 from tools.i18n import tr
 from tools.render.caches import _set_active
 from tools.viewer.model import PageModel
+from tools.printing.dialog import PrintDialog
 from tools.viewer.manage import ManagePanel
 from tools.viewer.page_grid import PageGrid
 from tools.viewer.single_page import SinglePageView
@@ -136,7 +137,6 @@ class PdfTab(PdfTabBase):
         """Oeffnet den vollstaendigen Druckdialog."""
         if not self.model:
             return
-        from tools.printing.dialog import PrintDialog
         dlg = PrintDialog(self.pdf_path, self.model, self)
         dlg.exec()
 
