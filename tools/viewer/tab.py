@@ -13,6 +13,8 @@ from tools.app_state import AppState
 from tools.i18n import tr
 from tools.render.caches import _set_active
 from tools.viewer.model import PageModel
+from tools.viewer.manage import ManagePanel
+from tools.viewer.page_grid import PageGrid
 from tools.viewer.single_page import SinglePageView
 from tools.viewer.tab_base import PdfTabBase
 
@@ -90,8 +92,6 @@ class PdfTab(PdfTabBase):
         """Create PageGrid + ManagePanel once and cache them for the lifetime of the tab."""
         if self._manage_panel is not None:
             return  # already built
-        from tools.viewer.manage import ManagePanel
-        from tools.viewer.page_grid import PageGrid
         grid = PageGrid(self.model, self.pdf_path)
         grid_scroll = QScrollArea()
         grid_scroll.setWidgetResizable(True)

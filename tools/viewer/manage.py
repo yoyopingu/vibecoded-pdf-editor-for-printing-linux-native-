@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent
 from tools.app_state import AppState
 from tools.i18n import tr
 from tools.viewer.model import _parse_positions, _positions_to_str
-from tools.viewer.tab import PdfTab
+from tools.viewer.tab_base import PdfTabBase, owning_tab
 from tools.theme import _TV, _register_themed
 
 
@@ -506,11 +506,9 @@ class ManagePanel(QWidget):
         # page indexes against the old, shorter file — an inserted blank page is
         # past its last index, so the render threw and the preview showed the
         # blue "could not render" fallback at a bogus size.
-        tab = self.tab if isinstance(self.tab, PdfTab) else None
+        tab = self.tab if isinstance(self.tab, PdfTabBase) else None
         if tab is None:
-            tab = self.parent()
-            while tab is not None and not isinstance(tab, PdfTab):
-                tab = tab.parent()
+            tab = owning_tab(self.parent())
         if tab is not None:
             tab.pdf_path = new_path
             tab.single.pdf_path = new_path
