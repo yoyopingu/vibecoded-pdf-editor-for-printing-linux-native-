@@ -237,7 +237,6 @@ PIP_PACKAGES=(
     reportlab
     img2pdf
     pdf2image
-    pytesseract
     ocrmypdf
 )
 
@@ -407,7 +406,6 @@ checks = [
     ("reportlab",       "reportlab"),
     ("img2pdf",         "img2pdf"),
     ("pdf2image",       "pdf2image"),
-    ("pytesseract",     "pytesseract"),
     ("ocrmypdf",        "ocrmypdf"),
 ]
 failed = False

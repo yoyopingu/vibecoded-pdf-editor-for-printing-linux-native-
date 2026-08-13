@@ -4,29 +4,18 @@ CopyShop PDF Suite v3 — the entry point.
 Starten:  copyshop-pdf              (installed)
           python3 main.py           (from the repository)
           python3 -m tools.app
-          … either, with a file:  … datei.pdf
+          … any of them, with a file:  … datei.pdf
+
+Dependencies are listed in requirements.txt and README.md, and nowhere else.
+They used to be spelled out here as pacman and apt command lines, which drifted:
+the list named python-pytesseract, which nothing has imported since the OCR
+panel started driving the tesseract binary itself — and requirements.txt said so
+in as many words, two files apart.
 
 Inside the package rather than a top-level main.py: an installed top-level
-module called "main" sits in site-packages under a name anything might want,
-and the console script pointed at it. Everything it needs is in tools/ anyway.
-main.py at the repository root is a launcher for the documented dev command and
-is not installed.
-
-Abhängigkeiten (Arch/CachyOS):
-  sudo pacman -S python-pyqt6 python-pypdf python-pikepdf python-pillow \
-                 python-reportlab python-img2pdf python-pdf2image \
-                 python-pytesseract python-pypdfium2 python-pip \
-                 tesseract tesseract-data-deu tesseract-data-eng \
-                 ghostscript poppler
-  pip install ocrmypdf --break-system-packages
-
-Abhängigkeiten (Ubuntu/Debian):
-  sudo apt install python3-pyqt6 python3-pypdf python3-pikepdf python3-pil \
-                   python3-reportlab python3-img2pdf python3-pdf2image \
-                   python3-pytesseract python3-pypdfium2 python3-pip \
-                   tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng \
-                   ghostscript poppler-utils
-  pip3 install ocrmypdf --break-system-packages
+module called "main" sits in site-packages under a name anything might want, and
+the console script pointed at it. main.py at the repository root is a launcher
+for the documented dev command, and is not installed.
 """
 
 import sys, os, traceback, logging

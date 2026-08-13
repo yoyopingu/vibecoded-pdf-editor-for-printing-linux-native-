@@ -775,7 +775,6 @@ _EN: dict[str, str] = {
     "Deutsch + Englisch": "German + English",
     "Engine:": "Engine:",
     "ocrmypdf (empfohlen)": "ocrmypdf (recommended)",
-    "pytesseract (schnell)": "pytesseract (fast)",
     "DPI:": "DPI:",
     "Durchsuchbare PDF erstellen": "Create searchable PDF",
     "Nur Text extrahieren": "Extract text only",

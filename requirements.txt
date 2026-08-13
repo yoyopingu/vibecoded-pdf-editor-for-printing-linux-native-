@@ -26,7 +26,8 @@ pdf2image>=1.16     # PDF -> images for the OCR fallback (needs poppler)
 #                   # PDFs using tesseract directly; with it you additionally
 #                   # get true deskew and PDF/A output.
 #
-# pytesseract       # NOT required. It was used by an older OCR code path that
-#                   # only produced a .txt file; the current code drives the
-#                   # tesseract binary itself. Listed here only because the
-#                   # install notes in main.py's docstring still mention it.
+# pytesseract       # NOT required, and not installed. It belonged to an older
+#                   # OCR path that only produced a .txt file; the current code
+#                   # drives the tesseract binary itself. Noted here so it does
+#                   # not get added back — install.sh and the entry point's
+#                   # docstring both claimed it long after it stopped being used.
