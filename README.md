@@ -205,9 +205,16 @@ Four layers, and imports only ever point downwards.
 | `caches.py` | The thumbnail and full-page LRUs, evicted by what the user is looking at rather than by age. |
 | `queue.py` | One worker, a priority heap, and the render tasks. A page turn preempts the thumbnail in flight. |
 
-**`tools/viewer/` — showing it.** One module per part: `theme`, `model`,
-`canvas`, `single_page`, `page_grid`, `manage`, `merge`, `printing`, `tab`,
-`panel`. `tools/page_viewer.py` re-exports them and carries the map.
+**`tools/viewer/` — showing it.** One module per part: `model`, `canvas`,
+`single_page`, `page_grid`, `manage`, `merge`, `tab`, `panel`.
+`tools/page_viewer.py` re-exports them and carries the map.
+
+**`tools/printing/` — putting it on paper.** `dialog` decides what to print, on
+what, and how; `preview` draws the sheet as the printer will produce it; `spool`
+is the sending — Ghostscript and lp, or Qt. `spool` takes a path, a page model
+and the settings, and touches no widget, which is what lets it be tested
+directly: it is the part that has to be right when the shop is billing for the
+output.
 
 **`tools/panels/` — the tools.** One module per sidebar entry — N-Up,
 imposition, compress, crop/scale, page numbers, image↔PDF, greyscale, forms,
@@ -229,6 +236,7 @@ And the rest of `tools/`:
 | `jobs.py` | The one mechanism for fire-and-forget background work: owned, cancellable, and waited for at shutdown. |
 | `app_state.py` | Small singleton holding the current document, page model and page, plus the signals other parts subscribe to (`pdf_changed`, `result_ready`, `status_message`). How a tool finds the open file without asking for one. |
 | `multi_open.py` | Which file formats can become a PDF, the file-dialog filter built from that list, and the conversion that runs img2pdf and LibreOffice. |
+| `theme.py` | The live palette every widget paints with, and the switch between light and dark. Shared by the viewer, the panels, the print dialog and the window, so it belongs to none of them. |
 | `i18n.py` | `tr()` and the German→English string table. German source strings are the keys. |
 | `plugin_manager.py` | Discovers `BasePanel` subclasses in `plugins/`, and the panel for installing them. |
 
