@@ -1,5 +1,6 @@
 """
-Titlebar, moved out of main.py.
+The frameless window's own chrome — the menu bar, the drag-to-move, and
+the window buttons.
 """
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
 from PyQt6.QtCore import Qt, QPoint

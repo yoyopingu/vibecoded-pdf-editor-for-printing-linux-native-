@@ -1,6 +1,6 @@
 """
-FormsPanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Formulare / Reduzieren — fill form fields and flatten them, and the
+annotations with them, into the page content.
 """
 import os, shutil
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock

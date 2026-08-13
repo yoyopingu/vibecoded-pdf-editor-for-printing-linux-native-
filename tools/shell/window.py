@@ -1,5 +1,6 @@
 """
-Window, moved out of main.py.
+MainWindow: the sidebar, and what it switches between — the viewer and the
+tool panels.
 """
 import sys, os
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox

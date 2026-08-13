@@ -1,6 +1,5 @@
 """
-ImgPdfPanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Bild zu/von PDF — images into a PDF, and PDF pages back out as images.
 """
 import os
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QGroupBox, QApplication

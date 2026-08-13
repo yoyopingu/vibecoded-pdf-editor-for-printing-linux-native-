@@ -1,6 +1,6 @@
 """
-PreflightPanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Druckvorstufenprüfung — check a PDF for what tends to go wrong at the
+press, and report it rather than changing anything.
 """
 import os
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock

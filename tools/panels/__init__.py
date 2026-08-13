@@ -1,10 +1,10 @@
 """
 One module per tool panel, plus the helpers they share.
 
-All of this was tools/all_tools.py, a single 3,502-line file holding thirteen
-unrelated panels. It is split here by pure code movement — every body is
-byte-identical to what it replaced. tools/all_tools.py remains as a re-export
-shim so existing imports keep working.
+All of this was a single 3,502-line module holding thirteen unrelated panels.
+It was split by pure code movement — every body byte-identical to what it
+replaced. Panels are imported from their own modules now; there is no
+aggregating module left.
 
 Shared helpers live in the underscore modules, grouped by what they are for:
 

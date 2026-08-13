@@ -1,5 +1,6 @@
 """
-Settings, moved out of main.py.
+Persisted preferences, and the three dialogs over them — appearance,
+performance and general.
 """
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QDialog, QRadioButton, QCheckBox, QSpinBox, QFormLayout, QComboBox
 from PyQt6.QtCore import QSettings, pyqtSignal

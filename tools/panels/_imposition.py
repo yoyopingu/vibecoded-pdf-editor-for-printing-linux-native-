@@ -1,7 +1,5 @@
 """
 Placing a page into a slot on a sheet. Shared by Broschüre and N-Up.
-
-Moved verbatim out of tools/all_tools.py; see tools/panels/__init__.py.
 """
 
 

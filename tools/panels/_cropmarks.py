@@ -1,7 +1,5 @@
 """
 Crop / cut marks. Shared by the Crop tool and N-Up.
-
-Moved verbatim out of tools/all_tools.py; see tools/panels/__init__.py.
 """
 
 

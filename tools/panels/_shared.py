@@ -1,7 +1,6 @@
 """
-Helpers shared by more than one tool panel.
-
-Moved verbatim out of tools/all_tools.py; see tools/panels/__init__.py.
+Helpers shared by more than one tool panel: the label/field rows, the
+preview pane, the paper sizes and the page geometry.
 """
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                              QSizePolicy, QWidget, QComboBox, QDoubleSpinBox,

@@ -1,6 +1,6 @@
 """
-CropResizePanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Zuschneiden / Skalieren — trim or extend the page, fit it to a paper size,
+and set cut marks. Shows the sheet it is about to produce.
 """
 import os
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock

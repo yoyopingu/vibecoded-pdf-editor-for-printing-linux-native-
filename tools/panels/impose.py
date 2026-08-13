@@ -1,6 +1,6 @@
 """
-ImposePanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Broschüre / Ausschießen — saddle-stitch imposition: normalise the pages and
+lay them out on larger sheets in the order a folded booklet needs.
 """
 from PyQt6.QtWidgets import QVBoxLayout, QSpinBox, QComboBox, QGroupBox, QCheckBox
 from tools._base import BasePanel, make_label

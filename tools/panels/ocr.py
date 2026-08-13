@@ -1,6 +1,6 @@
 """
-OcrPanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+OCR — make a scanned PDF searchable: ocrmypdf where it is installed, and
+tesseract's own PDF renderer where it is not.
 """
 import os, subprocess, shutil
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock

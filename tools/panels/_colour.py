@@ -1,7 +1,8 @@
 """
-How far a page is from neutral grey. Shared by Grayscale and Preflight.
+How far a page is from neutral grey, measured over its pixels.
 
-Moved verbatim out of tools/all_tools.py; see tools/panels/__init__.py.
+Shared by Grayscale and Preflight. Which colour spaces a page *declares* is a
+different question, and that is tools/colorspace.py.
 """
 
 

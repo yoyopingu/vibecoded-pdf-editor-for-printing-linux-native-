@@ -1,6 +1,6 @@
 """
-MergeSplitPanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Zusammenführen / Trennen — merge several PDFs into one, or split one into
+parts.
 """
 import os
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QSpinBox, QGroupBox, QRadioButton, QApplication

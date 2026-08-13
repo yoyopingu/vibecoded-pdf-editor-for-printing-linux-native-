@@ -1,6 +1,6 @@
 """
-CompressPanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Komprimieren — shrink a PDF through Ghostscript, and refuse a result that
+came back damaged.
 """
 import os, subprocess, shutil
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QCheckBox

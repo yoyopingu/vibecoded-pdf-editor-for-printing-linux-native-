@@ -1,5 +1,5 @@
 """
-The tab host — the widget main.py puts on screen.
+The tab host — the widget the main window puts on screen.
 
 Opening files, closing tabs and everything that has to happen when one closes:
 the render work it started is cancelled, its thumbnails and page renders are

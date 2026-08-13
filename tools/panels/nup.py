@@ -1,6 +1,6 @@
 """
-NUpPanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+N-Up Layout — several source pages to a sheet, with margins, gaps and crop
+marks, over a live preview of the sheet.
 """
 import os, math
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock

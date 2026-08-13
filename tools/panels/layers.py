@@ -1,6 +1,6 @@
 """
-LayersPanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Ebenen (OCG) — list a file's optional-content groups, and flatten or drop
+them.
 """
 import os, subprocess, shutil
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox, QScrollArea, QWidget

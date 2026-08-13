@@ -2,7 +2,7 @@
 File classification and the conversion worker that turns images/office files
 into PDFs.
 
-Picking several files opens page_viewer.MergeOrderWidget directly as a tab (in
+Picking several files opens tools.viewer.merge.MergeOrderWidget as a tab (in
 the same style as "Seiten verwalten"), where the choice between merging them and
 opening them separately is made. Two dialog-shaped copies of that UI used to
 live here — an ordering dialog and a modal open/merge chooser in front of it.

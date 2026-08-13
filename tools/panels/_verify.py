@@ -2,7 +2,6 @@
 Checking that a colour conversion did not destroy the page.
 
 Shared by Compress, Grayscale, Layers and ColourProfile.
-Moved verbatim out of tools/all_tools.py; see tools/panels/__init__.py.
 """
 import logging
 

@@ -1,6 +1,6 @@
 """
-ColourProfilePanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Farbprofil / CMYK — report which colour spaces a file uses, and convert
+it to CMYK or sRGB through Ghostscript, checking the result before it ships.
 """
 import os, shutil
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QTextEdit

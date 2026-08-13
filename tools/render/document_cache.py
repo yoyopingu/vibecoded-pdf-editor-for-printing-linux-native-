@@ -62,10 +62,10 @@ times each:
   * The same workload with one process-wide lock: clean, every run.
 
 So :data:`PDFIUM_LOCK` serialises every pdfium call in the process, and is the
-lock that actually provides safety. ``tools.page_viewer`` re-exports it as
-``_pdfium_lock``, so documents opened ad hoc by the tools and the print path are
-mutually exclusive with the cached ones — one lock for all of pdfium, wherever
-the document came from.
+lock that actually provides safety. The tool panels and the print path import
+it directly for the documents they open themselves, so those are mutually
+exclusive with the cached ones — one lock for all of pdfium, wherever the
+document came from.
 
 Each handle still carries its own :class:`threading.Lock`, taken inside the
 global one. It costs an uncontended acquire per render and expresses the real

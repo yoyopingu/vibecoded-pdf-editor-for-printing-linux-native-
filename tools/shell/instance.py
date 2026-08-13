@@ -1,5 +1,6 @@
 """
-Instance, moved out of main.py.
+One app, one window: a second launch hands its files to the running
+instance over a local socket instead of opening another window.
 """
 import os
 try:

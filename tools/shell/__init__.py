@@ -7,7 +7,7 @@ The application shell — everything around the documents.
     window      MainWindow: the sidebar, and what it switches between
     instance    one app, one window — a second launch hands its files over
 
-This was main.py, which is now the entry point and nothing else: configure
-logging, build the QApplication, hand off to an already-running instance if
-there is one, otherwise open the window.
+This was all of main.py. What is left of the entry point is tools/app.py:
+configure logging, build the QApplication, hand off to an already-running
+instance if there is one, otherwise open the window.
 """

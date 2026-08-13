@@ -1,6 +1,6 @@
 """
-GrayscalePanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Graustufen — turn visually grey pages into real DeviceGray, one page at a
+time, and check each converted page against the original before shipping it.
 """
 import os, subprocess, shutil, logging
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock

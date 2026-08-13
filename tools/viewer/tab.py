@@ -47,7 +47,7 @@ class PdfTab(QWidget):
     def cancel_render_work(self):
         """Stop everything this tab has on the render queue.
 
-        Closing a tab cancelled its jobs.py work but nothing on _RenderQueue, so
+        Closing a tab cancelled its tools/jobs.py work but nothing on _RenderQueue, so
         a pre-render for a document nobody is looking at any more went on holding
         the one render thread — and the pdfium lock with it — while the tab the
         user switched to waited behind it."""

@@ -1,5 +1,6 @@
 """
-Style, moved out of main.py.
+How the application looks: the palette, the two stylesheets built from it,
+the theme switch, and the window icon.
 """
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt, QPoint

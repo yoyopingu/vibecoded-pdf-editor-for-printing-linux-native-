@@ -1,6 +1,5 @@
 """
-PageNumbersPanel, moved verbatim out of tools/all_tools.py.
-See tools/panels/__init__.py.
+Seitenzahlen — stamp page numbers onto the pages.
 """
 import io
 from PyQt6.QtWidgets import QVBoxLayout, QLineEdit, QSpinBox, QComboBox, QGroupBox
