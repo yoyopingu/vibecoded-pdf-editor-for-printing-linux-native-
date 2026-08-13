@@ -12,6 +12,7 @@ import math
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QSizePolicy
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QPixmap
+from tools.colorspace import describe, page_colorspaces
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
@@ -674,12 +675,6 @@ class SinglePageView(QWidget):
         self._page_h_pt = 0.0
         self._scroll_x = 0.0
         self._scroll_y = 0.0
-        self._cs_cache = {}   # clear color-space cache on new document
-        if hasattr(self, '_pikepdf_doc') and self._pikepdf_doc is not None:
-            try: self._pikepdf_doc.close()
-            except Exception: pass
-        self._pikepdf_doc = None
-        self._pikepdf_path = None
         n = len(model.order)
         self._tot_lbl.setText(f"/ {n}")
         self._prerender_aim = None   # a new file: re-aim even at the same index
@@ -996,113 +991,11 @@ class SinglePageView(QWidget):
                 return
             uid = self.model.order[self._current]
             src_path, orig = self.model.page_source(uid, self.pdf_path)
-            cs = self._detect_colorspace(src_path, orig)
+            cs = describe(page_colorspaces(src_path, orig))
             self._color_lbl.setText(tr('Farbprofil: {p0}').format(p0=cs))
         except Exception:
             self._color_lbl.setText(tr("Farbprofil: —"))
 
-    def _detect_colorspace(self, pdf_path, page_idx):
-        cache_key = (pdf_path, page_idx)
-        if not hasattr(self, '_cs_cache'):
-            self._cs_cache = {}
-        if cache_key in self._cs_cache:
-            return self._cs_cache[cache_key]
-        try:
-            import pikepdf, re as _re
-            # Reuse the open pikepdf handle for the same file to avoid reopening on every page
-            if not hasattr(self, '_pikepdf_path') or self._pikepdf_path != pdf_path:
-                if hasattr(self, '_pikepdf_doc') and self._pikepdf_doc is not None:
-                    try: self._pikepdf_doc.close()
-                    except Exception: pass
-                self._pikepdf_doc = pikepdf.open(pdf_path)
-                self._pikepdf_path = pdf_path
-            pdf = self._pikepdf_doc
-            page = pdf.pages[page_idx]
-            cs_names = set()
-
-            # Regexes for content-stream colour operators (fill + stroke).
-            _re_rgb  = _re.compile(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+(?:rg|RG)\b')
-            _re_cmyk = _re.compile(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[kK]\b')
-            _re_gray = _re.compile(r'(?:^|[^\d.])[\d.]+\s+[gG]\b')
-
-            def _content_bytes(obj):
-                # A page keeps its stream(s) in /Contents; a Form XObject *is* the
-                # stream, so read it directly.
-                if "/Contents" in obj:
-                    contents = obj.get("/Contents")
-                    data = b""
-                    if isinstance(contents, pikepdf.Array):
-                        for c in contents:
-                            try: data += bytes(c.read_bytes())
-                            except Exception: pass
-                    elif contents is not None:
-                        try: data = bytes(contents.read_bytes())
-                        except Exception: pass
-                    return data
-                try:
-                    return bytes(obj.read_bytes())
-                except Exception:
-                    return b""
-
-            def _scan(obj, depth, seen):
-                # Recurse through Form XObjects so nested content (e.g. N-Up,
-                # stamps, merged pages) is inspected too — otherwise the page's
-                # own stream is just "/Fm0 Do" and no colour is ever found.
-                if depth > 8:
-                    return
-                res = obj.get("/Resources")
-                if res is not None:
-                    cs_d = res.get("/ColorSpace")
-                    if isinstance(cs_d, pikepdf.Dictionary):
-                        for v in cs_d.values():
-                            try:
-                                cs_names.add(str(v[0]) if isinstance(v, pikepdf.Array) else str(v))
-                            except Exception:
-                                pass
-                    xobj = res.get("/XObject")
-                    if isinstance(xobj, pikepdf.Dictionary):
-                        for v in xobj.values():
-                            try:
-                                sub = v.get("/Subtype")
-                                if sub == pikepdf.Name("/Image"):
-                                    cs = v.get("/ColorSpace")
-                                    if cs is not None:
-                                        cs_names.add(str(cs[0]) if isinstance(cs, pikepdf.Array) else str(cs))
-                                elif sub == pikepdf.Name("/Form"):
-                                    try:    key = v.objgen
-                                    except Exception: key = id(v)
-                                    if key not in seen:
-                                        seen.add(key)
-                                        _scan(v, depth + 1, seen)
-                            except Exception:
-                                pass
-                try:
-                    text = _content_bytes(obj).decode("latin-1", errors="replace")
-                    if _re_rgb.search(text):  cs_names.add("/DeviceRGB")
-                    if _re_cmyk.search(text): cs_names.add("/DeviceCMYK")
-                    if _re_gray.search(text): cs_names.add("/DeviceGray")
-                except Exception:
-                    pass
-
-            _scan(page, 0, set())
-
-            has_rgb  = bool(cs_names & {"/DeviceRGB", "/CalRGB", "/ICCBased"})
-            has_cmyk = "/DeviceCMYK" in cs_names
-            has_gray = bool(cs_names & {"/DeviceGray", "/CalGray"})
-            if has_rgb and has_cmyk:
-                result = "RGB + CMYK"
-            elif has_cmyk:
-                result = "CMYK"
-            elif has_rgb:
-                result = "RGB"
-            elif has_gray:
-                result = "Grayscale"
-            else:
-                result = "—"
-            self._cs_cache[cache_key] = result
-            return result
-        except Exception:
-            return "—"
 
     def next_page(self):
         if self.model and self._current < len(self.model.order) - 1:

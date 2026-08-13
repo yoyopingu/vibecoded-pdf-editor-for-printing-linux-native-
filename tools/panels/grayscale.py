@@ -12,6 +12,7 @@ from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap
 from tools.app_state import AppState
 from tools._base import BasePanel, make_label
+from tools.colorspace import is_grey_only, page_colorspaces
 from tools.i18n import tr
 from tools.panels._colour import _colour_histogram, _hist_stats
 from tools.panels._verify import _BLACKOUT_LIMIT, _page_luma, _conversion_damage, _verify_pages_intact
@@ -608,34 +609,15 @@ class GrayscalePanel(BasePanel):
                 doc.close()
             self._reclassify()
             try:
-                import pikepdf, re as _re
+                # Which pages are grey already, so they are left alone. The scan
+                # is tools/colorspace.py — this used not to look inside Form
+                # XObjects, so a page produced by N-Up, imposition or merge
+                # showed no colour spaces at all and was never recognised.
+                import pikepdf
                 with pikepdf.open(src) as pdf:
-                  for i, page in enumerate(pdf.pages):
-                    res = page.get("/Resources"); cs_names = set()
-                    if res:
-                        cs_d = res.get("/ColorSpace")
-                        if cs_d and isinstance(cs_d, pikepdf.Dictionary):
-                            for v in cs_d.values():
-                                try: cs_names.add(str(v[0]) if isinstance(v, pikepdf.Array) else str(v))
-                                except Exception: pass
-                        xobj = res.get("/XObject")
-                        if xobj and isinstance(xobj, pikepdf.Dictionary):
-                            for v in xobj.values():
-                                try:
-                                    if v.get("/Subtype") == pikepdf.Name("/Image"):
-                                        cs = v.get("/ColorSpace")
-                                        if cs: cs_names.add(str(cs[0]) if isinstance(cs, pikepdf.Array) else str(cs))
-                                except Exception: pass
-                    try:
-                        contents = page.get("/Contents"); stream = b""
-                        if isinstance(contents, pikepdf.Array):
-                            for c in contents: stream += bytes(c.read_bytes())
-                        elif contents: stream = bytes(contents.read_bytes())
-                        text = stream.decode("latin-1", errors="replace")
-                        if _re.search(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+r[gG]\b', text): cs_names.add("/DeviceRGB")
-                        if _re.search(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[kK]\b', text): cs_names.add("/DeviceCMYK")
-                    except Exception: pass
-                    if "/DeviceGray" in cs_names and not any(x in cs_names for x in ("/DeviceRGB","/DeviceCMYK","/CalRGB","/ICCBased")):
+                    n_pages = len(pdf.pages)
+                for i in range(n_pages):
+                    if is_grey_only(page_colorspaces(src, i)):
                         self._already_grey.add(i)
             except Exception:
                 # Only an optimisation — it marks pages that are already

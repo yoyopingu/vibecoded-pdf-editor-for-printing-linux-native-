@@ -5,6 +5,7 @@ See tools/panels/__init__.py.
 import os, shutil
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QTextEdit
 from tools._base import BasePanel, make_label
+from tools.colorspace import document_colorspaces, has_cmyk, has_rgb
 from tools.i18n import tr
 from tools.panels._shared import row
 from tools.panels._verify import _verify_pages_intact
@@ -80,71 +81,20 @@ class ColourProfilePanel(BasePanel):
         except ValueError as e: self.log.log(str(e),error=True); return
         try:
             import pikepdf
+            # Presentation only — the scanning is tools/colorspace.py, shared
+            # with the viewer's label and the greyscale scan.
             CS_MAP={
                 "/DeviceRGB":"RGB", "/DeviceCMYK":"CMYK", "/DeviceGray":"Graustufen",
                 "/CalRGB":"Kal. RGB", "/CalGray":"Kal. Grau", "/ICCBased":"ICC",
                 "/Lab":"CIE Lab", "/Separation":tr("Sonderfarbe"), "/DeviceN":"DeviceN",
             }
-            pdf=pikepdf.open(src)
-            found=set()
+            found = set(document_colorspaces(src))
+            with pikepdf.open(src) as pdf:
+                n_pages = len(pdf.pages)
 
-            def _cs_name(obj):
-                try:
-                    if isinstance(obj, pikepdf.Array): return str(obj[0])
-                    return str(obj)
-                except Exception: return ""
-
-            def _scan(res):
-                if res is None: return
-                if "/ColorSpace" in res:
-                    cs_dict=res["/ColorSpace"]
-                    if isinstance(cs_dict, pikepdf.Dictionary):
-                        for v in cs_dict.values():
-                            n=_cs_name(v)
-                            if n in CS_MAP: found.add(n)
-                    else:
-                        n=_cs_name(cs_dict)
-                        if n in CS_MAP: found.add(n)
-                if "/XObject" in res:
-                    xobj=res["/XObject"]
-                    if isinstance(xobj, pikepdf.Dictionary):
-                        for v in xobj.values():
-                            try:
-                                if v.get("/Subtype")==pikepdf.Name("/Image") and "/ColorSpace" in v:
-                                    n=_cs_name(v["/ColorSpace"])
-                                    if n in CS_MAP: found.add(n)
-                                elif v.get("/Subtype")==pikepdf.Name("/Form"):
-                                    if "/Resources" in v: _scan(v["/Resources"])
-                            except Exception: pass
-
-            for page in pdf.pages:
-                res=page.get("/Resources")
-                if res: _scan(res)
-                # Content Stream scannen für direkte Farboperatoren (GS-Vektoren)
-                if not found or found == {"/DeviceGray"}:
-                    try:
-                        import re
-                        stream_bytes = b""
-                        contents = page.get("/Contents")
-                        if contents is not None:
-                            if isinstance(contents, pikepdf.Array):
-                                for c in contents: stream_bytes += bytes(c.read_bytes())
-                            else:
-                                stream_bytes = bytes(contents.read_bytes())
-                        text = stream_bytes.decode("latin-1", errors="replace")
-                        if re.search(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[kK]\b', text):
-                            found.add("/DeviceCMYK")
-                        if re.search(r'[\d.]+\s+[\d.]+\s+[\d.]+\s+r[gG]\b', text):
-                            found.add("/DeviceRGB")
-                        if re.search(r'[\d.]+\s+[gG]\b', text):
-                            found.add("/DeviceGray")
-                    except Exception: pass
-            n_pages = len(pdf.pages)
-            pdf.close()
-
-            readable=[CS_MAP.get(c, c) for c in found]
-            is_cmyk="/DeviceCMYK" in found
-            is_rgb=bool(found & {"/DeviceRGB","/CalRGB","/ICCBased"})
+            readable=[CS_MAP[c] for c in found if c in CS_MAP]
+            is_cmyk=has_cmyk(found)
+            is_rgb=has_rgb(found)
             lines=[
                 tr('Datei:   {p0}').format(p0=os.path.basename(src)),
                 tr('Seiten:  {p0}').format(p0=n_pages),

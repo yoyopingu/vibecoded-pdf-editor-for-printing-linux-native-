@@ -235,6 +235,7 @@ And the rest of `tools/`:
 | `app_state.py` | Small singleton holding the current document, page model and page, plus the signals other parts subscribe to (`pdf_changed`, `result_ready`, `status_message`). How a tool finds the open file without asking for one. |
 | `multi_open.py` | Which file formats can become a PDF, the file-dialog filter built from that list, and the conversion that runs img2pdf and LibreOffice. |
 | `theme.py` | The live palette every widget paints with, and the switch between light and dark. Shared by the viewer, the panels, the print dialog and the window, so it belongs to none of them. |
+| `colorspace.py` | Which colour spaces a page uses, read from the file's structure — declared spaces, image spaces, and the colour operators in the content streams, recursing into Form XObjects. Shared by the viewer's label, the Farbprofil tool and the greyscale scan, which each used to have their own copy and disagree. |
 | `i18n.py` | `tr()` and the German→English string table. German source strings are the keys. |
 | `plugin_manager.py` | Discovers `BasePanel` subclasses in `plugins/`, and the panel for installing them. |
 

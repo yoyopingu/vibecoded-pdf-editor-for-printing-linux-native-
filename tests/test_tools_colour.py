@@ -339,3 +339,80 @@ def test_cmyk_profiles():
     p._run_action()
     assert len(PdfReader(o).pages) >= 1, "CMYK conversion produced no valid output"
     return "ok"
+
+
+def _nested_colour_pdf(name="cs_nested.pdf"):
+    """A page whose only colour lives inside a Form XObject — what N-Up,
+    imposition and merge all produce."""
+    import pikepdf
+    inner = os.path.join(_TMP, "cs_inner.pdf")
+    c = canvas.Canvas(inner, pagesize=A4)
+    c.setFillColorRGB(1, 0, 0); c.rect(100, 400, 300, 200, fill=1, stroke=0)
+    c.showPage(); c.save()
+    out = os.path.join(_TMP, name)
+    with pikepdf.open(inner) as src, pikepdf.new() as pdf:
+        page = pdf.add_blank_page(page_size=(595, 842))
+        form = pdf.copy_foreign(pikepdf.Page(src.pages[0]).as_form_xobject())
+        page.add_overlay(form, pikepdf.Rectangle(0, 0, 595, 842))
+        pdf.save(out)
+    return out
+
+
+def _mixed_colour_pdf(name="cs_mixed.pdf"):
+    """An RGB image — which puts /DeviceRGB in /Resources — and a CMYK vector
+    fill, which lives only in the content stream."""
+    from PIL import Image as _I
+    img = os.path.join(_TMP, "cs_rgb.png")
+    _I.new("RGB", (40, 40), (200, 30, 30)).save(img)
+    out = os.path.join(_TMP, name)
+    c = canvas.Canvas(out, pagesize=A4)
+    c.drawImage(img, 60, 600, 120, 120)
+    c.setFillColorCMYK(0, 1, 1, 0); c.rect(60, 300, 200, 150, fill=1, stroke=0)
+    c.showPage(); c.save()
+    return out
+
+
+def test_colour_scan_sees_inside_a_form_xobject():
+    """Imposition, N-Up and merge turn a page into a Form XObject, after which
+    the page's own content stream is just "/Fm0 Do". A scan that does not
+    recurse finds nothing at all there — which is what the greyscale tool did,
+    so an imposed colour page was never recognised as colour."""
+    from tools.colorspace import page_colorspaces, is_grey_only, describe
+    names = page_colorspaces(_nested_colour_pdf(), 0)
+    assert "/DeviceRGB" in names, f"colour inside the form was not seen: {sorted(names)}"
+    assert not is_grey_only(names), "an imposed colour page counted as grey"
+    assert describe(names) == "RGB"
+
+
+def test_colour_scan_reads_resources_and_content_stream():
+    """Both, always. The Farbprofil tool stopped at the first thing /Resources
+    gave it, so a page with an RGB image and a CMYK vector fill was reported as
+    RGB — the wrong answer from the tool whose whole job is that answer."""
+    from tools.colorspace import page_colorspaces, has_cmyk, has_rgb, describe
+    names = page_colorspaces(_mixed_colour_pdf(), 0)
+    assert has_rgb(names), f"the RGB image was missed: {sorted(names)}"
+    assert has_cmyk(names), f"the CMYK fill was missed: {sorted(names)}"
+    assert describe(names) == "RGB + CMYK"
+
+
+def test_an_unreadable_page_is_not_called_grey():
+    """Nothing found means the page could not be read. Treating that as grey
+    would make the greyscale tool skip converting it."""
+    from tools.colorspace import page_colorspaces, is_grey_only
+    assert page_colorspaces(os.path.join(_TMP, "cs_does_not_exist.pdf"), 0) == frozenset()
+    assert not is_grey_only(frozenset())
+
+
+def test_farbprofil_report_names_every_colour_space_present():
+    """What the operator reads has to be right — it is what decides whether a
+    file gets converted before it goes to a professional press.
+
+    The report used to stop scanning as soon as /Resources yielded anything, so
+    a file with an RGB image and a CMYK vector fill was reported as plain RGB
+    and recommended for conversion it had partly had already."""
+    _open(_mixed_colour_pdf("cs_report.pdf"))
+    p = ColourProfilePanel(); p.log.log = lambda *a, **k: None
+    p._inspect()
+    report = p.report.toPlainText()
+    assert "CMYK" in report and "RGB" in report, f"report missed a colour space:\n{report}"
+    assert "Gemischt" in report, f"mixed file not flagged as mixed:\n{report}"
