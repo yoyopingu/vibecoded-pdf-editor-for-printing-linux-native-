@@ -35,7 +35,7 @@ from tools.render.caches      import (_set_active, _priority_evict,
                                       _ThumbnailCache, _FullPageCache)
 from tools.render.images      import (MAX_RENDER_PX, _SCALE_EPS, _good_enough,
                                       pil_to_qpixmap, _render_image,
-                                      render_page, _rotate_char_boxes)
+                                      _rotate_char_boxes)
 from tools.render.queue       import (_thumb_render_width, _ThumbSignals,
                                       _ThumbTask, _RenderQueue, _render_queue,
                                       shutdown_render_queue, _PageSignals,

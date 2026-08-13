@@ -25,34 +25,6 @@ PAPER_SIZES_PT = {
 LABEL_W = 220   # Feste Label-Breite — passt alle deutschen Bezeichnungen
 
 
-def _normalized_page(src_page):
-    """Return a copy of src_page with /Rotate baked into content and mediabox corrected."""
-    from pypdf import PdfWriter, Transformation as _T
-    try:
-        rot = int(src_page.get('/Rotate', 0) or 0) % 360
-    except Exception:
-        rot = 0
-    if rot == 0:
-        return src_page
-    w = PdfWriter()
-    w.add_page(src_page)
-    p = w.pages[0]
-    rw = float(p.mediabox.width)
-    rh = float(p.mediabox.height)
-    if rot == 90:
-        p.add_transformation(_T((0, -1, 1, 0, 0, rw)))
-        p.mediabox.lower_left = (0, 0); p.mediabox.upper_right = (rh, rw)
-    elif rot == 180:
-        p.add_transformation(_T((-1, 0, 0, -1, rw, rh)))
-    elif rot == 270:
-        p.add_transformation(_T((0, 1, -1, 0, rh, 0)))
-        p.mediabox.lower_left = (0, 0); p.mediabox.upper_right = (rh, rw)
-    for key in ('/Rotate', '/CropBox', '/BleedBox', '/TrimBox', '/ArtBox'):
-        if key in p:
-            del p[key]
-    return p
-
-
 def _inherited_rotate(page) -> int:
     """/Rotate of a pikepdf page, following the inheritance chain up the page
     tree (it may live on a /Pages node instead of the page itself)."""
@@ -138,17 +110,6 @@ def row(label_text: str, widget, stretch=1, label_w: int = LABEL_W) -> QHBoxLayo
     lbl.setObjectName("dimLabel")
     h.addWidget(lbl)
     h.addWidget(widget, stretch)
-    return h
-
-
-def row2(label_text: str, w1, label2: str, w2) -> QHBoxLayout:
-    """Zwei Label+Feld Paare in einer Zeile."""
-    h = QHBoxLayout()
-    h.setSpacing(12)
-    l1 = QLabel(label_text); l1.setFixedWidth(LABEL_W); l1.setObjectName("dimLabel")
-    l2 = QLabel(label2);     l2.setFixedWidth(120);     l2.setObjectName("dimLabel")
-    h.addWidget(l1); h.addWidget(w1, 1)
-    h.addWidget(l2); h.addWidget(w2, 1)
     return h
 
 

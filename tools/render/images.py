@@ -1,7 +1,7 @@
 """
 A whole page, as one image, plus the arithmetic of how big to make it.
 
-render_page / _render_image are the simple path — give me this page at this
+_render_image is the simple path — give me this page at this
 width — used for thumbnails and for anything that just needs a picture. Deep
 zoom does not come through here; it renders only the visible window, in
 tools/render/region.py.
@@ -91,10 +91,6 @@ def _render_image(pdf_path, page_index, width, rotation=0, should_cancel=None):
                      QImage.Format.Format_RGB32)
         img.fill(QColor("#2a3a5a"))
         return img
-
-
-def render_page(pdf_path, page_index, width):
-    return QPixmap.fromImage(_render_image(pdf_path, page_index, width))
 
 
 def _rotate_char_boxes(chars, rot, w, h):

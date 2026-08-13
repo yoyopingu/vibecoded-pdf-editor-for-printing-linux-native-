@@ -31,9 +31,9 @@ from tools.i18n      import tr
 # ── Shared helpers, now in tools/panels/ ─────────────────────────────────────
 # Imported rather than defined here, and re-exported: this module is a shim.
 from tools.panels._shared     import (MM_TO_PT, PAPER_SIZES_PT, LABEL_W,
-                                      _normalized_page, _inherited_rotate,
-                                      _visible_box, _visible_size, _mat_mul,
-                                      _display_matrix, row, row2, PreviewPane)
+                                      _inherited_rotate, _visible_box,
+                                      _visible_size, _mat_mul, _display_matrix,
+                                      row, PreviewPane)
 from tools.panels._colour     import _colour_histogram, _hist_stats
 from tools.panels._verify     import (_VERIFY_SCALE, _BLACKOUT_LIMIT, _page_luma,
                                       _conversion_damage, _verify_pages_intact)

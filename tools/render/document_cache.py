@@ -344,26 +344,6 @@ def open_page(path, index):
         _checkin(handle)
 
 
-def get_handle(path):
-    """The :class:`DocumentHandle` for `path`, opening the document if needed."""
-    handle = _checkout(path)
-    if handle is None:
-        raise FileNotFoundError(path)
-    _checkin(handle)
-    return handle
-
-
-def get_document(path):
-    """The cached, still-open document for `path`.
-
-    Note what this does *not* give you: the document is not pinned, so it may be
-    evicted and closed by another thread's checkout at any moment, and no lock
-    is held. Hold :data:`PDFIUM_LOCK` around every call you make on it, or use
-    :func:`page_document`, which handles the lifetime and the locking together.
-    """
-    return get_handle(path).doc
-
-
 def release(path):
     """Drop everything cached for `path` — the parsed document and its loaded
     pages. Called when the tab showing it closes.
