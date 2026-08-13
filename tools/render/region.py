@@ -58,6 +58,21 @@ REGION_MARGIN_PX = 192
 
 
 _page_sizes: "dict" = {}
+_PAGE_SIZES_MAX = 512
+
+
+def _remember(cache, key, value, cap):
+    """Store `value`, dropping the oldest entries once `cap` is reached.
+
+    Not cache.clear(): a document with more pages than the cap would wipe
+    everything it had just learned each time it filled up, so paging through a
+    long file kept re-measuring pages it had already seen. Insertion order is
+    enough to decide what to drop — these are filled in page order.
+    """
+    cache[key] = value
+    while len(cache) > cap:
+        cache.pop(next(iter(cache)))
+    return value
 
 
 def page_size_pt(path, page_index):
@@ -69,9 +84,7 @@ def page_size_pt(path, page_index):
         from tools.render.document_cache import open_page
         with open_page(path, page_index) as page:
             size = (page.get_width(), page.get_height())
-        if len(_page_sizes) > 256:
-            _page_sizes.clear()
-        _page_sizes[key] = size
+        _remember(_page_sizes, key, size, _PAGE_SIZES_MAX)
     return size
 
 
@@ -163,9 +176,7 @@ def page_chars(path, page_index, scale, rotation=0):
         except Exception:
             logging.debug("region: text extraction failed", exc_info=True)
             unit = []
-        if len(_unit_chars) >= _UNIT_CHARS_MAX:
-            _unit_chars.pop(next(iter(_unit_chars)), None)
-        _unit_chars[key] = unit
+        _remember(_unit_chars, key, unit, _UNIT_CHARS_MAX)
 
     scaled = [(ch, x0 * scale, y0 * scale, x1 * scale, y1 * scale)
               for ch, x0, y0, x1, y1 in unit]

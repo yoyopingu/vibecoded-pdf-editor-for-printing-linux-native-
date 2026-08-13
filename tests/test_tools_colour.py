@@ -511,3 +511,33 @@ def test_the_cache_drops_the_oldest_not_everything():
     assert ("doc", _CACHE_MAX + 49) in _cache, "the newest entry was dropped"
     assert ("doc", 49) not in _cache, "the oldest entry was kept"
     assert ("doc", 60) in _cache, "everything was cleared instead of the oldest"
+
+
+def test_colour_operators_read_the_stream_the_way_a_pdf_writes_it():
+    """The operand separator before an operator is optional, and PDF whitespace
+    is six characters rather than three.
+
+    `1 0 0rg` is legal and optimisers emit it; the scan skipped it because a
+    digit sitting against the operator looked like the middle of a token. A
+    letter there does mean that — the RG in /DeviceRGB is not the operator —
+    but a digit is just the last operand written tight."""
+    from tools.colorspace import colour_operators
+
+    finds = [
+        (b"1 0 0 rg\n",     {"/DeviceRGB"},  "the ordinary spelling"),
+        (b"1 0 0rg\n",      {"/DeviceRGB"},  "no space before the operator"),
+        (b"0 0 0 1k\n",     {"/DeviceCMYK"}, "the same, for CMYK"),
+        (b"1 0 0\frg\n",    {"/DeviceRGB"},  "form feed counts as whitespace"),
+        (b"q 1 0 0 RG Q",   {"/DeviceRGB"},  "the stroke-side operator"),
+        (b"1 0 0 rg",       {"/DeviceRGB"},  "operator at the very end"),
+    ]
+    rejects = [
+        (b"/DeviceRGB cs",  "RG inside a name"),
+        (b"1 0 0 rgb",      "rgb is a different token"),
+        (b"123 rg",         "one operand is not a triple"),
+        (b"1 0 0 1 0 0 cm", "cm is not a colour operator"),
+    ]
+    for data, expect, why in finds:
+        assert colour_operators(data) == expect, f"{why}: {data!r}"
+    for data, why in rejects:
+        assert colour_operators(data) == set(), f"{why}: {data!r}"

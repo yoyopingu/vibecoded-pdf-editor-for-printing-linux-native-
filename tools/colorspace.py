@@ -43,11 +43,22 @@ from tools.render.document_cache import _stat_key
 #
 # The operand count then runs against 64 bytes instead of 53 million, so the
 # whole scan is bounded by how fast the file can be read.
-_RE_OPERANDS = re.compile(rb'(?:[-+]?[0-9.]+[ \t\r\n]+){1,5}\Z')
+# PDF whitespace is NUL, tab, newline, form feed, carriage return and space —
+# not just the three a naive pattern reaches for.
+_WS = rb'[\x00\t\n\f\r ]'
+# Operands, with the separator before the operator optional: `1 0 0 rg` and the
+# compact `1 0 0rg` are both legal, and optimisers emit the second. Whitespace
+# *between* operands stays mandatory, or backtracking would read `123` as three
+# separate numbers and call it an RGB triple.
+_RE_OPERANDS = re.compile(rb'(?:[-+]?[0-9.]+' + _WS + rb'+){0,4}[-+]?[0-9.]+'
+                          + _WS + rb'*\Z')
 _OPERANDS_WINDOW = 64          # more than enough for four numbers and spacing
 
-# A PDF operator is delimited: `rg` in `/Xrg` or `rgb` is not the operator.
-_WORD = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+# A PDF operator is delimited. A letter before it means we are inside a name or
+# a longer token — the `RG` in `/DeviceRGB` is not the operator. A digit before
+# it is fine: that is the last operand, written tight against it.
+_LETTER = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+_ALNUM = _LETTER | frozenset(b"0123456789")
 
 _FAMILIES = (
     ((b"rg", b"RG"), 3, "/DeviceRGB"),
@@ -59,7 +70,7 @@ _FAMILIES = (
 def _delimited(data, pos, length):
     before = data[pos - 1] if pos else None
     after = data[pos + length] if pos + length < len(data) else None
-    return before not in _WORD and after not in _WORD
+    return before not in _LETTER and after not in _ALNUM
 
 
 def _uses(data, tokens, operands):
