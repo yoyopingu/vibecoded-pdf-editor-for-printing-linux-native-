@@ -12,7 +12,8 @@ import math
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QSizePolicy
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QPixmap
-from tools.colorspace import describe, page_colorspaces
+from tools.colorspace import (cached_page_colorspaces, describe,
+                              page_colorspaces)
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
@@ -986,15 +987,47 @@ class SinglePageView(QWidget):
         QTimer.singleShot(0, self._update_color_label)
 
     def _update_color_label(self):
+        """Say which colour spaces the page uses, without stalling to find out.
+
+        Reading them means walking every content stream on the page — half a
+        second on a large one, and this runs after every render, on the GUI
+        thread. So: answer at once when it is already known, and otherwise ask
+        in the background and fill the label in when the answer arrives.
+        """
         try:
             if not self.model or not self.pdf_path:
                 return
             uid = self.model.order[self._current]
             src_path, orig = self.model.page_source(uid, self.pdf_path)
-            cs = describe(page_colorspaces(src_path, orig))
-            self._color_lbl.setText(tr('Farbprofil: {p0}').format(p0=cs))
         except Exception:
             self._color_lbl.setText(tr("Farbprofil: —"))
+            return
+
+        known = cached_page_colorspaces(src_path, orig)
+        if known is not None:
+            self._color_lbl.setText(
+                tr('Farbprofil: {p0}').format(p0=describe(known)))
+            return
+
+        # The page this answer will belong to. By the time it comes back the
+        # user may have turned to another one, and a label from the page before
+        # is worse than no label.
+        self._cs_pending = (src_path, orig)
+        self._color_lbl.setText(tr("Farbprofil: …"))
+        from tools.jobs import submit
+        submit(lambda job: page_colorspaces(src_path, orig),
+               owner=self, name="colorspace",
+               on_done=lambda names, want=(src_path, orig):
+                   self._apply_color_label(want, names))
+
+    def _apply_color_label(self, want, names):
+        if getattr(self, "_cs_pending", None) != want:
+            return                      # the user has moved on
+        try:
+            self._color_lbl.setText(
+                tr('Farbprofil: {p0}').format(p0=describe(names)))
+        except RuntimeError:
+            pass                        # the view is being torn down
 
 
     def next_page(self):

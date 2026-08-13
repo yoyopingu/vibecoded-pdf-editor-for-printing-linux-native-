@@ -416,3 +416,33 @@ def test_farbprofil_report_names_every_colour_space_present():
     report = p.report.toPlainText()
     assert "CMYK" in report and "RGB" in report, f"report missed a colour space:\n{report}"
     assert "Gemischt" in report, f"mixed file not flagged as mixed:\n{report}"
+
+
+def test_colour_scan_does_not_degrade_on_a_large_content_stream():
+    """The scan has to stay linear in the size of the stream.
+
+    It was not. Matching operands-then-operator — `[\\d.]+\\s+` four times over
+    followed by [kK] — backtracks catastrophically through a page that is mostly
+    coordinates and contains no CMYK, which is the ordinary case for a large
+    vector drawing. Measured at 15.3 seconds on one 53 MB page, against 260 ms
+    to read that stream off disk, and it ran on the GUI thread.
+
+    This builds the shape that provoked it: a long run of numeric operands with
+    no CMYK operator anywhere in it."""
+    import time
+    from tools.colorspace import colour_operators
+
+    # ~8 MB of plausible path drawing: numbers, moves, lines, strokes, no CMYK.
+    chunk = b"0.482 0.913 m 12.5 33.75 l 100.25 4.5 l S\n"
+    data = b"1 0 0 RG 0.5 w\n" + chunk * (8_000_000 // len(chunk))
+
+    start = time.perf_counter()
+    names = colour_operators(data)
+    elapsed = time.perf_counter() - start
+
+    assert "/DeviceRGB" in names, "the stroke colour was missed"
+    assert "/DeviceCMYK" not in names, "invented a CMYK operator"
+    # Generous: the point is orders of magnitude, not a stopwatch. The old
+    # spelling took tens of seconds on this input.
+    assert elapsed < 3.0, f"{len(data)/1e6:.0f} MB took {elapsed:.1f} s"
+    return f"{len(data)/1e6:.0f} MB in {elapsed*1000:.0f} ms"
