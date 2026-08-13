@@ -11,7 +11,6 @@ from PyQt6.QtCore import Qt, pyqtSignal, QRectF
 from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
-from tools.render.images import pil_to_qpixmap
 from tools.theme import _TV
 
 
@@ -185,7 +184,7 @@ class _PrintPreview(QWidget):
         src_path, orig = self._model.page_source(uid, self._pdf_path)
         rot      = self._model.get_rotation(uid)
 
-        import threading, weakref
+        import weakref
         self_ref = weakref.ref(self)
 
         def _bg(job):

@@ -11,14 +11,10 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QSpinBox, QLineEdit, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QPageLayout
-from tools.app_state import AppState
 from tools.i18n import tr
-from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.printing.preview import _PrintPreview
 from tools.printing import prefs
-from tools.printing.spool import (_PAPER_PTS, _gs_blacked_out, print_via_gs,
-                                  recenter_on_paper, write_subset_pdf,
-                                  prerender_for_qt)
+from tools.printing.spool import (_PAPER_PTS, print_via_gs, prerender_for_qt)
 from tools.viewer.tab import PdfTab
 from tools.theme import _TV
 
@@ -490,7 +486,7 @@ class PrintDialog(QDialog):
         self.printer_combo.setEnabled(False)
         self._printers_loaded.connect(self._apply_printer_list)
 
-        import threading, weakref
+        import weakref
         self_ref = weakref.ref(self)
 
         def _bg(job):
@@ -1073,7 +1069,7 @@ class PrintDialog(QDialog):
             qt_dpi = 600   # laser-printer safe default
         hw_margin_mm = self._hw_margin_mm   # capture now; _on_printer_changed won't run in bg
 
-        import shutil, threading, weakref
+        import shutil, weakref
         self_ref = weakref.ref(self)
 
         def _report(msg):

@@ -16,8 +16,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QPlainTextEdit, QScrollArea, QApplication,
     QSizePolicy, QComboBox
 )
-from PyQt6.QtCore import Qt, QEvent, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QEvent
 from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
 

@@ -1,7 +1,7 @@
 """Plugin Manager v3"""
 import os, sys, importlib.util
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+    QVBoxLayout, QPushButton,
     QListWidget, QListWidgetItem, QTextEdit, QFileDialog, QGroupBox
 )
 from PyQt6.QtCore import Qt
