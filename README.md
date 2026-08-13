@@ -27,8 +27,10 @@ Written in Python with PyQt6. The interface ships in German and English
 - Opening several files at once goes straight to a sort preview, where they can
   be merged into one document or opened as separate tabs. Images and Office
   documents are converted on the way in.
-- Printing with page ranges, duplex, N-up and a monochrome option, with the
-  spooled job verified against what was requested.
+- Printing with page ranges, copies and collation, paper size and tray,
+  orientation, scaling, duplex and a colour mode — read from the queue's own
+  CUPS defaults, and reopened on whatever you printed with last. The spooled
+  job is verified against what was requested.
 
 **Tools** (left sidebar)
 
@@ -160,7 +162,7 @@ python3 tests/run.py zoom render   # only modules whose name matches
 pytest tests/test_render.py        # if you have pytest
 ```
 
-Both runners see the same 90 tests. `tests/run.py` exists because the
+Both runners see the same 112 tests. `tests/run.py` exists because the
 interpreter this app runs on has PyQt6, pypdfium2, pikepdf and reportlab but
 not necessarily pytest, and a suite the app's own machine cannot run is not
 much of a suite.
@@ -169,7 +171,8 @@ One caveat, stated plainly. A full run in a *single* process dies of a heap
 fault about three times in eight — deep in, long after most tests have reported
 PASS. Every test passes; a crashed run is one that got most of the way and fell
 over. Both runners are affected, so it is the app or its libraries in a process
-that has built and destroyed the whole GUI ninety times, not the runner.
+that has built and destroyed the whole GUI a hundred times over, not the
+runner.
 
 A single module has never been seen to crash, under either runner. So
 `python3 tests/run.py` with no arguments runs **one process per module**:
@@ -222,10 +225,12 @@ OCR, preflight, layers, colour profile — over shared helpers in `_shared.py`,
 
 **`tools/shell/` — everything around the documents.** `style` (palette,
 stylesheets, window icon), `settings` (persisted preferences and their
-dialogs), `titlebar`, `window` (`MainWindow` and the sidebar), and `instance`
-(a second launch hands its files to the running window). `tools/app.py` is the
-entry point — `main.py` at the root is a launcher for running from a checkout,
-and is deliberately not installed.
+dialogs), `titlebar`, `window` (`MainWindow` and the sidebar), `instance`
+(a second launch hands its files to the running window), and `inputs` (click a
+number field and its value is selected, ready to be typed over — one event
+filter on the application rather than a subclass per field). `tools/app.py` is
+the entry point; `main.py` at the root is a launcher for running from a
+checkout, and is deliberately not installed.
 
 And the rest of `tools/`:
 
@@ -236,7 +241,6 @@ And the rest of `tools/`:
 | `app_state.py` | Small singleton holding the current document, page model and page, plus the signals other parts subscribe to (`pdf_changed`, `result_ready`, `status_message`). How a tool finds the open file without asking for one. |
 | `multi_open.py` | Which file formats can become a PDF, the file-dialog filter built from that list, and the conversion that runs img2pdf and LibreOffice. |
 | `theme.py` | The live palette every widget paints with, and the switch between light and dark. Shared by the viewer, the panels, the print dialog and the window, so it belongs to none of them. |
-| `shell/inputs.py` | Click a number field and its value is selected, ready to be typed over; click again and the caret goes where you clicked. One event filter on the application rather than a subclass per field. |
 | `colorspace.py` | Which colour spaces a page uses, read from the file's structure — declared spaces, image spaces, and the colour operators in the content streams, recursing into Form XObjects. Shared by the viewer's label, the Farbprofil tool and the greyscale scan, which each used to have their own copy and disagree. |
 | `i18n.py` | `tr()` and the German→English string table. German source strings are the keys. |
 | `plugin_manager.py` | Discovers `BasePanel` subclasses in `plugins/`, and the panel for installing them. |
