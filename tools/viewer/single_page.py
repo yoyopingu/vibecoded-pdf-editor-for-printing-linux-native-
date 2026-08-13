@@ -30,8 +30,6 @@ from tools.theme import _PREV_BTN, _TV, _register_themed
 # lie. Window rendering costs the same at any zoom, so the limit is now just a
 # question of what is useful.
 MAX_ZOOM = 40.0
-
-
 MIN_ZOOM = 0.1
 
 

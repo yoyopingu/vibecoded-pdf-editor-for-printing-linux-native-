@@ -12,8 +12,6 @@ except ImportError:                       # QtNetwork not installed
 
 
 _IPC_KEY = "copyshop_pdf_suite_single_instance"
-
-
 _IPC_TOKEN_PREFIX = "\x01token="
 
 

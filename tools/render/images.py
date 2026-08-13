@@ -31,7 +31,6 @@ from tools.render.region import page_px_size, page_size_pt
 # cached and pre-rendered for page flipping; above it, it would be gigabytes.
 MAX_RENDER_PX = 4000
 
-
 _SCALE_EPS = 0.01
 
 

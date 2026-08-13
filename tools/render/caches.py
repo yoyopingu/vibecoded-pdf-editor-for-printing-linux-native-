@@ -15,8 +15,6 @@ from collections import OrderedDict
 
 
 _active_path: str = ""
-
-
 _active_page: int = 0
 
 

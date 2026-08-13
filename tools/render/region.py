@@ -56,7 +56,6 @@ def _revision(path):
 # all, it is just a blit at a different offset.
 REGION_MARGIN_PX = 192
 
-
 _page_sizes: "dict" = {}
 _PAGE_SIZES_MAX = 512
 

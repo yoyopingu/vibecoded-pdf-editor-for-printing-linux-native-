@@ -362,8 +362,6 @@ QTabBar::close-button {{ subcontrol-position: right; }}
 
 
 STYLE       = _build_style(dark=True)
-
-
 LIGHT_STYLE = _build_style(dark=False)
 
 
