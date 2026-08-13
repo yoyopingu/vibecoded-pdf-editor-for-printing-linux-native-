@@ -4,6 +4,7 @@ App.
 import os, sys, time
 import tools.all_tools as T
 import main as MAIN
+import tools.shell.instance as INSTANCE
 from tests.support import FX, _TMP, _app, _open, _spin
 
 
@@ -15,7 +16,8 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer
 app = QApplication([])
 import main as MAIN
-MAIN._IPC_KEY = {key!r}          # own socket, so a real running app is untouched
+import tools.shell.instance as INSTANCE
+INSTANCE._IPC_KEY = {key!r}   # own socket, so a real running app is untouched
 win = MAIN.MainWindow(open_file={src!r})
 win.show()
 seen = []
@@ -49,7 +51,8 @@ sys.path.insert(0, {repo!r})
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 sys.argv = ["copyshop", {src!r}]
 import main as MAIN
-MAIN._IPC_KEY = {key!r}          # own socket, so a real running app is untouched
+import tools.shell.instance as INSTANCE
+INSTANCE._IPC_KEY = {key!r}   # own socket, so a real running app is untouched
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
@@ -116,7 +119,11 @@ def test_single_instance_forwards_files():
     # A private key: the developer's own copy of the app may well be running,
     # and it would answer on the production socket.
     key = f"copyshop_test_{os.getpid()}"
-    real_key, MAIN._IPC_KEY = MAIN._IPC_KEY, key
+    # Patched where it is read: _forward_to_running_instance resolves
+    # _IPC_KEY in its own module, so rebinding main's copy would leave the
+    # test talking to the production socket — and to the developer's own
+    # running app, which would answer.
+    real_key, INSTANCE._IPC_KEY = INSTANCE._IPC_KEY, key
     with open(script, "w") as f:
         f.write(_HOST_SCRIPT.format(repo=repo, src=FX["normal"], key=key))
 
@@ -149,7 +156,7 @@ def test_single_instance_forwards_files():
         assert raises == 1, f"window was raised {raises}x for one delivery"
     finally:
         host.kill(); host.wait(timeout=10)
-        MAIN._IPC_KEY = real_key
+        INSTANCE._IPC_KEY = real_key
 
 
 def test_open_paths_routes_by_count():
