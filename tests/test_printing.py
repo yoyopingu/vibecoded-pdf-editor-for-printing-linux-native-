@@ -6,12 +6,13 @@ from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 import pypdfium2 as pdfium
-import tools.all_tools as T
+from tools.panels._colour import _colour_histogram, _hist_stats
 from tests.support import _TMP, _page_labels
 
 
 def _print_dialog(n_pages=10, name="print_src.pdf"):
-    from tools.page_viewer import PdfTab, PrintDialog
+    from tools.viewer.tab import PdfTab
+    from tools.printing.dialog import PrintDialog
     src = os.path.join(_TMP, name)
     c = canvas.Canvas(src, pagesize=A4)
     for i in range(n_pages):
@@ -108,14 +109,15 @@ def test_print_never_destroys_colour_in_the_spooled_file():
     def saturation(path):
         d = pdfium.PdfDocument(path)
         pil = d[0].render(scale=0.4).to_pil().convert("RGB"); d.close()
-        return T._hist_stats(T._colour_histogram(pil), 20)[0]
+        return _hist_stats(_colour_histogram(pil), 20)[0]
 
     src_sat = saturation(src)
     assert src_sat > 100, "fixture is not colourful enough to test with"
 
     tab, dlg = _print_dialog(1, "print_colour_tab.pdf")
     dlg = None
-    from tools.page_viewer import PdfTab, PrintDialog
+    from tools.viewer.tab import PdfTab
+    from tools.printing.dialog import PrintDialog
     tab = PdfTab(src)
     dlg = PrintDialog(tab.pdf_path, tab.model, tab)
 

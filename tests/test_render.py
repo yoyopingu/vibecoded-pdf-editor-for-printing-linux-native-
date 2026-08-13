@@ -4,7 +4,7 @@ Render.
 import os, time, tempfile
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
-from tools.page_viewer import _ThumbnailCache
+from tools.render.caches import _ThumbnailCache
 from tests.support import FX, _TMP, _app, _open_single_view, _settle, _spin
 
 
@@ -86,8 +86,8 @@ def test_jobs_are_cancelled_on_tab_close_and_on_shutdown():
     that was being deleted."""
     import time as _t
     from tools import jobs
-    import tools.page_viewer as pv
-    from tools.page_viewer import PageViewerPanel
+    import tools.render.queue as pv
+    from tools.viewer.panel import PageViewerPanel
 
     def polling(sink):
         """Work that notices cancellation, like the real job bodies do."""
@@ -202,11 +202,11 @@ def test_a_narrower_thumbnail_is_shrunk_not_re_rendered():
     sheet. Thumbnail widths are derived from the window's, so dragging it used
     to re-render every card at every width it passed through."""
     # The module _ThumbTask resolves _render_image in, which is where the spy
-    # has to go — patching the re-export in tools.page_viewer would rebind a
-    # name nothing looks up.
+    # has to go — patching a re-export elsewhere would rebind a name nothing
+    # looks up.
     import tools.render.queue as pv
-    from tools.page_viewer import (_ThumbTask, _ThumbnailCache,
-                                   _thumb_render_width)
+    from tools.render.queue import _ThumbTask, _thumb_render_width
+    from tools.render.caches import _ThumbnailCache
     _ThumbnailCache.invalidate()
     rendered = []
     original = pv._render_image
@@ -345,7 +345,7 @@ def test_closing_a_tab_releases_the_parsed_document():
     """A loaded page of a big PDF is hundreds of megabytes. Keeping the document
     and its pages parsed for a tab the user has closed is the largest single
     thing this app can hold on to for no reason."""
-    from tools.page_viewer import PageViewerPanel
+    from tools.viewer.panel import PageViewerPanel
     from tools.render import document_cache as dc
     dc.close_all()
     vp = PageViewerPanel(); vp.resize(900, 700); vp.show()
@@ -368,7 +368,7 @@ def test_the_prerender_window_follows_the_reader():
     """Pre-rendering ran once, 400 ms after the file opened, over a window around
     page 1 — so it warmed pages the user had already seen and never the ones
     ahead of them. Ten pages in, every turn was a cold render again."""
-    from tools.page_viewer import _FullPageCache
+    from tools.render.caches import _FullPageCache
     vp, sv = _open_single_view(FX["booklet32"])
     try:
         _settle(vp, lambda: sv._prerender_tasks, tries=200)
@@ -385,7 +385,7 @@ def test_the_prerender_window_follows_the_reader():
 def test_render_paths_go_through_the_document_cache():
     """_render_image used to open and close the whole PDF for every single page.
     Five pages of one file should now cost one parse."""
-    from tools.page_viewer import _render_image
+    from tools.render.images import _render_image
     from tools.render import document_cache as dc
     dc.close_all()
     restore, parsed = _count_parses()

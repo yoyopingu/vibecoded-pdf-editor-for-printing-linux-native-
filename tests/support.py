@@ -9,28 +9,28 @@ pytest every test that touched it failed on an empty dict before it began.
 
 Import order below is not arbitrary; see the note on main.
 """
-import os, sys, hashlib, time, tempfile, shutil
+import os, sys, time, tempfile
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PyQt6.QtWidgets import QApplication, QStackedWidget, QLabel
-from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication
 _app = QApplication.instance() or QApplication(sys.argv)
 
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfReader
 import pypdfium2 as pdfium
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from PIL import Image
 
 from tools.app_state import AppState
-from tools.page_viewer import PageModel, _ThumbnailCache
-import tools.all_tools as T
-# Imported up here on purpose: main pulls in PyQt6.QtNetwork, and loading that
-# extension module later — with the render threads already running — segfaults.
-import main as MAIN
-from tools._base import BasePanel, CurrentFileBar, LogBox, ToolScrollArea
+from tools.viewer.model import PageModel
+from tools.panels.nup import NUpPanel
+
+# Not used here, and not removable: main pulls in PyQt6.QtNetwork, and loading
+# that extension module later — once the render threads are running — segfaults
+# inside the import machinery. Importing it now is the ordering that works.
+import main as MAIN                                            # noqa: F401
 
 
 MM = 2.8346456693
@@ -155,7 +155,7 @@ def _ink_margins(path, i=0, scale=4):
 def _nup(src, *, cols=1, rows=1, fmt=0, margins=20.0, gaps=0.0, name="nup_c.pdf"):
     """Run the real N-Up panel over `src` and return the output path."""
     _open(src)
-    p = T.NUpPanel()
+    p = NUpPanel()
     p.cols.setValue(cols); p.rows.setValue(rows)
     p.out_fmt.setCurrentIndex(fmt)
     for w in (p.margin_t, p.margin_b, p.margin_l, p.margin_r): w.setValue(margins)
@@ -202,7 +202,8 @@ def _pdfium_page_text(path):
 
 def _open_single_view(path, w=1000, h=760):
     """A viewer showing `path`, settled on its first real render."""
-    from tools.page_viewer import PageViewerPanel, _FullPageCache
+    from tools.viewer.panel import PageViewerPanel
+    from tools.render.caches import _FullPageCache
     # Start from a cold cache: these tests care about what happens when the
     # cached render is coarser or finer than the zoom asked for, and a render
     # left behind by an earlier test decides that for them.

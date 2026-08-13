@@ -10,21 +10,46 @@ from PIL import Image
 from tools.app_state import AppState
 from tools._base import BasePanel
 import pypdfium2 as pdfium
-import tools.all_tools as T
+from tools.panels.colour_profile import ColourProfilePanel
+from tools.panels.compress import CompressPanel
+from tools.panels.crop_resize import CropResizePanel
+from tools.panels.forms import FormsPanel
+from tools.panels.img_pdf import ImgPdfPanel
+from tools.panels.impose import ImposePanel
+from tools.panels.layers import LayersPanel
+from tools.panels.merge_split import MergeSplitPanel
+from tools.panels.nup import NUpPanel
+from tools.panels.page_numbers import PageNumbersPanel
 from tests.support import FX, _TMP, _app, _open, _pdfium_page_text, _sync_async
 
 
 def test_panels_construct():
-    names = [n for n in dir(T) if n.endswith("Panel") and isinstance(getattr(T, n), type)]
-    built = 0
-    for n in names:
-        getattr(T, n)(); built += 1
-    assert built >= 10, f"only {built} panels built"
+    """Every panel in tools/panels/ has to build.
+
+    Discovered by walking the package rather than listed here, so a panel added
+    later is covered without anyone remembering to add it — which is what this
+    test did when they all lived in one module and it could read dir() of it."""
+    import importlib, pkgutil
+    import tools.panels
+
+    built = []
+    for mod in pkgutil.iter_modules(tools.panels.__path__):
+        if mod.name.startswith("_"):
+            continue                      # shared helpers, not panels
+        m = importlib.import_module(f"tools.panels.{mod.name}")
+        for name in dir(m):
+            obj = getattr(m, name)
+            if (name.endswith("Panel") and isinstance(obj, type)
+                    and obj.__module__ == m.__name__):
+                obj()
+                built.append(name)
+    assert len(built) >= 10, f"only built {sorted(built)}"
+    return f"{len(built)} panels"
 
 
 def test_encryption_guard():
     _open(FX["encrypted"])
-    p = T.CropResizePanel()
+    p = CropResizePanel()
     try:
         p.require_pdf(); raise AssertionError("encrypted PDF was not rejected")
     except ValueError as e:
@@ -49,7 +74,7 @@ def test_run_async_base():
 
 def test_preview_visibility_guard():
     _open(FX["color"])
-    nup = T.NUpPanel(); nup.src_combo.setCurrentIndex(0)
+    nup = NUpPanel(); nup.src_combo.setCurrentIndex(0)
     stack = QStackedWidget(); other = QStackedWidget()
     stack.addWidget(nup); stack.addWidget(other)
     stack.setCurrentWidget(other); stack.resize(900, 600); stack.show(); _app.processEvents()
@@ -63,7 +88,7 @@ def test_ocr_produces_a_searchable_pdf():
     searchable PDF. Tesseract writes exactly that; the pages just have to be
     rendered, OCR'd and stitched back together."""
     import shutil as _sh
-    from tools.all_tools import _run_ocr, tesseract_langs
+    from tools.panels.ocr import _run_ocr, tesseract_langs
     if not _sh.which("tesseract"):
         return "skipped — no tesseract"
     langs = tesseract_langs()
@@ -131,7 +156,7 @@ def test_form_flatten_keeps_the_filled_values():
     empty_ink = _plain_render_ink(src)
 
     _open(src)
-    p = T.FormsPanel(); p.log.log = lambda *a, **k: None
+    p = FormsPanel(); p.log.log = lambda *a, **k: None
     p._load()
     for w in p._fields.values():
         if isinstance(w, QLineEdit): w.setText("MAX MUSTERMANN")
@@ -173,7 +198,7 @@ def test_compress_refuses_a_damaged_result():
     _open(src)
 
     def compress(patch=None, tag="ok"):
-        p = T.CompressPanel(); p.log.log = lambda *a, **k: None
+        p = CompressPanel(); p.log.log = lambda *a, **k: None
         p.preset.setCurrentIndex(1); p.gs_check.setChecked(True)
         o = os.path.join(_TMP, f"cmp_{tag}.pdf")
         p.save_pdf = lambda *a, **k: o
@@ -188,7 +213,7 @@ def test_compress_refuses_a_damaged_result():
 
     # Honest compression at every preset must go through untouched.
     for i in range(4):
-        p = T.CompressPanel(); p.log.log = lambda *a, **k: None
+        p = CompressPanel(); p.log.log = lambda *a, **k: None
         p.preset.setCurrentIndex(i); p.gs_check.setChecked(True)
         o = os.path.join(_TMP, f"cmp_p{i}.pdf")
         p.save_pdf = lambda *a, **k: o
@@ -237,21 +262,21 @@ def test_output_validity():
         return len(PdfReader(path).pages)
 
     # Merge 5 + 1 -> 6 pages
-    m = T.MergeSplitPanel(); m.merge_list.add_files([FX["normal"], FX["single"]])
+    m = MergeSplitPanel(); m.merge_list.add_files([FX["normal"], FX["single"]])
     o = out("merge"); m.save_pdf = lambda *a, **k: o; m.open_result = lambda *a, **k: None
     m._do_merge_impl()
     assert pages(o) == 6, f"merge expected 6, got {pages(o)}"
 
     # Image -> PDF (1 page)
-    ip = T.ImgPdfPanel(); ip.img_list.add_files([FX["image"]])
+    ip = ImgPdfPanel(); ip.img_list.add_files([FX["image"]])
     o = out("img"); ip.save_pdf = lambda *a, **k: o; ip.open_result = lambda *a, **k: None
     ip._to_pdf()
     assert pages(o) == 1, f"img2pdf expected 1, got {pages(o)}"
 
     # transformers on a 3-page doc -> valid output
     _open(FX["color"])
-    for cls in (T.CompressPanel, T.PageNumbersPanel, T.ImposePanel,
-                T.LayersPanel, T.ColourProfilePanel):
+    for cls in (CompressPanel, PageNumbersPanel, ImposePanel,
+                LayersPanel, ColourProfilePanel):
         _open(FX["color"]); p = cls(); _sync_async(p)
         o = out(cls.__name__); p.save_pdf = lambda *a, **k: o
         cap = {}; p.open_result = lambda path, t="": cap.update(p=path)

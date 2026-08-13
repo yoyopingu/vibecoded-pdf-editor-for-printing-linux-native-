@@ -2,7 +2,11 @@
 App.
 """
 import os, sys, time
-import tools.all_tools as T
+from tools.panels.compress import CompressPanel
+from tools.panels.crop_resize import CropResizePanel
+from tools.panels.grayscale import GrayscalePanel
+from tools.panels.nup import NUpPanel
+from tools.panels.page_numbers import PageNumbersPanel
 import main as MAIN
 import tools.shell.instance as INSTANCE
 from tests.support import FX, _TMP, _app, _open, _spin
@@ -229,7 +233,7 @@ def test_dropdowns_show_all_their_options():
         # and the combos the tools actually use
         _app.setStyleSheet(MAIN.STYLE)
         _open(FX["normal"])
-        for panel_cls in (T.NUpPanel, T.CropResizePanel, T.PageNumbersPanel, T.CompressPanel):
+        for panel_cls in (NUpPanel, CropResizePanel, PageNumbersPanel, CompressPanel):
             p = panel_cls(); p.resize(900, 600); p.show(); _app.processEvents()
             for cb in p.findChildren(QComboBox):
                 if cb.count() < 2: continue
@@ -251,11 +255,11 @@ def test_light_theme_reaches_every_colour_source():
     try:
         MAIN.apply_theme_globally("light")
         assert _as.THEME["BG"] == "#edf1f7", f"THEME not switched: {_as.THEME['BG']}"
-        from tools.page_viewer import _TV
+        from tools.theme import _TV
         assert _TV["viewer_bg"] == "#e8edf3"
         # the greyscale preview follows a *runtime* switch as well
         _open(FX["normal"])
-        g = T.GrayscalePanel(); g.resize(900, 600); g.show()
+        g = GrayscalePanel(); g.resize(900, 600); g.show()
         g._build_preview(3)
         _app.processEvents()
         light_css = g._preview_box.styleSheet()

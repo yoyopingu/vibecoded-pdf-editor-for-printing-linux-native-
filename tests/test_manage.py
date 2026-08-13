@@ -25,7 +25,8 @@ def test_rotation_reaches_the_tools():
     flattened view, so they measured and previewed the page in its original
     orientation and produced a crop for the wrong side."""
     from tools._base import displayed_pdf
-    from tools.all_tools import CropResizePanel, NUpPanel
+    from tools.panels.crop_resize import CropResizePanel
+    from tools.panels.nup import NUpPanel
     tab, panel = _manage(3, "rot_tools.pdf")
     st = AppState.get()
     w0, h0 = _pdfium_dims(st.current_pdf)
@@ -72,7 +73,7 @@ def test_rotation_reaches_the_preview():
     """The single-page view turns the bitmap but used to keep the page's original
     width and height, so a rotated page was fitted into a portrait box, measured
     as portrait in the "Masse" readout, and drawn smaller than it should be."""
-    from tools.page_viewer import PageViewerPanel
+    from tools.viewer.panel import PageViewerPanel
     vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
     vp.open_file(FX["normal"])
     _spin(60, 0.01)
@@ -108,7 +109,7 @@ def test_rotation_reaches_the_preview():
 def test_char_boxes_follow_a_rotated_page():
     """Text rectangles are measured before the bitmap is turned; if they do not
     turn with it, selecting text on a rotated page highlights the wrong place."""
-    from tools.page_viewer import _rotate_char_boxes
+    from tools.render.images import _rotate_char_boxes
     W, H = 400.0, 800.0
     box = [("a", 10.0, 20.0, 30.0, 50.0)]      # near the top-left
     assert _rotate_char_boxes(box, 0, W, H) == box
@@ -124,7 +125,7 @@ def test_char_boxes_follow_a_rotated_page():
 
 def _manage(n_pages=6, name="mgr.pdf"):
     """A PdfTab with its page manager built, wired into AppState."""
-    from tools.page_viewer import PdfTab
+    from tools.viewer.tab import PdfTab
     src = os.path.join(_TMP, name)
     c = canvas.Canvas(src, pagesize=A4)
     for i in range(n_pages):

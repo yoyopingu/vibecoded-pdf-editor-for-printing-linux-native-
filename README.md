@@ -207,7 +207,6 @@ Four layers, and imports only ever point downwards.
 
 **`tools/viewer/` — showing it.** One module per part: `model`, `canvas`,
 `single_page`, `page_grid`, `manage`, `merge`, `tab`, `panel`.
-`tools/page_viewer.py` re-exports them and carries the map.
 
 **`tools/printing/` — putting it on paper.** `dialog` decides what to print, on
 what, and how; `preview` draws the sheet as the printer will produce it; `spool`
@@ -220,7 +219,6 @@ output.
 imposition, compress, crop/scale, page numbers, image↔PDF, greyscale, forms,
 OCR, preflight, layers, colour profile — over shared helpers in `_shared.py`,
 `_verify.py`, `_colour.py`, `_cropmarks.py` and `_imposition.py`.
-`tools/all_tools.py` re-exports them.
 
 **`tools/shell/` — everything around the documents.** `style` (palette,
 stylesheets, window icon), `settings` (persisted preferences and their

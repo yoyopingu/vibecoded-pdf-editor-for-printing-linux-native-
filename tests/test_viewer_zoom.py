@@ -28,7 +28,7 @@ def _target_scale_of(sv, zoom):
     if scale is not None:               # uncapped: the page may exceed one bitmap
         got = scale(zoom)
         if got: return got
-    import tools.page_viewer as _pv     # older build: the render was clamped
+    import tools.render.queue as _pv     # older build: the render was clamped
     cap = getattr(_pv, "MAX_RENDER_PX", 4000)
     return min(fit * zoom, cap / sv._page_w_pt, cap / sv._page_h_pt)
 
@@ -148,7 +148,7 @@ def test_deep_zoom_renders_the_window_not_the_whole_page():
     not. It is a switch now: above it only the part of the page on screen is
     rendered, at the exact scale, so the page on screen keeps growing while the
     bitmap stays the size of the window."""
-    import tools.page_viewer as pv
+    import tools.render.queue as pv
     from tools.render.region import render_region
     assert isinstance(pv.MAX_RENDER_PX, int) and pv.MAX_RENDER_PX > 0
     src = _fine_detail_pdf()
@@ -198,7 +198,7 @@ def test_zoom_gesture_does_not_build_page_sized_pixmaps():
     built a 16428x23205 pixmap — 381 megapixels, three gigabytes — on the GUI
     thread. That was seconds of freeze, and the smeared over-zoomed frame that
     flashed up before the real render arrived. It crops first now."""
-    from tools.page_viewer import PdfPageCanvas
+    from tools.viewer.canvas import PdfPageCanvas
     src = _fine_detail_pdf()
     vp, sv = _open_single_view(src, w=1100, h=780)
     biggest = [0, (0, 0)]
@@ -227,7 +227,7 @@ def test_zoom_gesture_renders_once_not_once_per_step():
     """Every wheel click used to queue its own render of the page. On a complex
     page that is seconds of work thrown away — the settle timer exists so the
     exact render happens once, when the gesture stops."""
-    import tools.page_viewer as pv
+    import tools.render.queue as pv
     src = _fine_detail_pdf()
     vp, sv = _open_single_view(src, w=1100, h=780)
     started = []
@@ -274,7 +274,7 @@ def test_zooming_out_reuses_the_finer_render():
     """Shrinking a render made at a higher scale is supersampling — as sharp as
     rendering again. Re-rendering for it made zooming out on a complex page as
     slow as zooming in, for nothing visible."""
-    import tools.page_viewer as pv
+    import tools.render.queue as pv
     src = _fine_detail_pdf()
     vp, sv = _open_single_view(src, w=1100, h=780)
     started = []
@@ -335,7 +335,7 @@ def test_panning_inside_the_margin_costs_no_render():
         before_rect = sv._region_rect
         renders = []
         real = pv_module = None
-        import tools.page_viewer as pv_module
+        import tools.render.queue as pv_module
         orig = pv_module._RegionRenderTask.run
         def counting(self):
             renders.append(1)
@@ -433,8 +433,8 @@ def test_a_slow_page_still_finishes_one_render():
     exactly the case the window rendering exists for — sat on an interpolated
     stand-in for as long as it was looked at, while the render thread threw the
     same work away eight times a second."""
-    import tools.page_viewer as pv
-    from tools.page_viewer import _FullPageCache
+    import tools.render.queue as pv
+    from tools.render.caches import _FullPageCache
     src = _fine_detail_pdf()
     vp, sv = _open_single_view(src)
     started = []

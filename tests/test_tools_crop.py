@@ -5,14 +5,15 @@ import os
 from pypdf import PdfReader
 from PIL import Image
 import pypdfium2 as pdfium
-import tools.all_tools as T
+from tools.panels.crop_resize import CropResizePanel
+from tools.panels._cropmarks import _crop_mark_segments
 from tests.support import FX, MM, _TMP, _brightest, _ink_margins, _nup, _open
 
 
 def test_crop_format_modes():
     _open(FX["normal"])
     def run(action_idx, fmt_setter):
-        p = T.CropResizePanel(); p.apply_all.setChecked(True)
+        p = CropResizePanel(); p.apply_all.setChecked(True)
         out = os.path.join(_TMP, "crop.pdf")
         p.save_pdf = lambda *a, **k: out
         cap = {}; p.open_result = lambda path, t="": cap.update(p=path)
@@ -31,7 +32,7 @@ def test_crop_format_modes():
 
 
 def test_crop_mark_geometry():
-    segs = T._crop_mark_segments([(100, 100, 300, 500)])    # mx=200, corners 100/300
+    segs = _crop_mark_segments([(100, 100, 300, 500)])    # mx=200, corners 100/300
     assert len(segs) == 16, f"expected 16 (8 corner + 8 centre), got {len(segs)}"
     top = [s for s in segs if abs(s[1]-s[3]) < 0.01 and s[1] > 500]   # horizontal centre marks
     centres = sorted(set(round((s[0]+s[2])/2, 1) for s in top))
@@ -52,7 +53,7 @@ def test_crop_format_applies_per_page():
     mixed page sizes the run used to apply the *previewed* page's millimetres to
     all of them, so the other pages came out a different size and off-centre."""
     _open(FX["mixed"])
-    p = T.CropResizePanel(); p.apply_all.setChecked(True)
+    p = CropResizePanel(); p.apply_all.setChecked(True)
     p.scale_check.setChecked(True); p.keep_ratio.setChecked(True)
     p.fmt_combo.setCurrentText("A5  (148x210mm)")
     out = os.path.join(_TMP, "crop_fmt.pdf")
@@ -69,7 +70,7 @@ def test_crop_format_applies_per_page():
         L, R, B, Tp = _ink_margins(out, i)
         assert abs(L-R) < 0.4 and abs(B-Tp) < 0.4, f"page {i+1} not centred"
     # a manual edit after picking the format must still win
-    p2 = T.CropResizePanel(); p2.apply_all.setChecked(True); p2.scale_check.setChecked(False)
+    p2 = CropResizePanel(); p2.apply_all.setChecked(True); p2.scale_check.setChecked(False)
     p2.fmt_combo.setCurrentText("A5  (148x210mm)"); p2.ct.setValue(30.0)
     out2 = os.path.join(_TMP, "crop_fmt2.pdf")
     p2.save_pdf = lambda *a, **k: out2; p2.open_result = lambda path, t="": None
@@ -82,7 +83,7 @@ def test_crop_rejects_over_trim():
     """Trimming away more than the page must be reported, not clamped to a 1 pt
     page with the content dumped somewhere off it."""
     _open(FX["framed"])
-    p = T.CropResizePanel(); p.apply_all.setChecked(True)
+    p = CropResizePanel(); p.apply_all.setChecked(True)
     p.cl2.setValue(150.0); p.cr.setValue(150.0)          # 300 mm off a 210 mm page
     p.save_pdf = lambda *a, **k: os.path.join(_TMP, "never2.pdf")
     p.open_result = lambda path, t="": None
@@ -100,13 +101,13 @@ def test_crop_preview_shows_added_whitespace():
     the added strip as paper. It used to stay the dark canvas colour, so the
     white space being added was invisible."""
     _open(FX["framed"])
-    p = T.CropResizePanel(); p.apply_all.setChecked(True); p.scale_check.setChecked(False)
+    p = CropResizePanel(); p.apply_all.setChecked(True); p.scale_check.setChecked(False)
     for w in (p.ct, p.cb2, p.cl2, p.cr): w.setValue(-15.0)
     pm, _ = p._render_preview(500, 650, 1.0)
     im = _qpix_to_pil(pm); px = im.load()
     # Match the outline against the *live* accent rather than a literal colour —
     # this used to hardcode the old red and broke the moment the accent changed.
-    from tools.page_viewer import _TV
+    from tools.theme import _TV
     ar, ag, ab = (int(_TV["acc"].lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
     hits = [(x, y) for y in range(im.height) for x in range(im.width)
             if abs(px[x, y][0]-ar) < 40 and abs(px[x, y][1]-ag) < 40
@@ -122,7 +123,7 @@ def test_crop_leaves_consistent_boxes():
     handed N-Up a page whose declared box no longer matched its content."""
     import pikepdf
     _open(FX["framed_cropbox"])
-    p = T.CropResizePanel(); p.apply_all.setChecked(True)
+    p = CropResizePanel(); p.apply_all.setChecked(True)
     p.scale_check.setChecked(False)
     for w, v in ((p.ct, 5.0), (p.cb2, 5.0), (p.cl2, 5.0), (p.cr, 5.0)): w.setValue(v)
     out = os.path.join(_TMP, "crop_boxes.pdf")
@@ -148,7 +149,7 @@ def test_crop_trims_the_edge_you_see():
     millimetres off the wrong side."""
     _open(FX["framed_rot90"])
     d = pdfium.PdfDocument(FX["framed_rot90"]); w0, h0 = d[0].get_width(), d[0].get_height(); d.close()
-    p = T.CropResizePanel(); p.apply_all.setChecked(True); p.scale_check.setChecked(False)
+    p = CropResizePanel(); p.apply_all.setChecked(True); p.scale_check.setChecked(False)
     p.cl2.setValue(30.0)                                  # 30 mm off the left
     out = os.path.join(_TMP, "crop_rot.pdf")
     p.save_pdf = lambda *a, **k: out; p.open_result = lambda path, t="": None

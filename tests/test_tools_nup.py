@@ -6,7 +6,8 @@ from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import A4
 from tools.app_state import AppState
 import pypdfium2 as pdfium
-import tools.all_tools as T
+from tools.panels.impose import ImposePanel, _booklet_sides
+from tools.panels.nup import NUpPanel, _build_nup
 from tests.support import FX, MM, _BK_GREY, _TMP, _app, _ink_margins, _nup, _open, _sync_async
 
 
@@ -40,7 +41,7 @@ def _impose(path, open_first=True, **kw):
     of the page-manager test is that the tool follows that model."""
     if open_first:
         _open(path)
-    p = T.ImposePanel(); _sync_async(p)
+    p = ImposePanel(); _sync_async(p)
     for attr, val in kw.items():
         w = getattr(p, attr)
         (w.setCurrentIndex if hasattr(w, "setCurrentIndex") else w.setChecked)(val)
@@ -54,7 +55,7 @@ def _impose(path, open_first=True, **kw):
 def test_nup_source_modes():
     _open(FX["normal"])      # 5 pages
     def sheets(mode):
-        p = T.NUpPanel(); p.cols.setValue(2); p.rows.setValue(2); p.src_combo.setCurrentIndex(mode)
+        p = NUpPanel(); p.cols.setValue(2); p.rows.setValue(2); p.src_combo.setCurrentIndex(mode)
         out = os.path.join(_TMP, f"nup{mode}.pdf"); p.save_pdf = lambda *a, **k: out
         cap = {}; p.open_result = lambda path, t="": cap.update(p=path); _sync_async(p)
         p._run_action(); return len(PdfReader(cap["p"]).pages)
@@ -64,7 +65,7 @@ def test_nup_source_modes():
 
 def test_nup_preview_differs_by_mode():
     _open(FX["normal"])
-    nup = T.NUpPanel(); nup.cols.setValue(2); nup.rows.setValue(2)
+    nup = NUpPanel(); nup.cols.setValue(2); nup.rows.setValue(2)
     nup.resize(900, 600); nup.show(); _app.processEvents()
     def h(mode):
         nup.src_combo.setCurrentIndex(mode)
@@ -84,8 +85,8 @@ def test_nup_crop_marks():
     sw = (A4w-2*ml-gap)/2; sh = (A4h-2*mt-gap)/2
     params = (A4w, A4h, mt, mt, ml, ml, gap, gap, sw, sh, 2, 2)
     nomark = os.path.join(_TMP, "nm.pdf"); withm = os.path.join(_TMP, "wm.pdf")
-    T._build_nup(FX["normal"], nomark, [0, 1, 2, 3], params, 4, lambda m: None, crop_marks=False)
-    T._build_nup(FX["normal"], withm, [0, 1, 2, 3], params, 4, lambda m: None, crop_marks=True)
+    _build_nup(FX["normal"], nomark, [0, 1, 2, 3], params, 4, lambda m: None, crop_marks=False)
+    _build_nup(FX["normal"], withm, [0, 1, 2, 3], params, 4, lambda m: None, crop_marks=True)
     def left_margin_dark(path):
         d = pdfium.PdfDocument(path); im = d[0].render(scale=2).to_pil().convert("L"); d.close()
         return min(im.crop((0, 0, int(ml*2), im.size[1])).get_flattened_data())
@@ -123,7 +124,7 @@ def test_nup_rejects_impossible_margins():
     """Margins wider than the sheet must be reported, not silently squeezed into
     a 1 pt slot in the corner."""
     _open(FX["framed"])
-    p = T.NUpPanel()
+    p = NUpPanel()
     p.out_fmt.setCurrentIndex(0)                      # A4
     p.margin_l.setValue(120.0); p.margin_r.setValue(120.0)
     p.save_pdf = lambda *a, **k: os.path.join(_TMP, "never.pdf")
@@ -142,14 +143,14 @@ def test_booklet_pads_to_multiples_of_four():
     multiple of four — and it must do that by adding blank *slots* at the end,
     never by dropping or duplicating a source page."""
     for n in (1, 2, 3, 4, 5, 6, 29, 30, 31, 32):
-        sides = T._booklet_sides(n)
+        sides = _booklet_sides(n)
         flat  = [i for side in sides for i in side]
         assert sorted(i for i in flat if i is not None) == list(range(n)), \
             f"n={n}: pages lost or duplicated — {flat}"
         assert len(flat) % 4 == 0 and 0 <= len(flat) - n < 4, \
             f"n={n}: padded to {len(flat)} slots"
     # 4 pages fold as [back|front] then [inside-left|inside-right]
-    assert T._booklet_sides(4) == [[3, 0], [1, 2]]
+    assert _booklet_sides(4) == [[3, 0], [1, 2]]
 
 
 def test_booklet_page_order():
@@ -227,7 +228,7 @@ def test_tools_see_the_page_manager():
     since "Leere Seite einfuegen" appends the blank to the end of the file, it
     surfaced as the back of the cover."""
     from tools._base import displayed_pdf
-    from tools.page_viewer import PdfTab
+    from tools.viewer.tab import PdfTab
 
     # unedited document -> the original file, no copy
     _open(FX["booklet32"])

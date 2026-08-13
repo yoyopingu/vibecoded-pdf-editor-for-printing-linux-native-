@@ -4,7 +4,7 @@ Merge Preview.
 import os, time, tempfile
 from PyQt6.QtWidgets import QLabel
 from pypdf import PdfReader
-from tools.page_viewer import PageModel
+from tools.viewer.model import PageModel
 import main as MAIN
 from tests.support import FX, _TMP, _app, _pdfium_page_text, _settle, _spin
 
@@ -24,7 +24,8 @@ def test_merge_view_matches_manage_view():
     its selection behaviour must be the same — they used to be a separate
     implementation with single-select only, no zoom and boxed cards."""
     from PyQt6.QtCore import Qt as _Qt
-    from tools.page_viewer import PageGrid, FileGrid, MergeOrderWidget, CARD_W
+    from tools.viewer.page_grid import PageGrid, CARD_W
+    from tools.viewer.merge import FileGrid, MergeOrderWidget
     paths = [FX["normal"], FX["single"], FX["framed"], FX["mixed"]]
     model = PageModel(4)
     pgrid = PageGrid(model, FX["normal"])
@@ -63,7 +64,7 @@ def test_merge_view_matches_manage_view():
 
 
 def test_merge_view_reorders_and_removes():
-    from tools.page_viewer import MergeOrderWidget
+    from tools.viewer.merge import MergeOrderWidget
     paths = [FX["normal"], FX["single"], FX["framed"], FX["mixed"]]
     mw = MergeOrderWidget(paths); g = mw._grid
     g._selected = {0, 1}; g._last_selected = 0
@@ -90,7 +91,8 @@ def test_merge_view_reorders_and_removes():
 def test_merge_tab_end_to_end():
     """Open the merge tab, reorder, confirm — the result must be one PDF in the
     order shown, replacing the merge tab."""
-    from tools.page_viewer import PageViewerPanel, MergeOrderWidget
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.merge import MergeOrderWidget
     paths = [FX["normal"], FX["single"], FX["framed"]]      # 5 + 1 + 1 pages
     vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
     vp.show_merge_tab(paths)
@@ -116,7 +118,7 @@ def test_merge_tab_end_to_end():
 def _open_in_manage(path):
     """Open `path` in a viewer panel and switch it into the page manager.
     Returns (viewer, tab, manage_panel)."""
-    from tools.page_viewer import PageViewerPanel
+    from tools.viewer.panel import PageViewerPanel
     vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
     vp.open_file(path)
     _spin(60, 0.01)
@@ -210,8 +212,8 @@ def test_drop_marker_is_a_slim_page_slot():
     not the barbed line that used to read as a crooked arrow. Measured by
     diffing a render with and without the marker, so only the marker's own
     pixels are inspected."""
-    from tools.page_viewer import PageGrid, CARD_H
-    from tools.page_viewer import PageModel as _PM
+    from tools.viewer.page_grid import PageGrid, CARD_H
+    from tools.viewer.model import PageModel as _PM
     grid = PageGrid(_PM(6), FX["normal"])
     grid.resize(700, 500); grid.show()
     _spin(40, 0.02)
@@ -256,7 +258,8 @@ def test_several_files_go_straight_to_the_preview():
     chooser was removed because clicking its merge button faster than the
     preview could be built queued the click and opened one preview per click."""
     from PyQt6.QtWidgets import QDialog
-    from tools.page_viewer import PageViewerPanel, MergeOrderWidget
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.merge import MergeOrderWidget
     import tools.multi_open as MO
     assert not hasattr(MO, "MultiOpenDialog"), "the modal chooser is back"
 
@@ -294,7 +297,9 @@ def test_several_files_go_straight_to_the_preview():
 def test_preview_opens_files_separately():
     """"Einzeln oeffnen" converts the same way the merge does, but gives every
     file its own tab."""
-    from tools.page_viewer import PageViewerPanel, MergeOrderWidget, PdfTab
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.merge import MergeOrderWidget
+    from tools.viewer.tab import PdfTab
     paths = [FX["normal"], FX["single"], FX["image"]]   # 5 + 1 + 1(converted)
     vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
     vp.show_merge_tab(paths)
@@ -373,7 +378,7 @@ def test_opening_a_bad_file_reports_instead_of_crashing():
     model and no explanation."""
     from PyQt6.QtWidgets import QMessageBox, QFileDialog
     from PyQt6.QtCore import QSettings
-    from tools.page_viewer import PageViewerPanel
+    from tools.viewer.panel import PageViewerPanel
     said = []
     orig_w, orig_c = QMessageBox.warning, QMessageBox.critical
     QMessageBox.warning  = staticmethod(lambda *a, **k: said.append(a[1]))
@@ -415,7 +420,8 @@ def test_merge_preview_hides_the_app_sidebar():
     """The preview brings its own sidebar. The app's tool nav must step aside
     while it is up — the two used to stack, and the left one offered tools that
     do not apply here. It has to come back when the preview closes."""
-    from tools.page_viewer import PageViewerPanel, MergeOrderWidget
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.merge import MergeOrderWidget
     vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
     shown = []
     vp.hide_sidebar = lambda: shown.append(False)
@@ -445,7 +451,8 @@ def test_merge_preview_thumbnails_behave_like_the_page_manager():
     the row without bouncing as the cursor passes the last thumbnail."""
     from PyQt6.QtCore import Qt as _Qt, QPoint, QPointF, QEvent as _QE
     from PyQt6.QtGui import QMouseEvent
-    from tools.page_viewer import MergeOrderWidget, MARGIN, GAP
+    from tools.viewer.merge import MergeOrderWidget
+    from tools.viewer.page_grid import MARGIN, GAP
     paths = [FX["normal"], FX["single"], FX["framed"], FX["mixed"]]
     w = MergeOrderWidget(paths); w.resize(950, 650); w.show()
     _spin(40, 0.02)
@@ -475,7 +482,7 @@ def test_merge_preview_answers_the_page_manager_shortcuts():
     """Ctrl+C / X / V / Z did nothing here while working one view over, because
     this view registered three lone QShortcuts instead of the shared filter."""
     from PyQt6.QtCore import Qt as _Qt
-    from tools.page_viewer import MergeOrderWidget
+    from tools.viewer.merge import MergeOrderWidget
     C = _Qt.KeyboardModifier.ControlModifier
     paths = [FX["normal"], FX["single"], FX["framed"]]
     w = MergeOrderWidget(paths); w.resize(950, 650); w.show()
@@ -524,7 +531,8 @@ def test_merge_preview_has_no_rotate_button():
     """Rotating a whole file means nothing, and the zoom-reset button was
     wearing the page manager's rotate-left glyph, so it read as one. Same fix
     the page manager already had: label it 1:1."""
-    from tools.page_viewer import MergeOrderWidget, PageGrid
+    from tools.viewer.merge import MergeOrderWidget
+    from tools.viewer.page_grid import PageGrid
     w = MergeOrderWidget([FX["normal"], FX["single"]])
     labels = [b.text() for b in w._zoom_btns]
     assert "↺" not in labels and "↻" not in labels, \
@@ -541,7 +549,8 @@ def test_preview_reports_files_it_could_not_convert():
     be told which one, or they get a document quietly missing pages — the
     removed chooser dialog was the only thing that ever showed those errors."""
     from PyQt6.QtWidgets import QMessageBox
-    from tools.page_viewer import PageViewerPanel, MergeOrderWidget
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.merge import MergeOrderWidget
     broken = os.path.join(_TMP, "broken.png")
     with open(broken, "wb") as f:
         f.write(b"this is not an image")
@@ -574,7 +583,9 @@ def test_preview_survives_fast_clicks():
     attribute, dropping the last reference to a QThread that was still running
     — which Qt answers by aborting the process. Two previews converting side by
     side must both finish, each into its own output."""
-    from tools.page_viewer import PageViewerPanel, MergeOrderWidget, PdfTab
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.merge import MergeOrderWidget
+    from tools.viewer.tab import PdfTab
     vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
     set_a = [FX["normal"], FX["image"]]      # the image forces real work
     set_b = [FX["single"], FX["framed"], FX["image"]]

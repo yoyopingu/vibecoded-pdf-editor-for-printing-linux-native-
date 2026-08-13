@@ -7,7 +7,10 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from PIL import Image
 import pypdfium2 as pdfium
-import tools.all_tools as T
+from tools.panels.colour_profile import ColourProfilePanel
+from tools.panels.grayscale import GrayscalePanel, _grey_vector
+from tools.panels.preflight import PreflightPanel
+from tools.panels._colour import _hist_stats
 from tests.support import FX, _TMP, _brightest, _open, _sync_async
 
 
@@ -46,10 +49,10 @@ def test_greyscale_detects_a_tiny_colour_mark():
     silently converted. That is a reprint."""
     src = _grey_fixture()
     _open(src)
-    p = T.GrayscalePanel(); p.log.log = lambda *a, **k: None
+    p = GrayscalePanel(); p.log.log = lambda *a, **k: None
     p._scan()
     assert len(p._page_data) == 4, f"scan produced {len(p._page_data)} pages"
-    dist = [T._hist_stats(h, 20)[0] for h in p._page_data]
+    dist = [_hist_stats(h, 20)[0] for h in p._page_data]
     assert dist[1] > 200, f"the tiny red mark reads as only {dist[1]}"
     assert dist[0] == 0, f"the black-only page is not neutral ({dist[0]})"
 
@@ -65,7 +68,7 @@ def test_greyscale_threshold_slider_is_live():
     the default ratio mode the control did nothing at all."""
     src = _grey_fixture()
     _open(src)
-    p = T.GrayscalePanel(); p.log.log = lambda *a, **k: None
+    p = GrayscalePanel(); p.log.log = lambda *a, **k: None
     p._scan()
     p.mode_ratio.setChecked(True); p.ratio.setValue(300)
     outcomes = set()
@@ -81,7 +84,7 @@ def test_greyscale_scan_recovers_from_failure():
     scan returned immediately for the rest of the session."""
     src = _grey_fixture()
     _open(src)
-    p = T.GrayscalePanel(); p.log.log = lambda *a, **k: None
+    p = GrayscalePanel(); p.log.log = lambda *a, **k: None
     boom = lambda: (_ for _ in ()).throw(RuntimeError("render exploded"))
     real = p._scan_impl
     p._scan_impl = boom
@@ -109,7 +112,7 @@ def test_preflight_sees_a_tiny_colour_mark():
     c.showPage(); c.save()
 
     _open(src)
-    p = T.PreflightPanel(); p.log.log = lambda *a, **k: None
+    p = PreflightPanel(); p.log.log = lambda *a, **k: None
     p.chk_colour.setChecked(True)
     p._do_preflight()
     report = p.report.toPlainText()
@@ -175,7 +178,7 @@ def test_greyscale_never_ships_a_blacked_out_page():
     restore = _blackout_gs(inject_into_retry=False)
     try:
         out = os.path.join(_TMP, "grey_guard1.pdf")
-        res, msg = T._grey_vector(gs, src, out, {0, 1, 2}, 3, lambda m: None)
+        res, msg = _grey_vector(gs, src, out, {0, 1, 2}, 3, lambda m: None)
     finally:
         restore()
     assert _mean_luma(res, 1) > 100, "a blacked-out page reached the output"
@@ -185,7 +188,7 @@ def test_greyscale_never_ships_a_blacked_out_page():
     restore = _blackout_gs(inject_into_retry=True)
     try:
         out = os.path.join(_TMP, "grey_guard2.pdf")
-        res, msg = T._grey_vector(gs, src, out, {0, 1, 2}, 3, lambda m: None)
+        res, msg = _grey_vector(gs, src, out, {0, 1, 2}, 3, lambda m: None)
     finally:
         restore()
     assert _mean_luma(res, 1) > 100, "a blacked-out page reached the output"
@@ -236,7 +239,7 @@ def test_greyscale_verification_passes_normal_pages():
     c.showPage(); c.save()
 
     out = os.path.join(_TMP, "grey_real_out.pdf")
-    _, msg = T._grey_vector(gs, src, out, set(range(6)), 6, lambda m: None)
+    _, msg = _grey_vector(gs, src, out, set(range(6)), 6, lambda m: None)
     assert "ACHTUNG" not in msg, f"legitimate pages were refused:\n{msg}"
     return "6 pages, no false positives"
 
@@ -253,7 +256,7 @@ def test_cmyk_never_ships_a_blacked_out_page():
     _open(src)
     restore = _blackout_gs(inject_into_retry=True)
     try:
-        p = T.ColourProfilePanel(); p.log.log = lambda *a, **k: None
+        p = ColourProfilePanel(); p.log.log = lambda *a, **k: None
         out = os.path.join(_TMP, "cmyk_guard.pdf")
         p.save_pdf = lambda *a, **k: out
         p.open_result = lambda *a, **k: None
@@ -270,7 +273,7 @@ def test_print_blackout_check_tolerates_scaling():
     mean brightness rather than pixels — a per-pixel diff would flag healthy
     pages as damaged and quietly print everything unconverted."""
     from reportlab.lib import colors
-    from tools.page_viewer import _gs_blacked_out
+    from tools.printing.spool import _gs_blacked_out
     import pikepdf
 
     def make(name, black_page=None, scaled=False):
@@ -306,7 +309,7 @@ def test_greyscale_vector():
         return "SKIP (no ghostscript)"
     _open(FX["color"])
     def convert(sel):
-        p = T.GrayscalePanel()
+        p = GrayscalePanel()
         p._scanned_path = FX["color"]   # bypass the (cached) auto-scan
         p._page_data = [(0.0, 0.0)]*3; p._manual_sel = set(sel)
         p._grey_pages = set(); p._manual_skip = set(); p._already_grey = set()
@@ -328,7 +331,7 @@ def test_cmyk_profiles():
     if not shutil.which("gs"):
         return "SKIP (no ghostscript)"
     _open(FX["color"])
-    p = T.ColourProfilePanel()
+    p = ColourProfilePanel()
     assert p.profile_combo.count() >= 5, "expected several CMYK profile options"
     o = os.path.join(_TMP, "cmyk.pdf")
     p.save_pdf = lambda *a, **k: o; p.open_result = lambda *a, **k: None

@@ -28,5 +28,5 @@ def pytest_sessionfinish(session, exitstatus):
     tests/run.py sidesteps the same problem with os._exit; pytest needs its
     reporting to finish, so this stops the threads instead of the process.
     """
-    from tools.page_viewer import shutdown_render_queue
+    from tools.render.queue import shutdown_render_queue
     shutdown_render_queue()
