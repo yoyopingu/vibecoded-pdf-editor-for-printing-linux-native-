@@ -20,7 +20,7 @@ from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
 from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
-from tools.viewer.tab import PdfTab
+from tools.viewer.tab_base import owning_tab
 from tools.theme import _PREV_BTN, _TV, _register_themed
 
 
@@ -1079,9 +1079,7 @@ class SinglePageView(QWidget):
                 self._go_to_dialog(); return
             # ── Print ─────────────────────────────────────────────────────────
             if k == Qt.Key.Key_P:
-                parent = self.parent()
-                while parent and not isinstance(parent, PdfTab):
-                    parent = parent.parent()
+                parent = owning_tab(self.parent())
                 if parent:
                     parent._print()
                 return

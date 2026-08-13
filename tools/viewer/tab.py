@@ -7,15 +7,17 @@ its children, and each child walks back up the parent chain to ask which tab
 owns it, so the tab imports them at call time and they import the tab normally.
 """
 import os, logging
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QFrame, QScrollArea, QStackedWidget
+from PyQt6.QtWidgets import QVBoxLayout, QFrame, QScrollArea, QStackedWidget
 from PyQt6.QtCore import pyqtSignal, QTimer
 from tools.app_state import AppState
 from tools.i18n import tr
 from tools.render.caches import _set_active
 from tools.viewer.model import PageModel
+from tools.viewer.single_page import SinglePageView
+from tools.viewer.tab_base import PdfTabBase
 
 
-class PdfTab(QWidget):
+class PdfTab(PdfTabBase):
     changed = pyqtSignal()
 
     def __init__(self, pdf_path, parent=None):
@@ -34,10 +36,6 @@ class PdfTab(QWidget):
         layout.addWidget(self._stack, 1)
 
         # Einzelansicht
-        # A tab builds its own children, so it is the one that names them; the
-        # children only ever walk back up to ask which tab owns them. Imported
-        # at call time to keep that one loop from being an import cycle.
-        from tools.viewer.single_page import SinglePageView
         self.single = SinglePageView()
         self.single.page_changed.connect(self._on_page_changed)
         self._stack.addWidget(self.single)
