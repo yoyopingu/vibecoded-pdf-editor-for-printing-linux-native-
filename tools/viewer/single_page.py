@@ -803,6 +803,14 @@ class SinglePageView(QWidget):
         if self._prerender_aim != self._current:
             self._prerender_aim = self._current
             self._prerender_timer.start(350)
+            # Ask which colour spaces this page uses *now*, alongside the
+            # render rather than after it. The two share nothing — one
+            # rasterises, the other reads the content stream — so the scan
+            # used to sit waiting for a render it did not need, and only then
+            # spend its own third of a second. Started here it overlaps, and
+            # on the large pages where the scan is slow the render is slow
+            # too, so the answer is usually there when the page appears.
+            self._update_color_label()
 
         # ── Too big to render whole: render the window instead ────────────────
         scale = self._display_scale(self._zoom)
@@ -1005,7 +1013,10 @@ class SinglePageView(QWidget):
         # The page this answer will belong to. By the time it comes back the
         # user may have turned to another one, and a label from the page before
         # is worse than no label.
-        self._cs_pending = (src_path, orig)
+        want = (src_path, orig)
+        if getattr(self, "_cs_pending", None) == want:
+            return          # already asked for this page; the answer is coming
+        self._cs_pending = want
         self._color_lbl.setText(tr("Farbprofil: …"))
         from tools.jobs import submit
         submit(lambda job: page_colorspaces(src_path, orig),

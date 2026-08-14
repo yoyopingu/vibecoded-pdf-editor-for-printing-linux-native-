@@ -541,3 +541,81 @@ def test_colour_operators_read_the_stream_the_way_a_pdf_writes_it():
         assert colour_operators(data) == expect, f"{why}: {data!r}"
     for data, why in rejects:
         assert colour_operators(data) == set(), f"{why}: {data!r}"
+
+
+def test_the_two_searches_agree_on_every_answer():
+    """_uses looks for candidates with bytes.find and, once there are clearly
+    too many to walk from Python, hands the rest of the buffer to the regex
+    engine. The two halves have to agree — a switch that changed the answer
+    would be a wrong colour profile on exactly the large pages it exists for.
+
+    Each case here puts its real operator past _LOOP_BUDGET candidates, so the
+    answer is decided by the regex half, and compares against the same buffer
+    scanned with the budget raised out of the way."""
+    import tools.colorspace as CS
+    from tools.colorspace import colour_operators
+
+    noise = b"gx" * (CS._LOOP_BUDGET * 3)      # 'g' candidates, none an operator
+    cases = {
+        "gray after the switch":  noise + b"\n0.5 g\n",
+        "rgb after the switch":   noise + b"\n1 0 0 rg\n",
+        "cmyk after the switch":  noise + b"\n0 0 0 1 k\n",
+        "nothing at all":         noise,
+        "operator with too few operands": noise + b"\n1 0 k\n",
+        "letter before the token":        noise + b"\n0.5 Xg\n",
+        "compact, no space before op":    noise + b"\n1 0 0rg\n",
+        "stroke-side capitals":           noise + b"\n0 0 0 1 K\n",
+    }
+    real_budget = CS._LOOP_BUDGET
+    for label, data in cases.items():
+        via_regex = colour_operators(data)
+        CS._LOOP_BUDGET = len(data) + 1        # never switch: find walks it all
+        try:
+            via_find = colour_operators(data)
+        finally:
+            CS._LOOP_BUDGET = real_budget
+        assert via_regex == via_find, \
+            f"{label}: regex half said {sorted(via_regex)}, find half {sorted(via_find)}"
+    return f"{len(cases)} buffers, both halves agree"
+
+
+def test_a_page_of_mostly_gray_candidates_is_still_quick():
+    """The page this was found on holds 664,930 letters `g`, exactly one of
+    which is the operator, and the first 227,458 candidates are not. Walking
+    those from Python cost 181 ms of the 464 ms the whole scan took."""
+    import time
+    from tools.colorspace import colour_operators
+
+    # The shape: a great many 'g' that are not operators, then one that is.
+    # Sized so the threshold discriminates rather than merely passing —
+    # measured at 94 ms walking these from the regex engine and 686 ms walking
+    # them from Python, so 300 ms fails the old spelling with room to spare on
+    # a loaded machine.
+    data = b"".join((b"/Fg%d Do\n" % i) for i in range(800_000)) + b"\n0.5 g\n"
+    start = time.perf_counter()
+    names = colour_operators(data)
+    elapsed = time.perf_counter() - start
+    assert "/DeviceGray" in names, "the fill was missed behind the noise"
+    assert elapsed < 0.30, f"{len(data)/1e6:.0f} MB took {elapsed*1000:.0f} ms"
+    return f"{len(data)/1e6:.0f} MB, {elapsed*1000:.0f} ms"
+
+
+def test_content_streams_are_joined_not_accumulated():
+    """A page's /Contents is often an array, and the page manager adds parts to
+    it freely. Building the buffer with += copies everything read so far on
+    every part, which is quadratic in the number of them."""
+    import time, pikepdf
+    from tools.colorspace import _content_bytes
+
+    part = b"0.5 g 10 10 m 20 20 l S\n" + b"%" + b"x" * 40_000 + b"\n"
+    with pikepdf.new() as pdf:
+        pdf.add_blank_page(page_size=(595, 842))
+        page = pdf.pages[0]
+        page.obj["/Contents"] = pikepdf.Array(
+            [pdf.make_stream(part) for _ in range(400)])
+        start = time.perf_counter()
+        data = _content_bytes(page.obj, pikepdf)
+        elapsed = time.perf_counter() - start
+    assert data.count(b"0.5 g") == 400, "parts were lost"
+    assert elapsed < 2.0, f"400 parts took {elapsed:.1f} s"
+    return f"400 parts, {len(data)/1e6:.1f} MB in {elapsed*1000:.0f} ms"

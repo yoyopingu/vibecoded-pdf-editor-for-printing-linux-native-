@@ -73,17 +73,73 @@ def _delimited(data, pos, length):
     return before not in _LETTER and after not in _ALNUM
 
 
+# How many candidates we are willing to walk from Python before handing the
+# rest of the buffer to the regex engine. See _uses for why there are two ways
+# of looking and why the choice has to be made while looking rather than up
+# front — counting the candidates first costs more than either search.
+_LOOP_BUDGET = 2000
+
+# The operator with its trailing delimiter, for the regex half of that search.
+# The literal comes first on purpose: re scans for a leading literal the fast
+# way, and only then evaluates the lookahead. Put a lookbehind in front of it
+# instead and the optimisation is lost — the same pattern measured 1,040 ms
+# rather than 0.1 ms on the page below.
+_DELIMITED_RE = {}
+
+
+def _delimited_re(token):
+    rx = _DELIMITED_RE.get(token)
+    if rx is None:
+        rx = _DELIMITED_RE[token] = re.compile(re.escape(token) + rb'(?![A-Za-z0-9])')
+    return rx
+
+
+def _valid_at(data, pos, tlen, operands):
+    """Is the token at `pos` really an operator applied to enough numbers?"""
+    if not _delimited(data, pos, tlen):
+        return False
+    head = data[max(0, pos - _OPERANDS_WINDOW):pos]
+    m = _RE_OPERANDS.search(head)
+    return bool(m) and len(m.group(0).split()) >= operands
+
+
 def _uses(data, tokens, operands):
-    """Does `data` apply one of `tokens` to at least `operands` numbers?"""
+    """Does `data` apply one of `tokens` to at least `operands` numbers?
+
+    Two ways of finding candidates, because neither wins on its own. Measured
+    on the same 53 MB page as the operator notes above, whose content stream
+    holds 664,930 letters `g` of which exactly one is the operator:
+
+      bytes.find in a loop      181 ms   memchr is fast, but this pays ~0.8 us
+                                         of Python for each of the 227,458
+                                         candidates before the real one
+      regex over the buffer     500 ms   skips those in C in no time, but its
+                                         own scan is ~40x slower than memchr,
+                                         so a rare token — `k` occurs once —
+                                         costs a full pass for nothing
+      find, then regex           21 ms
+
+    So: start with find, which is free when candidates are few, and once it is
+    clear they are not, let the regex engine skip them. The switch is made from
+    inside the walk because deciding it up front needs bytes.count, and that is
+    31 ms per token here — more than either search costs.
+    """
     for token in tokens:
+        tlen = len(token)
         pos = data.find(token)
+        seen = 0
         while pos != -1:
-            if _delimited(data, pos, len(token)):
-                head = data[max(0, pos - _OPERANDS_WINDOW):pos]
-                m = _RE_OPERANDS.search(head)
-                if m and len(m.group(0).split()) >= operands:
-                    return True
+            if _valid_at(data, pos, tlen, operands):
+                return True
+            seen += 1
+            if seen >= _LOOP_BUDGET:
+                break                    # too many; the regex takes the rest
             pos = data.find(token, pos + 1)
+        if pos == -1:
+            continue                     # exhausted, no match in this token
+        for m in _delimited_re(token).finditer(data, pos + 1):
+            if _valid_at(data, m.start(), tlen, operands):
+                return True
     return False
 
 
@@ -119,19 +175,24 @@ def _content_bytes(obj, pikepdf):
     """
     if "/Contents" in obj:
         contents = obj.get("/Contents")
-        data = b""
         if isinstance(contents, pikepdf.Array):
+            # Joined once, not accumulated with +=. These streams are tens of
+            # megabytes when decompressed, and += copies everything read so far
+            # on every part — quadratic in the number of parts, which the page
+            # manager produces freely (every inserted operation is a new one).
+            parts = []
             for c in contents:
                 try:
-                    data += bytes(c.read_bytes())
+                    parts.append(c.read_bytes())
                 except Exception:
                     logging.debug("colorspace: unreadable content stream", exc_info=True)
-        elif contents is not None:
+            return b"".join(parts)
+        if contents is not None:
             try:
-                data = bytes(contents.read_bytes())
+                return contents.read_bytes()
             except Exception:
                 logging.debug("colorspace: unreadable content stream", exc_info=True)
-        return data
+        return b''
     try:
         return bytes(obj.read_bytes())
     except Exception:
