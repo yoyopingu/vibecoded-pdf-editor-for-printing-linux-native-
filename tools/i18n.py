@@ -137,7 +137,6 @@ _EN: dict[str, str] = {
     "PDF:": "PDF:",
     "Keine Datei geöffnet — öffne zuerst eine PDF im Page Viewer":
         "No file open — open a PDF in the Page Viewer first",
-    "Andere Datei...": "Other file...",
     "Log...": "Log...",
     "  Ausführen": "  Run",
 

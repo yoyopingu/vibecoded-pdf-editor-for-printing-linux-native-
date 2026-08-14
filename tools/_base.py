@@ -151,9 +151,15 @@ def make_separator() -> QFrame:
 
 
 class CurrentFileBar(QWidget):
-    """
-    Zeigt die aktuell geöffnete PDF an.
-    Erscheint oben in jedem Tool.
+    """Which PDF the tool will work on. Read-only, at the top of every tool.
+
+    It used to carry an "Andere Datei..." button that called
+    AppState.open_pdf() directly. That was a second way into the application
+    that bypassed the first: it swapped the file under the tool without opening
+    a tab, so the page manager's model still described the document that was
+    there before — and every tool reads its pages through that model. Files are
+    opened in the viewer, which is the only place that builds the model to go
+    with them.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -175,13 +181,6 @@ class CurrentFileBar(QWidget):
         self.file_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.file_label, 1)
 
-        self.open_btn = QPushButton(tr("Andere Datei..."))
-        self.open_btn.setObjectName("secondaryBtn")
-        self.open_btn.setFixedHeight(26)
-        self.open_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.open_btn.clicked.connect(self._pick_other)
-        layout.addWidget(self.open_btn)
-
         # Update wenn sich die aktuelle PDF ändert
         AppState.get().pdf_changed.connect(self._update)
         self._update(AppState.get().current_pdf)
@@ -196,13 +195,6 @@ class CurrentFileBar(QWidget):
         self.file_label.setStyleSheet("")  # let QSS handle colour
         self.file_label.style().unpolish(self.file_label)
         self.file_label.style().polish(self.file_label)
-
-    def _pick_other(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, tr("PDF öffnen"), "", tr("PDF Dateien (*.pdf)"))
-        if path:
-            AppState.get().open_pdf(path)
-
 
 class FileDropList(QListWidget):
     def __init__(self, extensions=("*.pdf",), parent=None):
