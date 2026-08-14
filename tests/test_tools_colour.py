@@ -11,7 +11,7 @@ from tools.panels.colour_profile import ColourProfilePanel
 from tools.panels.grayscale import GrayscalePanel, _grey_vector
 from tools.panels.preflight import PreflightPanel
 from tools.panels._colour import _hist_stats
-from tests.support import FX, _TMP, _brightest, _open, _sync_async
+from tests.support import FX, _TMP, _app, _brightest, _open, _spin, _sync_async
 
 
 def _page_has_colour(path, i):
@@ -49,7 +49,7 @@ def test_greyscale_detects_a_tiny_colour_mark():
     silently converted. That is a reprint."""
     src = _grey_fixture()
     _open(src)
-    p = GrayscalePanel(); p.log.log = lambda *a, **k: None
+    p = GrayscalePanel(); _sync_async(p); p.log.log = lambda *a, **k: None
     p._scan()
     assert len(p._page_data) == 4, f"scan produced {len(p._page_data)} pages"
     dist = [_hist_stats(h, 20)[0] for h in p._page_data]
@@ -68,7 +68,7 @@ def test_greyscale_threshold_slider_is_live():
     the default ratio mode the control did nothing at all."""
     src = _grey_fixture()
     _open(src)
-    p = GrayscalePanel(); p.log.log = lambda *a, **k: None
+    p = GrayscalePanel(); _sync_async(p); p.log.log = lambda *a, **k: None
     p._scan()
     p.mode_ratio.setChecked(True); p.ratio.setValue(300)
     outcomes = set()
@@ -84,15 +84,14 @@ def test_greyscale_scan_recovers_from_failure():
     scan returned immediately for the rest of the session."""
     src = _grey_fixture()
     _open(src)
-    p = GrayscalePanel(); p.log.log = lambda *a, **k: None
-    boom = lambda: (_ for _ in ()).throw(RuntimeError("render exploded"))
-    real = p._scan_impl
-    p._scan_impl = boom
+    p = GrayscalePanel(); _sync_async(p); p.log.log = lambda *a, **k: None
+    import tools.panels.grayscale as G
+    real = G._scan_pages
+    G._scan_pages = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("render exploded"))
     try:
-        try: p._scan()
-        except RuntimeError: pass
+        p._scan()
     finally:
-        p._scan_impl = real
+        G._scan_pages = real
     assert p._scanning is False, "the tool is wedged — no further scan can run"
     p._scan()
     assert len(p._page_data) == 4, "scanning did not recover"
@@ -656,3 +655,58 @@ def test_a_stream_shared_between_pages_is_read_once():
     assert "/DeviceRGB" in names, names
     assert len(reads) == 1, f"one stream, eight pages, {len(reads)} inflations"
     return f"8 pages sharing 1 stream -> {len(reads)} read"
+
+
+def test_running_greyscale_without_scanning_first_still_works():
+    """Ausführen on a document nothing has analysed yet has to scan and then
+    convert, as it always did — but the scan is on a worker now, so the two are
+    chained through the event loop instead of running one after the other in
+    the same call.
+
+    Driven with the real run_async rather than _sync_async: the chaining is the
+    thing being tested, and it turns on a queued timer landing after the scan
+    job's `finished` signal."""
+    if not shutil.which("gs"):
+        return "SKIP (no ghostscript)"
+    _open(FX["normal"])
+    p = GrayscalePanel(); p.resize(900, 600)
+    logged = []
+    p.log.log = lambda m, *a, **k: logged.append(str(m))
+    out = os.path.join(_TMP, "grey_unscanned.pdf")
+    p.save_pdf = lambda *a, **k: out
+    opened = []
+    p.open_result = lambda path, t="": opened.append(path)
+
+    assert not p._page_data, "the fixture is meant to start unscanned"
+    p._run_action()
+
+    import time
+    end = time.time() + 90
+    while time.time() < end and not opened:
+        _app.processEvents(); time.sleep(0.005)
+
+    assert p._page_data, f"the scan never ran:\n{logged}"
+    assert opened, f"the conversion never followed the scan:\n{logged}"
+    assert os.path.exists(out), "no output file"
+    return f"scanned {len(p._page_data)} pages, then converted"
+
+
+def test_a_document_with_nothing_to_convert_says_so():
+    """The same chain, when the scan decides no page qualifies. The message has
+    to reach the log — it is raised from a timer callback, where _safe_run is
+    not there to turn an exception into a log line."""
+    _open(FX["color"])
+    p = GrayscalePanel(); p.resize(900, 600)
+    logged = []
+    p.log.log = lambda m, *a, **k: logged.append(str(m))
+    p.save_pdf = lambda *a, **k: os.path.join(_TMP, "grey_none.pdf")
+    p.open_result = lambda *a, **k: None
+    p._run_action()
+
+    import time
+    end = time.time() + 60
+    while time.time() < end and not any("Keine Seiten" in m for m in logged):
+        _app.processEvents(); time.sleep(0.005)
+    assert any("Keine Seiten" in m for m in logged), \
+        f"the refusal never reached the log:\n{logged}"
+    return "reported, not swallowed"

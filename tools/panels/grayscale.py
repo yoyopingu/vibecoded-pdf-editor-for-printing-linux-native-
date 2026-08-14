@@ -7,12 +7,12 @@ from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
 from tools.theme import STATUS, _TV, _register_themed
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox, QRadioButton, QScrollArea, QWidget, QSlider, QApplication, QFrame, QSplitter, QGridLayout
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox, QRadioButton, QScrollArea, QWidget, QSlider, QFrame, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap
 from tools.app_state import AppState
 from tools._base import BasePanel, make_label
-from tools.colorspace import is_grey_only, page_colorspaces
+from tools.colorspace import document_colorspaces, is_grey_only, page_colorspaces
 from tools.i18n import tr
 from tools.panels._colour import _colour_histogram, _hist_stats
 from tools.panels._verify import _BLACKOUT_LIMIT, _page_luma, _conversion_damage, _verify_pages_intact
@@ -567,19 +567,19 @@ class GrayscalePanel(BasePanel):
         self._status_color.setText(f"🎨  {tr('Farbe')}: {n_total - n_sw}")
         self._status_total.setText(f"{tr('Gesamt')}: {n_total}")
 
-    def _scan(self):
+    def _scan(self, then=None):
+        """Analyse every page, off the GUI thread.
+
+        `then` is called on the GUI thread once the results are in, which is how
+        Ausführen gets its classification when nothing has been scanned yet.
+
+        This used to run inline with QApplication.processEvents() between pages.
+        Every page is rendered at full size to build its colour histogram —
+        about seven seconds each on a heavy vector page, 58 for eight of them,
+        and the window could not repaint or be closed for any of it.
+        """
         if self._scanning:
             return
-        self._scanning = True
-        try:
-            self._scan_impl()
-        finally:
-            # Always clear it: an error escaping the scan used to leave the flag
-            # set, and then no later scan would ever run for the rest of the
-            # session — the tool just quietly stopped updating.
-            self._scanning = False
-
-    def _scan_impl(self):
         try: src = self.require_pdf()
         except ValueError as e: self.log.log(str(e), error=True); return
         self.log.clear_log()
@@ -587,56 +587,71 @@ class GrayscalePanel(BasePanel):
         self._manual_sel.clear(); self._manual_skip.clear(); self._last_click = None
         self._already_grey = set()
         self._grey_thumb_gen += 1   # invalidate any in-flight thumb callbacks
-        QApplication.processEvents()
+
+        # The page count, so the preview cards can go up before the work starts.
         try:
             import pypdfium2 as pdfium
-            doc = pdfium.PdfDocument(src)
-            try:
-                n = len(doc)
-                self._build_preview(n); QApplication.processEvents()
-                for i in range(n):
-                    QApplication.processEvents()
-                    with _pdfium_lock:
-                        pil = doc[i].render(scale=1).to_pil().convert("RGB")
-                    hist = _colour_histogram(pil)
-                    self._page_data.append(hist)
-                    md, _ = _hist_stats(hist, self.thr.value())
-                    self.log.log(tr('Seite {p0}: max={p1}, farbig={p2:.2f}%').format(
-                        p0=i + 1, p1=md, p2=_hist_stats(hist, self.thr.value())[1] * 100))
-            finally:
-                # Always: a failed render used to leave the document (and its
-                # file handle) open for the life of the app.
-                doc.close()
-            self._reclassify()
-            try:
-                # Which pages are grey already, so they are left alone. The scan
-                # is tools/colorspace.py — this used not to look inside Form
-                # XObjects, so a page produced by N-Up, imposition or merge
-                # showed no colour spaces at all and was never recognised.
-                import pikepdf
-                with pikepdf.open(src) as pdf:
-                    n_pages = len(pdf.pages)
-                for i in range(n_pages):
-                    if is_grey_only(page_colorspaces(src, i)):
-                        self._already_grey.add(i)
-            except Exception:
-                # Only an optimisation — it marks pages that are already
-                # DeviceGray so they are left alone. If it fails they simply get
-                # converted like any other page, so carry on, but say so rather
-                # than swallowing it silently.
-                self._already_grey.clear()
-                logging.exception("grayscale: colour-space probe failed")
-            self._update_preview_borders()
-            self._load_preview_pixmaps_async(src)
-            self._scanned_path = src
+            with _pdfium_lock:
+                doc = pdfium.PdfDocument(src)
+                try: n = len(doc)
+                finally: doc.close()
         except Exception as e:
-            logging.exception("grayscale scan failed")
-            self.log.log(str(e), error=True)
+            logging.exception("grayscale: could not open the document")
+            self.log.log(str(e), error=True); return
+        self._build_preview(n)
+
+        self._scanning = True
+        thr = self.thr.value()
+        self.run_async(
+            lambda report: _scan_pages(src, thr, report),
+            on_done=lambda result: self._scan_done(src, result, then),
+            on_error=self._scan_failed,
+            busy_label="Seiten analysieren …",
+        )
+
+    def _scan_done(self, src, result, then=None):
+        self._scanning = False
+        hists, already_grey = result
+        self._page_data[:] = hists
+        self._already_grey = already_grey
+        self._reclassify()
+        self._update_preview_borders()
+        self._load_preview_pixmaps_async(src)
+        self._scanned_path = src
+        if then is not None:
+            # Next event-loop turn, not straight away: the job's `finished`
+            # signal is already queued behind us, and it re-enables the run
+            # button. Starting the conversion before that lands would have it
+            # re-enabled while the conversion is running.
+            QTimer.singleShot(0, then)
+
+    def _scan_failed(self, exc):
+        # Always clear it: an error escaping the scan used to leave the flag
+        # set, and then no later scan would ever run for the rest of the
+        # session — the tool just quietly stopped updating.
+        self._scanning = False
+        logging.error("grayscale scan failed: %s", exc)
+        self.log.log(str(exc), error=True)
 
     def _run_action(self):
         src = self.require_pdf()
         if self._scanned_path != src or not self._page_data:
-            self._scan()
+            # Nothing analysed yet. Scan first and convert when it comes back —
+            # the conversion needs the classification the scan produces.
+            self._scan(then=self._convert_after_scan)
+            return None
+        return self._convert()
+
+    def _convert_after_scan(self):
+        try:
+            self._convert()
+        except (ValueError, RuntimeError) as e:
+            # Raised from a timer callback rather than from _run_action, so
+            # _safe_run is not there to turn it into a log line.
+            self.log.log(str(e), error=True)
+
+    def _convert(self):
+        src = self.require_pdf()
         if not self._page_data:
             raise ValueError(tr("Bitte zuerst eine PDF öffnen."))
         if not self._grey_pages and not self._manual_sel:
@@ -666,3 +681,49 @@ class GrayscalePanel(BasePanel):
         out_path, msg = result
         self.log.log(msg)
         self.open_result(out_path, "Graustufen")
+
+
+def _scan_pages(src, thr, report):
+    """Colour histogram of every page, and which pages are already grey.
+
+    Plain data only; the panel classifies and draws back on the GUI thread.
+    """
+    import pypdfium2 as pdfium
+    hists = []
+    doc = pdfium.PdfDocument(src)
+    try:
+        n = len(doc)
+        for i in range(n):
+            with _pdfium_lock:
+                pil = doc[i].render(scale=1).to_pil().convert("RGB")
+            hist = _colour_histogram(pil)
+            hists.append(hist)
+            max_diff, ratio = _hist_stats(hist, thr)
+            report(tr('Seite {p0}: max={p1}, farbig={p2:.2f}%').format(
+                p0=i + 1, p1=max_diff, p2=ratio * 100))
+    finally:
+        # Always: a failed render used to leave the document (and its file
+        # handle) open for the life of the app.
+        doc.close()
+
+    already_grey = set()
+    try:
+        # Which pages are grey already, so they are left alone. The scan is
+        # tools/colorspace.py — this used not to look inside Form XObjects, so a
+        # page produced by N-Up, imposition or merge showed no colour spaces at
+        # all and was never recognised.
+        #
+        # document_colorspaces first: it opens the file once and caches every
+        # page on the way past, so the page_colorspaces calls below are all
+        # cache hits. Asking page by page opened the document once per page.
+        document_colorspaces(src)
+        for i in range(n):
+            if is_grey_only(page_colorspaces(src, i)):
+                already_grey.add(i)
+    except Exception:
+        # Only an optimisation — it marks pages that are already DeviceGray so
+        # they are left alone. If it fails they simply get converted like any
+        # other page, so carry on, but say so rather than swallowing it.
+        already_grey.clear()
+        logging.exception("grayscale: colour-space probe failed")
+    return hists, already_grey

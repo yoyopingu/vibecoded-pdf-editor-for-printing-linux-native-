@@ -135,8 +135,23 @@ def _open(path):
 
 
 def _sync_async(panel):
-    """Make run_async run synchronously for deterministic tests."""
-    panel.run_async = lambda work, on_done, **k: on_done(work(lambda m: None))
+    """Make run_async run synchronously for deterministic tests.
+
+    Follows the real contract rather than only its happy path: progress goes to
+    on_progress and a failure goes to on_error when one was given, which is how
+    a panel learns its work fell over. Without an on_error the exception
+    propagates, exactly as run_async's default does by logging it.
+    """
+    def run(work, on_done, *, on_error=None, on_progress=None, busy_label=None):
+        try:
+            result = work(on_progress or (lambda m: None))
+        except Exception as exc:
+            if on_error is None:
+                raise
+            on_error(exc)
+            return
+        on_done(result)
+    panel.run_async = run
 
 
 def _ink_margins(path, i=0, scale=4):
