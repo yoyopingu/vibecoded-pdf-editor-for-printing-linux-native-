@@ -981,11 +981,12 @@ _EN: dict[str, str] = {
     "Farbschema:": "Color scheme:",
     "LEISTUNG": "PERFORMANCE",
     "Seiten im Hintergrund vorab rendern": "Pre-render pages in background",
+    "Gerendert wird in einem Thread: pdfium ist nicht threadsicher, und\n"
+    "alle Aufrufe teilen sich eine Sperre. Mehr Threads wären hier ohne\n"
+    "Wirkung.":
+        "Rendering runs on one thread: pdfium is not thread-safe and every\n"
+        "call shares one lock. More threads would make no difference here.",
     "Vorab-Rendering:": "Pre-rendering:",
-    "Rendering-Geschwindigkeit:": "Rendering speed:",
-    "Ausgewogen  (empfohlen)": "Balanced  (recommended)",
-    "Schnell": "Fast",
-    "Maximum  (alle Kerne)": "Maximum  (all cores)",
     "Thumbnail-Cache:": "Thumbnail cache:",
     "ALLGEMEIN": "GENERAL",
     "Letzte Datei beim Programmstart automatisch oeffnen":

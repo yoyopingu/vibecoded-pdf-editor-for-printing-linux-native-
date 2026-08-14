@@ -2,7 +2,7 @@
 Persisted preferences, and the three dialogs over them — appearance,
 performance and general.
 """
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QDialog, QRadioButton, QCheckBox, QSpinBox, QFormLayout, QComboBox
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QDialog, QRadioButton, QCheckBox, QSpinBox, QFormLayout
 from PyQt6.QtCore import QSettings, pyqtSignal
 from tools.i18n import tr
 
@@ -63,30 +63,11 @@ class AppSettings:
 
     # Performance
     # Rendering speed preset: "balanced" | "fast" | "max"
-    # Maps to (page_threads, thumb_threads)
-    _SPEED_PRESETS = {
-        "balanced": (2, 4),
-        "fast":     (4, 6),
-        "max":      (8, 8),
-    }
-
     def prerender(self) -> bool:
         return self._qs.value("performance/prerender", True, type=bool)
 
     def set_prerender(self, val: bool):
         self._qs.setValue("performance/prerender", bool(val))
-
-    def speed_preset(self) -> str:
-        return self._qs.value("performance/speed_preset", "balanced")
-
-    def set_speed_preset(self, val: str):
-        self._qs.setValue("performance/speed_preset", val)
-
-    def render_threads(self) -> int:
-        return self._SPEED_PRESETS.get(self.speed_preset(), (2, 4))[0]
-
-    def thumb_threads(self) -> int:
-        return self._SPEED_PRESETS.get(self.speed_preset(), (2, 4))[1]
 
     def ram_percent(self) -> int:
         return int(self._qs.value("performance/ram_percent", 25))
@@ -198,19 +179,6 @@ class PerformanceDialog(QDialog):
         self._prerender_cb.setChecked(self._s.prerender())
         form.addRow(tr("Vorab-Rendering:"), self._prerender_cb)
 
-        self._speed_combo = QComboBox()
-        _speed_items = [
-            ("balanced", tr("Ausgewogen  (empfohlen)")),
-            ("fast",     tr("Schnell")),
-            ("max",      tr("Maximum  (alle Kerne)")),
-        ]
-        for key, label in _speed_items:
-            self._speed_combo.addItem(label, key)
-        cur_preset = self._s.speed_preset()
-        idx = next((i for i, (k, _) in enumerate(_speed_items) if k == cur_preset), 0)
-        self._speed_combo.setCurrentIndex(idx)
-        form.addRow(tr("Rendering-Geschwindigkeit:"), self._speed_combo)
-
         self._ram_spin = QSpinBox()
         self._ram_spin.setRange(5, 80)
         self._ram_spin.setSingleStep(5)
@@ -228,6 +196,12 @@ class PerformanceDialog(QDialog):
         form.addRow(tr("Thumbnail-Cache:"), cache_col)
 
         outer.addLayout(form)
+        note = QLabel(tr(
+            "Gerendert wird in einem Thread: pdfium ist nicht threadsicher, und\n"
+            "alle Aufrufe teilen sich eine Sperre. Mehr Threads wären hier ohne\n"
+            "Wirkung."))
+        note.setObjectName("dimLabel")
+        outer.addWidget(note)
         outer.addStretch()
         cancel = _dlg_buttons(outer, self._save)
         cancel.clicked.connect(self.reject)
@@ -238,13 +212,10 @@ class PerformanceDialog(QDialog):
     def _save(self):
         s = self._s
         s.set_prerender(self._prerender_cb.isChecked())
-        s.set_speed_preset(self._speed_combo.currentData())
         s.set_ram_percent(self._ram_spin.value())
         from tools.render.queue import apply_performance_settings
         apply_performance_settings(
             prerender       = s.prerender(),
-            render_threads  = s.render_threads(),
-            thumb_threads   = s.thumb_threads(),
             cache_size      = _ram_percent_to_pages(s.ram_percent()),
             full_page_cache = _ram_percent_to_full_pages(s.ram_percent()),
         )

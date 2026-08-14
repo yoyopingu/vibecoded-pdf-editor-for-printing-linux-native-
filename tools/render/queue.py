@@ -422,12 +422,15 @@ def prerender_enabled():
     return _prerender_enabled
 
 
-def apply_performance_settings(prerender=True, render_threads=1,
-                                thumb_threads=1, cache_size=300,
-                                full_page_cache=6):
+def apply_performance_settings(prerender=True, cache_size=300,
+                               full_page_cache=6):
     """Apply performance settings at runtime (called from PerformanceDialog).
-    render_threads / thumb_threads are ignored — rendering uses a single
-    priority queue thread so all jobs are serialised without lock contention.
+
+    There is no thread count here. Rendering runs on one priority queue thread,
+    and every pdfium call in the process is serialised by PDFIUM_LOCK anyway
+    (tools/render/document_cache explains why), so more threads could not render
+    anything faster. The dialog used to offer "Maximum (alle Kerne)" and pass a
+    render_threads/thumb_threads pair that this function then ignored.
     """
     global _prerender_enabled
     _prerender_enabled = bool(prerender)

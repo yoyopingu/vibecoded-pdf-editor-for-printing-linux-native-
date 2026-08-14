@@ -414,3 +414,45 @@ def test_a_forwarded_file_survives_a_garbage_collection():
             pass
         INSTANCE._IPC_KEY = real_key
     return "accepted socket survived a collection"
+
+
+def test_every_performance_setting_changes_something():
+    """A control that does nothing is worse than no control.
+
+    The dialog offered "Rendering-Geschwindigkeit: Ausgewogen / Schnell /
+    Maximum (alle Kerne)", which mapped to a render_threads/thumb_threads pair
+    that apply_performance_settings ignored on purpose — and could not have
+    used, because PDFIUM_LOCK serialises every pdfium call in the process.
+    It promised all your cores and did nothing at all.
+
+    What is left has to be real, so this drives each one and checks the thing
+    it claims to control actually moves."""
+    from tools.render.queue import apply_performance_settings, prerender_enabled
+    from tools.render.caches import _ThumbnailCache, _FullPageCache
+    from tools.shell.settings import AppSettings, PerformanceDialog
+
+    before = (_ThumbnailCache.MAX, _FullPageCache.MAX, prerender_enabled())
+    try:
+        apply_performance_settings(prerender=False, cache_size=77, full_page_cache=3)
+        assert prerender_enabled() is False, "the pre-render switch did nothing"
+        assert _ThumbnailCache.MAX == 77, "the cache size did nothing"
+        assert _FullPageCache.MAX == 3, "the full-page cache size did nothing"
+
+        apply_performance_settings(prerender=True, cache_size=300, full_page_cache=6)
+        assert prerender_enabled() is True
+    finally:
+        _ThumbnailCache.MAX, _FullPageCache.MAX = before[0], before[1]
+        apply_performance_settings(prerender=before[2],
+                                   cache_size=before[0], full_page_cache=before[1])
+
+    # And nothing is left in the dialog that AppSettings cannot answer for.
+    dlg = PerformanceDialog()
+    try:
+        s = AppSettings.get()
+        for gone in ("speed_preset", "render_threads", "thumb_threads"):
+            assert not hasattr(s, gone), f"{gone} survived the removal"
+        assert not hasattr(dlg, "_speed_combo"), "the inert control is still there"
+        assert hasattr(dlg, "_prerender_cb") and hasattr(dlg, "_ram_spin")
+    finally:
+        dlg.deleteLater(); _app.processEvents()
+    return "pre-render and cache size both bite; the thread count is gone"

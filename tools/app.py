@@ -96,8 +96,6 @@ def main():
 
     apply_performance_settings(
         prerender        = s.prerender(),
-        render_threads   = s.render_threads(),
-        thumb_threads    = s.thumb_threads(),
         cache_size       = _ram_percent_to_pages(s.ram_percent()),
         full_page_cache  = _ram_percent_to_full_pages(s.ram_percent()),
     )
