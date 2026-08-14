@@ -44,6 +44,10 @@ class SinglePageView(QWidget):
         self._zoom      = 1.0   # 1.0 = Fit-to-window
         self._last_pm   = None
         self._last_zoom = 1.0
+        # Which page _last_pm holds. It is a stand-in for zooming, and a
+        # stand-in is only honest about the page it was rendered from — see
+        # _stand_in_is_current.
+        self._last_pm_key = None
         self._page_w_pt = 0.0   # page dimensions in PDF points (stored on render)
         self._page_h_pt = 0.0
         self._scroll_x  = 0.0  # Scroll-Offset (float für präzise Berechnung)
@@ -461,6 +465,29 @@ class SinglePageView(QWidget):
         self._dims_key = key
         self._dims_rot = rot
 
+    def _current_page_key(self):
+        """(path, page index, rotation) of the page on screen, or None."""
+        try:
+            uid = self.model.order[self._current]
+            src_path, orig = self.model.page_source(uid, self.pdf_path)
+            return (src_path, orig, self.model.get_rotation(uid))
+        except Exception:
+            return None
+
+    def _stand_in_is_current(self):
+        """Is _last_pm a picture of the page we are showing?
+
+        It is only ever a stand-in — stretched to a new zoom while the exact
+        render runs — and stretching the *previous* page is not a stand-in, it
+        is the wrong page. On a simple document the real render lands in
+        milliseconds and nobody sees it; on a complex one it takes seconds, so
+        every page turn showed the page before it, and scrolling through a file
+        showed page 1 over and over.
+        """
+        return (self._last_pm is not None and self._last_zoom > 0
+                and self._last_pm_key is not None
+                and self._last_pm_key == self._current_page_key())
+
     def _leave_region_mode(self):
         if self._region_task is not None:
             self._region_task.cancel()
@@ -552,11 +579,15 @@ class SinglePageView(QWidget):
         if self._region_img is not None and self._region_scale > 0:
             src_pm, src_rect, src_scale = (self._region_img, self._region_rect,
                                            self._region_scale)
-        elif self._last_pm is not None and self._page_w_pt > 0:
+        elif self._stand_in_is_current() and self._page_w_pt > 0:
             src_pm = self._last_pm
             src_rect = (0, 0, self._last_pm.width(), self._last_pm.height())
             src_scale = self._last_pm.width() / self._page_w_pt
         if src_pm is None or src_scale <= 0:
+            # Nothing of this page to stretch. Clear rather than leave the
+            # previous page sitting there while this one renders.
+            self._view.clear()
+            self._showing_provisional = True
             return
         f = scale / src_scale
         rx, ry, _, _ = src_rect
@@ -855,6 +886,7 @@ class SinglePageView(QWidget):
                              for ch, x, y, x2, y2 in raw_chars]
             self._last_pm   = pm
             self._last_zoom = self._zoom
+            self._last_pm_key = (src_path, orig, rot)
             self._page_w_pt = page_w_pt   # needed by _capped_display_size
             self._page_h_pt = page_h_pt
             self._showing_provisional = not final
@@ -888,12 +920,16 @@ class SinglePageView(QWidget):
         self._render_gen += 1
         gen = self._render_gen
 
-        if self._last_pm is not None and self._last_zoom > 0:
+        if self._stand_in_is_current():
             # No settle timer: the exact render is submitted below, and _render()
             # *is* the settle. See _render_preview.
             self._render_preview(schedule_settle=False)
         else:
-            # No previous render — show a scaled-up thumbnail for instant feedback
+            # Nothing of *this* page to stretch — show a scaled-up thumbnail of
+            # it for instant feedback. This branch used to be unreachable after
+            # the first render of a session, because the test above was only
+            # "is there a previous pixmap", and after a page turn there always
+            # is: the previous page's.
             thumb_img = _ThumbnailCache.get_any(src_path, orig, rot)
             if thumb_img is not None:
                 pm = QPixmap.fromImage(thumb_img).scaled(
@@ -903,6 +939,13 @@ class SinglePageView(QWidget):
                 off_x = (avail_w - pm.width())  // 2
                 off_y = (avail_h - pm.height()) // 2
                 self._view.set_page(pm, [], off_x, off_y)
+                self._showing_provisional = True
+            else:
+                # Nothing of this page to show yet. Blank, not the page before
+                # it: leaving the last render on screen is how a slow document
+                # came to look like the same page over and over.
+                self._view.clear()
+                self._showing_provisional = True
 
         task = _PageRenderTask(gen, src_path, orig, rot,
                                avail_w, avail_h, self._zoom,
@@ -966,6 +1009,7 @@ class SinglePageView(QWidget):
 
         self._last_pm   = pm
         self._last_zoom = self._zoom
+        self._last_pm_key = self._current_page_key()
         self._page_w_pt = page_w_pt   # needed by _capped_display_size
         self._page_h_pt = page_h_pt
         self._showing_provisional = provisional

@@ -6,6 +6,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 import pypdfium2 as pdfium
 from tests.support import _TMP, _app, _open_single_view, _settle, _spin
+from tools.render.queue import _render_queue
 
 
 def _fine_detail_pdf(name="fine_detail.pdf"):
@@ -465,3 +466,90 @@ def test_a_slow_page_still_finishes_one_render():
         pv._PageRenderTask.run = original
         vp.deleteLater(); _app.processEvents()
     return f"{len(started)} render(s)"
+
+
+def _distinct_pages_pdf(name="turn_pages.pdf"):
+    """Five pages, each a solid colour, so which page is on screen is obvious."""
+    from reportlab.lib import colors
+    out = os.path.join(_TMP, name)
+    if not os.path.exists(out):
+        c = canvas.Canvas(out, pagesize=A4)
+        for hexcol in ("#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff"):
+            c.setFillColor(colors.HexColor(hexcol))
+            c.rect(0, 0, A4[0], A4[1], fill=1, stroke=0)
+            c.showPage()
+        c.save()
+    return out, ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff"]
+
+
+def _dominant(view):
+    """The commonest colour on screen, or "blank"."""
+    from collections import Counter
+    pm = view._pixmap
+    if pm is None:
+        return "blank"
+    img = pm.toImage()
+    seen = Counter()
+    for y in range(0, img.height(), max(1, img.height() // 30)):
+        for x in range(0, img.width(), max(1, img.width() // 30)):
+            seen[img.pixel(x, y) & 0xFFFFFF] += 1
+    return f"#{seen.most_common(1)[0][0]:06x}"
+
+
+def test_turning_a_page_never_shows_the_page_before_it():
+    """While the new page renders, the view may show a thumbnail of it or
+    nothing — never the page that was on screen a moment ago.
+
+    _last_pm is the previous render, kept so a zoom can stretch it into a
+    stand-in while the exact render runs. The cache-miss branch reached for it
+    on a page turn as well, where it is not a stand-in for anything: it is a
+    picture of a different page. The thumbnail branch below it — which fetches
+    a thumbnail of the page actually being shown — was therefore unreachable
+    after the first render of a session.
+
+    On a simple document the render lands in milliseconds and nobody sees it.
+    On a complex one it takes seconds, so every page turn showed the page
+    before it, and scrolling through the file showed page 1 over and over."""
+    src, want = _distinct_pages_pdf()
+    vp, sv = _open_single_view(src, 1000, 760)
+    try:
+        # Deep enough to need window rendering, which is what a complex page
+        # gets and what makes each render slow enough to be visible.
+        sv._zoom = 8.0
+        sv._render()
+        _settle(vp, lambda: sv._region_task is None and sv._render_task is None,
+                tries=300)
+
+        stale = []
+        for i in range(1, 5):
+            # Hold the render back rather than race it: what is on screen
+            # before it lands is the thing being tested, and how long that
+            # lasts is exactly what varies between a simple document and a
+            # complex one.
+            held = []
+            real_submit = _render_queue.submit
+            _render_queue.submit = lambda task, pri=1: held.append(task)
+            try:
+                sv.next_page()
+                _spin(3)
+                during = _dominant(sv._view)
+            finally:
+                _render_queue.submit = real_submit
+            if during not in ("blank", want[i]):
+                stale.append((i + 1, during, want[i]))
+
+            # Now let it render for real and check it arrives at the right page.
+            for task in held:
+                task.cancel()
+            sv._render()
+            _settle(vp, lambda: sv._region_task is None and sv._render_task is None,
+                    tries=400)
+            settled = _dominant(sv._view)
+            assert settled == want[i], \
+                f"page {i+1} settled showing {settled}, expected {want[i]}"
+        assert not stale, (
+            "showed another page while rendering: "
+            + ", ".join(f"page {p} showed {got} (wanted {exp})" for p, got, exp in stale))
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "4 turns, none showed the page before"
