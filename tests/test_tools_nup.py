@@ -157,7 +157,7 @@ def test_booklet_page_order():
     """32 pages must come out in saddle-stitch order with nothing blank: the back
     cover (page 32) shares the first sheet with the front cover, and page 2 lands
     on the reverse of it."""
-    out = _impose(FX["booklet32"], mode=0)
+    out = _impose(FX["booklet32"])
     got = _booklet_halves(out)
     want = [(32, 1), (2, 31), (30, 3), (4, 29), (28, 5), (6, 27), (26, 7), (8, 25),
             (24, 9), (10, 23), (22, 11), (12, 21), (20, 13), (14, 19), (18, 15), (16, 17)]
@@ -176,7 +176,7 @@ def test_booklet_keeps_rotation_and_visible_box():
             pdf.pages[i].obj["/MediaBox"] = pikepdf.Array([-8.5, -8.5, 603.78, 850.39])
             pdf.pages[i].obj["/CropBox"]  = pikepdf.Array([0, 0, 595.28, 841.89])
         pdf.save(src)
-    out = _impose(src, mode=0)
+    out = _impose(src)
 
     d = pdfium.PdfDocument(out)
     w, h = d[0].get_width(), d[0].get_height()
@@ -210,7 +210,7 @@ def test_booklet_annotation_content_survives():
                                Rect=pikepdf.Array([150, 250, 450, 550]), F=4,
                                AP=pikepdf.Dictionary(N=ap)))])
         pdf.save(src)
-    out = _impose(src, mode=0)
+    out = _impose(src)
     d = pdfium.PdfDocument(out)
     im = d[0].render(scale=0.25).to_pil().convert("L"); d.close()
     w, h = im.size
@@ -252,7 +252,7 @@ def test_tools_see_the_page_manager():
     assert st.current_pdf == tab.pdf_path, \
         "the rebuilt file was not published — tools still read the old one"
 
-    out = _impose(st.current_pdf, open_first=False, mode=0)
+    out = _impose(st.current_pdf, open_first=False)
     got = _booklet_halves(out)
     assert got[0] == (31, 1), \
         f"the back of the cover should carry page 31, got {got[0]}"
@@ -343,12 +343,11 @@ def test_nup_auto_format_is_never_rejected_at_full_scale():
     assert p._render_preview(400, 400, 1.0)[0] is not None
 
 
-def _impose_fmt(src, *, mode=0, fmt=None, normalise=True, name="imp.pdf",
-            custom_mm=None, landscape=False):
+def _impose_fmt(src, *, fmt=None, normalise=True, name="imp.pdf",
+                custom_mm=None, landscape=False):
     """Run the real Broschüre panel and return the output path."""
     _open(src)
     p = ImposePanel()
-    p.mode.setCurrentIndex(mode)
     p.out_fmt.set_format(p.AUTO_FORMAT if fmt is None else fmt)
     if custom_mm:
         p.out_fmt.set_custom_size(*custom_mm)
@@ -423,12 +422,11 @@ def test_booklet_refuses_a_sheet_too_small_for_unscaled_pages():
     assert cap.get("p"), "fitted pages should go on any sheet"
 
 
-def test_booklet_has_no_grid_mode():
-    """N-up grids are the N-Up Layout tool's job. This tool imposes on sheets."""
+def test_booklet_does_one_thing():
+    """Grid layouts are the N-Up Layout tool's job — including 2-up, which is a
+    2x1 grid in reading order. What is left here is the fold order, which is the
+    whole tool, so there is no mode to pick."""
     _open(FX["normal"])
     p = ImposePanel()
-    modes = [p.mode.itemText(i) for i in range(p.mode.count())]
-    assert len(modes) == 2, f"expected booklet and 2-up only, got {modes}"
-    assert not any("N-up" in m for m in modes), modes
-    for gone in ("cols", "rows_spin", "norm_target"):
+    for gone in ("mode", "cols", "rows_spin", "norm_target"):
         assert not hasattr(p, gone), f"{gone} survived"

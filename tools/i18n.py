@@ -668,7 +668,6 @@ _EN: dict[str, str] = {
     "Seitenzahlen auf {p0} Seiten hinzugefuegt": "Page numbers added to {p0} pages",
     "Schnittmarken auf {p0} Seite(n) gesetzt ({p1:.0f}×{p2:.0f} mm).": "Crop marks added to {p0} page(s) ({p1:.0f}×{p2:.0f} mm).",
     "Broschüre: {p0} Seiten auf {p1} Blattseiten.": "Booklet: {p0} pages on {p1} sheet sides.",
-    "2-up: {p0} Seiten auf {p1} Bögen.": "2-up: {p0} pages on {p1} sheets.",
     "{p0}×{p1}-up: {p2} Seiten auf {p3} Bögen.": "{p0}×{p1}-up: {p2} pages on {p3} sheets.",
     "Fertig. {p0} Seiten auf {p1} Blatt ({p2}×{p3}).": "Done. {p0} pages on {p1} sheets ({p2}×{p3}).",
     "Fertig. {p0} → {p1}  ({p2:+.1f}%)": "Done. {p0} → {p1}  ({p2:+.1f}%)",
@@ -736,7 +735,6 @@ _EN: dict[str, str] = {
     "Ausrichtung:": "Orientation:",
     "Hochformat": "Portrait",
     "Querformat": "Landscape",
-    "Modus:": "Mode:",
     "Skalieren (Inhalt anpassen)": "Scale (fit content)",
     "Zuschneiden (Ränder abschneiden)": "Crop (cut margins)",
     "Alle Seiten": "All pages",
@@ -912,13 +910,9 @@ _EN: dict[str, str] = {
 
     # ── Imposition panel (ImposePanel) ────────────────────────────────────────
     "Broschüre / Ausschießen": "Booklet / Imposition",
-    "Seiten normalisieren und auf größere Bögen anordnen.":
-        "Normalize pages and arrange on larger sheets.",
-    "Broschüre / Sattelheftung  (A4 → A3)": "Booklet / Saddle Stitch  (A4 → A3)",
-    "2-up  (zwei Seiten nebeneinander)": "2-up  (two pages side by side)",
+    "Seiten in Falzreihenfolge auf größere Bögen ausschießen.":
+        "Impose pages onto larger sheets in folding order.",
     "SEITEN NORMALISIEREN": "NORMALIZE PAGES",
-    "Alle Seiten werden zuerst auf dieselbe Größe gebracht\n(Proportionen bleiben erhalten, Rand wird aufgefüllt).":
-        "All pages are first brought to the same size\n(proportions preserved, edges filled).",
     "Wie Quellseite × 2  (automatisch)": "Same as source page × 2  (automatic)",
     "Der Bogen, auf den gedruckt wird. Zwei Seiten liegen nebeneinander\n"
     "darauf — A3 quer nimmt also zwei A4-Seiten auf.":
@@ -928,6 +922,7 @@ _EN: dict[str, str] = {
     "(Proportionen bleiben erhalten, Rand wird aufgefüllt).":
         "Every page is fitted to its half of the sheet\n"
         "(proportions are kept, the remainder is padded).",
+    "Seiten in Falzreihenfolge auf größere Bögen ausschießen": "Impose pages onto larger sheets in folding order",
     "Vor dem Ausschießen normalisieren": "Normalize before imposing",
     "Die PDF hat keine Seiten.": "The PDF has no pages.",
     "Ausschießen …": "Imposing …",

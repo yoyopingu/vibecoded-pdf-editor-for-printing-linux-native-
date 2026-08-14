@@ -2,16 +2,21 @@
 Broschüre / Ausschießen — imposition: lay the pages out on larger sheets, in
 the order a folded booklet needs.
 
-This tool arranges pages on a *sheet*; it is not a grid layout tool. It used to
-offer an "N-up Raster (Spalten × Zeilen)" mode as well, which is what the N-Up
-Layout tool is for, and did it with none of that tool's margins, gaps, crop
-marks or preview. Two answers to one question, and this was the worse one.
+One job: saddle-stitch imposition. There was a MODUS box offering an "N-up
+Raster (Spalten × Zeilen)" mode and a "2-up" mode as well, and both were the
+N-Up Layout tool written a second time — without that tool's margins, gaps,
+crop marks or preview. 2-up in particular is exactly a 2×1 grid with the pages
+in reading order.
+
+What is left is the thing N-Up cannot do: order the pages so the sheets fold
+into a booklet. That is not a layout option, it is the whole tool, so there is
+nothing to choose a mode between.
 """
-from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox
+from PyQt6.QtWidgets import QVBoxLayout, QGroupBox, QCheckBox
 from tools._base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels._shared import (PaperFormatSelector, _inherited_rotate,
-                                  _visible_box, _visible_size, row)
+                                  _visible_box, _visible_size)
 from tools.panels._imposition import (_ROT_MATRIX, _slot_placement, _flatten_annots,
                                       full_scale_problem)
 
@@ -21,19 +26,10 @@ from tools.panels._imposition import (_ROT_MATRIX, _slot_placement, _flatten_ann
 # ══════════════════════════════════════════════════════════════════════════════
 class ImposePanel(BasePanel):
     TITLE         = "Broschüre / Ausschießen"
-    SUBTITLE      = "Seiten normalisieren und auf größere Bögen anordnen."
+    SUBTITLE      = "Seiten in Falzreihenfolge auf größere Bögen ausschießen."
     OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
-        mb = QGroupBox(tr("MODUS")); ml = QVBoxLayout(mb)
-        self.mode = QComboBox()
-        self.mode.addItems([
-            tr("Broschüre / Sattelheftung  (A4 → A3)"),
-            tr("2-up  (zwei Seiten nebeneinander)"),
-        ])
-        ml.addLayout(row(tr("Modus:"), self.mode))
-        layout.addWidget(mb)
-
         # The same widget Crop/Scale and N-Up use, so all three offer the same
         # paper list, the same custom width x height and the same Querformat.
         # This tool had a five-entry list of its own that described the *page*
@@ -88,17 +84,9 @@ class ImposePanel(BasePanel):
             if problem:
                 raise ValueError(problem)
 
-        mode = self.mode.currentIndex()
-        if mode == 0:
-            sheets = [list(zip(side, halves)) for side in _booklet_sides(n)]
-            summary = lambda placed, nsheets: tr(
-                'Broschüre: {p0} Seiten auf {p1} Blattseiten.').format(p0=placed, p1=nsheets)
-        else:
-            pages = list(range(n))
-            while len(pages) % 2: pages.append(None)
-            sheets = [list(zip(pages[i:i + 2], halves)) for i in range(0, len(pages), 2)]
-            summary = lambda placed, nsheets: tr(
-                '2-up: {p0} Seiten auf {p1} Bögen.').format(p0=placed, p1=nsheets)
+        sheets = [list(zip(side, halves)) for side in _booklet_sides(n)]
+        summary = lambda placed, nsheets: tr(
+            'Broschüre: {p0} Seiten auf {p1} Blattseiten.').format(p0=placed, p1=nsheets)
 
         self.run_async(
             lambda report: _build_impose(src, out, sheets, sheet_w, sheet_h,
