@@ -1,9 +1,18 @@
 """
 What has already been rendered.
 
-Two LRUs of finished images, both keyed so that a page rewritten on disk cannot
-come back as its previous revision: thumbnails by (path, page, rotation, width),
-whole pages by (path, page, rotation, viewport bucket).
+Two LRUs of finished images: thumbnails by (path, page, rotation, width), whole
+pages by (path, page, rotation, viewport bucket).
+
+A path is not a document. The page manager writes over the file it is showing —
+Ctrl+S is save_to(tab.pdf_path) — and after that every one of those keys still
+matches while the pixels behind them describe the file as it used to be. This
+module's own docstring used to claim the keys made that impossible; they never
+had a revision in them.
+
+So each entry carries the revision of the file it was rendered from, and a read
+that finds a different one drops it and misses. tools/colorspace.py and
+tools/render/region.py key on the same _stat_key for the same reason.
 
 Eviction is by priority, not by age. _set_active names the page the user is
 looking at, and _priority_evict drops other tabs first, then other pages of this
@@ -12,6 +21,15 @@ one image that is about to be painted.
 """
 import threading
 from collections import OrderedDict
+
+from tools.render.document_cache import _stat_key
+
+
+def _revision(path):
+    """What the file at `path` is right now — size and mtime, or None if it
+    cannot be stat'd. Two renders of the same path with different revisions are
+    renders of different documents."""
+    return _stat_key(path)
 
 
 _active_path: str = ""
@@ -53,15 +71,20 @@ class _ThumbnailCache:
     @classmethod
     def get(cls, key):
         with cls._lock:
-            v = cls._store.get(key)
-            if v is not None:
-                cls._store.move_to_end(key)
-            return v
+            entry = cls._store.get(key)
+            if entry is None:
+                return None
+            rev, image = entry
+            if rev != _revision(key[0]):
+                del cls._store[key]      # the file has been written since
+                return None
+            cls._store.move_to_end(key)
+            return image
 
     @classmethod
     def put(cls, key, image):
         with cls._lock:
-            cls._store[key] = image
+            cls._store[key] = (_revision(key[0]), image)
             cls._store.move_to_end(key)
             while len(cls._store) > cls.MAX:
                 _priority_evict(cls._store,
@@ -90,10 +113,12 @@ class _ThumbnailCache:
     def get_any(cls, path, pidx, rot):
         """Return any cached image for this page, ignoring render_width.
         Used as a placeholder when the exact render_width is not cached yet."""
+        rev = _revision(path)
         with cls._lock:
-            for k, v in cls._store.items():
-                if k[0] == path and k[1] == pidx and k[2] == rot:
-                    return v
+            for k, (entry_rev, image) in cls._store.items():
+                if (k[0] == path and k[1] == pidx and k[2] == rot
+                        and entry_rev == rev):
+                    return image
         return None
 
     @classmethod
@@ -110,11 +135,13 @@ class _ThumbnailCache:
         thumbnail is wanted at, and that used to re-render every one of them.
         """
         best = None
+        rev = _revision(path)
         with cls._lock:
-            for (p, pi, r, w), v in cls._store.items():
-                if p == path and pi == pidx and r == rot and w >= width:
+            for (p, pi, r, w), (entry_rev, image) in cls._store.items():
+                if (p == path and pi == pidx and r == rot and w >= width
+                        and entry_rev == rev):
                     if best is None or w < best[0]:
-                        best = (w, v)
+                        best = (w, image)
         return best[1] if best else None
 
 
@@ -145,10 +172,15 @@ class _FullPageCache:
     def get(cls, path, pidx, rot, aw, ah):
         key = cls._key(path, pidx, rot, aw, ah)
         with cls._lock:
-            v = cls._store.get(key)
-            if v is not None:
-                cls._store.move_to_end(key)
-            return v   # (QImage, pw_pt, ph_pt, render_scale, raw_chars) or None
+            stored = cls._store.get(key)
+            if stored is None:
+                return None
+            rev, entry = stored
+            if rev != _revision(path):
+                del cls._store[key]      # the file has been written since
+                return None
+            cls._store.move_to_end(key)
+            return entry   # (QImage, pw_pt, ph_pt, render_scale, raw_chars)
 
     @classmethod
     def put(cls, path, pidx, rot, aw, ah, entry, force=False):
@@ -164,15 +196,16 @@ class _FullPageCache:
         Without `force` the higher-resolution entry is kept, which is what a
         speculative pre-render wants."""
         key = cls._key(path, pidx, rot, aw, ah)
+        rev = _revision(path)
         _, _, _, new_scale, _ = entry
         with cls._lock:
             existing = cls._store.get(key)
-            if existing is not None and not force:
-                _, _, _, ex_scale, _ = existing
+            if existing is not None and not force and existing[0] == rev:
+                _, _, _, ex_scale, _ = existing[1]
                 if new_scale < ex_scale * 0.99:
                     cls._store.move_to_end(key)  # refresh LRU even if not replacing
                     return
-            cls._store[key] = entry
+            cls._store[key] = (rev, entry)
             cls._store.move_to_end(key)
             while len(cls._store) > cls.MAX:
                 _priority_evict(cls._store,
@@ -205,9 +238,10 @@ class _FullPageCache:
         shrinking that render is free where rendering it again is a second
         walk over the whole drawing."""
         best = None
+        rev = _revision(path)
         with cls._lock:
-            for (p, pi, r, _aw, _ah), entry in cls._store.items():
-                if p == path and pi == pidx and r == rot:
+            for (p, pi, r, _aw, _ah), (entry_rev, entry) in cls._store.items():
+                if p == path and pi == pidx and r == rot and entry_rev == rev:
                     img = entry[0]
                     if img.width() >= width and (best is None
                                                  or img.width() < best.width()):
@@ -218,8 +252,9 @@ class _FullPageCache:
     def get_dims(cls, path, pidx, rot):
         """Return (page_w_pt, page_h_pt) from any cached entry for this page.
         Returns (0, 0) if not cached yet."""
+        rev = _revision(path)
         with cls._lock:
-            for (p, pi, r, _aw, _ah), (img, pw, ph, scale, chars) in cls._store.items():
-                if p == path and pi == pidx and r == rot:
-                    return pw, ph
+            for (p, pi, r, _aw, _ah), (entry_rev, entry) in cls._store.items():
+                if p == path and pi == pidx and r == rot and entry_rev == rev:
+                    return entry[1], entry[2]
         return 0.0, 0.0

@@ -616,3 +616,46 @@ def test_scrolling_up_into_an_unmeasured_page_does_not_strand_the_view():
     finally:
         vp.deleteLater(); _app.processEvents()
     return "no bogus offset, and the bottom is still reached"
+
+
+def test_saving_over_the_open_file_does_not_leave_the_old_render_on_screen():
+    """Ctrl+S is save_to(tab.pdf_path) — the page manager writes over the file
+    it is showing. Every render cache key still matched afterwards while the
+    pixels behind them described the file as it used to be, so the viewer went
+    on showing the document from before the save.
+
+    caches.py claimed the opposite in its own docstring — "keyed so that a page
+    rewritten on disk cannot come back as its previous revision" — but neither
+    key had a revision in it. The entries carry one now."""
+    from reportlab.lib import colors
+    import shutil
+
+    def make(path, hexcol):
+        c = canvas.Canvas(path, pagesize=A4)
+        c.setFillColor(colors.HexColor(hexcol))
+        c.rect(0, 0, A4[0], A4[1], fill=1, stroke=0)
+        c.showPage(); c.save()
+
+    live = os.path.join(_TMP, "rev_live.pdf")
+    other = os.path.join(_TMP, "rev_other.pdf")
+    make(live, "#ff0000")
+    make(other, "#0000ff")
+
+    vp, sv = _open_single_view(live, 900, 700)
+    try:
+        assert _dominant(sv._view) == "#ff0000", "fixture did not open red"
+
+        # Rewrite in place, as saving over the open document does. The mtime
+        # has to actually differ, which on a coarse clock it otherwise may not.
+        time.sleep(1.1)
+        shutil.copyfile(other, live)
+
+        sv._render()
+        _settle(vp, lambda: sv._render_task is None and sv._region_task is None,
+                tries=300)
+        shown = _dominant(sv._view)
+        assert shown == "#0000ff", \
+            f"showing {shown} — the render from before the file was written"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "the rewritten file is what is shown"
