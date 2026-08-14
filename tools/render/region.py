@@ -110,6 +110,33 @@ def page_px_size(page_w_pt, page_h_pt, scale, rotation=0):
     return (h, w) if rotation % 180 == 90 else (w, h)
 
 
+def target_scale(avail_w, avail_h, zoom, page_w_pt, page_h_pt, max_px,
+                 fallback=1.0):
+    """Pixels per point a page should be rendered at to fill `avail_w` x
+    `avail_h` at `zoom`, with `max_px` applied as the ceiling on either side.
+
+    One function, called from the GUI thread (deciding whether the cached
+    render is good enough), the render thread (deciding what to render) and the
+    pre-render worker processes (same question, another process). Any
+    disagreement between them — a snapped scale against an unsnapped one, say —
+    is a page that re-renders on every repaint, because the render never lands
+    on the scale that was asked for.
+
+    The cap is passed in rather than imported: this module is the one part of
+    the render path that pulls in no Qt, which is what lets a worker process
+    import it without dragging a GUI toolkit in behind it.
+
+    Snapped, because the only scales that can be rendered are the ones that put
+    a whole number of pixels across the page; see snap_scale below.
+    """
+    if page_w_pt <= 0 or page_h_pt <= 0:
+        return fallback
+    pad = 16
+    fit = min((avail_w - pad) / page_w_pt, (avail_h - pad) / page_h_pt)
+    return snap_scale(page_w_pt, page_h_pt,
+                      min(fit * zoom, max_px / page_w_pt, max_px / page_h_pt))
+
+
 def snap_scale(page_w_pt, page_h_pt, scale):
     """The nearest scale to `scale` that puts a whole number of pixels across
     the page's long axis, so that asking for it twice renders the same grid.

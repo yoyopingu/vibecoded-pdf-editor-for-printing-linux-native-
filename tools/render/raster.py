@@ -38,7 +38,6 @@ in ``tools.render.region`` for how a scale becomes that size.
 import ctypes
 import logging
 
-from PyQt6.QtGui import QImage
 
 from tools.render.document_cache import open_page
 
@@ -68,17 +67,50 @@ def _quarter_turns(rotation):
 def _image_from_bitmap(bitmap):
     """Wrap a BGRA pdfium bitmap as a QImage, copying once.
 
+    Qt is imported here rather than at the top of the module: the pre-render
+    worker processes import this file for render_window_raw, and pulling
+    PyQt6.QtGui into each of them would cost a GUI toolkit per worker for a
+    function they never call.
+
     Format_RGB32 is 0xffRRGGBB packed into a 32-bit int, which on a
     little-endian machine is the bytes B, G, R, X — pdfium's BGRA layout, with
     the alpha byte ignored rather than blended. The copy is what detaches the
     QImage from the bitmap's buffer, which is freed when the bitmap is.
     """
+    from PyQt6.QtGui import QImage
     return QImage(bitmap.buffer, bitmap.width, bitmap.height, bitmap.stride,
                   QImage.Format.Format_RGB32).copy()
 
 
+def _raw_from_bitmap(bitmap):
+    """The same pixels as plain bytes, for crossing a process boundary.
+
+    (buffer, width, height, stride) — BGRA, which is QImage's Format_RGB32 on a
+    little-endian machine, so the receiving side wraps it without converting.
+    """
+    return (bytes(bitmap.buffer), bitmap.width, bitmap.height, bitmap.stride)
+
+
 def render_window(path, page_index, page_px_w, page_px_h, box=None,
                   rotation=0, should_cancel=None, slice_ms=SLICE_MS):
+    """Rasterise part of a page into a QImage. See _render_window."""
+    return _render_window(path, page_index, page_px_w, page_px_h, box,
+                          rotation, should_cancel, slice_ms, _image_from_bitmap)
+
+
+def render_window_raw(path, page_index, page_px_w, page_px_h, box=None,
+                      rotation=0, should_cancel=None, slice_ms=SLICE_MS):
+    """Rasterise part of a page into plain bytes, for a worker process.
+
+    Same render, different last step: (buffer, w, h, stride) instead of a
+    QImage, so the result can be pickled back to the process that has the GUI.
+    """
+    return _render_window(path, page_index, page_px_w, page_px_h, box,
+                          rotation, should_cancel, slice_ms, _raw_from_bitmap)
+
+
+def _render_window(path, page_index, page_px_w, page_px_h, box,
+                   rotation, should_cancel, slice_ms, finish):
     """Rasterise part of a page.
 
     `page_px_w`/`page_px_h` are the size of the whole page in displayed pixels
@@ -144,7 +176,7 @@ def render_window(path, page_index, page_px_w, page_px_h, box=None,
                 # caller has since lost interest: it costs one copy, and the
                 # caller may still want to cache it. Only an abandoned one
                 # comes back None.
-                return _image_from_bitmap(bitmap)
+                return finish(bitmap)
             finally:
                 try:
                     bitmap.close()
