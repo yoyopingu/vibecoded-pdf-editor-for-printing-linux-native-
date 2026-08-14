@@ -52,6 +52,9 @@ class SinglePageView(QWidget):
         self._page_h_pt = 0.0
         self._scroll_x  = 0.0  # Scroll-Offset (float für präzise Berechnung)
         self._scroll_y  = 0.0
+        # "put me at the bottom of this page once its height is known" — see
+        # _place_scroll. Never expressed as a coordinate.
+        self._want_bottom = False
         self._zoom_timer = QTimer()
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.timeout.connect(self._render)
@@ -488,6 +491,25 @@ class SinglePageView(QWidget):
                 and self._last_pm_key is not None
                 and self._last_pm_key == self._current_page_key())
 
+    def _place_scroll(self, page_px_w, page_px_h, avail_w, avail_h):
+        """Clamp the scroll to the page, honouring a pending "start at bottom".
+
+        prev_page(start_at_bottom=True) used to write 999999 into _scroll_y and
+        trust every path to clamp it. The paths that can only clamp against a
+        height they know could not: on a page nothing had measured yet the
+        number stayed, and the wheel then walked it down 137 pixels a click —
+        8,537 clicks from the bottom of a page 3,154 pixels tall. Scrolling
+        down still turned pages, so it looked as though only "up" was broken,
+        and only the page button worked because it sets the scroll to zero.
+        """
+        max_sx = max(0.0, page_px_w - avail_w)
+        max_sy = max(0.0, page_px_h - avail_h)
+        if self._want_bottom and page_px_h > 0:
+            self._scroll_y = max_sy
+            self._want_bottom = False
+        self._scroll_x = max(0.0, min(self._scroll_x, max_sx))
+        self._scroll_y = max(0.0, min(self._scroll_y, max_sy))
+
     def _leave_region_mode(self):
         if self._region_task is not None:
             self._region_task.cancel()
@@ -540,8 +562,7 @@ class SinglePageView(QWidget):
         # Clamp the scroll to the page as it is at this zoom before deciding
         # what is visible, or the window is computed for a position the view
         # cannot actually be at.
-        self._scroll_x = max(0.0, min(self._scroll_x, max(0.0, page_px_w - avail_w)))
-        self._scroll_y = max(0.0, min(self._scroll_y, max(0.0, page_px_h - avail_h)))
+        self._place_scroll(page_px_w, page_px_h, avail_w, avail_h)
 
         same_scale = abs(self._region_scale - scale) <= scale * 1e-6
         if same_scale and covers(self._region_rect, page_px_w, page_px_h,
@@ -660,8 +681,7 @@ class SinglePageView(QWidget):
             # wheel click — at 3.8x that is an 11-megapixel scale per click, of
             # which one screenful is kept.
             page_px_w, page_px_h = self._page_px(scale)
-            self._scroll_x = max(0.0, min(self._scroll_x, max(0.0, page_px_w - avail_w)))
-            self._scroll_y = max(0.0, min(self._scroll_y, max(0.0, page_px_h - avail_h)))
+            self._place_scroll(page_px_w, page_px_h, avail_w, avail_h)
             if (self._region_scale > 0
                     and abs(self._region_scale - scale) <= scale * 1e-6
                     and covers(self._region_rect, page_px_w, page_px_h,
@@ -874,10 +894,9 @@ class SinglePageView(QWidget):
                     Qt.TransformationMode.SmoothTransformation)
             else:
                 pm = QPixmap.fromImage(img)
-            # Clamp scroll to the actual page bounds (handles the 999999 sentinel
-            # used by prev_page(start_at_bottom=True)).
-            self._scroll_x = max(0.0, min(self._scroll_x, max(0.0, pm.width()  - avail_w)))
-            self._scroll_y = max(0.0, min(self._scroll_y, max(0.0, pm.height() - avail_h)))
+            # Clamp to the page, and settle a pending "start at the bottom"
+            # from prev_page now that the height is known.
+            self._place_scroll(pm.width(), pm.height(), avail_w, avail_h)
             off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._scroll_x)
             off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._scroll_y)
             # raw_chars are image-relative: multiply by ratio then add display offset
@@ -993,13 +1012,12 @@ class SinglePageView(QWidget):
 
         pm = QPixmap.fromImage(image)
 
-        # Compute scroll-adjusted display offsets.
-        # Clamp first so the 999999 sentinel from prev_page(start_at_bottom)
-        # resolves to the actual page bottom.
+        # Compute scroll-adjusted display offsets. Place the scroll first, so
+        # a pending "start at the bottom" from prev_page resolves against the
+        # height this render just established.
         avail_w = self._view.width()
         avail_h = self._view.height()
-        self._scroll_x = max(0.0, min(self._scroll_x, max(0.0, pm.width()  - avail_w)))
-        self._scroll_y = max(0.0, min(self._scroll_y, max(0.0, pm.height() - avail_h)))
+        self._place_scroll(pm.width(), pm.height(), avail_w, avail_h)
         off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._scroll_x)
         off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._scroll_y)
 
@@ -1083,6 +1101,7 @@ class SinglePageView(QWidget):
             self._current += 1
             self._scroll_x  = 0.0
             self._scroll_y  = 0.0
+            self._want_bottom = False
             self._page_w_pt = 0.0   # clear stale dims so wheel uses only fresh renders
             self._page_h_pt = 0.0
             self._render()
@@ -1093,14 +1112,20 @@ class SinglePageView(QWidget):
             self._scroll_x  = 0.0
             self._page_w_pt = 0.0
             self._page_h_pt = 0.0
-            # Use a large sentinel; both render paths clamp it to the real max_sy
-            self._scroll_y = 999999.0 if start_at_bottom else 0.0
+            # Recorded as intent, not as a coordinate: _place_scroll puts the
+            # view at the bottom once something knows how tall the page is.
+            self._scroll_y = 0.0
+            self._want_bottom = bool(start_at_bottom)
             self._render()
 
     def go_to(self, page_1based):
         self._current  = max(0, page_1based - 1)
         self._scroll_x  = 0.0
         self._scroll_y  = 0.0
+        self._want_bottom = False
+        # "put me at the bottom of this page once its height is known" — see
+        # _place_scroll. Never expressed as a coordinate.
+        self._want_bottom = False
         self._page_w_pt = 0.0
         self._page_h_pt = 0.0
         self._render()

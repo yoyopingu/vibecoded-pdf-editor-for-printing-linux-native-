@@ -7,6 +7,8 @@ from reportlab.lib.pagesizes import A4
 import pypdfium2 as pdfium
 from tests.support import _TMP, _app, _open_single_view, _settle, _spin
 from tools.render.queue import _render_queue
+from tools.render.caches import _FullPageCache
+import tools.render.region as REGION
 
 
 def _fine_detail_pdf(name="fine_detail.pdf"):
@@ -553,3 +555,64 @@ def test_turning_a_page_never_shows_the_page_before_it():
     finally:
         vp.deleteLater(); _app.processEvents()
     return "4 turns, none showed the page before"
+
+
+def test_scrolling_up_into_an_unmeasured_page_does_not_strand_the_view():
+    """Wheel-up at the top of a page goes to the bottom of the one before it.
+
+    That was expressed by writing 999999 into _scroll_y and trusting every
+    render path to clamp it. The paths that clamp against a height they know
+    could not do it for a page nothing had measured yet, so the number stayed —
+    and the wheel walked it down 137 pixels a click, thousands of clicks from
+    a page 3,154 pixels tall. Scrolling *down* still turned pages, because the
+    same bogus offset read as "past the bottom", so it looked as though only up
+    was broken; the page button worked because it sets the offset to zero.
+
+    Renders are held back here so the page really is unmeasured, which is the
+    state the bug needed and which a complex document is in for seconds."""
+    src, _ = _distinct_pages_pdf("strand_pages.pdf")
+    vp, sv = _open_single_view(src, 1000, 760)
+    try:
+        sv._zoom = 6.0
+        sv._render()
+        _settle(vp, lambda: sv._region_task is None and sv._render_task is None,
+                tries=300)
+
+        # Forget every measurement, so the page we land on is one nothing knows
+        # the size of.
+        _FullPageCache.invalidate()
+        REGION._page_sizes.clear()
+
+        held = []
+        real_submit = _render_queue.submit
+        _render_queue.submit = lambda task, pri=1: held.append(task)
+        try:
+            sv._current = 4
+            sv._scroll_y = 0.0
+            sv.prev_page(start_at_bottom=True)
+            _spin(3)
+            stranded = sv._scroll_y
+        finally:
+            _render_queue.submit = real_submit
+            for task in held:
+                task.cancel()
+
+        page_px_h = sv._page_px(sv._display_scale(sv._zoom) or 0.0)[1]
+        assert stranded <= max(page_px_h, float(sv._view.height())), (
+            f"scroll left at {stranded:,.0f} on a page that is at most "
+            f"{page_px_h:,.0f} pixels tall")
+        assert sv._want_bottom, \
+            "the intent to show the bottom was dropped rather than deferred"
+
+        # And once something does measure the page, that intent is honoured.
+        sv._render()
+        _settle(vp, lambda: sv._region_task is None and sv._render_task is None,
+                tries=400)
+        page_px_h = sv._page_px(sv._display_scale(sv._zoom))[1]
+        want = max(0.0, page_px_h - sv._view.height())
+        assert abs(sv._scroll_y - want) < 2, \
+            f"did not land at the bottom: {sv._scroll_y:.0f}, expected {want:.0f}"
+        assert not sv._want_bottom, "the intent was not cleared once honoured"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "no bogus offset, and the bottom is still reached"
