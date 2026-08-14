@@ -22,6 +22,20 @@ from tools.i18n      import tr
 
 
 _VIEW_SNAPSHOTS: dict = {}     # model signature -> flattened temp PDF
+_SNAPSHOT_PATHS: set = set()   # the values above, for "is this path one of ours?"
+
+
+def _remember_snapshot(sig, path):
+    _VIEW_SNAPSHOTS[sig] = path
+    _SNAPSHOT_PATHS.add(path)
+
+
+def _forget_snapshot(sig):
+    """Drop one snapshot and return the file it pointed at, or None."""
+    path = _VIEW_SNAPSHOTS.pop(sig, None)
+    if path is not None:
+        _SNAPSHOT_PATHS.discard(path)
+    return path
 
 
 def _model_signature(model, base_path):
@@ -33,8 +47,13 @@ def _model_signature(model, base_path):
             tuple(sorted(model.foreign_src.items())))
 
 
-def displayed_pdf(base_path: str) -> str:
-    """Path to a PDF that matches what "Seiten verwalten" is showing.
+def ensure_view_snapshot(base_path: str) -> str:
+    """Path to a PDF that matches what "Seiten verwalten" is showing, writing
+    one first if there is not one already.
+
+    Named for the write, because there is one. The old name, displayed_pdf,
+    read like an accessor and hid that calling it can put a file in the
+    temp directory.
 
     Tools used to process the file on disk, but the page manager keeps the page
     order, the rotations, pages pulled in from other tabs and inserted blanks in
@@ -52,7 +71,7 @@ def displayed_pdf(base_path: str) -> str:
     model = getattr(AppState.get(), "page_model", None)
     if model is None or not getattr(model, "order", None) or not base_path:
         return base_path
-    if base_path in _VIEW_SNAPSHOTS.values():
+    if base_path in _SNAPSHOT_PATHS:
         return base_path       # already flattened — never apply the model twice
     try:
         sig = _model_signature(model, base_path)
@@ -89,9 +108,12 @@ def displayed_pdf(base_path: str) -> str:
     # Drop the previous snapshot of the same file — one temp file per document,
     # not one per edit.
     for old_sig in [s for s in _VIEW_SNAPSHOTS if s[0] == base_path]:
-        try: os.remove(_VIEW_SNAPSHOTS.pop(old_sig))
-        except Exception: pass
-    _VIEW_SNAPSHOTS[sig] = out
+        stale = _forget_snapshot(old_sig)
+        try:
+            os.remove(stale)
+        except OSError:
+            pass       # already gone, or the temp dir was cleared under us
+    _remember_snapshot(sig, out)
     return out
 
 
@@ -422,7 +444,7 @@ class BasePanel(QWidget):
         """Pfad der PDF, die das Tool verarbeiten soll — die Seiten so, wie der
         Viewer sie zeigt (Reihenfolge, Drehung, eingefügte Seiten). Für den
         Original-Dateinamen (Titelzeile, Ausgabename) AppState.current_pdf."""
-        return displayed_pdf(AppState.get().current_pdf)
+        return ensure_view_snapshot(AppState.get().current_pdf)
 
     def require_pdf(self) -> str:
         """Gibt aktuellen PDF-Pfad zurück, wirft Fehler wenn keine offen."""
@@ -446,7 +468,7 @@ class BasePanel(QWidget):
             pass   # unreadable for another reason — let the tool surface that itself
         # Only now flatten the page manager's view: the guards above have to run
         # on the real file (an encrypted one can't be copied page by page).
-        return displayed_pdf(path)
+        return ensure_view_snapshot(path)
 
     def open_result(self, path: str, title: str = ""):
         """Öffnet ein Ergebnis in einem neuen Tab."""

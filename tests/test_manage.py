@@ -8,7 +8,7 @@ from reportlab.lib.pagesizes import A4
 from tools.app_state import AppState
 import pypdfium2 as pdfium
 import tools.app as MAIN
-from tests.support import FX, _TMP, _app, _page_labels, _settle, _spin
+from tests.support import FX, _TMP, _app, _open, _page_labels, _settle, _spin
 
 
 def _pdfium_dims(path, index=0):
@@ -24,7 +24,7 @@ def test_rotation_reaches_the_tools():
     Three of them read AppState.current_pdf — the file on disk — instead of the
     flattened view, so they measured and previewed the page in its original
     orientation and produced a crop for the wrong side."""
-    from tools._base import displayed_pdf
+    from tools._base import ensure_view_snapshot
     from tools.panels.crop_resize import CropResizePanel
     from tools.panels.nup import NUpPanel
     tab, panel = _manage(3, "rot_tools.pdf")
@@ -33,11 +33,11 @@ def test_rotation_reaches_the_tools():
     assert h0 > w0, "fixture should start portrait"
 
     panel.grid.rotate_selected(0)          # no-op: identity view, no rewrite
-    assert displayed_pdf(st.current_pdf) == st.current_pdf
+    assert ensure_view_snapshot(st.current_pdf) == st.current_pdf
 
     tab.model.selected = {tab.model.order[0]}
     panel.grid.rotate_selected(90)
-    flat = displayed_pdf(st.current_pdf)
+    flat = ensure_view_snapshot(st.current_pdf)
     assert flat != st.current_pdf, "rotation did not produce a flattened view"
     assert PdfReader(flat, strict=False).pages[0].get("/Rotate") == 90
     w1, h1 = _pdfium_dims(flat)
@@ -154,7 +154,7 @@ def test_manage_open_as_tab_copies_or_moves():
     what the removed "Nach Bereichen..." split was for, only driven by picking
     pages instead of typing ranges into a prompt."""
     from PyQt6.QtWidgets import QMessageBox
-    from tools._base import displayed_pdf
+    from tools._base import ensure_view_snapshot
     tab, mp = _manage(6, "mgr_tab.pdf")
     opened = []
     AppState.get().open_result = lambda p, t="": opened.append(p)
@@ -171,7 +171,7 @@ def test_manage_open_as_tab_copies_or_moves():
       mp._open_as_tab()
       assert _page_labels(opened[-1]) == ["P1", "P2"], _page_labels(opened[-1])
       assert len(mp.model.order) == 4, "move must remove them from the document"
-      assert _page_labels(displayed_pdf(AppState.get().current_pdf)) == \
+      assert _page_labels(ensure_view_snapshot(AppState.get().current_pdf)) == \
         ["P3", "P4", "P5", "P6"]
 
       _answer_dialog("Abbrechen")          # matches nothing -> treated as cancel
@@ -188,7 +188,7 @@ def test_manage_inserts_several_files_at_once():
     """"Aus Datei(en) einfuegen..." replaced the separate merge button, so it has
     to accept more than one file and insert them after the selection."""
     from PyQt6.QtWidgets import QFileDialog
-    from tools._base import displayed_pdf
+    from tools._base import ensure_view_snapshot
     extras = []
     for tag, n in (("X", 2), ("Y", 1)):
         p = os.path.join(_TMP, f"ins_{tag}.pdf")
@@ -207,7 +207,7 @@ def test_manage_inserts_several_files_at_once():
     finally:
         QFileDialog.getOpenFileNames = real
     assert len(mp.model.order) == 6, f"expected 6 pages, got {len(mp.model.order)}"
-    assert _page_labels(displayed_pdf(AppState.get().current_pdf)) == \
+    assert _page_labels(ensure_view_snapshot(AppState.get().current_pdf)) == \
         ["P1", "X1", "X2", "Y1", "P2", "P3"]
 
 
@@ -231,3 +231,33 @@ def test_manage_panel_has_no_duplicate_actions():
         assert "Ctrl+S" not in keys, "Ctrl+S is registered twice — it will not fire"
     finally:
         win.deleteLater(); _app.processEvents()
+
+
+def test_a_snapshot_is_never_flattened_twice():
+    """ensure_view_snapshot returns its own output unchanged when handed back.
+
+    The check used to be `base_path in _VIEW_SNAPSHOTS.values()`, a scan over
+    every value on every call. It is a set now, which only stays correct if the
+    two structures are updated together — so this also asserts they agree after
+    a snapshot is superseded."""
+    import tools._base as B
+    from tools._base import ensure_view_snapshot
+    from tools.viewer.model import PageModel
+
+    st = _open(FX["normal"])
+    st.page_model = PageModel(5)
+    st.page_model.order.reverse()             # no longer a 1:1 view of the file
+    flat = ensure_view_snapshot(st.current_pdf)
+    assert flat != st.current_pdf, "reordered model should have been flattened"
+    assert flat in B._SNAPSHOT_PATHS
+    assert set(B._VIEW_SNAPSHOTS.values()) == B._SNAPSHOT_PATHS, "structures drifted"
+
+    # Handing the snapshot back must not apply the model to it a second time.
+    assert ensure_view_snapshot(flat) == flat
+
+    # Superseding it drops the old path from both.
+    st.page_model.rotations[st.page_model.order[0]] = 90
+    newer = ensure_view_snapshot(st.current_pdf)
+    assert newer != flat
+    assert flat not in B._SNAPSHOT_PATHS, "stale path left in the set"
+    assert set(B._VIEW_SNAPSHOTS.values()) == B._SNAPSHOT_PATHS, "structures drifted"

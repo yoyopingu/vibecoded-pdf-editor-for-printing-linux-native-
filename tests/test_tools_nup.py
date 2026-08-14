@@ -227,13 +227,13 @@ def test_tools_see_the_page_manager():
     user saves; reading the file instead imposed the pre-edit document — and
     since "Leere Seite einfuegen" appends the blank to the end of the file, it
     surfaced as the back of the cover."""
-    from tools._base import displayed_pdf
+    from tools._base import ensure_view_snapshot
     from tools.viewer.tab import PdfTab
 
     # unedited document -> the original file, no copy
     _open(FX["booklet32"])
     st = AppState.get()
-    assert displayed_pdf(st.current_pdf) == FX["booklet32"], \
+    assert ensure_view_snapshot(st.current_pdf) == FX["booklet32"], \
         "an unedited document should not be rewritten"
 
     # 31 pages + a blank inserted after page 1 == 32 pages on screen
