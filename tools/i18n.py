@@ -513,6 +513,7 @@ _EN: dict[str, str] = {
     "Pruefung abgeschlossen.": "Check complete.",
     "Ghostscript-Fehler": "Ghostscript error",
     "Seite {i} / {total}…": "Page {i} / {total}…",
+    "Pruefung laeuft …": "Checking …",
     "Formular wird ausgefüllt …": "Filling in the form …",
     "Bilder werden exportiert …": "Exporting images …",
     "Ghostscript: komprimiere …": "Ghostscript: compressing …",

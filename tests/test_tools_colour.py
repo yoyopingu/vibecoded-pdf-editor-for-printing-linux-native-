@@ -112,9 +112,9 @@ def test_preflight_sees_a_tiny_colour_mark():
     c.showPage(); c.save()
 
     _open(src)
-    p = PreflightPanel(); p.log.log = lambda *a, **k: None
+    p = PreflightPanel(); _sync_async(p); p.log.log = lambda *a, **k: None
     p.chk_colour.setChecked(True)
-    p._do_preflight()
+    p._run_action()
     report = p.report.toPlainText()
     assert "Farbseiten:" in report, f"the colour mark was missed:\n{report}"
 
