@@ -2,6 +2,44 @@
 Placing a page into a slot on a sheet. Shared by Broschüre and N-Up.
 """
 
+# A page is "too big" for its slot only past this much of a point, so a sheet
+# sized from the very pages it has to hold — where slot and page are the same
+# number arrived at by two different routes — is never rejected for a rounding
+# difference. A PDF stores its boxes to four decimals, which is enough for two
+# A4 pages side by side to measure 420.00000006 mm rather than 420.
+FIT_EPS_PT = 0.01
+
+
+def fits_at_full_scale(page_w, page_h, slot_w, slot_h):
+    """Whether a page of this size goes into that slot without being shrunk."""
+    return page_w <= slot_w + FIT_EPS_PT and page_h <= slot_h + FIT_EPS_PT
+
+
+def full_scale_problem(page_w, page_h, slot_w, slot_h, need_w, need_h):
+    """Why the pages will not fit at 100 %, as a ready-to-show sentence, or None.
+
+    Shared by N-Up and Broschüre because both place a page into a rectangle
+    without scaling it, and both have to refuse the same jobs in the same
+    words. Each works out `need_w`/`need_h` — the sheet that would hold them —
+    its own way, because a grid and a folded sheet arrive at it differently.
+    """
+    from tools.i18n import tr
+    from tools.panels._shared import MM_TO_PT
+    import math
+    if fits_at_full_scale(page_w, page_h, slot_w, slot_h):
+        return None
+    mm = lambda pt: pt / MM_TO_PT
+    # Round the requirement up to a whole millimetre, but ignore anything
+    # inside the tolerance above — otherwise a job that fits on 420 mm asks
+    # the operator for 421.
+    up = lambda pt: math.ceil(mm(pt) - mm(FIT_EPS_PT))
+    return tr("Bei 100 % ist kein Platz: Seite {p0}×{p1} mm, Feld {p2}×{p3} mm. "
+              "Nötig wäre ein Ausgabeformat von mindestens {p4}×{p5} mm.").format(
+        p0=round(mm(page_w)), p1=round(mm(page_h)),
+        p2=round(mm(max(slot_w, 0))), p3=round(mm(max(slot_h, 0))),
+        p4=up(need_w), p5=up(need_h))
+
+
 
 _ROT_MATRIX = {0: (1.0, 0.0, 0.0, 1.0), 90:  (0.0, -1.0, 1.0, 0.0),
                180: (-1.0, 0.0, 0.0, -1.0), 270: (0.0, 1.0, -1.0, 0.0)}

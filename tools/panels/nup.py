@@ -15,7 +15,8 @@ from tools._base import BasePanel
 from tools.i18n import tr
 from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, row, PreviewPane
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
-from tools.panels._imposition import _ROT_MATRIX, _slot_placement, _flatten_annots
+from tools.panels._imposition import (_ROT_MATRIX, _slot_placement, _flatten_annots,
+                                      full_scale_problem)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -35,40 +36,19 @@ def _nup_slot_rects(params, n_slot):
     return rects
 
 
-# A page is "too big" only past this much of a point, so a sheet sized from the
-# very pages it has to hold — "Wie Quellseite × Raster", where slot and page are
-# the same number arrived at by two different routes — is never rejected for a
-# rounding difference.
-_FIT_EPS_PT = 0.01
-
-
 def _full_scale_problem(max_w, max_h, params):
     """Why pages of `max_w` x `max_h` points will not fit their slots at 100 %,
-    as a ready-to-show sentence — or None if they fit.
+    or None if they fit.
 
-    Shared by the preview and the run for the same reason _nup_slot_rects is:
-    the preview must refuse exactly what the run refuses, and say the same
-    thing about it."""
+    The rule and the sentence live in tools/panels/_imposition.py, with the
+    placement maths both tools share. What is specific here is the sheet that
+    would work: the same arithmetic "Wie Quellseite x Raster" uses, so the size
+    the message names is one this tool can actually produce."""
     (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
-    if max_w <= slot_w + _FIT_EPS_PT and max_h <= slot_h + _FIT_EPS_PT:
-        return None
-    # What the sheet would have to be for these pages, at this grid, with these
-    # margins — the same arithmetic "Wie Quellseite x Raster" uses, so the
-    # number the message gives is one the tool can actually produce.
-    need_w = max_w * cols + ml + mr + gh * (cols - 1)
-    need_h = max_h * rows + mt + mb + gv * (rows - 1)
-    mm = lambda pt: pt / MM_TO_PT
-    # Round up to the next whole millimetre, ignoring anything inside the same
-    # tolerance the fit test uses. A PDF stores its MediaBox to four decimals,
-    # so two A4 pages side by side measure 420.00000006 mm rather than 420 —
-    # and a plain ceil() would tell the operator to find a 421 mm sheet for a
-    # job that fits on 420.
-    up = lambda pt: math.ceil(mm(pt) - mm(_FIT_EPS_PT))
-    return tr("Bei 100 % ist kein Platz: Seite {p0}×{p1} mm, Feld {p2}×{p3} mm. "
-              "Nötig wäre ein Ausgabeformat von mindestens {p4}×{p5} mm.").format(
-        p0=round(mm(max_w)), p1=round(mm(max_h)),
-        p2=round(mm(max(slot_w, 0))), p3=round(mm(max(slot_h, 0))),
-        p4=up(need_w), p5=up(need_h))
+    return full_scale_problem(
+        max_w, max_h, slot_w, slot_h,
+        need_w=max_w * cols + ml + mr + gh * (cols - 1),
+        need_h=max_h * rows + mt + mb + gv * (rows - 1))
 
 
 def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False,

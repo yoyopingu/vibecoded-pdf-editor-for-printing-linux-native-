@@ -341,3 +341,94 @@ def test_nup_auto_format_is_never_rejected_at_full_scale():
     p._run_action()
     assert cap.get("p"), "auto format was rejected at 100 %"
     assert p._render_preview(400, 400, 1.0)[0] is not None
+
+
+def _impose_fmt(src, *, mode=0, fmt=None, normalise=True, name="imp.pdf",
+            custom_mm=None, landscape=False):
+    """Run the real Broschüre panel and return the output path."""
+    _open(src)
+    p = ImposePanel()
+    p.mode.setCurrentIndex(mode)
+    p.out_fmt.set_format(p.AUTO_FORMAT if fmt is None else fmt)
+    if custom_mm:
+        p.out_fmt.set_custom_size(*custom_mm)
+    p.out_fmt.landscape.setChecked(landscape)
+    p.norm_check.setChecked(normalise)
+    out = os.path.join(_TMP, name)
+    p.save_pdf = lambda *a, **k: out
+    cap = {}; p.open_result = lambda path, t="": cap.update(p=path); _sync_async(p)
+    p._run_action()
+    return cap.get("p"), p
+
+
+def test_booklet_sheet_follows_the_chosen_output_format():
+    """The sheet was always twice the page and could not be stated. Choosing a
+    format has to decide it — including a custom size and Querformat, the same
+    way Crop/Scale and N-Up read that widget."""
+    auto, _ = _impose_fmt(FX["normal"], name="imp_auto.pdf")
+    d = pdfium.PdfDocument(auto)
+    try:
+        w, h = d[0].get_size()
+    finally:
+        d.close()
+    assert abs(w - 2 * 595.2756) < 1.0 and abs(h - 841.8898) < 1.0, \
+        f"auto should be two A4 pages wide, got {w}x{h}"
+
+    # A3 landscape is exactly two A4 pages, and is what a booklet is printed on.
+    a3, _ = _impose_fmt(FX["normal"], fmt="A3  (297x420mm)", landscape=True,
+                    name="imp_a3.pdf")
+    d = pdfium.PdfDocument(a3)
+    try:
+        w, h = d[0].get_size()
+    finally:
+        d.close()
+    assert abs(w - 420 * MM) < 1.0 and abs(h - 297 * MM) < 1.0, \
+        f"A3 landscape expected, got {w}x{h}"
+
+    cust, _ = _impose_fmt(FX["normal"], fmt="Benutzerdefiniert (mm)",
+                      custom_mm=(500.0, 300.0), name="imp_custom.pdf")
+    d = pdfium.PdfDocument(cust)
+    try:
+        w, h = d[0].get_size()
+    finally:
+        d.close()
+    assert abs(w - 500 * MM) < 1.0 and abs(h - 300 * MM) < 1.0, \
+        f"custom size ignored, got {w}x{h}"
+
+
+def test_booklet_refuses_a_sheet_too_small_for_unscaled_pages():
+    """With normalising off the pages go on at their own size. That always fitted
+    while the sheet was derived from them; now that it can be chosen, a sheet
+    too small has to be reported rather than silently clipping the content."""
+    _open(FX["normal"])
+    p = ImposePanel()
+    p.out_fmt.set_format("A5  (148x210mm)")
+    p.norm_check.setChecked(False)
+    p.save_pdf = lambda *a, **k: os.path.join(_TMP, "imp_never.pdf")
+    _sync_async(p)
+    try:
+        p._run_action()
+        raise AssertionError("A5 accepted for unscaled A4 pages")
+    except ValueError as e:
+        msg = str(e)
+    assert "100" in msg and "420" in msg, \
+        f"the message should name the sheet that would work, got {msg!r}"
+
+    # Normalising is what makes a small sheet legitimate: the pages are fitted.
+    p.norm_check.setChecked(True)
+    out = os.path.join(_TMP, "imp_a5_fitted.pdf")
+    p.save_pdf = lambda *a, **k: out
+    cap = {}; p.open_result = lambda path, t="": cap.update(p=path)
+    p._run_action()
+    assert cap.get("p"), "fitted pages should go on any sheet"
+
+
+def test_booklet_has_no_grid_mode():
+    """N-up grids are the N-Up Layout tool's job. This tool imposes on sheets."""
+    _open(FX["normal"])
+    p = ImposePanel()
+    modes = [p.mode.itemText(i) for i in range(p.mode.count())]
+    assert len(modes) == 2, f"expected booklet and 2-up only, got {modes}"
+    assert not any("N-up" in m for m in modes), modes
+    for gone in ("cols", "rows_spin", "norm_target"):
+        assert not hasattr(p, gone), f"{gone} survived"

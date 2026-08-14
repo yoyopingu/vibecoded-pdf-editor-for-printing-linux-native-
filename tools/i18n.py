@@ -316,7 +316,6 @@ _EN: dict[str, str] = {
     "H": "H",
     "Auf Format zuschneiden / skalieren": "Crop / scale to format",
     "Nur Schnittmarken setzen": "Only add crop marks",
-    "Letter  (216 × 279 mm)": "Letter  (216 × 279 mm)",
     "  Felder laden": "  Load fields",
     "CMYK-Profil:": "CMYK profile:",
     "Benannte Profile nutzen die passende .icc-Datei aus ~/.local/share/copyshop_pdf_suite/icc/ — fehlt sie, wird generisch konvertiert.":
@@ -864,8 +863,6 @@ _EN: dict[str, str] = {
     "Proportionen beibehalten": "Keep proportions",
     "Alle PDF-Seiten": "All PDF pages",
     "Modus:": "Mode:",
-    "Spalten (N-up):": "Columns (N-up):",
-    "Zeilen (N-up):": "Rows (N-up):",
     "Letzte Seite mit Leerseiten auffuellen": "Fill last page with blank pages",
     "Nach dem Speichern reduzieren (fuer Druck)": "Flatten after saving (for printing)",
     "Felder laden": "Load fields",
@@ -898,9 +895,6 @@ _EN: dict[str, str] = {
     "Zeilen:": "Rows:",
     "Quellseite um 90° drehen": "Rotate source page 90°",
     "AUSGABEFORMAT": "OUTPUT FORMAT",
-    "DIN A4  (210 × 297 mm)": "A4  (210 × 297 mm)",
-    "DIN A3  (297 × 420 mm)": "A3  (297 × 420 mm)",
-    "DIN A5  (148 × 210 mm)": "A5  (148 × 210 mm)",
     "Wie Quellseite × Raster  (automatisch)": "Match source × grid  (auto)",
     "ABSTÄNDE": "SPACING",
     "Rand oben:": "Top margin:",
@@ -922,15 +916,21 @@ _EN: dict[str, str] = {
         "Normalize pages and arrange on larger sheets.",
     "Broschüre / Sattelheftung  (A4 → A3)": "Booklet / Saddle Stitch  (A4 → A3)",
     "2-up  (zwei Seiten nebeneinander)": "2-up  (two pages side by side)",
-    "N-up Raster  (Spalten × Zeilen)": "N-up Grid  (Columns × Rows)",
     "SEITEN NORMALISIEREN": "NORMALIZE PAGES",
     "Alle Seiten werden zuerst auf dieselbe Größe gebracht\n(Proportionen bleiben erhalten, Rand wird aufgefüllt).":
         "All pages are first brought to the same size\n(proportions preserved, edges filled).",
+    "Wie Quellseite × 2  (automatisch)": "Same as source page × 2  (automatic)",
+    "Der Bogen, auf den gedruckt wird. Zwei Seiten liegen nebeneinander\n"
+    "darauf — A3 quer nimmt also zwei A4-Seiten auf.":
+        "The sheet that goes through the printer. Two pages sit side by side "
+        "on it — A3 landscape therefore takes two A4 pages.",
+    "Alle Seiten werden auf ihre Hälfte des Bogens gebracht\n"
+    "(Proportionen bleiben erhalten, Rand wird aufgefüllt).":
+        "Every page is fitted to its half of the sheet\n"
+        "(proportions are kept, the remainder is padded).",
     "Vor dem Ausschießen normalisieren": "Normalize before imposing",
     "Die PDF hat keine Seiten.": "The PDF has no pages.",
     "Ausschießen …": "Imposing …",
-    "Größte Seite im Dokument  (automatisch)": "Largest page in document  (auto)",
-    "Zielgröße:": "Target size:",
     "Ausgeschossene PDF speichern als": "Save imposed PDF as",
     "Kein Ausgabepfad.": "No output path.",
 
@@ -1012,7 +1012,6 @@ _EN: dict[str, str] = {
     # ── Imposition panel ─────────────────────────────────────────────────────
     "2-up (zwei Seiten nebeneinander)": "2-up (two pages side by side)",
     "Broschuere (Sattelheftung)": "Booklet (saddle stitch)",
-    "N-up Raster (Spalten x Zeilen)": "N-up grid (columns x rows)",
 
     # ── Layers panel ─────────────────────────────────────────────────────────
     "Ebenen laden": "Load layers",

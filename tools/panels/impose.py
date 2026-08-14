@@ -1,12 +1,19 @@
 """
-Broschüre / Ausschießen — saddle-stitch imposition: normalise the pages and
-lay them out on larger sheets in the order a folded booklet needs.
+Broschüre / Ausschießen — imposition: lay the pages out on larger sheets, in
+the order a folded booklet needs.
+
+This tool arranges pages on a *sheet*; it is not a grid layout tool. It used to
+offer an "N-up Raster (Spalten × Zeilen)" mode as well, which is what the N-Up
+Layout tool is for, and did it with none of that tool's margins, gaps, crop
+marks or preview. Two answers to one question, and this was the worse one.
 """
-from PyQt6.QtWidgets import QVBoxLayout, QSpinBox, QComboBox, QGroupBox, QCheckBox
+from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox
 from tools._base import BasePanel, make_label
 from tools.i18n import tr
-from tools.panels._shared import _inherited_rotate, _visible_box, _visible_size, row
-from tools.panels._imposition import _ROT_MATRIX, _slot_placement, _flatten_annots
+from tools.panels._shared import (PaperFormatSelector, _inherited_rotate,
+                                  _visible_box, _visible_size, row)
+from tools.panels._imposition import (_ROT_MATRIX, _slot_placement, _flatten_annots,
+                                      full_scale_problem)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -23,42 +30,33 @@ class ImposePanel(BasePanel):
         self.mode.addItems([
             tr("Broschüre / Sattelheftung  (A4 → A3)"),
             tr("2-up  (zwei Seiten nebeneinander)"),
-            tr("N-up Raster  (Spalten × Zeilen)"),
         ])
-        self.mode.currentIndexChanged.connect(self._on_mode_changed)
         ml.addLayout(row(tr("Modus:"), self.mode))
-        self.cols = QSpinBox(); self.cols.setRange(1, 8); self.cols.setValue(2)
-        self.rows_spin = QSpinBox(); self.rows_spin.setRange(1, 8); self.rows_spin.setValue(2)
-        self._row_cols = row(tr("Spalten (N-up):"), self.cols)
-        self._row_rows = row(tr("Zeilen (N-up):"), self.rows_spin)
-        ml.addLayout(self._row_cols)
-        ml.addLayout(self._row_rows)
         layout.addWidget(mb)
+
+        # The same widget Crop/Scale and N-Up use, so all three offer the same
+        # paper list, the same custom width x height and the same Querformat.
+        # This tool had a five-entry list of its own that described the *page*
+        # and left the sheet implicit at twice its width — so the one number a
+        # print shop actually needs, what comes out of the printer, could not
+        # be said at all.
+        ob = QGroupBox(tr("AUSGABEFORMAT")); ol = QVBoxLayout(ob)
+        self.AUTO_FORMAT = tr("Wie Quellseite × 2  (automatisch)")
+        self.out_fmt = PaperFormatSelector(after=[self.AUTO_FORMAT])
+        self.out_fmt.set_format(self.AUTO_FORMAT)
+        ol.addWidget(self.out_fmt)
+        ol.addWidget(make_label(tr(
+            "Der Bogen, auf den gedruckt wird. Zwei Seiten liegen nebeneinander\n"
+            "darauf — A3 quer nimmt also zwei A4-Seiten auf."), dim=True))
+        layout.addWidget(ob)
 
         nb = QGroupBox(tr("SEITEN NORMALISIEREN")); nl = QVBoxLayout(nb)
         nl.addWidget(make_label(tr(
-            "Alle Seiten werden zuerst auf dieselbe Größe gebracht\n"
+            "Alle Seiten werden auf ihre Hälfte des Bogens gebracht\n"
             "(Proportionen bleiben erhalten, Rand wird aufgefüllt)."), dim=True))
         self.norm_check = QCheckBox(tr("Vor dem Ausschießen normalisieren"))
         self.norm_check.setChecked(True); nl.addWidget(self.norm_check)
-        self.norm_target = QComboBox()
-        self.norm_target.addItems([
-            tr("Größte Seite im Dokument  (automatisch)"),
-            tr("DIN A4  (210 × 297 mm)"),
-            tr("DIN A3  (297 × 420 mm)"),
-            tr("DIN A5  (148 × 210 mm)"),
-            tr("Letter  (216 × 279 mm)"),
-        ])
-        nl.addLayout(row(tr("Zielgröße:"), self.norm_target))
         layout.addWidget(nb)
-        self._on_mode_changed(0)
-
-    def _on_mode_changed(self, idx):
-        nup = (idx == 2)
-        for layout in (self._row_cols, self._row_rows):
-            for i in range(layout.count()):
-                w = layout.itemAt(i).widget()
-                if w: w.setVisible(nup)
 
     def _run_action(self):
         import pikepdf
@@ -69,37 +67,39 @@ class ImposePanel(BasePanel):
         with pikepdf.open(src) as doc:
             n = len(doc.pages)
             if not n: raise ValueError(tr("Die PDF hat keine Seiten."))
-            pw, ph = _impose_page_size(doc, self.norm_target.currentIndex())
+            page_w, page_h = _largest_page(doc)
+
+        sheet = self.out_fmt.target_size_pt()      # None = "Wie Quellseite × 2"
+        if sheet is None:
+            sheet_w, sheet_h = page_w * 2, page_h
+        else:
+            sheet_w, sheet_h = sheet               # Querformat already applied
+        half_w = sheet_w / 2.0
+        halves = [(0.0, 0.0, half_w, sheet_h), (half_w, 0.0, sheet_w, sheet_h)]
+
+        fit = self.norm_check.isChecked()
+        if not fit:
+            # Without normalising, each page goes on at its own size. Before the
+            # sheet could be chosen it was always twice the page, so that always
+            # fitted; now it need not, and clipped content is not something to
+            # discover after printing.
+            problem = full_scale_problem(page_w, page_h, half_w, sheet_h,
+                                         need_w=page_w * 2, need_h=page_h)
+            if problem:
+                raise ValueError(problem)
 
         mode = self.mode.currentIndex()
         if mode == 0:
-            sheet_w, sheet_h = pw * 2, ph
-            halves = [(0.0, 0.0, pw, ph), (pw, 0.0, pw * 2, ph)]
             sheets = [list(zip(side, halves)) for side in _booklet_sides(n)]
             summary = lambda placed, nsheets: tr(
                 'Broschüre: {p0} Seiten auf {p1} Blattseiten.').format(p0=placed, p1=nsheets)
-        elif mode == 1:
-            sheet_w, sheet_h = pw * 2, ph
-            halves = [(0.0, 0.0, pw, ph), (pw, 0.0, pw * 2, ph)]
+        else:
             pages = list(range(n))
             while len(pages) % 2: pages.append(None)
             sheets = [list(zip(pages[i:i + 2], halves)) for i in range(0, len(pages), 2)]
             summary = lambda placed, nsheets: tr(
                 '2-up: {p0} Seiten auf {p1} Bögen.').format(p0=placed, p1=nsheets)
-        else:
-            cols = self.cols.value(); rows = self.rows_spin.value(); per = cols * rows
-            sheet_w, sheet_h = pw, ph
-            cw, chh = pw / cols, ph / rows
-            cells = [(c * cw, ph - (r + 1) * chh, (c + 1) * cw, ph - r * chh)
-                     for r in range(rows) for c in range(cols)]
-            pages = list(range(n))
-            while len(pages) % per: pages.append(None)
-            sheets = [list(zip(pages[i:i + per], cells)) for i in range(0, len(pages), per)]
-            summary = lambda placed, nsheets: tr(
-                '{p0}×{p1}-up: {p2} Seiten auf {p3} Bögen.').format(
-                    p0=cols, p1=rows, p2=placed, p3=nsheets)
 
-        fit = self.norm_check.isChecked()
         self.run_async(
             lambda report: _build_impose(src, out, sheets, sheet_w, sheet_h,
                                          fit, report, summary),
@@ -131,18 +131,18 @@ def _booklet_sides(n_pages):
     return [[(i if i < n_pages else None) for i in side] for side in sides]
 
 
-def _impose_page_size(doc, idx):
-    """The size of one booklet page: a fixed paper size, or — for "largest page
-    in the document" — the biggest page *as displayed* (visible box, /Rotate
-    applied).
+def _largest_page(doc):
+    """The biggest page in the document *as displayed* (visible box, /Rotate
+    applied) — what "Wie Quellseite × 2" sizes the sheet from, and what has to
+    fit its half when normalising is off.
 
     Deliberately the largest single page, not max(width) × max(height) over all
     of them: a document mixing portrait and landscape A4 made those two maxima
-    841×841, so every sheet came out square."""
-    sizes = {1: (595.28, 841.89), 2: (841.89, 1190.55),
-             3: (419.53, 595.28), 4: (612.0, 792.0)}
-    if idx in sizes:
-        return sizes[idx]
+    841×841, so every sheet came out square.
+
+    The fixed paper sizes this used to also answer with are gone — those are
+    the sheet now, and the sheet is chosen with the same PaperFormatSelector
+    the other tools use, which offers the full paper list and a custom size."""
     return max((_visible_size(p) for p in doc.pages),
                key=lambda wh: wh[0] * wh[1], default=(595.28, 841.89))
 
