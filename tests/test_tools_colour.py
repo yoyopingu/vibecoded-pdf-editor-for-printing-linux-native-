@@ -619,3 +619,35 @@ def test_content_streams_are_joined_not_accumulated():
     assert data.count(b"0.5 g") == 400, "parts were lost"
     assert elapsed < 2.0, f"400 parts took {elapsed:.1f} s"
     return f"400 parts, {len(data)/1e6:.1f} MB in {elapsed*1000:.0f} ms"
+
+
+def test_a_stream_shared_between_pages_is_read_once():
+    """Pages that share a content stream are one scan, not one per page.
+
+    Imposition, N-Up's repeat mode and a duplicated page in the page manager
+    all produce documents like this. The per-page cache cannot see it — two
+    pages are two keys — so the identity of the bytes is cached as well."""
+    import pikepdf
+    import tools.colorspace as CS
+    from tools.colorspace import document_colorspaces
+
+    src = os.path.join(_TMP, "shared_stream.pdf")
+    with pikepdf.new() as pdf:
+        pdf.add_blank_page(page_size=(200, 200))
+        stream = pdf.make_stream(b"1 0 0 rg 10 10 100 100 re f\n")
+        pdf.pages[0].obj["/Contents"] = stream
+        for _ in range(7):                      # eight pages, one stream
+            pdf.pages.append(pdf.pages[0])
+        pdf.save(src)
+
+    reads = []
+    real = CS._content_bytes
+    CS._content_bytes = lambda obj, pp: (reads.append(1), real(obj, pp))[1]
+    try:
+        CS._cache.clear(); CS._stream_cache.clear()
+        names = document_colorspaces(src)
+    finally:
+        CS._content_bytes = real
+    assert "/DeviceRGB" in names, names
+    assert len(reads) == 1, f"one stream, eight pages, {len(reads)} inflations"
+    return f"8 pages sharing 1 stream -> {len(reads)} read"

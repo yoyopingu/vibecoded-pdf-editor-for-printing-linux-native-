@@ -161,6 +161,12 @@ _MAX_FORM_DEPTH = 8
 _cache: "dict" = {}
 _CACHE_MAX = 512     # pages; a frozenset of a few short strings each
 
+# (file revision, content identity) -> frozenset. Keyed on which objects the
+# bytes came from rather than on which page asked for them, so a stream shared
+# between pages is inflated and searched once. See _content_key.
+_stream_cache: "dict" = {}
+_STREAM_CACHE_MAX = 2048
+
 
 def _revision(path):
     return _stat_key(path) or (path, None, None)
@@ -199,7 +205,7 @@ def _content_bytes(obj, pikepdf):
         return b""
 
 
-def _scan(obj, found, pikepdf, depth=0, seen=None):
+def _scan(obj, found, pikepdf, rev, depth=0, seen=None):
     """Collect colour-space names from `obj` and anything it draws."""
     if depth > _MAX_FORM_DEPTH:
         return
@@ -233,36 +239,86 @@ def _scan(obj, found, pikepdf, depth=0, seen=None):
                             key = id(v)
                         if key not in seen:      # a form may refer to itself
                             seen.add(key)
-                            _scan(v, found, pikepdf, depth + 1, seen)
+                            _scan(v, found, pikepdf, rev, depth + 1, seen)
                 except Exception:
                     logging.debug("colorspace: bad /XObject entry", exc_info=True)
 
     # Always, not only when the resources gave nothing: vector fills live here
     # and nowhere else.
     try:
-        found |= colour_operators(_content_bytes(obj, pikepdf))
+        found |= _content_names(obj, pikepdf, rev)
     except Exception:
         logging.debug("colorspace: content scan failed", exc_info=True)
 
 
-def _page_names(page, pikepdf):
+def _page_names(page, pikepdf, rev):
     found = set()
-    _scan(page, found, pikepdf)
+    _scan(page, found, pikepdf, rev)
     return frozenset(found)
 
 
-def _remember(key, names):
-    """Cache `names`, dropping the oldest entries once the cap is reached.
+def _remember_in(cache, key, value, cap):
+    """Cache `value`, dropping the oldest entries once `cap` is reached.
 
-    Not _cache.clear(): a document with more pages than the cap would wipe
+    Not cache.clear(): a document with more pages than the cap would wipe
     everything it had just learned each time it filled up, so scanning a
     300-page file left only its last few pages cached and the viewer went back
     to reading page 1 from disk. Insertion order is good enough to decide what
     to drop — these are read in page order.
     """
-    _cache[key] = names
-    while len(_cache) > _CACHE_MAX:
-        _cache.pop(next(iter(_cache)))
+    cache[key] = value
+    while len(cache) > cap:
+        cache.pop(next(iter(cache)))
+    return value
+
+
+def _remember(key, names):
+    return _remember_in(_cache, key, names, _CACHE_MAX)
+
+
+def _content_key(obj, pikepdf):
+    """Identity of the bytes _content_bytes would return, or None if they have
+    none that can be recognised again.
+
+    Two pages that share a content stream are the same scan, and they are not
+    rare: imposition and N-Up place the same form on every sheet, the page
+    manager duplicates pages, and a booklet is built from both. On one
+    eight-page document whose pages all referred to stream (11, 0), the scan
+    inflated and searched seven distinct streams once per page — 56 inflations
+    of seven. (Within a single page the walk already deduplicated: the `seen`
+    guard that stops a form recurring into itself also stops /Fm10 and /Fm11
+    being read twice when they are one object. It is only across pages that
+    the work was repeated.)
+
+    A generation of (0, 0) means the object is written inline rather than
+    referenced, so there is nothing to recognise it by; those are not cached.
+    """
+    try:
+        if "/Contents" in obj:
+            contents = obj.get("/Contents")
+            if contents is None:
+                return None
+            if isinstance(contents, pikepdf.Array):
+                gens = tuple(c.objgen for c in contents)
+                return gens if gens and all(g != (0, 0) for g in gens) else None
+            gen = contents.objgen
+            return (gen,) if gen != (0, 0) else None
+        gen = obj.objgen
+        return (gen,) if gen != (0, 0) else None
+    except Exception:
+        return None
+
+
+def _content_names(obj, pikepdf, rev):
+    """colour_operators over this object's content, once per distinct stream."""
+    key = _content_key(obj, pikepdf)
+    if key is not None:
+        hit = _stream_cache.get((rev, key))
+        if hit is not None:
+            return hit
+    names = frozenset(colour_operators(_content_bytes(obj, pikepdf)))
+    if key is not None:
+        _remember_in(_stream_cache, (rev, key), names, _STREAM_CACHE_MAX)
     return names
 
 
@@ -276,7 +332,8 @@ def page_colorspaces(pdf_path, page_index):
     try:
         import pikepdf
         with pikepdf.open(pdf_path) as pdf:
-            return _remember(key, _page_names(pdf.pages[page_index], pikepdf))
+            return _remember(key, _page_names(pdf.pages[page_index], pikepdf,
+                                             key[0]))
     except Exception:
         logging.debug("colorspace: %s page %s unreadable", pdf_path, page_index,
                       exc_info=True)
@@ -311,7 +368,7 @@ def document_colorspaces(pdf_path):
                 key = (revision, i)
                 names = _cache.get(key)
                 if names is None:
-                    names = _remember(key, _page_names(page, pikepdf))
+                    names = _remember(key, _page_names(page, pikepdf, revision))
                 found |= names
     except Exception:
         logging.debug("colorspace: %s unreadable", pdf_path, exc_info=True)
