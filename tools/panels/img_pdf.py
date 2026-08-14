@@ -58,24 +58,40 @@ class ImgPdfPanel(BasePanel):
         except Exception as e: self.log.log(str(e), error=True)
 
     def _to_img(self):
+        # Rasterising every page at the chosen dpi is the slowest thing this
+        # panel does, and it used to run right here with processEvents() pumped
+        # between batches — which repaints but leaves the window unusable and
+        # gives no way to stop.
         try: src = self.require_pdf()
         except ValueError as e: self.log.log(str(e), error=True); return
         out_dir = self.save_dir()
         if not out_dir: return
-        self.log.clear_log(); QApplication.processEvents()
-        try:
-            from pdf2image import convert_from_path
-            from pypdf import PdfReader
-            fmt=self.fmt.currentText().lower(); ext={"jpeg":"jpg"}.get(fmt,fmt)
-            n_pages = len(PdfReader(src, strict=False).pages)
-            stem=os.path.splitext(os.path.basename(src))[0]
-            for i in range(0, n_pages, 10):
-                QApplication.processEvents()
-                end = min(i+10, n_pages)
-                pages=convert_from_path(src, dpi=self.dpi.value(), first_page=i+1, last_page=end)
-                for j, img in enumerate(pages):
-                    img.save(os.path.join(out_dir, f"{stem}_s{i+j+1:03d}.{ext}"), fmt.upper())
-            self.log.log(tr('{p0} Bilder exportiert').format(p0=n_pages))
-        except Exception as e: self.log.log(str(e), error=True)
+        self.log.clear_log()
+        fmt = self.fmt.currentText().lower()
+        dpi = self.dpi.value()
+
+        self.run_async(
+            lambda report: _pdf_to_images(src, out_dir, fmt, dpi, report),
+            on_done=lambda n: self.log.log(tr('{p0} Bilder exportiert').format(p0=n)),
+            busy_label="Bilder werden exportiert …",
+        )
 
     def _run_action(self): pass
+
+
+def _pdf_to_images(src, out_dir, fmt, dpi, report):
+    """Render every page of `src` into `out_dir`. Returns how many."""
+    from pdf2image import convert_from_path
+    from pypdf import PdfReader
+    ext = {"jpeg": "jpg"}.get(fmt, fmt)
+    n_pages = len(PdfReader(src, strict=False).pages)
+    stem = os.path.splitext(os.path.basename(src))[0]
+    # In batches of ten: convert_from_path holds every page it produced in
+    # memory at once, and a long document at 300 dpi does not fit.
+    for i in range(0, n_pages, 10):
+        end = min(i + 10, n_pages)
+        report(tr('Seite {i} / {total}…').format(i=end, total=n_pages))
+        pages = convert_from_path(src, dpi=dpi, first_page=i + 1, last_page=end)
+        for j, img in enumerate(pages):
+            img.save(os.path.join(out_dir, f"{stem}_s{i+j+1:03d}.{ext}"), fmt.upper())
+    return n_pages

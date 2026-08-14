@@ -156,7 +156,7 @@ def test_form_flatten_keeps_the_filled_values():
     empty_ink = _plain_render_ink(src)
 
     _open(src)
-    p = FormsPanel(); p.log.log = lambda *a, **k: None
+    p = FormsPanel(); _sync_async(p); p.log.log = lambda *a, **k: None
     p._load()
     for w in p._fields.values():
         if isinstance(w, QLineEdit): w.setText("MAX MUSTERMANN")

@@ -113,27 +113,48 @@ class FormsPanel(BasePanel):
         except Exception as e: self.log.log(str(e),error=True)
 
     def _run_action(self):
-        src=self.require_pdf()
-        out=self.save_pdf("Ausgefuelltes Formular speichern als")
+        # The field values are read here; writing and the optional flatten —
+        # which shells out to Ghostscript — go to a worker.
+        src = self.require_pdf()
+        out = self.save_pdf("Ausgefuelltes Formular speichern als")
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
-        import tempfile
-        from pypdf import PdfReader, PdfWriter
-        reader=PdfReader(src, strict=False); writer=PdfWriter(); writer.append(reader)
-        data={name: ("/Yes" if (isinstance(w,QCheckBox) and w.isChecked()) else
-                     "/Off" if isinstance(w,QCheckBox) else w.text())
-              for name,w in self._fields.items()}
-        for page in writer.pages: writer.update_page_form_field_values(page,data)
-        filled_fd, filled = tempfile.mkstemp(suffix=".pdf"); os.close(filled_fd)
-        try:
-            with open(filled,"wb") as f: writer.write(f)
-            if self.flatten.isChecked():
-                _flatten_form(filled, out,
-                              has_values=any(str(v).strip() not in ("", "/Off")
-                                             for v in data.values()))
-            else:
-                shutil.copyfile(filled, out)
-        finally:
-            try: os.remove(filled)
-            except OSError: pass
-        self.open_result(out,tr("Formular ausgefuellt"))
-        return tr('Formular ausgefuellt ({p0} Felder)').format(p0=len(data))
+        data = {name: ("/Yes" if (isinstance(w, QCheckBox) and w.isChecked()) else
+                       "/Off" if isinstance(w, QCheckBox) else w.text())
+                for name, w in self._fields.items()}
+        flatten = self.flatten.isChecked()
+
+        self.run_async(
+            lambda report: _fill_form(src, out, data, flatten, report),
+            on_done=self._form_done,
+            busy_label="Formular wird ausgefüllt …",
+        )
+        return None
+
+    def _form_done(self, result):
+        out, n_fields = result
+        self.log.log(tr('Formular ausgefuellt ({p0} Felder)').format(p0=n_fields))
+        self.open_result(out, tr("Formular ausgefuellt"))
+
+
+def _fill_form(src, out, data, flatten, report):
+    """Write `src` with `data` filled in, optionally flattened. Plain data only."""
+    import tempfile
+    from pypdf import PdfReader, PdfWriter
+    report(tr("Schreibe Datei …"))
+    reader = PdfReader(src, strict=False); writer = PdfWriter(); writer.append(reader)
+    for page in writer.pages:
+        writer.update_page_form_field_values(page, data)
+    filled_fd, filled = tempfile.mkstemp(suffix=".pdf"); os.close(filled_fd)
+    try:
+        with open(filled, "wb") as f: writer.write(f)
+        if flatten:
+            report(tr("Ghostscript: reduziere …"))
+            _flatten_form(filled, out,
+                          has_values=any(str(v).strip() not in ("", "/Off")
+                                         for v in data.values()))
+        else:
+            shutil.copyfile(filled, out)
+    finally:
+        try: os.remove(filled)
+        except OSError: pass
+    return out, len(data)
