@@ -361,3 +361,56 @@ def test_clicking_a_number_field_selects_its_value():
         import tools.shell.inputs as _inputs
         _inputs._filter = None
         w.deleteLater(); _app.processEvents()
+
+
+def test_a_forwarded_file_survives_a_garbage_collection():
+    """The accepted socket has to stay referenced from Python until it is done.
+
+    nextPendingConnection() returns a QLocalSocket that C++ owns — parented to
+    the server — so the socket survives. Its Python wrapper did not: nothing
+    referenced it once _serve returned, and collecting it took the connections
+    to readyRead and disconnected with it. The bytes still arrived and nobody
+    was listening, so the launch silently did nothing.
+
+    Timing decided whether a collection landed in that window, which made it an
+    intermittent failure rather than an obvious one. Here the collection is
+    forced into exactly that window, so the bug is deterministic."""
+    import gc
+    from PyQt6.QtNetwork import QLocalSocket
+
+    class _Win:
+        def __init__(self): self.got = []
+        def open_paths(self, paths, token=""): self.got.append((list(paths), token))
+
+    key = f"copyshop_gc_{os.getpid()}"
+    real_key, INSTANCE._IPC_KEY = INSTANCE._IPC_KEY, key
+    win = _Win()
+    server = INSTANCE._listen_for_open_requests(win)
+    try:
+        assert server is not None and server.isListening(), "listener did not start"
+        sock = QLocalSocket()
+        sock.connectToServer(key)
+        assert sock.waitForConnected(2000), "client could not connect"
+
+        # Let the server accept it. _serve runs here, with nothing to read yet —
+        # the state the failure needed.
+        _spin(20)
+        gc.collect()
+
+        sock.write((FX["single"] + "\n").encode("utf-8"))
+        sock.flush()
+        if sock.bytesToWrite():
+            sock.waitForBytesWritten(2000)
+        sock.disconnectFromServer()
+        _spin(40)
+
+        assert win.got, "the forwarded path never arrived"
+        paths, _token = win.got[0]
+        assert paths == [FX["single"]], f"wrong payload: {win.got!r}"
+    finally:
+        try:
+            server.close()
+        except Exception:
+            pass
+        INSTANCE._IPC_KEY = real_key
+    return "accepted socket survived a collection"

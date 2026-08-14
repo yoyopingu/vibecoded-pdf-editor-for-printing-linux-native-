@@ -60,6 +60,21 @@ def _listen_for_open_requests(win):
     if QLocalServer is None:
         return None
 
+    # The sockets we have accepted and not yet finished with.
+    #
+    # nextPendingConnection() hands back a QLocalSocket that C++ owns — it is
+    # parented to the server, so the socket itself survives. Its *Python*
+    # wrapper does not: once _serve returned, nothing referenced it, and when
+    # it was collected PyQt took the connections to _read and _finish with it.
+    # The socket stayed alive and the bytes still arrived; there was simply no
+    # longer anything listening for them, so the launch did nothing at all.
+    #
+    # It reproduced about half the time in a loop, and only when a garbage
+    # collection happened to land between accepting the connection and the
+    # data arriving — which is why it read as an intermittent test failure for
+    # a long time before it read as this.
+    _open_connections = set()
+
     def _on_connection():
         # Drain every queued connection: two launches in quick succession (e.g.
         # double-clicking two PDFs) can land before this handler runs, and
@@ -69,6 +84,7 @@ def _listen_for_open_requests(win):
 
     def _serve(conn):
         if conn is None: return
+        _open_connections.add(conn)
         buf  = bytearray()
         done = []
 
@@ -102,6 +118,7 @@ def _listen_for_open_requests(win):
             # the file the app was started with, say), the message was silently
             # dropped and that launch did nothing at all.
             _read()
+            _open_connections.discard(conn)
             conn.deleteLater()
 
         conn.readyRead.connect(_read)
