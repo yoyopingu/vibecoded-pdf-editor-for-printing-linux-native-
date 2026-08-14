@@ -22,7 +22,9 @@ from tools.theme import _TV
 
 
 _QUEUE_INFO_CACHE = {}       # printer -> {"sources": ..., "defaults": ...}
-_PRINTER_LIST_CACHE = None   # (names:list[str], default:str) — filled on first enumerate
+_PRINTER_LIST_CACHE = None   # (names:list[str], default:str) — last enumeration seen.
+                             # Only ever a head start: every dialog open
+                             # re-enumerates and replaces it if it has changed.
 
 
 class PrintDialog(QDialog):
@@ -470,21 +472,25 @@ class PrintDialog(QDialog):
         `lpstat -e`) takes ~1–2 s — doing it during construction froze the whole
         dialog before it appeared. Instead the dialog opens instantly with a
         placeholder and the list is fetched in a background thread (subprocess —
-        safe off the GUI thread, unlike Qt's print classes). The result is
-        cached for the session so subsequent opens are instant.
+        safe off the GUI thread, unlike Qt's print classes).
+
+        Later opens show the previous result immediately and enumerate again
+        behind it, so the list is both instant and current. The combo is only
+        rebuilt if the answer differs.
         """
         self.printer_combo.clear()
 
-        # Session cache → instant repeat opens
+        # The cache is a head start, not the answer: show last time's list at
+        # once so the dialog is usable immediately, then enumerate anyway. A
+        # printer plugged in while the app was running used to be invisible
+        # until a restart, because this returned here and never asked again.
         if _PRINTER_LIST_CACHE is not None:
             names, default = _PRINTER_LIST_CACHE
             self._apply_printer_list(names, default)
-            return
-
-        # First open: show a placeholder, fetch the list off-thread
-        self.printer_combo.addItem(tr("Drucker werden geladen…"), "none")
-        self.printer_combo.setEnabled(False)
-        self._printers_loaded.connect(self._apply_printer_list)
+        else:
+            self.printer_combo.addItem(tr("Drucker werden geladen…"), "none")
+            self.printer_combo.setEnabled(False)
+        self._printers_loaded.connect(self._on_printers_enumerated)
 
         import weakref
         self_ref = weakref.ref(self)
@@ -675,10 +681,24 @@ class PrintDialog(QDialog):
             _combo_by_data(self.source_combo, source[1])
         self.colorconv_combo.setEnabled(self.color_combo.currentData() != "mono")
 
-    def _apply_printer_list(self, names, default):
+    def _on_printers_enumerated(self, names, default):
+        """A fresh enumeration has come back from the background thread.
+
+        Usually it says exactly what the cache already said, and then there is
+        nothing to do — rebuilding the combo under someone who is using it is
+        worse than not refreshing at all. Only a real change redraws, and it
+        keeps whatever printer is selected if that printer still exists."""
+        if _PRINTER_LIST_CACHE == (list(names), default):
+            return
+        current = self.printer_combo.currentData()
+        self._apply_printer_list(names, default,
+                                 keep=current if current not in (None, "none") else None)
+
+    def _apply_printer_list(self, names, default, keep=None):
         """Populate the combo from an enumerated printer list (GUI thread)."""
         global _PRINTER_LIST_CACHE
         _PRINTER_LIST_CACHE = (list(names), default)
+        was_selected = self.printer_combo.currentData()
 
         try:
             self.printer_combo.currentIndexChanged.disconnect(self._on_printer_changed)
@@ -695,7 +715,7 @@ class PrintDialog(QDialog):
         # The one used last, if it is still there; otherwise the system default.
         # Reopening on the printer you actually print to is the whole point of
         # remembering it.
-        for wanted in (prefs.last_printer(), default):
+        for wanted in (keep, prefs.last_printer(), default):
             if not wanted:
                 continue
             idx = self.printer_combo.findData(wanted)
@@ -705,7 +725,15 @@ class PrintDialog(QDialog):
         self.printer_combo.blockSignals(False)
 
         self.printer_combo.currentIndexChanged.connect(self._on_printer_changed)
-        self._on_printer_changed()   # applies the printer's own defaults
+        # Only when the selection actually moved, and only if the user has not
+        # already made a choice. A refresh that finds the same printer selected
+        # has nothing to apply; one that finds the selected printer gone would
+        # otherwise undo the paper size and sides the operator just picked.
+        # _apply_queue_info has honoured _settings_touched all along — this is
+        # the Qt half of the same rule.
+        if (self.printer_combo.currentData() != was_selected
+                and not self._settings_touched):
+            self._on_printer_changed()
 
     # Fallback paper list used when printer reports no supported sizes
     _FALLBACK_PAPERS = [
