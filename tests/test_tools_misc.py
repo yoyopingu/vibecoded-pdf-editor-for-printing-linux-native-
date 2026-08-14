@@ -198,7 +198,9 @@ def test_compress_refuses_a_damaged_result():
     _open(src)
 
     def compress(patch=None, tag="ok"):
-        p = CompressPanel(); p.log.log = lambda *a, **k: None
+        # The work runs on a worker now; _sync_async runs it here instead so the
+        # assertions below still see it finish before they look.
+        p = CompressPanel(); _sync_async(p); p.log.log = lambda *a, **k: None
         p.preset.setCurrentIndex(1); p.gs_check.setChecked(True)
         o = os.path.join(_TMP, f"cmp_{tag}.pdf")
         p.save_pdf = lambda *a, **k: o
@@ -213,7 +215,7 @@ def test_compress_refuses_a_damaged_result():
 
     # Honest compression at every preset must go through untouched.
     for i in range(4):
-        p = CompressPanel(); p.log.log = lambda *a, **k: None
+        p = CompressPanel(); _sync_async(p); p.log.log = lambda *a, **k: None
         p.preset.setCurrentIndex(i); p.gs_check.setChecked(True)
         o = os.path.join(_TMP, f"cmp_p{i}.pdf")
         p.save_pdf = lambda *a, **k: o
@@ -283,3 +285,48 @@ def test_output_validity():
         p._run_action()
         path = cap.get("p", o)
         assert os.path.exists(path) and pages(path) >= 1, f"{cls.__name__} produced no valid output"
+
+
+def test_the_heavy_tools_hand_their_work_to_a_worker():
+    """Pressing Ausführen must return to the event loop, not hold it.
+
+    _safe_run calls _run_action on the GUI thread, so a tool that does its work
+    inline freezes the window for the whole of it — measured at three minutes
+    of Ghostscript on a heavy document, with no repaint, no progress and no way
+    to cancel. These do the work through run_async instead, which is what the
+    rest of the suite of tools already did.
+
+    Asserted structurally rather than by timing: _run_action returns None and
+    the panel is marked as having work outstanding, which together mean the
+    heavy part is somewhere else."""
+    from tools.panels.compress import CompressPanel
+    from tools.panels.colour_profile import ColourProfilePanel
+    from tools.panels.layers import LayersPanel
+    from tools.panels.impose import ImposePanel
+    from tools.panels.nup import NUpPanel
+
+    _open(FX["color"])
+    handed_off = []
+    for cls in (CompressPanel, ColourProfilePanel, LayersPanel,
+                ImposePanel, NUpPanel):
+        p = cls()
+        p.save_pdf = lambda *a, **k: os.path.join(_TMP, f"hand_{cls.__name__}.pdf")
+        p.open_result = lambda *a, **k: None
+        p.log.log = lambda *a, **k: None
+        try:
+            result = p._run_action()
+        except RuntimeError as e:
+            # A tool that cannot run here at all (no Ghostscript) is not what
+            # this test is about.
+            if "Ghostscript" in str(e):
+                continue
+            raise
+        assert result is None, \
+            f"{cls.__name__}._run_action did the work inline (returned {result!r})"
+        assert getattr(p, "_async_running", False), \
+            f"{cls.__name__} returned None without starting a job"
+        handed_off.append(cls.__name__)
+        from tools.jobs import cancel_owner
+        cancel_owner(p)
+    assert len(handed_off) >= 3, f"only {handed_off} were checked"
+    return ", ".join(handed_off)

@@ -117,8 +117,9 @@ class ColourProfilePanel(BasePanel):
             self.log.log(str(e), error=True)
 
     def _run_action(self):
-        import subprocess as sp
-
+        # Everything read from a widget is read here; the Ghostscript run and
+        # the page-by-page verification go to a worker. On a heavy file that is
+        # minutes during which the window used to be unable to repaint.
         src = self.require_pdf()
 
         if not shutil.which("gs"):
@@ -129,98 +130,10 @@ class ColourProfilePanel(BasePanel):
         out = self.save_pdf("CMYK-PDF speichern als")
         if not out: raise ValueError(tr("Kein Ausgabepfad angegeben."))
 
-        # Bewährter GS-Befehl für RGB→CMYK ohne ICC-Profil-Problematik.
-        # -dEncodeColorImages=false / -dEncodeGrayImages=false verhindert
-        # Neukomprimierung und Qualitätsverlust bei Bildern.
-        # -dPDFSETTINGS=/prepress: höchste Qualität, Fonts eingebettet.
         # Selected CMYK target profile (None = generic). Use its .icc if present.
         candidates = self.profile_combo.currentData()
         icc = self._resolve_icc(candidates)
         prof_label = self.profile_combo.currentText().split(" — ")[0]
-
-        # Ghostscript writes to a temp file, never straight to `out`: the result
-        # is checked page by page first, exactly as the greyscale conversion is.
-        # pdfwrite can black out a transparency group while exiting 0, and for a
-        # prepress file nobody notices until it is on press.
-        import tempfile, contextlib, pikepdf
-        fd, cmyk_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
-        try:
-            cmd = [
-                "gs",
-                "-o", cmyk_tmp,
-                "-sDEVICE=pdfwrite",
-                "-dPDFSETTINGS=/prepress",
-                "-dEncodeColorImages=false",
-                "-dEncodeGrayImages=false",
-                "-dEncodeMonoImages=false",
-                "-sProcessColorModel=DeviceCMYK",
-                "-sColorConversionStrategy=CMYK",
-                "-sColorConversionStrategyForImages=CMYK",
-            ]
-            if icc:
-                cmd.append(f"-sOutputICCProfile={icc}")   # convert to this named CMYK space
-            cmd.append(src)
-
-            r = sp.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
-
-            if r.returncode != 0:
-                err = (r.stderr.strip() or r.stdout.strip() or f"exit {r.returncode}")[:500]
-                raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=err))
-            if not os.path.exists(cmyk_tmp) or os.path.getsize(cmyk_tmp) == 0:
-                raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
-
-            with pikepdf.open(src) as _s, pikepdf.open(cmyk_tmp) as _c:
-                n_ok = min(len(_s.pages), len(_c.pages))
-            damaged = _verify_pages_intact(src, cmyk_tmp, range(n_ok), None)
-            if damaged:
-                # Keep the untouched original for those pages rather than hand
-                # over a file with black rectangles in it.
-                with contextlib.ExitStack() as stack:
-                    s_pdf = stack.enter_context(pikepdf.open(src))
-                    c_pdf = stack.enter_context(pikepdf.open(cmyk_tmp))
-                    o_pdf = stack.enter_context(pikepdf.Pdf.new())
-                    for i in range(n_ok):
-                        o_pdf.pages.append(
-                            s_pdf.pages[i] if i in damaged else c_pdf.pages[i])
-                    o_pdf.save(out)
-            else:
-                shutil.copyfile(cmyk_tmp, out)
-        finally:
-            try: os.remove(cmyk_tmp)
-            except OSError: pass
-
-        # Ergebnis verifizieren
-        try:
-            import pikepdf
-            found_rgb = False
-            pdf_out = pikepdf.open(out)
-            for page in pdf_out.pages:
-                res = page.get("/Resources")
-                if not res: continue
-                xobj = res.get("/XObject")
-                if xobj and isinstance(xobj, pikepdf.Dictionary):
-                    for v in xobj.values():
-                        try:
-                            if v.get("/Subtype") == pikepdf.Name("/Image"):
-                                cs = v.get("/ColorSpace")
-                                if cs:
-                                    name = str(cs[0]) if isinstance(cs, pikepdf.Array) else str(cs)
-                                    if name in ("/DeviceRGB", "/CalRGB"):
-                                        found_rgb = True
-                        except Exception:
-                            logging.debug("colour profile: could not read an image's "
-                                          "colour space", exc_info=True)
-            pdf_out.close()
-            verify = tr("⚠  Einige RGB-Bilder noch vorhanden (eingebettete Profile).") if found_rgb else tr("✓  Farbraum erfolgreich in CMYK konvertiert.")
-        except Exception:
-            verify = tr("(Verifikation nicht möglich)")
-        if damaged:
-            verify += "\n⚠  " + tr(
-                'ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt '
-                'und blieben deshalb unveraendert: {p1}').format(
-                    p0=len(damaged),
-                    p1=", ".join(f"{i + 1} ({why})" for i, why in sorted(damaged.items())))
-
         if icc:
             prof_note = f"Profil: {prof_label}  ({os.path.basename(icc)})"
         elif candidates:
@@ -228,5 +141,123 @@ class ColourProfilePanel(BasePanel):
         else:
             prof_note = "Profil: Standard (generisch)"
 
+        self.run_async(
+            lambda report: _to_cmyk(src, out, icc, report),
+            on_done=lambda result: self._cmyk_done(result, prof_note),
+            busy_label="CMYK-Konvertierung …",
+        )
+        return None
+
+    def _cmyk_done(self, result, prof_note):
+        out, damaged, found_rgb, verified = result
+        if not verified:
+            verify = tr("(Verifikation nicht möglich)")
+        else:
+            verify = (tr("⚠  Einige RGB-Bilder noch vorhanden (eingebettete Profile).")
+                      if found_rgb else
+                      tr("✓  Farbraum erfolgreich in CMYK konvertiert."))
+        if damaged:
+            verify += "\n⚠  " + tr(
+                'ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt '
+                'und blieben deshalb unveraendert: {p1}').format(
+                    p0=len(damaged),
+                    p1=", ".join(f"{i + 1} ({why})" for i, why in sorted(damaged.items())))
+        self.log.log(tr('Konvertierung abgeschlossen.\n{p0}\n{p1}').format(
+            p0=prof_note, p1=verify))
         self.open_result(out, tr("CMYK konvertiert"))
-        return tr('Konvertierung abgeschlossen.\n{p0}\n{p1}').format(p0=prof_note, p1=verify)
+
+
+def _to_cmyk(src, out, icc, report):
+    """Convert `src` to CMYK into `out` on a worker thread.
+
+    Returns (out, damaged, found_rgb, verified). Plain data only — the panel
+    turns it into a report back on the GUI thread.
+    """
+    import subprocess as sp
+    import tempfile, contextlib, pikepdf
+
+    # Bewährter GS-Befehl für RGB→CMYK ohne ICC-Profil-Problematik.
+    # -dEncodeColorImages=false / -dEncodeGrayImages=false verhindert
+    # Neukomprimierung und Qualitätsverlust bei Bildern.
+    # -dPDFSETTINGS=/prepress: höchste Qualität, Fonts eingebettet.
+    #
+    # Ghostscript writes to a temp file, never straight to `out`: the result
+    # is checked page by page first, exactly as the greyscale conversion is.
+    # pdfwrite can black out a transparency group while exiting 0, and for a
+    # prepress file nobody notices until it is on press.
+    fd, cmyk_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+    try:
+        cmd = [
+            "gs",
+            "-o", cmyk_tmp,
+            "-sDEVICE=pdfwrite",
+            "-dPDFSETTINGS=/prepress",
+            "-dEncodeColorImages=false",
+            "-dEncodeGrayImages=false",
+            "-dEncodeMonoImages=false",
+            "-sProcessColorModel=DeviceCMYK",
+            "-sColorConversionStrategy=CMYK",
+            "-sColorConversionStrategyForImages=CMYK",
+        ]
+        if icc:
+            cmd.append(f"-sOutputICCProfile={icc}")   # convert to this named CMYK space
+        cmd.append(src)
+
+        report(tr("Ghostscript: CMYK-Konvertierung …"))
+        r = sp.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
+
+        if r.returncode != 0:
+            err = (r.stderr.strip() or r.stdout.strip() or f"exit {r.returncode}")[:500]
+            raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=err))
+        if not os.path.exists(cmyk_tmp) or os.path.getsize(cmyk_tmp) == 0:
+            raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
+
+        with pikepdf.open(src) as _s, pikepdf.open(cmyk_tmp) as _c:
+            n_ok = min(len(_s.pages), len(_c.pages))
+        report(tr("Prüfe Seiten …"))
+        damaged = _verify_pages_intact(src, cmyk_tmp, range(n_ok), None)
+        if damaged:
+            # Keep the untouched original for those pages rather than hand
+            # over a file with black rectangles in it.
+            with contextlib.ExitStack() as stack:
+                s_pdf = stack.enter_context(pikepdf.open(src))
+                c_pdf = stack.enter_context(pikepdf.open(cmyk_tmp))
+                o_pdf = stack.enter_context(pikepdf.Pdf.new())
+                for i in range(n_ok):
+                    o_pdf.pages.append(
+                        s_pdf.pages[i] if i in damaged else c_pdf.pages[i])
+                o_pdf.save(out)
+        else:
+            shutil.copyfile(cmyk_tmp, out)
+    finally:
+        try: os.remove(cmyk_tmp)
+        except OSError: pass
+
+    # Ergebnis verifizieren
+    found_rgb = False
+    try:
+        import pikepdf
+        pdf_out = pikepdf.open(out)
+        for page in pdf_out.pages:
+            res = page.get("/Resources")
+            if not res: continue
+            xobj = res.get("/XObject")
+            if xobj and isinstance(xobj, pikepdf.Dictionary):
+                for v in xobj.values():
+                    try:
+                        if v.get("/Subtype") == pikepdf.Name("/Image"):
+                            cs = v.get("/ColorSpace")
+                            if cs:
+                                name = str(cs[0]) if isinstance(cs, pikepdf.Array) else str(cs)
+                                if name in ("/DeviceRGB", "/CalRGB"):
+                                    found_rgb = True
+                    except Exception:
+                        logging.debug("colour profile: could not read an image's "
+                                      "colour space", exc_info=True)
+        pdf_out.close()
+        verified = True
+    except Exception:
+        logging.debug("colour profile: verification failed", exc_info=True)
+        verified = False
+
+    return out, damaged, found_rgb, verified

@@ -50,61 +50,84 @@ class LayersPanel(BasePanel):
         for _,cb in self._cbs: cb.setChecked(state)
 
     def _run_action(self):
-        src=self.require_pdf()
-        out=self.save_pdf("PDF speichern als")
+        # The checkbox states are read here; writing the file and the optional
+        # Ghostscript flatten go to a worker. Flattening a large document is
+        # minutes of pdfwrite, and it used to hold the GUI thread for all of it.
+        src = self.require_pdf()
+        out = self.save_pdf("PDF speichern als")
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
-        from pypdf import PdfReader, PdfWriter
-        from pypdf.generic import ArrayObject, NameObject
-        reader = PdfReader(src, strict=False)
-        writer = PdfWriter(); writer.append(reader)
-        if self._cbs:
-            root = writer.trailer["/Root"]
-            oc = root.get("/OCProperties")
-            if oc:
-                oc_obj = oc.get_object()
-                checked = {idnum for idnum, cb in self._cbs if cb.isChecked()}
-                on_arr  = ArrayObject()
-                off_arr = ArrayObject()
-                for ref in oc_obj.get("/OCGs", ArrayObject()):
-                    if ref.idnum in checked:
-                        on_arr.append(ref)
-                    else:
-                        off_arr.append(ref)
-                oc_obj[NameObject("/ON")] = on_arr
-                if off_arr:
-                    oc_obj[NameObject("/OFF")] = off_arr
-        with open(out, "wb") as f: writer.write(f)
-        if self.flatten.isChecked() and shutil.which("gs"):
-            import tempfile
-            fd, flat = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
-            try:
-                cmd=["gs","-sDEVICE=pdfwrite","-dCompatibilityLevel=1.5",
-                     "-dNOPAUSE","-dBATCH","-dQUIET",f"-sOutputFile={flat}",out]
-                r=subprocess.run(cmd,capture_output=True, text=True, errors="replace",timeout=300)
-                if r.returncode!=0:
-                    # -dQUIET: a failing Ghostscript often says nothing, and
-                    # RuntimeError("") is an error dialog with no error in it.
-                    raise RuntimeError(r.stderr.strip() or r.stdout.strip()
-                                       or tr('Ghostscript beendet mit Code {p0}').format(p0=r.returncode))
-                if not os.path.exists(flat) or os.path.getsize(flat) == 0:
-                    raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
-                # Check before replacing: flattening layers runs the same
-                # pdfwrite path that can black a page out while exiting 0, and
-                # this one overwrites the file the user is about to be handed.
-                import pikepdf
-                with pikepdf.open(out) as _a, pikepdf.open(flat) as _b:
-                    n_a, n_b = len(_a.pages), len(_b.pages)
-                damaged = (_verify_pages_intact(out, flat, range(min(n_a, n_b)), None)
-                           if n_a == n_b else {0: tr("Seitenzahl")})
-                if damaged:
-                    raise RuntimeError(tr(
-                        'Reduzieren hat Seite(n) beschaedigt: {p0} — die '
-                        'unreduzierte Datei wurde behalten.').format(
-                            p0=", ".join(f"{i + 1} ({why})"
-                                         for i, why in sorted(damaged.items()))))
-                os.replace(flat, out)
-            finally:
-                try: os.remove(flat)
-                except OSError: pass
-        self.open_result(out,tr("Ebenen verarbeitet"))
-        return tr("Ebenen verarbeitet")
+        checked = {idnum for idnum, cb in self._cbs if cb.isChecked()}
+        have_cbs = bool(self._cbs)
+        flatten = self.flatten.isChecked() and bool(shutil.which("gs"))
+
+        self.run_async(
+            lambda report: _apply_layers(src, out, checked, have_cbs, flatten, report),
+            on_done=self._layers_done,
+            busy_label="Ebenen werden verarbeitet …",
+        )
+        return None
+
+    def _layers_done(self, out):
+        self.log.log(tr("Ebenen verarbeitet"))
+        self.open_result(out, tr("Ebenen verarbeitet"))
+
+
+def _apply_layers(src, out, checked, have_cbs, flatten, report):
+    """Write `src` to `out` with the chosen layers on, optionally flattened."""
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import ArrayObject, NameObject
+    report(tr("Schreibe Datei …"))
+    reader = PdfReader(src, strict=False)
+    writer = PdfWriter(); writer.append(reader)
+    if have_cbs:
+        root = writer.trailer["/Root"]
+        oc = root.get("/OCProperties")
+        if oc:
+            oc_obj = oc.get_object()
+            on_arr  = ArrayObject()
+            off_arr = ArrayObject()
+            for ref in oc_obj.get("/OCGs", ArrayObject()):
+                if ref.idnum in checked:
+                    on_arr.append(ref)
+                else:
+                    off_arr.append(ref)
+            oc_obj[NameObject("/ON")] = on_arr
+            if off_arr:
+                oc_obj[NameObject("/OFF")] = off_arr
+    with open(out, "wb") as f: writer.write(f)
+
+    if flatten:
+        import tempfile
+        fd, flat = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+        try:
+            report(tr("Ghostscript: reduziere …"))
+            cmd=["gs","-sDEVICE=pdfwrite","-dCompatibilityLevel=1.5",
+                 "-dNOPAUSE","-dBATCH","-dQUIET",f"-sOutputFile={flat}",out]
+            r=subprocess.run(cmd,capture_output=True, text=True, errors="replace",timeout=300)
+            if r.returncode!=0:
+                # -dQUIET: a failing Ghostscript often says nothing, and
+                # RuntimeError("") is an error dialog with no error in it.
+                raise RuntimeError(r.stderr.strip() or r.stdout.strip()
+                                   or tr('Ghostscript beendet mit Code {p0}').format(p0=r.returncode))
+            if not os.path.exists(flat) or os.path.getsize(flat) == 0:
+                raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
+            # Check before replacing: flattening layers runs the same
+            # pdfwrite path that can black a page out while exiting 0, and
+            # this one overwrites the file the user is about to be handed.
+            import pikepdf
+            with pikepdf.open(out) as _a, pikepdf.open(flat) as _b:
+                n_a, n_b = len(_a.pages), len(_b.pages)
+            report(tr("Prüfe Seiten …"))
+            damaged = (_verify_pages_intact(out, flat, range(min(n_a, n_b)), None)
+                       if n_a == n_b else {0: tr("Seitenzahl")})
+            if damaged:
+                raise RuntimeError(tr(
+                    'Reduzieren hat Seite(n) beschaedigt: {p0} — die '
+                    'unreduzierte Datei wurde behalten.').format(
+                        p0=", ".join(f"{i + 1} ({why})"
+                                     for i, why in sorted(damaged.items()))))
+            os.replace(flat, out)
+        finally:
+            try: os.remove(flat)
+            except OSError: pass
+    return out

@@ -256,11 +256,16 @@ def test_cmyk_never_ships_a_blacked_out_page():
     _open(src)
     restore = _blackout_gs(inject_into_retry=True)
     try:
-        p = ColourProfilePanel(); p.log.log = lambda *a, **k: None
+        # The summary is logged now rather than returned — the work happens on
+        # a worker and the panel reports when it comes back.
+        logged = []
+        p = ColourProfilePanel(); _sync_async(p)
+        p.log.log = lambda m, *a, **k: logged.append(m)
         out = os.path.join(_TMP, "cmyk_guard.pdf")
         p.save_pdf = lambda *a, **k: out
         p.open_result = lambda *a, **k: None
-        msg = p._run_action()
+        p._run_action()
+        msg = "\n".join(logged)
     finally:
         restore()
     assert _mean_luma(out, 1) > 100, "a blacked-out page reached the CMYK output"
@@ -331,7 +336,7 @@ def test_cmyk_profiles():
     if not shutil.which("gs"):
         return "SKIP (no ghostscript)"
     _open(FX["color"])
-    p = ColourProfilePanel()
+    p = ColourProfilePanel(); _sync_async(p)
     assert p.profile_combo.count() >= 5, "expected several CMYK profile options"
     o = os.path.join(_TMP, "cmyk.pdf")
     p.save_pdf = lambda *a, **k: o; p.open_result = lambda *a, **k: None
