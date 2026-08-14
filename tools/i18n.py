@@ -328,6 +328,15 @@ _EN: dict[str, str] = {
     "rechts": "right",
     "Abstand H": "Gap H",
     "V": "V",
+    "Quellseiten in Originalgröße (100 %)": "Source pages at original size (100%)",
+    "Seiten werden nicht verkleinert. Das Ausgabeformat muss groß "
+    "genug sein, sonst meldet das Werkzeug, wie groß es sein müsste.":
+        "Pages are not scaled down. The output format has to be large enough; "
+        "if it is not, the tool reports the size it would need.",
+    "Bei 100 % ist kein Platz: Seite {p0}×{p1} mm, Feld {p2}×{p3} mm. "
+    "Nötig wäre ein Ausgabeformat von mindestens {p4}×{p5} mm.":
+        "No room at 100%: page {p0}×{p1} mm, slot {p2}×{p3} mm. "
+        "The output format would have to be at least {p4}×{p5} mm.",
     "Schnittmarken hinzufügen": "Add crop marks",
     "N-Up PDF speichern als": "Save N-Up PDF as",
     "Jede Seite wiederholt (ein Blatt je Seite)": "Repeat each page (one sheet per page)",
@@ -889,8 +898,6 @@ _EN: dict[str, str] = {
     "Spalten:": "Columns:",
     "Zeilen:": "Rows:",
     "Quellseite um 90° drehen": "Rotate source page 90°",
-    "Fehlende Positionen mit Leerseiten auffüllen": "Fill empty positions with blank pages",
-    "Fehlende Seiten mit Leerseiten auffüllen": "Fill missing pages with blank pages",
     "AUSGABEFORMAT": "OUTPUT FORMAT",
     "DIN A4  (210 × 297 mm)": "A4  (210 × 297 mm)",
     "DIN A3  (297 × 420 mm)": "A3  (297 × 420 mm)",
@@ -921,8 +928,6 @@ _EN: dict[str, str] = {
     "Alle Seiten werden zuerst auf dieselbe Größe gebracht\n(Proportionen bleiben erhalten, Rand wird aufgefüllt).":
         "All pages are first brought to the same size\n(proportions preserved, edges filled).",
     "Vor dem Ausschießen normalisieren": "Normalize before imposing",
-    "Eine Broschüre wird immer auf ein Vielfaches von 4 Seiten aufgefüllt.":
-        "A booklet is always padded to a multiple of 4 pages.",
     "Die PDF hat keine Seiten.": "The PDF has no pages.",
     "Ausschießen …": "Imposing …",
     "Größte Seite im Dokument  (automatisch)": "Largest page in document  (auto)",

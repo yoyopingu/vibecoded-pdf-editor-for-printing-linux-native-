@@ -258,3 +258,86 @@ def test_tools_see_the_page_manager():
         f"the back of the cover should carry page 31, got {got[0]}"
     assert got[1] == ("blank", 30), \
         f"the inserted blank belongs on the inside of the cover, got {got[1]}"
+
+
+def test_nup_at_full_scale_does_not_resize_the_page():
+    """"Quellseiten in Originalgröße" places each page at its own size instead of
+    scaling it to fill the slot. A4 pages 2×2 on A2 fit exactly, so every page
+    must come out 210×297 mm — the same test at the default setting would show
+    them enlarged to fill their quarter."""
+    _open(FX["normal"])
+    p = NUpPanel()
+    p.cols.setValue(2); p.rows.setValue(2)
+    p.out_fmt.set_format("A2  (420x594mm)")
+    for w in (p.margin_t, p.margin_b, p.margin_l, p.margin_r): w.setValue(0.0)
+    p.gap_h.setValue(0.0); p.gap_v.setValue(0.0)
+    p.full_scale.setChecked(True)
+    out = os.path.join(_TMP, "nup_full_scale.pdf")
+    p.save_pdf = lambda *a, **k: out
+    cap = {}; p.open_result = lambda path, t="": cap.update(p=path); _sync_async(p)
+    p._run_action()
+
+    d = pdfium.PdfDocument(cap["p"])
+    try:
+        # The placement matrix is `s 0 0 s tx ty cm`; at 100 % every s is 1.
+        import pikepdf
+        with pikepdf.open(cap["p"]) as pdf:
+            ops = b"".join(bytes(s.read_bytes()) for s in
+                           ([pdf.pages[0].obj["/Contents"]]
+                            if not isinstance(pdf.pages[0].obj["/Contents"], pikepdf.Array)
+                            else list(pdf.pages[0].obj["/Contents"])))
+        scales = [ln.split()[1] for ln in ops.decode("latin-1").splitlines()
+                  if ln.startswith("q ") and " cm " in ln]
+        assert scales and all(abs(float(s) - 1.0) < 1e-6 for s in scales), \
+            f"pages were resized at 100 %: {scales}"
+    finally:
+        d.close()
+
+
+def test_nup_at_full_scale_refuses_a_sheet_that_is_too_small():
+    """A4 pages 2×2 at 100 % need A2. Asking for A4 has to be reported — with
+    the size that would work — and the preview has to say the same thing rather
+    than drawing something the run would refuse."""
+    _open(FX["normal"])
+    p = NUpPanel()
+    p.cols.setValue(2); p.rows.setValue(2)
+    p.out_fmt.set_format("A4  (210x297mm)")
+    for w in (p.margin_t, p.margin_b, p.margin_l, p.margin_r): w.setValue(0.0)
+    p.gap_h.setValue(0.0); p.gap_v.setValue(0.0)
+    p.full_scale.setChecked(True)
+    p.save_pdf = lambda *a, **k: os.path.join(_TMP, "never_full.pdf")
+    _sync_async(p)
+    try:
+        p._run_action()
+        raise AssertionError("A4 accepted for four A4 pages at 100 %")
+    except ValueError as e:
+        msg = str(e)
+    assert "100" in msg and "420" in msg and "594" in msg, \
+        f"the message should name the sheet that would work, got {msg!r}"
+
+    pm, info = p._render_preview(400, 400, 1.0)
+    assert pm is None, "preview drew a layout the run refuses"
+    assert info == msg, f"preview and run disagree:\n  run     {msg!r}\n  preview {info!r}"
+
+    # …and the same job on a big enough sheet goes through, preview included.
+    p.out_fmt.set_format("A2  (420x594mm)")
+    assert p._render_preview(400, 400, 1.0)[0] is not None, "A2 should be fine"
+
+
+def test_nup_auto_format_is_never_rejected_at_full_scale():
+    """"Wie Quellseite × Raster" sizes the sheet from the pages themselves, so at
+    100 % it fits by construction. Slot and page arrive at the same number by
+    two different routes, and a rounding difference must not reject the job."""
+    _open(FX["normal"])
+    p = NUpPanel()
+    p.cols.setValue(3); p.rows.setValue(2)
+    p.out_fmt.set_format(p.AUTO_FORMAT)
+    for w in (p.margin_t, p.margin_b, p.margin_l, p.margin_r): w.setValue(7.5)
+    p.gap_h.setValue(4.0); p.gap_v.setValue(4.0)
+    p.full_scale.setChecked(True)
+    out = os.path.join(_TMP, "nup_auto_full.pdf")
+    p.save_pdf = lambda *a, **k: out
+    cap = {}; p.open_result = lambda path, t="": cap.update(p=path); _sync_async(p)
+    p._run_action()
+    assert cap.get("p"), "auto format was rejected at 100 %"
+    assert p._render_preview(400, 400, 1.0)[0] is not None

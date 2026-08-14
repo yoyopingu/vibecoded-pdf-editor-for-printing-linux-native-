@@ -35,11 +35,50 @@ def _nup_slot_rects(params, n_slot):
     return rects
 
 
-def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False):
+# A page is "too big" only past this much of a point, so a sheet sized from the
+# very pages it has to hold — "Wie Quellseite × Raster", where slot and page are
+# the same number arrived at by two different routes — is never rejected for a
+# rounding difference.
+_FIT_EPS_PT = 0.01
+
+
+def _full_scale_problem(max_w, max_h, params):
+    """Why pages of `max_w` x `max_h` points will not fit their slots at 100 %,
+    as a ready-to-show sentence — or None if they fit.
+
+    Shared by the preview and the run for the same reason _nup_slot_rects is:
+    the preview must refuse exactly what the run refuses, and say the same
+    thing about it."""
+    (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
+    if max_w <= slot_w + _FIT_EPS_PT and max_h <= slot_h + _FIT_EPS_PT:
+        return None
+    # What the sheet would have to be for these pages, at this grid, with these
+    # margins — the same arithmetic "Wie Quellseite x Raster" uses, so the
+    # number the message gives is one the tool can actually produce.
+    need_w = max_w * cols + ml + mr + gh * (cols - 1)
+    need_h = max_h * rows + mt + mb + gv * (rows - 1)
+    mm = lambda pt: pt / MM_TO_PT
+    # Round up to the next whole millimetre, ignoring anything inside the same
+    # tolerance the fit test uses. A PDF stores its MediaBox to four decimals,
+    # so two A4 pages side by side measure 420.00000006 mm rather than 420 —
+    # and a plain ceil() would tell the operator to find a 421 mm sheet for a
+    # job that fits on 420.
+    up = lambda pt: math.ceil(mm(pt) - mm(_FIT_EPS_PT))
+    return tr("Bei 100 % ist kein Platz: Seite {p0}×{p1} mm, Feld {p2}×{p3} mm. "
+              "Nötig wäre ein Ausgabeformat von mindestens {p4}×{p5} mm.").format(
+        p0=round(mm(max_w)), p1=round(mm(max_h)),
+        p2=round(mm(max(slot_w, 0))), p3=round(mm(max(slot_h, 0))),
+        p4=up(need_w), p5=up(need_h))
+
+
+def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False,
+               fixed_scale=None):
     """Build the N-Up PDF on a worker thread (via BasePanel.run_async).
 
     Each source page becomes a Form XObject that is scaled to fit its slot,
-    keeping its aspect ratio, and centred there. This is dramatically faster than
+    keeping its aspect ratio, and centred there — or, with `fixed_scale=1.0`,
+    placed at its own size and centred without being resized at all. This is
+    dramatically faster than
     pypdf's ``merge_transformed_page`` on vector-heavy pages (which parses +
     decompresses every content stream — ~30s and a 10× larger output for a dense
     4-page file vs ~0.5s here) and keeps the source content compressed. Only
@@ -90,7 +129,8 @@ def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False):
             src_pi = src_pages[page_i]
             if src_pi is None or src_pi >= len(src_doc.pages): continue
             fx, box, rot = _form_for(src_pi)
-            s, tx, ty = _slot_placement(box, rot, rects[slot_i])
+            s, tx, ty = _slot_placement(box, rot, rects[slot_i],
+                                        fixed_scale=fixed_scale)
             if src_pi not in names:
                 names[src_pi] = sheet.add_resource(fx, Name.XObject, prefix="NUp")
             name = names[src_pi]
@@ -205,8 +245,16 @@ class NUpPanel(BasePanel):
         self.rows = QSpinBox(); self.rows.setRange(1, 10); self.rows.setValue(2); self.rows.valueChanged.connect(self._update_preview)
         gl.addLayout(r(tr("Spalten:"), self.cols))
         gl.addLayout(r(tr("Zeilen:"), self.rows))
-        self.blank_fill = QCheckBox(tr("Fehlende Positionen mit Leerseiten auffüllen")); self.blank_fill.setChecked(True)
-        gl.addWidget(self.blank_fill)
+        # Empty positions are always left blank — there is nothing else a slot
+        # with no page could be — so the tick box that used to say so is gone.
+        # This one changes something: normally a page is scaled to fill its
+        # slot, and with this set it keeps its own size and is only centred.
+        self.full_scale = QCheckBox(tr("Quellseiten in Originalgröße (100 %)"))
+        self.full_scale.setToolTip(tr(
+            "Seiten werden nicht verkleinert. Das Ausgabeformat muss groß "
+            "genug sein, sonst meldet das Werkzeug, wie groß es sein müsste."))
+        self.full_scale.toggled.connect(self._update_preview)
+        gl.addWidget(self.full_scale)
         layout.addWidget(gb)
 
         ob = QGroupBox(tr("AUSGABEFORMAT")); ol = QVBoxLayout(ob)
@@ -336,6 +384,15 @@ class NUpPanel(BasePanel):
             self._get_layout_params(src_pw, src_ph)
         if slot_w <= 1.0 or slot_h <= 1.0:
             return None, tr("Abstände zu groß — kein Platz für Inhalt.")
+        full_scale = self.full_scale.isChecked()
+        if full_scale:
+            # Measured on the page the preview is showing, which is the page the
+            # sheet was sized from. The run checks every page it will place.
+            problem = _full_scale_problem(src_pw, src_ph,
+                                          (out_w, out_h, mt, mb, ml, mr, gh, gv,
+                                           slot_w, slot_h, cols, rows))
+            if problem:
+                return None, problem
         cs = min(avail_w / out_w, avail_h / out_h) * zoom
         canvas_w = max(1, int(out_w * cs)); canvas_h = max(1, int(out_h * cs))
 
@@ -378,7 +435,7 @@ class NUpPanel(BasePanel):
                 src_pm = pm_by_page.get(pg) if pg is not None else None
                 if src_pm is None:
                     continue
-                scale   = min(slot_w / src_pw, slot_h / src_ph)
+                scale   = 1.0 if full_scale else min(slot_w / src_pw, slot_h / src_ph)
                 scaled_w = max(1, int(src_pw * scale * cs))
                 scaled_h = max(1, int(src_ph * scale * cs))
                 off_x = sx + (sw - scaled_w) // 2; off_y = sy + (sh - scaled_h) // 2
@@ -427,18 +484,34 @@ class NUpPanel(BasePanel):
             # content.
             rep = max(0, min(AppState.get().current_page, n_total - 1))
             src_pw, src_ph = _visible_size(_doc.pages[rep])
+            # At 100 % nothing is scaled down, so it is the *largest* page that
+            # decides whether the job is possible — not the one the sheet was
+            # sized from. Measuring them all is a box lookup per page, no
+            # rasterising, so it is cheap even on a long document.
+            full_scale = self.full_scale.isChecked()
+            max_w = max_h = 0.0
+            if full_scale:
+                for pi in sorted({p for p in src_pages if p is not None}):
+                    w, h = _visible_size(_doc.pages[pi])
+                    max_w = max(max_w, w); max_h = max(max_h, h)
         params = self._get_layout_params(src_pw, src_ph)
         slot_w, slot_h = params[8], params[9]
         if slot_w <= 1.0 or slot_h <= 1.0:
             raise ValueError(tr("Abstände zu groß — kein Platz für Inhalt."))
+        if full_scale:
+            problem = _full_scale_problem(max_w, max_h, params)
+            if problem:
+                raise ValueError(problem)
         if len(src_pages) == 1: src_pages = src_pages * n_slot   # single-page doc → fill the sheet
-        if self.blank_fill.isChecked():
-            while len(src_pages) % n_slot: src_pages.append(None)
+        # An unused slot is blank paper; there was never anything else it could
+        # be. Padding the list only makes that explicit for the last sheet.
+        while len(src_pages) % n_slot: src_pages.append(None)
 
         crop = self.crop_marks.isChecked()
         self.run_async(
             lambda report: _build_nup(src_path, out_path, src_pages, params,
-                                      n_slot, report, crop_marks=crop),
+                                      n_slot, report, crop_marks=crop,
+                                      fixed_scale=1.0 if full_scale else None),
             on_done=self._nup_done,
             busy_label=tr("N-Up läuft …"),
         )

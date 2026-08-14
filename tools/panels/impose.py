@@ -33,8 +33,6 @@ class ImposePanel(BasePanel):
         self._row_rows = row(tr("Zeilen (N-up):"), self.rows_spin)
         ml.addLayout(self._row_cols)
         ml.addLayout(self._row_rows)
-        self.blank = QCheckBox(tr("Fehlende Seiten mit Leerseiten auffüllen"))
-        self.blank.setChecked(True); ml.addWidget(self.blank)
         layout.addWidget(mb)
 
         nb = QGroupBox(tr("SEITEN NORMALISIEREN")); nl = QVBoxLayout(nb)
@@ -61,14 +59,6 @@ class ImposePanel(BasePanel):
             for i in range(layout.count()):
                 w = layout.itemAt(i).widget()
                 if w: w.setVisible(nup)
-        # A saddle-stitched booklet is always a multiple of four pages — a folded
-        # sheet carries four of them — so the fill-up option has no meaning there.
-        # It used to stay enabled and be silently ignored.
-        booklet = (idx == 0)
-        self.blank.setEnabled(not booklet)
-        self.blank.setToolTip(tr(
-            "Eine Broschüre wird immer auf ein Vielfaches von 4 Seiten aufgefüllt.")
-            if booklet else "")
 
     def _run_action(self):
         import pikepdf
@@ -82,7 +72,6 @@ class ImposePanel(BasePanel):
             pw, ph = _impose_page_size(doc, self.norm_target.currentIndex())
 
         mode = self.mode.currentIndex()
-        pad  = self.blank.isChecked()
         if mode == 0:
             sheet_w, sheet_h = pw * 2, ph
             halves = [(0.0, 0.0, pw, ph), (pw, 0.0, pw * 2, ph)]
@@ -93,8 +82,7 @@ class ImposePanel(BasePanel):
             sheet_w, sheet_h = pw * 2, ph
             halves = [(0.0, 0.0, pw, ph), (pw, 0.0, pw * 2, ph)]
             pages = list(range(n))
-            if pad:
-                while len(pages) % 2: pages.append(None)
+            while len(pages) % 2: pages.append(None)
             sheets = [list(zip(pages[i:i + 2], halves)) for i in range(0, len(pages), 2)]
             summary = lambda placed, nsheets: tr(
                 '2-up: {p0} Seiten auf {p1} Bögen.').format(p0=placed, p1=nsheets)
@@ -105,8 +93,7 @@ class ImposePanel(BasePanel):
             cells = [(c * cw, ph - (r + 1) * chh, (c + 1) * cw, ph - r * chh)
                      for r in range(rows) for c in range(cols)]
             pages = list(range(n))
-            if pad:
-                while len(pages) % per: pages.append(None)
+            while len(pages) % per: pages.append(None)
             sheets = [list(zip(pages[i:i + per], cells)) for i in range(0, len(pages), per)]
             summary = lambda placed, nsheets: tr(
                 '{p0}×{p1}-up: {p2} Seiten auf {p3} Bögen.').format(
