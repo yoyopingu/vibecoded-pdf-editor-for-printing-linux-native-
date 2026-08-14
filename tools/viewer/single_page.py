@@ -682,16 +682,16 @@ class SinglePageView(QWidget):
         for timer in (self._zoom_timer, self._size_retry_timer,
                       self._prerender_timer):
             try: timer.stop()
-            except Exception: pass
+            except RuntimeError: pass   # C++ timer already destroyed
         for task in list(self._prerender_tasks):
             try: task.cancel()
-            except Exception: pass
+            except Exception: pass   # a task past its checkpoint stops on its own
         self._prerender_tasks.clear()
         for name in ("_render_task", "_region_task"):
             task = getattr(self, name, None)
             if task is not None:
                 try: task.cancel()
-                except Exception: pass
+                except Exception: pass   # as above; the attribute is cleared regardless
                 setattr(self, name, None)
 
     def _prerender_all(self):
@@ -721,8 +721,8 @@ class SinglePageView(QWidget):
                         if int(_line.split()[1]) < 512 * 1024:
                             return
                         break
-        except Exception:
-            pass
+        except (OSError, ValueError, IndexError):
+            pass      # no procfs to ask: pre-render rather than refuse to
         avail_w = self._view.width()
         avail_h = self._view.height()
         if avail_w < 50 or avail_h < 50:

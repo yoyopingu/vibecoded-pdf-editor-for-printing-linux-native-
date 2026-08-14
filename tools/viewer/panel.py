@@ -499,7 +499,7 @@ class PageViewerPanel(QWidget):
             from PyQt6.QtCore import QSettings
             QSettings("CopyShop", "PDFSuite").setValue("general/last_file", path)
         except Exception:
-            pass
+            logging.debug("could not record the last opened file", exc_info=True)
 
     def _open_result_tab(self, path, title):
         # Reached from AppState.result_ready, i.e. from a tool that just wrote a
@@ -529,7 +529,7 @@ class PageViewerPanel(QWidget):
             for child in w.findChildren(QWidget):
                 cancel_owner(child)
         except Exception:
-            pass
+            logging.debug("closing a tab: cancelling its jobs failed", exc_info=True)
         if isinstance(w, PdfTab):
             w.cancel_render_work()
             _ThumbnailCache.evict_tab(w.pdf_path)
@@ -546,7 +546,7 @@ class PageViewerPanel(QWidget):
             # running, in which case the worker is still writing in there.
             if w.tmp_dir and not w._busy:
                 try: shutil.rmtree(w.tmp_dir, ignore_errors=True)
-                except Exception: pass
+                except Exception: pass   # as above — the directory is temporary either way
         self.tabs.removeTab(idx)
         self.tabs_changed.emit()
 
@@ -613,7 +613,7 @@ class PageViewerPanel(QWidget):
                 self.tabs.removeTab(wi)
             self._update_toolbar()
             try: shutil.rmtree(widget.tmp_dir, ignore_errors=True)
-            except Exception: pass
+            except Exception: pass   # ignore_errors already handles the file-level failures
 
         widget.merge_confirmed.connect(_on_confirmed)
         widget.open_separately.connect(_on_separately)

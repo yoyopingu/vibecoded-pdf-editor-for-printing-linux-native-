@@ -191,7 +191,7 @@ def page_chars(path, page_index, scale, rotation=0):
                 finally:
                     if textpage is not None:
                         try: textpage.close()
-                        except Exception: pass
+                        except Exception: pass   # the page closes with the context manager regardless
         except Exception:
             logging.debug("region: text extraction failed", exc_info=True)
             unit = []

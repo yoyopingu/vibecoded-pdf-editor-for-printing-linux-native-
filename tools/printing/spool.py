@@ -255,7 +255,8 @@ def write_subset_pdf(pdf_path, model, pages, dest_path):
     finally:
         for r in readers.values():
             try: r.stream.close()
-            except Exception: pass
+            except Exception: pass   # inside a finally: anything raised here would
+                                     # replace the error that brought us in
     return skipped
 
 
@@ -338,7 +339,7 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
     finally:
         for doc in pdfium_docs.values():
             try: doc.close()
-            except Exception: pass
+            except Exception: pass   # closing what we can; a failure here cannot change the job's outcome
 
     if not rendered:
         raise RuntimeError(tr("Keine Seiten konnten gerendert werden."))
@@ -382,7 +383,8 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                 if pw_pt < ph_pt:
                     pw_pt, ph_pt = ph_pt, pw_pt
         except Exception:
-            pass
+            logging.debug("could not read the first page's orientation; "
+                          "using the paper as given", exc_info=True)
     # orient_idx == 1 → portrait: keep pw_pt < ph_pt as-is
 
     sub_fd, sub_tmp = tempfile.mkstemp(suffix="_sub.pdf")
@@ -614,4 +616,4 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         for f in [sub_tmp, norm_tmp, recenter_tmp]:
             if f:
                 try: os.unlink(f)
-                except Exception: pass
+                except OSError: pass   # temp file already gone

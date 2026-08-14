@@ -190,6 +190,6 @@ class PdfTab(PdfTabBase):
             os.replace(tmp_path, out_path)
         except Exception:
             try: os.unlink(tmp_path)
-            except Exception: pass
+            except OSError: pass   # nothing written, or already removed
             raise
         return tr('Gespeichert: {p0} Seiten -> {p1}').format(p0=n, p1=out_path)

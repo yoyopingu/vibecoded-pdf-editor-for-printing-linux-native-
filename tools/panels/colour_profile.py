@@ -2,6 +2,7 @@
 Farbprofil / CMYK — report which colour spaces a file uses, and convert
 it to CMYK or sRGB through Ghostscript, checking the result before it ships.
 """
+import logging
 import os, shutil
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QTextEdit
 from tools._base import BasePanel, make_label
@@ -207,7 +208,8 @@ class ColourProfilePanel(BasePanel):
                                     if name in ("/DeviceRGB", "/CalRGB"):
                                         found_rgb = True
                         except Exception:
-                            pass
+                            logging.debug("colour profile: could not read an image's "
+                                          "colour space", exc_info=True)
             pdf_out.close()
             verify = tr("⚠  Einige RGB-Bilder noch vorhanden (eingebettete Profile).") if found_rgb else tr("✓  Farbraum erfolgreich in CMYK konvertiert.")
         except Exception:

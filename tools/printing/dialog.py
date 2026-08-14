@@ -44,7 +44,8 @@ class PrintDialog(QDialog):
             from tools.jobs import cancel_owner
             cancel_owner(self)
         except Exception:
-            pass
+            logging.debug("print dialog: cancelling background jobs failed",
+                          exc_info=True)
         super().done(result_code)
 
     # Delivers the async-enumerated printer list to the GUI thread.
@@ -503,14 +504,14 @@ class PrintDialog(QDialog):
                                    capture_output=True, text=True, errors="replace", timeout=15)
                 names = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
             except Exception:
-                pass
+                logging.debug("lpstat -e failed; trying Qt", exc_info=True)
             if not names:
                 # Fallback to Qt enumeration if lpstat is unavailable
                 try:
                     from PyQt6.QtPrintSupport import QPrinterInfo
                     names = list(QPrinterInfo.availablePrinterNames())
                 except Exception:
-                    pass
+                    logging.debug("Qt found no printers either", exc_info=True)
             try:
                 import subprocess
                 r = subprocess.run(["lpstat", "-d"],
@@ -521,7 +522,7 @@ class PrintDialog(QDialog):
                     if cand in names:
                         default = cand
             except Exception:
-                pass
+                logging.debug("lpstat -d failed; no system default", exc_info=True)
             obj = self_ref()
             if obj is not None and not job.cancelled:
                 try:
@@ -788,7 +789,8 @@ class PrintDialog(QDialog):
                             self.paper_combo.addItem(label, key)
                         populated = True
                 except Exception:
-                    pass
+                    logging.debug("printer reported no usable page sizes; "
+                                  "falling back to the built-in list", exc_info=True)
 
             if not populated:
                 for label, key in self._FALLBACK_PAPERS:
@@ -801,7 +803,8 @@ class PrintDialog(QDialog):
                 try:
                     default_paper = _qt_to_lp.get(info.defaultPageSize().id())
                 except Exception:
-                    pass
+                    logging.debug("Qt has no default page size for this queue",
+                                  exc_info=True)
             target_paper = default_paper or prev_paper
             if target_paper:
                 idx = self.paper_combo.findData(target_paper)
@@ -827,7 +830,8 @@ class PrintDialog(QDialog):
                     if dm == QPrinter.DuplexMode.DuplexShortSide:
                         edge = "short"
                 except Exception:
-                    pass
+                    logging.debug("Qt has no default duplex mode for this queue",
+                                  exc_info=True)
             self.duplex_check.setChecked(default_duplex)
             ei = self.duplex_edge_combo.findData(edge)
             if ei >= 0:
@@ -954,7 +958,8 @@ class PrintDialog(QDialog):
                     self.paper_combo.setCurrentIndex(idx)
                     self._sync_preview()
         except Exception:
-            pass
+            logging.debug("could not guess the paper size from the PDF",
+                          exc_info=True)
 
     def _get_pages(self):
         """Returns list of page indices to print, or None on validation error."""
@@ -1057,7 +1062,8 @@ class PrintDialog(QDialog):
                        "bitte zuerst entsperren."))
                 return
         except Exception:
-            pass
+            logging.debug("could not check whether the PDF is encrypted; "
+                          "letting the print attempt report it", exc_info=True)
 
         n = len(pages_to_print)
         self.status_lbl.setText(

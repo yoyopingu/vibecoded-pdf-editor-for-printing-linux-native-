@@ -14,8 +14,8 @@ def _total_ram_kb() -> int:
             for line in f:
                 if line.startswith("MemTotal:"):
                     return int(line.split()[1])
-    except Exception:
-        pass
+    except (OSError, ValueError, IndexError):
+        pass          # no procfs, or a line that does not parse: use the default
     return 4 * 1024 * 1024
 
 

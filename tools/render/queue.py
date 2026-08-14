@@ -124,11 +124,11 @@ class _RenderQueue:
             self._stop = True
             for _, _, task in self._heap:
                 try: task.cancel()
-                except Exception: pass
+                except Exception: pass   # cancel is best-effort; a task that will not stop still gets dropped
             self._heap.clear()
             if self._running is not None:
                 try: self._running.cancel()
-                except Exception: pass
+                except Exception: pass   # same: the queue is being cleared either way
             self._cond.notify_all()
         if self._thread.is_alive():
             self._thread.join(timeout)
@@ -186,7 +186,7 @@ def shutdown_render_queue(timeout: float = 2.0):
         # is still inside would be exactly the thing the handle locks prevent.
         close_all()
     except Exception:
-        pass
+        logging.exception("shutdown: closing cached documents failed")
 
 
 # The backstop for anything that exits without an event loop — tests, scripts.

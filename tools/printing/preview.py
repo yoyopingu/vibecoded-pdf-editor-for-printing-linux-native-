@@ -5,6 +5,7 @@ Draws the sheet as the printer will produce it: the selected paper, the margins,
 the scale, and the page itself rendered into that. It renders off the GUI thread
 and takes its settings from the dialog through update_settings.
 """
+import logging
 import io
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer
@@ -216,7 +217,7 @@ class _PrintPreview(QWidget):
                     except RuntimeError:
                         pass   # widget was deleted
             except Exception:
-                pass
+                logging.exception("print preview: background render failed")
         from tools.jobs import submit
         self._render_job = submit(_bg, owner=self, name="print-preview-render")
 
