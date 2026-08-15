@@ -637,6 +637,52 @@ _EN: dict[str, str] = {
         'unreadable',
     'Druckvorstufe…':
         'Prepress…',
+    'DRUCKFAEHIGKEIT':
+        'PRESS READINESS',
+    'Anschnitt / Endformat (TrimBox)':
+        'Bleed / trim size (TrimBox)',
+    'Bildauflösung ausreichend':
+        'Image resolution sufficient',
+    'Ebenen (OCG) auflisten':
+        'List layers (OCG)',
+    'Anschnitt …':
+        'Bleed …',
+    'Schriften …':
+        'Fonts …',
+    'Bildauflösung …':
+        'Image resolution …',
+    'Alle Schriften eingebettet':
+        'All fonts embedded',
+    'Kein Anschnitt definiert — Endformat = Seitenformat':
+        'No bleed defined — trim size = page size',
+    'Schriften nicht eingebettet: {p0}':
+        'Fonts not embedded: {p0}',
+    'Bilder unter {p0} dpi: {p1}':
+        'Images below {p0} dpi: {p1}',
+    'Bildauflösung mindestens {p0} dpi':
+        'Image resolution at least {p0} dpi',
+    'Ebenen: {p0} sichtbar, {p1} ausgeschaltet — beim PDF/X-Export wird beides aufgeloest':
+        'Layers: {p0} visible, {p1} switched off — the PDF/X export resolves both',
+    'Anschnitt nur auf einem Teil der Seiten (ohne TrimBox: {p0})':
+        'Bleed on only some pages (no TrimBox on: {p0})',
+    'Anschnitt: {p0:.1f} mm':
+        'Bleed: {p0:.1f} mm',
+    'Anschnitt: {p0:.1f}–{p1:.1f} mm':
+        'Bleed: {p0:.1f}–{p1:.1f} mm',
+    '{p0} — knapp, ueblich sind 3 mm':
+        '{p0} — tight; 3 mm is usual',
+    'Seite {p0} ({p1} dpi)':
+        'page {p0} ({p1} dpi)',
+    'Das eingebettete Ausgabeprofil ist nicht CMYK.':
+        'The embedded output profile is not CMYK.',
+    'Die Ausgabe enthaelt noch Ebenen (OCG).':
+        'The output still contains layers (OCG).',
+    'Die Ausgabe ist verschluesselt.':
+        'The output is encrypted.',
+    'eingebettete Dateien':
+        'embedded files',
+    'Die Ausgabe enthaelt {p0}.':
+        'The output contains {p0}.',
     "Keine PDF geladen.": "No PDF loaded.",
     "Keine Seiten ausgewaehlt.": "No pages selected.",
     "Keine Seiten ausgewaehlt": "No pages selected",

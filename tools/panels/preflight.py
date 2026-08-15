@@ -28,6 +28,20 @@ class PreflightPanel(BasePanel):
         self.chk_colour=QCheckBox(tr("Farbige Seiten erkennen")); self.chk_colour.setChecked(True); cl.addWidget(self.chk_colour)
         self.chk_enc=QCheckBox(tr("Nicht passwortgeschuetzt")); self.chk_enc.setChecked(True); cl.addWidget(self.chk_enc)
         layout.addWidget(cb)
+
+        # What decides whether the file can go on a press at all, and what the
+        # PDF/X export will have to do to it. Separate group because these are
+        # about the file's fitness, not about it matching an expected format.
+        xb = QGroupBox(tr("DRUCKFAEHIGKEIT")); xl = QVBoxLayout(xb)
+        self.chk_bleed = QCheckBox(tr("Anschnitt / Endformat (TrimBox)"))
+        self.chk_bleed.setChecked(True); xl.addWidget(self.chk_bleed)
+        self.chk_fonts = QCheckBox(tr("Schriften eingebettet"))
+        self.chk_fonts.setChecked(True); xl.addWidget(self.chk_fonts)
+        self.chk_dpi = QCheckBox(tr("Bildauflösung ausreichend"))
+        self.chk_dpi.setChecked(True); xl.addWidget(self.chk_dpi)
+        self.chk_layers = QCheckBox(tr("Ebenen (OCG) auflisten"))
+        self.chk_layers.setChecked(True); xl.addWidget(self.chk_layers)
+        layout.addWidget(xb)
         layout.addWidget(make_label(tr("Bericht:"), dim=True))
         self.report=QTextEdit(); self.report.setReadOnly(True); self.report.setMinimumHeight(180)
         self.report.setPlaceholderText(tr("Pruefung starten...")); layout.addWidget(self.report)
@@ -44,11 +58,19 @@ class PreflightPanel(BasePanel):
             "orient": self.chk_orient.isChecked(),
             "colour": self.chk_colour.isChecked(),
             "enc":    self.chk_enc.isChecked(),
+            "bleed":  self.chk_bleed.isChecked(),
+            "fonts":  self.chk_fonts.isChecked(),
+            "dpi":    self.chk_dpi.isChecked(),
+            "layers": self.chk_layers.isChecked(),
         }
         target = PAPER_SIZES_PT.get(self.size_combo.currentText())
+        # The press resolution the shop set, so "genug Auflösung" means the
+        # same number here as the export will downsample to.
+        from tools.shell.settings import AppSettings
+        min_dpi = AppSettings.get().pdfx_image_dpi()
 
         self.run_async(
-            lambda report: _preflight(src, checks, target, report),
+            lambda report: _preflight(src, checks, target, min_dpi, report),
             on_done=self._preflight_done,
             busy_label="Pruefung laeuft …",
         )
@@ -60,7 +82,72 @@ class PreflightPanel(BasePanel):
         self.log.log(verdict)
 
 
-def _preflight(src, checks, target, report):
+def _press_readiness(src, checks, min_dpi, report):
+    """The half of the report that is about going on a press.
+
+    Returns (issues, oks). Separated from _preflight so the page-by-page walk
+    below is not interleaved with four independent document-wide questions —
+    and so each of these can be read next to what it means for the job.
+    """
+    from tools.panels import _prepress
+    issues, oks = [], []
+
+    if checks.get("bleed"):
+        report(tr("Anschnitt …"))
+        measured, bleeds, untrimmed = _prepress.page_bleed(src)
+        if not measured:
+            pass
+        elif not bleeds:
+            # Not an error: a flyer that ends at the paper edge has no bleed
+            # and needs none. It is a fact the operator has to know, because
+            # the export cannot invent one and neither can the shop.
+            oks.append(tr("Kein Anschnitt definiert — Endformat = Seitenformat"))
+        elif untrimmed:
+            issues.append(tr('Anschnitt nur auf einem Teil der Seiten '
+                             '(ohne TrimBox: {p0})').format(
+                                 p0=", ".join(str(p) for p in untrimmed[:10])))
+        else:
+            low, high = min(bleeds), max(bleeds)
+            where = (tr('Anschnitt: {p0:.1f} mm').format(p0=low) if high - low < 0.1
+                     else tr('Anschnitt: {p0:.1f}–{p1:.1f} mm').format(p0=low, p1=high))
+            # 3 mm is the usual minimum a shop asks for; less than 2 mm leaves
+            # nothing for the cutter's tolerance.
+            (oks if low >= 2.0 else issues).append(
+                where if low >= 2.0 else
+                tr('{p0} — knapp, ueblich sind 3 mm').format(p0=where))
+
+    if checks.get("fonts"):
+        report(tr("Schriften …"))
+        missing = _prepress.unembedded_fonts(src)
+        if missing:
+            issues.append(tr('Schriften nicht eingebettet: {p0}').format(
+                p0=", ".join(missing[:6])))
+        else:
+            oks.append(tr("Alle Schriften eingebettet"))
+
+    if checks.get("dpi"):
+        report(tr("Bildauflösung …"))
+        low_res = _prepress.low_resolution_images(src, min_dpi)
+        if low_res:
+            issues.append(tr('Bilder unter {p0} dpi: {p1}').format(
+                p0=min_dpi,
+                p1=", ".join(tr('Seite {p0} ({p1} dpi)').format(p0=page, p1=dpi)
+                             for page, dpi in low_res[:6])))
+        else:
+            oks.append(tr('Bildauflösung mindestens {p0} dpi').format(p0=min_dpi))
+
+    if checks.get("layers"):
+        on, off = _prepress.layer_summary(src)
+        if on or off:
+            oks.append(tr('Ebenen: {p0} sichtbar, {p1} ausgeschaltet — beim '
+                          'PDF/X-Export wird beides aufgeloest').format(
+                              p0=len(on), p1=len(off)))
+            for name in off[:6]:
+                oks.append(tr('   ✗ {p0} — ausgeschaltet, entfaellt').format(p0=name))
+    return issues, oks
+
+
+def _preflight(src, checks, target, min_dpi, report):
     """Walk the document and describe what would go wrong at the press.
 
     Returns (report lines, one-line verdict). Plain data only — the panel puts
@@ -102,6 +189,9 @@ def _preflight(src, checks, target, report):
         if checks["colour"]:
             if colour_pages: issues.append(f"Farbseiten: {colour_pages[:10]}")
             else: oks.append(tr("Keine Farbseiten erkannt"))
+        press_issues, press_oks = _press_readiness(src, checks, min_dpi, report)
+        issues += press_issues
+        oks += press_oks
         lines = [f"BERICHT -- {os.path.basename(src)}",
                  tr('Seiten: {p0}  |  {p1} KB').format(
                      p0=n, p1=os.path.getsize(src) // 1024), ""]

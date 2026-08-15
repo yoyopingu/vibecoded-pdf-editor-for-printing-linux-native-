@@ -7,8 +7,9 @@ import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
 from tools.panels._icc import CMYK_PROFILES, fallback_cmyk_icc, resolve_icc
+from tools.panels._prepress import layer_summary
 from tools.panels.pdfx import (PDFX_VERSION, _boxes_survived, _check_conformance,
-                               _export_pdfx, _layer_report, _pdfx_defs)
+                               _export_pdfx, _pdfx_defs)
 from tests.support import FX, _TMP
 
 
@@ -75,7 +76,7 @@ def test_a_layer_switched_off_never_reaches_the_plate():
     must resolve it the way the file says, not by making everything visible.
     A cutter contour that prints is a ruined run."""
     src = _layered_fixture()
-    on, off = _layer_report(src)
+    on, off = layer_summary(src)
     assert (on, off) == ([], ["Stanzkontur"]), (on, off)
 
     out = _out("layered")
@@ -344,3 +345,71 @@ def test_a_named_profile_that_is_installed_is_the_one_used():
     found = resolve_icc((os.path.basename(fallback),))
     assert found is None or os.path.isfile(found)
     return "missing profiles answer None, present ones answer a real path"
+
+
+def test_preflight_reports_what_a_press_needs_to_know():
+    """The check button moved off the export panel and into preflight, so this
+    is where an operator finds out whether a file can go on a press.
+
+    Four questions, and the bleed one has to distinguish "no bleed" from
+    "bleed missing on some pages" — the first is a normal flyer, the second is
+    a file someone assembled wrong.
+    """
+    from tools.panels.preflight import _preflight
+
+    checks = dict(size=False, orient=False, colour=False, enc=False,
+                  bleed=True, fonts=True, dpi=True, layers=True)
+
+    def report_for(path):
+        lines, _verdict = _preflight(path, checks, None, 300, lambda _m: None)
+        return "\n".join(lines)
+
+    # A file with 3 mm of bleed says so, in millimetres.
+    with_bleed = report_for(_bleed_fixture())
+    assert "3.0 mm" in with_bleed, with_bleed
+
+    # A file with none says that too, and it is not an error: a flyer that
+    # ends at the paper edge needs no bleed and cannot be given one.
+    without = report_for(FX["color"])
+    assert "Kein Anschnitt definiert" in without, without
+    assert "PROBLEME" not in without.split("Kein Anschnitt")[0].split("BESTANDEN")[-1]
+
+    # Base-14 Helvetica is the commonest unembedded font there is: it looks
+    # right in every viewer and gets substituted at the RIP.
+    assert "Helvetica" in without, without
+
+    # Bleed on only some pages is a real problem, unlike having none at all.
+    partial = os.path.join(_TMP, "pdfx_partial_bleed.pdf")
+    with pikepdf.open(_bleed_fixture()) as pdf:
+        del pdf.pages[1].obj["/TrimBox"]
+        pdf.save(partial)
+    mixed = report_for(partial)
+    assert "PROBLEME" in mixed and "nur auf einem Teil" in mixed, mixed
+    return "bleed in mm, absent bleed, partial bleed, and the substituted font"
+
+
+def test_image_resolution_is_measured_where_the_image_is_placed():
+    """The same 500-pixel logo is 250 dpi across two inches and 50 dpi across
+    ten. Anything that reads the image's own dimensions and stops there gets
+    this backwards, so the placement matrix has to be followed."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from PIL import Image
+    from tools.panels._prepress import low_resolution_images
+
+    src = os.path.join(_TMP, "pdfx_placement.pdf")
+    if not os.path.exists(src):
+        w, h = A4
+        small = os.path.join(_TMP, "pdfx_logo.png")
+        Image.new("RGB", (500, 500), (10, 90, 160)).save(small)
+        c = canvas.Canvas(src, pagesize=A4)
+        c.drawImage(small, 0, 0, 144, 144); c.showPage()   # 500 px / 2 in = 250 dpi
+        c.drawImage(small, 0, 0, 720, 720); c.showPage()   # 500 px / 10 in = 50 dpi
+        c.drawImage(small, 0, 0, 72, 72); c.showPage()     # 500 dpi, fine
+        c.save()
+
+    found = dict(low_resolution_images(src, 300))
+    assert set(found) == {1, 2}, f"wrong pages flagged: {found}"
+    assert 240 < found[1] < 260, found
+    assert 45 < found[2] < 55, found
+    return f"same image: page 1 {found[1]} dpi, page 2 {found[2]} dpi, page 3 fine"

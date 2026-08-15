@@ -53,35 +53,11 @@ from tools._base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels._icc import (ICC_DIR, fallback_cmyk_icc, profile_by_key,
                                resolve_icc)
+from tools.panels._prepress import layer_summary
 from tools.panels._verify import _verify_pages_intact
 
 
 PDFX_VERSION = "PDF/X-3:2002"
-
-
-def _layer_report(path):
-    """(names of layers on, names of layers off) in `path`.
-
-    "Off" means the file's default configuration switches it off, which is
-    what Ghostscript honours when it resolves optional content away.
-    """
-    from pypdf import PdfReader
-    from pypdf.generic import ArrayObject
-    reader = PdfReader(path, strict=False)
-    oc = reader.trailer["/Root"].get("/OCProperties")
-    if not oc:
-        return [], []
-    oc = oc.get_object()
-    default = oc.get("/D")
-    off_ids = set()
-    if default is not None:
-        for ref in default.get_object().get("/OFF", ArrayObject()):
-            off_ids.add(ref.idnum)
-    on, off = [], []
-    for ref in oc.get("/OCGs", ArrayObject()):
-        name = str(ref.get_object().get("/Name", tr("(unbenannt)")))
-        (off if ref.idnum in off_ids else on).append(name)
-    return on, off
 
 
 class PdfxPanel(BasePanel):
@@ -242,8 +218,18 @@ def _check_conformance(path):
     whole value of this tool is that its output can be handed over without
     being opened again. If the claim is not backed by the file, the file does
     not ship.
+
+    These are *structural* checks, not certification. They cover the rules of
+    X-3 that can be read straight out of the file — the marker, the output
+    intent, the boxes, and the things the standard forbids outright. A real
+    validator additionally checks the parts of the page description that only
+    a rendering engine can see, and there is no packaged free PDF/X validator
+    to defer to. Calling this "validated" would be the same false confidence
+    as claiming X-1a, so it is not called that anywhere.
     """
     import pikepdf
+    from tools.panels._prepress import unembedded_fonts
+
     with pikepdf.open(path) as pdf:
         if str(pdf.docinfo.get("/GTS_PDFXVersion", "")) != PDFX_VERSION:
             raise RuntimeError(tr("Die Ausgabe traegt keine PDF/X-Kennung."))
@@ -251,13 +237,33 @@ def _check_conformance(path):
         if not intents or len(intents) == 0:
             raise RuntimeError(tr("Die Ausgabe hat keinen Output-Intent."))
         intent = intents[0]
-        if intent.get("/DestOutputProfile") is None:
+        profile = intent.get("/DestOutputProfile")
+        if profile is None:
             raise RuntimeError(tr("Der Output-Intent enthaelt kein ICC-Profil."))
+        if int(profile.get("/N", 0)) != 4:
+            raise RuntimeError(tr("Das eingebettete Ausgabeprofil ist nicht CMYK."))
         missing = [i + 1 for i, p in enumerate(pdf.pages)
                    if "/TrimBox" not in p.obj and "/ArtBox" not in p.obj]
         if missing:
             raise RuntimeError(tr("Seiten ohne TrimBox: {p0}").format(
                 p0=", ".join(str(i) for i in missing)))
+        # Things PDF/X forbids outright. Each of these would be resolved at
+        # the RIP by guessing, which is the one thing the standard exists to
+        # prevent.
+        if "/OCProperties" in pdf.Root:
+            raise RuntimeError(tr("Die Ausgabe enthaelt noch Ebenen (OCG)."))
+        if pdf.is_encrypted:
+            raise RuntimeError(tr("Die Ausgabe ist verschluesselt."))
+        names = pdf.Root.get("/Names") or {}
+        for key, why in (("/JavaScript", "JavaScript"),
+                         ("/EmbeddedFiles", tr("eingebettete Dateien"))):
+            if key in names:
+                raise RuntimeError(tr("Die Ausgabe enthaelt {p0}.").format(p0=why))
+
+    not_embedded = unembedded_fonts(path)
+    if not_embedded:
+        raise RuntimeError(tr("Schriften nicht eingebettet: {p0}").format(
+            p0=", ".join(not_embedded[:6])))
 
 
 def _boxes_survived(src, dst):
@@ -315,7 +321,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, report):
     import tempfile
     import pikepdf
 
-    on, off = _layer_report(src)
+    on, off = layer_summary(src)
 
     fd, defs = tempfile.mkstemp(suffix=".ps"); os.close(fd)
     fd, tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)

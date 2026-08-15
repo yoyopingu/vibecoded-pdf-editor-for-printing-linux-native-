@@ -45,8 +45,8 @@ Written in Python with PyQt6. The interface ships in German and English
 | Graustufen | greyscale conversion that refuses to damage a page |
 | Formulare / Reduzieren | fill and flatten AcroForms |
 | OCR — Texterkennung | make scanned PDFs searchable |
-| Druckvorstufenprüfung | preflight: colour, resolution, fonts, boxes |
-| PDF/X-Export | press-ready PDF/X-3 with an embedded output intent |
+| Druckvorstufenprüfung | preflight: bleed, fonts, image resolution, colour, layers |
+| PDF/X-Export | one button: press-ready PDF/X-3, CMYK against the shop's output intent |
 | Farbprofil / CMYK | colour profile conversion |
 | Plugin-Manager | install your own tool panels |
 
@@ -221,7 +221,8 @@ output.
 **`tools/panels/` — the tools.** One module per sidebar entry — N-Up,
 imposition, compress, crop/scale, page numbers, image↔PDF, greyscale, forms,
 OCR, preflight, PDF/X, colour profile — over shared helpers in `_shared.py`,
-`_verify.py`, `_colour.py`, `_cropmarks.py`, `_icc.py` and `_imposition.py`.
+`_verify.py`, `_colour.py`, `_cropmarks.py`, `_icc.py`, `_prepress.py` and
+`_imposition.py`.
 
 **`tools/shell/` — everything around the documents.** `style` (palette,
 stylesheets, window icon), `settings` (persisted preferences and their
