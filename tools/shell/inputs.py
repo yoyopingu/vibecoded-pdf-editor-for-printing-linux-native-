@@ -21,14 +21,14 @@ And the wheel does not change a setting the pointer merely happens to be over.
 Scrolling down a dialog past a dropdown quietly changed the paper size, the
 duplex edge or the colour mode — the print dialog is a column of them, and the
 one place you cannot afford a setting to change without being asked is the one
-that sends a job to a printer. A control takes the wheel only once it has
-keyboard focus, which means it was clicked or tabbed into on purpose; otherwise
-the wheel goes where it was going, to whatever scrolls behind it.
+that sends a job to a printer. These controls do not take the wheel at all; it goes to whatever scrolls
+behind them, which is where it was aimed. Values are changed by clicking,
+typing or the arrow keys — the wheel is for moving about.
 """
 
 from PyQt6.QtCore import QObject, QEvent, QTimer
-from PyQt6.QtWidgets import (QAbstractSlider, QAbstractSpinBox, QComboBox,
-                             QLineEdit)
+from PyQt6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplication,
+                             QComboBox, QLineEdit, QSlider)
 
 
 class _InputBehaviour(QObject):
@@ -40,34 +40,48 @@ class _InputBehaviour(QObject):
             # Queued: a mouse press delivers FocusIn first and *then* sets the
             # caret from the click, which would drop a selection made here.
             QTimer.singleShot(0, lambda: _select_all(obj))
-        elif kind == QEvent.Type.Wheel and _ignores_hover_wheel(obj):
-            # Eaten, not passed on: accepting it here and returning True stops
-            # the widget acting on it, and Qt then offers the wheel to the
-            # scroll area behind — which is where the user was aiming.
-            event.ignore()
+        elif kind == QEvent.Type.Wheel and _guards_wheel(obj):
+            # Hand it to whatever scrolls behind before swallowing it. Returning
+            # True alone consumes the event outright — the control is left
+            # alone, and so is the panel the user was trying to scroll.
+            area = _scrollable_ancestor(obj)
+            if area is not None:
+                QApplication.sendEvent(area.viewport(), event)
             return True
         return super().eventFilter(obj, event)
 
 
-def _ignores_hover_wheel(obj):
-    """Is this a control the wheel should leave alone right now?
+def _guards_wheel(obj):
+    """Is this a control the wheel should never change?
 
-    Dropdowns, spin boxes and sliders, unless they hold keyboard focus. Focus
-    means the control was clicked or tabbed into, so the wheel was aimed at it
-    rather than passing over it on the way down a dialog.
+    Dropdowns, spin boxes and sliders. Not scroll bars: QScrollBar is a
+    QAbstractSlider too, and matching on that base class ate the wheel on the
+    scroll bars themselves — every panel in the application refusing to scroll.
+    QSlider is the sibling class and covers only the standalone control.
 
     An open dropdown is exempt: its popup is a list, and scrolling a list is
     what the wheel is for.
     """
-    if not isinstance(obj, (QComboBox, QAbstractSpinBox, QAbstractSlider)):
+    if not isinstance(obj, (QComboBox, QAbstractSpinBox, QSlider)):
         return False
     try:
-        if isinstance(obj, QComboBox) and obj.view() is not None \
-           and obj.view().isVisible():
-            return False
-        return not obj.hasFocus()
+        return not (isinstance(obj, QComboBox) and obj.view() is not None
+                    and obj.view().isVisible())
     except RuntimeError:
         return False        # widget on its way out
+
+
+def _scrollable_ancestor(widget):
+    """The nearest scroll area above `widget`, or None."""
+    try:
+        parent = widget.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QAbstractScrollArea):
+                return parent
+            parent = parent.parentWidget()
+    except RuntimeError:
+        pass
+    return None
 
 
 def _is_number_field(obj):

@@ -837,12 +837,17 @@ class PageViewerPanel(QWidget):
                 for t in list(tab.single._prerender_tasks):
                     t.cancel()
                 tab.single._prerender_tasks.clear()
-                # Evict full-page renders for this tab, keeping only its current page
-                # (it can re-render quickly when the user switches back)
-                _FullPageCache.evict_tab(tab.pdf_path,
-                                         keep_page=tab.single._current)
-                # Thumbnails are small — let the priority eviction handle those
-                # gradually rather than dropping them all at once.
+                # Its rendered pages stay. They used to be thrown away here,
+                # every page but the one it was showing, on the reasoning that
+                # "it can re-render quickly when the user switches back" — which
+                # is true of a text page and false of the ones this application
+                # exists for: seconds each, and a document's worth of them.
+                #
+                # That was written when the cache held six entries and evicting
+                # another tab was the only way to make room. It is bounded by
+                # memory now, and _priority_evict already drops other tabs first
+                # when room is actually needed. Throwing the work away before
+                # anything asks for the space just means doing it twice.
 
         w = active_widget
         if isinstance(w, PdfTab):

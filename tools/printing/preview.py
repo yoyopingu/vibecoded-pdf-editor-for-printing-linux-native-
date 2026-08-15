@@ -98,7 +98,7 @@ class _PrintPreview(QWidget):
         # tools/shell/style.py and again beside the zoom buttons in
         # tools/panels/_shared.py; this was the third place with it.
         self._prev_btn = QPushButton("◀")
-        self._prev_btn.setFixedSize(30, 26)
+        self._prev_btn.setFixedSize(46, 28)
         self._prev_btn.setObjectName("iconBtn")
         self._prev_btn.clicked.connect(self._prev_page)
         self._page_lbl = QLabel(tr("Seite 1 / 1"))
@@ -107,7 +107,7 @@ class _PrintPreview(QWidget):
         self._page_lbl.setStyleSheet(
             f"font-size:10px;color:{_TV['dim']};background:transparent;")
         self._next_btn = QPushButton("▶")
-        self._next_btn.setFixedSize(30, 26)
+        self._next_btn.setFixedSize(46, 28)
         self._next_btn.setObjectName("iconBtn")
         self._next_btn.clicked.connect(self._next_page)
         # Together, centred under the sheet. The stretch used to be on the

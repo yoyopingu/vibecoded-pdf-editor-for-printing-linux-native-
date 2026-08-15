@@ -452,3 +452,50 @@ def test_the_page_cache_is_bounded_by_memory_not_by_a_page_count():
         _FullPageCache.MAX_BYTES = before
         _FullPageCache.invalidate()
     return "budget honoured, capacity follows page size"
+
+
+def test_switching_tabs_does_not_throw_away_the_other_tab_s_renders():
+    """Going back to a file you had open should not start rendering from
+    scratch.
+
+    Every tab change evicted the full-page renders of every other tab, keeping
+    only the page each was showing, on the reasoning that it "can re-render
+    quickly when the user switches back". That is true of a page of text and
+    false of the ones this application exists for — seconds each, and a whole
+    document of them.
+
+    It was written when the cache held six entries and evicting another tab was
+    the only way to make room. The cache is bounded by memory now, and
+    _priority_evict already drops other tabs first when room is actually
+    needed."""
+    from tools.viewer.panel import PageViewerPanel
+    from tools.render.caches import _FullPageCache
+    from tests.support import _settle, _spin
+
+    _FullPageCache.invalidate()
+    vp = PageViewerPanel(); vp.resize(900, 700); vp.show()
+    try:
+        vp.open_file(FX["normal"])
+        _settle(vp, lambda: vp.tabs.count() and vp.tabs.currentWidget().single._last_pm,
+                tries=300)
+        sv = vp.tabs.currentWidget().single
+        for i in range(4):
+            sv.go_to(i + 1)
+            _settle(vp, lambda: sv._render_task is None and sv._region_task is None,
+                    tries=200)
+        first = {k[1] for k in _FullPageCache._store if k[0] == FX["normal"]}
+        assert len(first) >= 3, f"the fixture only cached {sorted(first)}"
+
+        vp.open_file(FX["color"])
+        _spin(40)
+        for idx in (0, 1, 0):                 # back and forth, as a reader does
+            vp.tabs.setCurrentIndex(idx)
+            _spin(20)
+
+        kept = {k[1] for k in _FullPageCache._store if k[0] == FX["normal"]}
+        assert kept >= first, (
+            f"switching tabs discarded pages {sorted(first - kept)} of the file "
+            f"that was left — it will render them all again")
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return f"{len(first)} rendered pages survived three tab switches"

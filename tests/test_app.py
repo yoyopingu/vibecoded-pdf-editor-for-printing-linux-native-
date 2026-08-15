@@ -463,56 +463,63 @@ def test_every_performance_setting_changes_something():
 
 
 def test_the_wheel_does_not_change_a_setting_it_is_only_passing_over():
-    """Scrolling a dialog must not alter the settings the pointer crosses.
+    """Scrolling a dialog must not alter the settings the pointer crosses, and
+    must still scroll the dialog.
 
-    Scrolling down the print dialog quietly changed the paper size, the duplex
-    edge or the colour mode on the way past — and that dialog is a column of
-    dropdowns whose whole job is deciding what comes out of a printer. The same
-    applies to spin boxes and sliders everywhere else.
-
-    A control takes the wheel once it holds keyboard focus, which means it was
-    clicked or tabbed into deliberately. Otherwise the wheel carries on to
-    whatever scrolls behind it."""
-    from PyQt6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QSpinBox, QSlider
+    Scrolling down the print dialog changed the paper size, the duplex edge or
+    the colour mode on the way past. The first attempt at stopping that broke
+    scrolling altogether, twice over: it matched QAbstractSlider, which
+    QScrollBar inherits — so it ate the wheel on the scroll bars themselves —
+    and it consumed the event rather than passing it on, so even a panel with
+    no scroll bar under the pointer stopped moving. Both halves are asserted
+    here."""
+    from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QSpinBox,
+                                 QSlider, QScrollArea)
     from PyQt6.QtCore import Qt, QPoint, QPointF
     from PyQt6.QtGui import QWheelEvent
     from tools.shell.inputs import install
 
     install(_app)
-    w = QWidget(); lay = QVBoxLayout(w)
+    inner = QWidget(); lay = QVBoxLayout(inner)
     combo = QComboBox(); combo.addItems(["A4", "A3", "Letter"]); combo.setCurrentIndex(0)
     spin  = QSpinBox(); spin.setRange(0, 99); spin.setValue(5)
     slide = QSlider(Qt.Orientation.Horizontal); slide.setRange(0, 50); slide.setValue(10)
     for x in (combo, spin, slide):
         lay.addWidget(x)
-    w.show(); w.raise_(); w.activateWindow()
-    _spin(4, 0.0)
+    for i in range(40):                       # enough content to need scrolling
+        lay.addWidget(QSpinBox())
+    area = QScrollArea(); area.setWidgetResizable(True); area.setWidget(inner)
+    area.resize(300, 200); area.show(); area.raise_(); area.activateWindow()
+    _spin(6, 0.0)
 
     def wheel(widget):
-        pos = QPointF(widget.rect().center())
-        ev = QWheelEvent(pos, widget.mapToGlobal(widget.rect().center()).toPointF(),
+        centre = widget.rect().center()
+        ev = QWheelEvent(QPointF(centre), QPointF(widget.mapToGlobal(centre)),
                          QPoint(0, -120), QPoint(0, -120), Qt.MouseButton.NoButton,
                          Qt.KeyboardModifier.NoModifier,
                          Qt.ScrollPhase.NoScrollPhase, False)
         _app.sendEvent(widget, ev)
         _spin(2, 0.0)
 
-    # Nothing focused: hovering and scrolling must leave every one of them alone.
-    w.setFocus(); _spin(2, 0.0)
-    before = (combo.currentIndex(), spin.value(), slide.value())
-    for widget in (combo, spin, slide):
+    bar = area.verticalScrollBar()
+    assert bar.maximum() > 0, "the fixture does not actually scroll"
+
+    # Over each control: the setting is untouched and the panel still scrolls.
+    for widget, read in ((combo, combo.currentIndex),
+                         (spin,  spin.value),
+                         (slide, slide.value)):
+        before_value = read()
+        before_scroll = bar.value()
         wheel(widget)
-    after = (combo.currentIndex(), spin.value(), slide.value())
-    assert after == before, (
-        f"the wheel changed a setting it was only passing over: {before} -> {after}")
+        assert read() == before_value, \
+            f"{type(widget).__name__} changed under a wheel that was passing over it"
+        assert bar.value() > before_scroll, \
+            f"the panel stopped scrolling with the pointer over a {type(widget).__name__}"
 
-    # Clicked into on purpose: the wheel is meant for it now.
-    spin.setFocus(); _spin(3, 0.0)
-    assert spin.hasFocus(), "could not focus the spin box to test the other half"
-    focused_before = spin.value()
-    wheel(spin)
-    assert spin.value() != focused_before, \
-        "a control the user has focused should still take the wheel"
+    # And the scroll bar itself is not a control to be protected from the wheel.
+    before_scroll = bar.value()
+    wheel(bar)
+    assert bar.value() != before_scroll, "the scroll bar itself stopped scrolling"
 
-    w.deleteLater(); _app.processEvents()
-    return "hovered controls ignore it, the focused one takes it"
+    area.deleteLater(); _app.processEvents()
+    return "settings untouched, panel still scrolls, scroll bar still works"
