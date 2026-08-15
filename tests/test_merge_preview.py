@@ -151,12 +151,12 @@ def test_inserted_blank_page_renders_in_the_preview():
     sv = tab.single
     sv._current = 2                                          # the blank
     sv._render()
-    _settle(vp, lambda: sv._page_w_pt > 0, tries=200)
-    assert sv._page_w_pt > 0 and sv._page_h_pt > 0, \
-        f"preview has no page size ({sv._page_w_pt}x{sv._page_h_pt}) — render failed"
+    _settle(vp, lambda: sv._layout.page_w_pt > 0, tries=200)
+    assert sv._layout.page_w_pt > 0 and sv._layout.page_h_pt > 0, \
+        f"preview has no page size ({sv._layout.page_w_pt}x{sv._layout.page_h_pt}) — render failed"
     # A4-ish, like the page it was inserted after — not a fallback of any size
-    assert 500 < sv._page_w_pt < 700 and 700 < sv._page_h_pt < 950, \
-        f"blank page is {sv._page_w_pt}x{sv._page_h_pt} pt"
+    assert 500 < sv._layout.page_w_pt < 700 and 700 < sv._layout.page_h_pt < 950, \
+        f"blank page is {sv._layout.page_w_pt}x{sv._layout.page_h_pt} pt"
     img = sv._last_pm.toImage()
     mid = img.pixel(img.width()//2, img.height()//2)
     assert (mid & 0xFFFFFF) == 0xFFFFFF, \

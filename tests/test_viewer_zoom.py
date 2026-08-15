@@ -25,15 +25,15 @@ def _fine_detail_pdf(name="fine_detail.pdf"):
 
 def _target_scale_of(sv, zoom):
     pad = 16
-    fit = min((sv._view.width() - pad) / sv._page_w_pt,
-              (sv._view.height() - pad) / sv._page_h_pt)
+    fit = min((sv._view.width() - pad) / sv._layout.page_w_pt,
+              (sv._view.height() - pad) / sv._layout.page_h_pt)
     scale = getattr(sv, "_display_scale", None)
     if scale is not None:               # uncapped: the page may exceed one bitmap
         got = scale(zoom)
         if got: return got
     import tools.render.queue as _pv     # older build: the render was clamped
     cap = getattr(_pv, "MAX_RENDER_PX", 4000)
-    return min(fit * zoom, cap / sv._page_w_pt, cap / sv._page_h_pt)
+    return min(fit * zoom, cap / sv._layout.page_w_pt, cap / sv._layout.page_h_pt)
 
 
 def _matches_pdfium(pm, path, page_index, scale):
@@ -72,7 +72,7 @@ def test_zoom_settles_on_a_real_render_not_an_interpolation():
     vp, sv = _open_single_view(src)
     try:
         for zoom in (1.3, 1.4):
-            sv._zoom = zoom
+            sv._layout.zoom = zoom
             sv._render()
             assert _settle(vp, lambda: sv._render_task is None
                            and not getattr(sv, "_showing_provisional", False),
@@ -91,7 +91,7 @@ def test_zoom_shows_a_provisional_image_before_the_real_one():
     vp, sv = _open_single_view(src)
     try:
         before = sv._last_pm.width()
-        sv._zoom = 1.3
+        sv._layout.zoom = 1.3
         sv._render()                      # synchronous part only
         assert sv._last_pm.width() > before, "nothing was shown for the new zoom"
         assert getattr(sv, "_showing_provisional", False), \
@@ -111,13 +111,13 @@ def test_a_newer_zoom_cancels_the_render_still_in_flight():
     src = _fine_detail_pdf()
     vp, sv = _open_single_view(src)
     try:
-        sv._zoom = 2.0
+        sv._layout.zoom = 2.0
         sv._render()
         stale_task = sv._render_task
         stale_gen  = sv._render_gen
         assert stale_task is not None
 
-        sv._zoom = 3.0
+        sv._layout.zoom = 3.0
         sv._render()
         assert not stale_task._active, "the overtaken render was not cancelled"
         assert sv._render_gen > stale_gen, "the generation counter did not move"
@@ -159,11 +159,11 @@ def test_deep_zoom_renders_the_window_not_the_whole_page():
     try:
         seen = []
         for zoom in (2.0, 12.0, 40.0):
-            sv._zoom = zoom
+            sv._layout.zoom = zoom
             sv._render()
             assert _settled_deep(vp, sv), f"zoom {zoom} never settled"
             scale = _target_scale_of(sv, zoom)
-            page_px = max(sv._page_w_pt * scale, sv._page_h_pt * scale)
+            page_px = max(sv._layout.page_w_pt * scale, sv._layout.page_h_pt * scale)
             region  = sv._region_scale > 0
             bitmap  = sv._region_img if region else sv._last_pm
             seen.append((zoom, page_px, region, bitmap.width(), bitmap.height()))
@@ -216,7 +216,7 @@ def test_zoom_gesture_does_not_build_page_sized_pixmaps():
         for _ in range(16):
             sv._zoom_in()          # what a wheel click calls
             _spin(3, 0.0)
-        assert sv._zoom > 20, f"the gesture only reached {sv._zoom:.1f}x"
+        assert sv._layout.zoom > 20, f"the gesture only reached {sv._layout.zoom:.1f}x"
         w, h = biggest[1]
         # a screenful, with room for the render margin — not a page
         assert biggest[0] <= 12_000_000, \
@@ -287,13 +287,13 @@ def test_zooming_out_reuses_the_finer_render():
         return orig(self)
     pv._PageRenderTask.run = counting
     try:
-        sv._zoom = 3.0                       # render fine once
+        sv._layout.zoom = 3.0                       # render fine once
         sv._render()
         assert _settled_deep(vp, sv)
         assert started, "the zoom-in did not render"
         started.clear()
         for zoom in (2.4, 1.9, 1.5, 1.2, 1.0):
-            sv._zoom = zoom
+            sv._layout.zoom = zoom
             sv._render()
             assert _settled_deep(vp, sv), f"zoom {zoom} never settled"
             assert not sv._showing_provisional, \
@@ -312,7 +312,7 @@ def test_deep_zoom_memory_does_not_grow_with_zoom():
     try:
         sizes = []
         for zoom in (10.0, 20.0, 40.0):
-            sv._zoom = zoom
+            sv._layout.zoom = zoom
             sv._render()
             assert _settled_deep(vp, sv), f"zoom {zoom} never settled"
             assert sv._region_scale > 0, f"zoom {zoom} did not use window rendering"
@@ -331,7 +331,7 @@ def test_panning_inside_the_margin_costs_no_render():
     src = _fine_detail_pdf()
     vp, sv = _open_single_view(src)
     try:
-        sv._zoom = 20.0
+        sv._layout.zoom = 20.0
         sv._render()
         assert _settled_deep(vp, sv)
         assert sv._region_scale > 0
@@ -345,13 +345,13 @@ def test_panning_inside_the_margin_costs_no_render():
             return orig(self)
         pv_module._RegionRenderTask.run = counting
         try:
-            sv._scroll_y += REGION_MARGIN_PX // 2      # inside the margin
+            sv._layout.scroll_y += REGION_MARGIN_PX // 2      # inside the margin
             sv._render()
             _spin(10, 0.01)
             assert not renders, "a pan inside the margin triggered a render"
             assert sv._region_rect == before_rect, "the window was rebuilt anyway"
 
-            sv._scroll_y += REGION_MARGIN_PX * 4       # well outside it
+            sv._layout.scroll_y += REGION_MARGIN_PX * 4       # well outside it
             sv._render()
             assert _settled_deep(vp, sv)
             assert renders, "a pan past the margin did not render"
@@ -370,16 +370,16 @@ def test_deep_zoom_window_always_covers_the_visible_sheet():
     try:
         gaps = []
         for zoom in (10.0, 25.0, 40.0):
-            sv._zoom = zoom
+            sv._layout.zoom = zoom
             sv._render()
             assert _settled_deep(vp, sv)
             scale = sv._display_scale(zoom)
-            pw, ph = sv._page_w_pt * scale, sv._page_h_pt * scale
+            pw, ph = sv._layout.page_w_pt * scale, sv._layout.page_h_pt * scale
             aw, ah = sv._view.width(), sv._view.height()
             for fx in (0.0, 0.5, 1.0):
                 for fy in (0.0, 1.0):
-                    sv._scroll_x = fx * max(0.0, pw - aw)
-                    sv._scroll_y = fy * max(0.0, ph - ah)
+                    sv._layout.scroll_x = fx * max(0.0, pw - aw)
+                    sv._layout.scroll_y = fy * max(0.0, ph - ah)
                     sv._render()
                     assert _settled_deep(vp, sv)
                     px0, py0, rw, rh = sv._region_rect
@@ -407,11 +407,11 @@ def test_deep_zoom_is_correct_for_a_rotated_page():
         tab._build_manage_once()
         tab.model.selected = {tab.model.order[0]}
         tab._manage_panel.grid.rotate_selected(90)
-        sv._zoom = 12.0
+        sv._layout.zoom = 12.0
         sv._render()
         assert _settled_deep(vp, sv)
         assert sv._region_scale > 0, "not in window mode"
-        assert sv._page_w_pt > sv._page_h_pt, "rotation did not reach the view"
+        assert sv._layout.page_w_pt > sv._layout.page_h_pt, "rotation did not reach the view"
 
         scale = sv._region_scale
         px0, py0, w, h = sv._region_rect
@@ -517,7 +517,7 @@ def test_turning_a_page_never_shows_the_page_before_it():
     try:
         # Deep enough to need window rendering, which is what a complex page
         # gets and what makes each render slow enough to be visible.
-        sv._zoom = 8.0
+        sv._layout.zoom = 8.0
         sv._render()
         _settle(vp, lambda: sv._region_task is None and sv._render_task is None,
                 tries=300)
@@ -573,7 +573,7 @@ def test_scrolling_up_into_an_unmeasured_page_does_not_strand_the_view():
     src, _ = _distinct_pages_pdf("strand_pages.pdf")
     vp, sv = _open_single_view(src, 1000, 760)
     try:
-        sv._zoom = 6.0
+        sv._layout.zoom = 6.0
         sv._render()
         _settle(vp, lambda: sv._region_task is None and sv._render_task is None,
                 tries=300)
@@ -588,31 +588,31 @@ def test_scrolling_up_into_an_unmeasured_page_does_not_strand_the_view():
         _render_queue.submit = lambda task, pri=1: held.append(task)
         try:
             sv._current = 4
-            sv._scroll_y = 0.0
+            sv._layout.scroll_y = 0.0
             sv.prev_page(start_at_bottom=True)
             _spin(3)
-            stranded = sv._scroll_y
+            stranded = sv._layout.scroll_y
         finally:
             _render_queue.submit = real_submit
             for task in held:
                 task.cancel()
 
-        page_px_h = sv._page_px(sv._display_scale(sv._zoom) or 0.0)[1]
+        page_px_h = sv._page_px(sv._display_scale(sv._layout.zoom) or 0.0)[1]
         assert stranded <= max(page_px_h, float(sv._view.height())), (
             f"scroll left at {stranded:,.0f} on a page that is at most "
             f"{page_px_h:,.0f} pixels tall")
-        assert sv._want_bottom, \
+        assert sv._layout.want_bottom, \
             "the intent to show the bottom was dropped rather than deferred"
 
         # And once something does measure the page, that intent is honoured.
         sv._render()
         _settle(vp, lambda: sv._region_task is None and sv._render_task is None,
                 tries=400)
-        page_px_h = sv._page_px(sv._display_scale(sv._zoom))[1]
+        page_px_h = sv._page_px(sv._display_scale(sv._layout.zoom))[1]
         want = max(0.0, page_px_h - sv._view.height())
-        assert abs(sv._scroll_y - want) < 2, \
-            f"did not land at the bottom: {sv._scroll_y:.0f}, expected {want:.0f}"
-        assert not sv._want_bottom, "the intent was not cleared once honoured"
+        assert abs(sv._layout.scroll_y - want) < 2, \
+            f"did not land at the bottom: {sv._layout.scroll_y:.0f}, expected {want:.0f}"
+        assert not sv._layout.want_bottom, "the intent was not cleared once honoured"
     finally:
         vp.deleteLater(); _app.processEvents()
     return "no bogus offset, and the bottom is still reached"
