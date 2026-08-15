@@ -79,8 +79,8 @@ def test_rotation_reaches_the_preview():
     _spin(60, 0.01)
     tab = vp.tabs.currentWidget()
     sv  = tab.single
-    _settle(vp, lambda: sv._layout.page_w_pt > 0, tries=200)
-    portrait = (sv._layout.page_w_pt, sv._layout.page_h_pt)
+    _settle(vp, lambda: sv._page_w_pt > 0, tries=200)
+    portrait = (sv._page_w_pt, sv._page_h_pt)
     assert portrait[1] > portrait[0], "fixture should start portrait"
     area_before = sv._last_pm.width() * sv._last_pm.height()
 
@@ -93,11 +93,11 @@ def test_rotation_reaches_the_preview():
     # soon as the rotation is seen, before anything has been re-rendered.
     assert _settle(vp, lambda: sv._render_task is None
                    and not getattr(sv, "_showing_provisional", False)
-                   and sv._layout.page_w_pt > portrait[0], tries=250), \
+                   and sv._page_w_pt > portrait[0], tries=250), \
         "the preview never picked up the rotation"
-    assert (round(sv._layout.page_w_pt), round(sv._layout.page_h_pt)) == \
+    assert (round(sv._page_w_pt), round(sv._page_h_pt)) == \
            (round(portrait[1]), round(portrait[0])), \
-        f"preview reports {sv._layout.page_w_pt:.0f}x{sv._layout.page_h_pt:.0f}, expected the swap"
+        f"preview reports {sv._page_w_pt:.0f}x{sv._page_h_pt:.0f}, expected the swap"
     pm = sv._last_pm
     assert pm.width() > pm.height(), "the rendered page is not landscape"
     # fitted to the same window, so it should not have shrunk

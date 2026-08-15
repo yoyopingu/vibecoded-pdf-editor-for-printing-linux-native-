@@ -16,12 +16,10 @@ from tools.colorspace import (cached_page_colorspaces, describe,
                               page_colorspaces)
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
-from tools.render.images import _SCALE_EPS, _good_enough
+from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
-from tools.render.region import (cached_page_size_pt, covers, page_px_size,
-                                 region_for_viewport)
+from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
-from tools.viewer.page_layout import PageLayout
 from tools.viewer.tab_base import owning_tab
 from tools.theme import _PREV_BTN, _TV, _register_themed
 
@@ -43,17 +41,20 @@ class SinglePageView(QWidget):
         self.pdf_path   = None
         self.model      = None
         self._current   = 0
-        # Where the page sits on screen — size, zoom, scroll — in one object
-        # both renderers can be handed. The names below are unchanged: they are
-        # properties onto this, so nothing that reads self._layout.zoom or
-        # self._layout.scroll_y had to learn a new one.
-        self._layout    = PageLayout()
+        self._zoom      = 1.0   # 1.0 = Fit-to-window
         self._last_pm   = None
         self._last_zoom = 1.0
         # Which page _last_pm holds. It is a stand-in for zooming, and a
         # stand-in is only honest about the page it was rendered from — see
         # _stand_in_is_current.
         self._last_pm_key = None
+        self._page_w_pt = 0.0   # page dimensions in PDF points (stored on render)
+        self._page_h_pt = 0.0
+        self._scroll_x  = 0.0  # Scroll-Offset (float für präzise Berechnung)
+        self._scroll_y  = 0.0
+        # "put me at the bottom of this page once its height is known" — see
+        # _place_scroll. Never expressed as a coordinate.
+        self._want_bottom = False
         self._zoom_timer = QTimer()
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.timeout.connect(self._render)
@@ -205,18 +206,47 @@ class SinglePageView(QWidget):
     # ── Zoom-Methoden ─────────────────────────────────────────────────────────
 
     def _display_scale(self, zoom):
-        """Pixels per point the page is shown at. See PageLayout.display_scale."""
-        return self._layout.display_scale(self._view.width(), self._view.height(),
-                                          zoom)
+        """Pixels per point the page is shown at. No ceiling: past
+        MAX_RENDER_PX the page is not rendered in one piece any more, it is
+        rendered a window at a time, so the zoom is free to keep going.
+
+        Snapped to a scale that puts a whole number of pixels across the page,
+        which is the only kind that can be rendered — see snap_scale in
+        tools/render/region.py. Without it the scale laid out with and the scale
+        rendered at differ in the seventh decimal, and every pan reads as a new
+        zoom and re-renders instead of blitting.
+        """
+        if self._page_w_pt <= 0 or self._page_h_pt <= 0:
+            return None
+        avail_w = self._view.width()
+        avail_h = self._view.height()
+        if avail_w < 16 or avail_h < 16:
+            return None
+        pad = 16
+        fit = min((avail_w - pad) / self._page_w_pt,
+                  (avail_h - pad) / self._page_h_pt)
+        return snap_scale(self._page_w_pt, self._page_h_pt, fit * zoom)
 
     def _capped_display_size(self, zoom):
-        """(w, h) in pixels the page occupies at `zoom`, or (None, None)."""
-        return self._layout.display_size(self._view.width(), self._view.height(),
-                                         zoom)
+        """Size in pixels (w, h) the page occupies on screen at `zoom`, or
+        (None, None) if its dimensions are not known yet.
+
+        This is what the scroll limits and the zoom anchor are built on. It used
+        to clamp to MAX_RENDER_PX, because that really was as large as the page
+        could get — the render was one bitmap. With window rendering the page on
+        screen keeps growing, and clamping here would have pinned the scroll
+        range while the page kept getting bigger under it."""
+        scale = self._display_scale(zoom)
+        if scale is None:
+            return None, None
+        return self._page_px(scale)
 
     def _use_region_rendering(self, scale):
         """Is the page at this scale too large to render in one piece?"""
-        return self._layout.needs_window(scale)
+        if self._page_w_pt <= 0 or self._page_h_pt <= 0 or scale is None:
+            return False
+        return max(self._page_w_pt * scale,
+                   self._page_h_pt * scale) > MAX_RENDER_PX
 
     def _apply_zoom(self, new_zoom, mx=None, my=None):
         """
@@ -233,14 +263,14 @@ class SinglePageView(QWidget):
         avail_w = float(self._view.width())
         avail_h = float(self._view.height())
         if avail_w < 1 or avail_h < 1:
-            self._layout.zoom = max(MIN_ZOOM, min(MAX_ZOOM, new_zoom))
+            self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, new_zoom))
             return
 
         if mx is None: mx = avail_w / 2.0
         if my is None: my = avail_h / 2.0
 
-        old_zoom = self._layout.zoom
-        self._layout.zoom = max(MIN_ZOOM, min(MAX_ZOOM, float(new_zoom)))
+        old_zoom = self._zoom
+        self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, float(new_zoom)))
 
         if self._last_pm is None or self._last_zoom <= 0 or old_zoom <= 0:
             return
@@ -251,7 +281,7 @@ class SinglePageView(QWidget):
         # longer increases the actual pixel width — leading to wrong scroll
         # limits that push the page completely off-screen.
         eff_w_cap, eff_h_cap = self._capped_display_size(old_zoom)
-        new_w_cap, new_h_cap = self._capped_display_size(self._layout.zoom)
+        new_w_cap, new_h_cap = self._capped_display_size(self._zoom)
 
         if eff_w_cap is not None and new_w_cap is not None:
             eff_w, eff_h = eff_w_cap, eff_h_cap
@@ -260,13 +290,13 @@ class SinglePageView(QWidget):
             # Fallback: linear extrapolation (no page dims yet)
             eff_w = self._last_pm.width()  * (old_zoom / self._last_zoom)
             eff_h = self._last_pm.height() * (old_zoom / self._last_zoom)
-            ratio = self._layout.zoom / old_zoom
+            ratio = self._zoom / old_zoom
             new_w = eff_w * ratio
             new_h = eff_h * ratio
 
         # Aktuelle linke/obere Kante der Seite im Viewport
-        cur_off_x = max(0.0, (avail_w - eff_w) / 2.0) - self._layout.scroll_x
-        cur_off_y = max(0.0, (avail_h - eff_h) / 2.0) - self._layout.scroll_y
+        cur_off_x = max(0.0, (avail_w - eff_w) / 2.0) - self._scroll_x
+        cur_off_y = max(0.0, (avail_h - eff_h) / 2.0) - self._scroll_y
 
         # Seitenanteil unter dem Mauszeiger (0=linke Kante, 1=rechte Kante)
         frac_x = (mx - cur_off_x) / eff_w if eff_w > 0 else 0.5
@@ -275,29 +305,29 @@ class SinglePageView(QWidget):
         # Neuen Scroll berechnen: frac soll wieder bei mx/my liegen
         new_off_base_x = max(0.0, (avail_w - new_w) / 2.0)
         new_off_base_y = max(0.0, (avail_h - new_h) / 2.0)
-        self._layout.scroll_x = new_off_base_x + frac_x * new_w - mx
-        self._layout.scroll_y = new_off_base_y + frac_y * new_h - my
+        self._scroll_x = new_off_base_x + frac_x * new_w - mx
+        self._scroll_y = new_off_base_y + frac_y * new_h - my
 
         # Auf gültigen Bereich begrenzen
         max_sx = max(0.0, new_w - avail_w)
         max_sy = max(0.0, new_h - avail_h)
-        self._layout.scroll_x = max(0.0, min(self._layout.scroll_x, max_sx))
-        self._layout.scroll_y = max(0.0, min(self._layout.scroll_y, max_sy))
+        self._scroll_x = max(0.0, min(self._scroll_x, max_sx))
+        self._scroll_y = max(0.0, min(self._scroll_y, max_sy))
 
     def _zoom_in(self):
-        self._apply_zoom(self._layout.zoom * 1.25)
+        self._apply_zoom(self._zoom * 1.25)
         self._render_preview()
         self._zoom_timer.start(120)
 
     def _zoom_out(self):
-        self._apply_zoom(self._layout.zoom / 1.25)
+        self._apply_zoom(self._zoom / 1.25)
         self._render_preview()
         self._zoom_timer.start(120)
 
     def _zoom_fit(self):
-        self._layout.zoom     = 1.0
-        self._layout.scroll_x = 0.0
-        self._layout.scroll_y = 0.0
+        self._zoom     = 1.0
+        self._scroll_x = 0.0
+        self._scroll_y = 0.0
         self._render()
 
     def _zoom_actual_size(self):
@@ -313,17 +343,17 @@ class SinglePageView(QWidget):
             actual_scale = phys_dpi / 72.0          # px per PDF point at physical size
             avail_w = self._view.width()
             avail_h = self._view.height()
-            if self._layout.page_w_pt > 0 and avail_w > 16 and avail_h > 16:
+            if self._page_w_pt > 0 and avail_w > 16 and avail_h > 16:
                 pad       = 16
-                fit_scale = min((avail_w - pad) / self._layout.page_w_pt,
-                                (avail_h - pad) / self._layout.page_h_pt)
-                self._layout.zoom = max(MIN_ZOOM, min(MAX_ZOOM, actual_scale / fit_scale)) if fit_scale > 0 else 1.0
+                fit_scale = min((avail_w - pad) / self._page_w_pt,
+                                (avail_h - pad) / self._page_h_pt)
+                self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, actual_scale / fit_scale)) if fit_scale > 0 else 1.0
             else:
-                self._layout.zoom = 1.0
+                self._zoom = 1.0
         except Exception:
-            self._layout.zoom = 1.0
-        self._layout.scroll_x = 0.0
-        self._layout.scroll_y = 0.0
+            self._zoom = 1.0
+        self._scroll_x = 0.0
+        self._scroll_y = 0.0
         self._render()
 
     def wheelEvent(self, e):
@@ -334,7 +364,7 @@ class SinglePageView(QWidget):
         if ctrl:
             factor = 1.15 if dy > 0 else 1.0 / 1.15
             mp = self._view.mapFrom(self, e.position().toPoint())
-            self._apply_zoom(self._layout.zoom * factor, float(mp.x()), float(mp.y()))
+            self._apply_zoom(self._zoom * factor, float(mp.x()), float(mp.y()))
             self._render_preview()
             self._zoom_timer.start(120)
             e.accept()
@@ -344,26 +374,26 @@ class SinglePageView(QWidget):
         if shift:
             # Use vertical wheel axis (most mice don't have a horizontal wheel)
             dx = -dy   # wheel-down → scroll right, wheel-up → scroll left
-            disp_w, _ = self._capped_display_size(self._layout.zoom)
+            disp_w, _ = self._capped_display_size(self._zoom)
             if disp_w is None and self._last_pm is not None and self._last_zoom > 0:
-                disp_w = self._last_pm.width() * (self._layout.zoom / self._last_zoom)
+                disp_w = self._last_pm.width() * (self._zoom / self._last_zoom)
             avail_w = float(self._view.width())
             max_sx  = max(0.0, (disp_w or 0.0) - avail_w)
             if max_sx > 0:
                 step_x = max(50.0, avail_w * 0.18)
-                self._layout.scroll_x = max(0.0, min(self._layout.scroll_x + (step_x if dx > 0 else -step_x), max_sx))
+                self._scroll_x = max(0.0, min(self._scroll_x + (step_x if dx > 0 else -step_x), max_sx))
                 self._render_preview(); self._schedule_settle()
             e.accept()
             return
 
         # No modifier: scroll vertically within page, page-flip only at boundary.
-        disp_w, disp_h = self._capped_display_size(self._layout.zoom)
+        disp_w, disp_h = self._capped_display_size(self._zoom)
         # Only use _last_pm as fallback when it belongs to the CURRENT page
         # (i.e. page dimensions are already known from a completed render).
         # Using stale dims from a previous page during a mid-flight render causes
         # incorrect max_sy → unexpected page flips.
-        if disp_h is None and self._layout.page_w_pt > 0 and self._last_pm is not None and self._last_zoom > 0:
-            ratio  = self._layout.zoom / self._last_zoom
+        if disp_h is None and self._page_w_pt > 0 and self._last_pm is not None and self._last_zoom > 0:
+            ratio  = self._zoom / self._last_zoom
             disp_h = self._last_pm.height() * ratio
         avail_h = float(self._view.height())
         max_sy  = max(0.0, (disp_h or 0.0) - avail_h)
@@ -376,14 +406,14 @@ class SinglePageView(QWidget):
         # is cancelled and re-aimed instead, and the page that has not arrived
         # yet stands in as blank paper.
         if dy < 0:   # wheel down → scroll down, then next page
-            if max_sy > 0 and self._layout.scroll_y < max_sy - 0.5:
-                self._layout.scroll_y = min(self._layout.scroll_y + step, max_sy)
+            if max_sy > 0 and self._scroll_y < max_sy - 0.5:
+                self._scroll_y = min(self._scroll_y + step, max_sy)
                 self._render_preview(); self._schedule_settle()
             else:
                 self.next_page()          # lands at top of next page (scroll_y=0)
         else:        # wheel up → scroll up, then prev page at its BOTTOM
-            if self._layout.scroll_y > 0.5:
-                self._layout.scroll_y = max(self._layout.scroll_y - step, 0.0)
+            if self._scroll_y > 0.5:
+                self._scroll_y = max(self._scroll_y - step, 0.0)
                 self._render_preview(); self._schedule_settle()
             else:
                 self.prev_page(start_at_bottom=True)
@@ -429,18 +459,18 @@ class SinglePageView(QWidget):
         """
         key = (src_path, orig)
         if (self._dims_key == key and self._dims_rot is not None
-                and self._layout.page_w_pt > 0 and self._layout.page_h_pt > 0):
+                and self._page_w_pt > 0 and self._page_h_pt > 0):
             if (rot % 180) != (self._dims_rot % 180):
-                self._layout.page_w_pt, self._layout.page_h_pt = self._layout.page_h_pt, self._layout.page_w_pt
+                self._page_w_pt, self._page_h_pt = self._page_h_pt, self._page_w_pt
                 self._leave_region_mode()   # measured against the old shape
-        elif self._dims_key != key or self._layout.page_w_pt <= 0 or self._layout.page_h_pt <= 0:
+        elif self._dims_key != key or self._page_w_pt <= 0 or self._page_h_pt <= 0:
             # A different page: whatever window is rendered belongs to the old
             # one, and blitting it here would show the wrong page at the right
             # scroll position.
             self._leave_region_mode()
             w_pt, h_pt = self._known_page_size(src_path, orig, rot)
             if w_pt > 0 and h_pt > 0:
-                self._layout.page_w_pt, self._layout.page_h_pt = w_pt, h_pt
+                self._page_w_pt, self._page_h_pt = w_pt, h_pt
         self._dims_key = key
         self._dims_rot = rot
 
@@ -479,16 +509,31 @@ class SinglePageView(QWidget):
         if w_pt <= 0 or h_pt <= 0:
             self._view.clear()
             return
-        scale = _target_scale(avail_w, avail_h, self._layout.zoom, w_pt, h_pt)
+        scale = _target_scale(avail_w, avail_h, self._zoom, w_pt, h_pt)
         page_px_w, page_px_h = page_px_size(w_pt, h_pt, scale, 0)
         self._place_scroll(page_px_w, page_px_h, avail_w, avail_h)
-        ox = max(0.0, (avail_w - page_px_w) / 2.0) - self._layout.scroll_x
-        oy = max(0.0, (avail_h - page_px_h) / 2.0) - self._layout.scroll_y
+        ox = max(0.0, (avail_w - page_px_w) / 2.0) - self._scroll_x
+        oy = max(0.0, (avail_h - page_px_h) / 2.0) - self._scroll_y
         self._view.show_placeholder(ox, oy, page_px_w, page_px_h)
 
     def _place_scroll(self, page_px_w, page_px_h, avail_w, avail_h):
-        """Clamp the scroll to the page. See PageLayout.place_scroll."""
-        self._layout.place_scroll(page_px_w, page_px_h, avail_w, avail_h)
+        """Clamp the scroll to the page, honouring a pending "start at bottom".
+
+        prev_page(start_at_bottom=True) used to write 999999 into _scroll_y and
+        trust every path to clamp it. The paths that can only clamp against a
+        height they know could not: on a page nothing had measured yet the
+        number stayed, and the wheel then walked it down 137 pixels a click —
+        8,537 clicks from the bottom of a page 3,154 pixels tall. Scrolling
+        down still turned pages, so it looked as though only "up" was broken,
+        and only the page button worked because it sets the scroll to zero.
+        """
+        max_sx = max(0.0, page_px_w - avail_w)
+        max_sy = max(0.0, page_px_h - avail_h)
+        if self._want_bottom and page_px_h > 0:
+            self._scroll_y = max_sy
+            self._want_bottom = False
+        self._scroll_x = max(0.0, min(self._scroll_x, max_sx))
+        self._scroll_y = max(0.0, min(self._scroll_y, max_sy))
 
     def _leave_region_mode(self):
         if self._region_task is not None:
@@ -505,13 +550,20 @@ class SinglePageView(QWidget):
         self._zoom_timer.start(ms)
 
     def _page_px(self, scale):
-        """The sheet's size on screen in whole pixels at `scale`."""
-        return self._layout.page_px(scale)
+        """The sheet's size on screen in whole pixels at `scale`.
+
+        The same number the renderer works to, so the window it produces lands
+        exactly where the view expects it. _page_w_pt/_page_h_pt already
+        describe the page as displayed, hence rotation=0 here.
+        """
+        return page_px_size(self._page_w_pt, self._page_h_pt, scale, 0)
 
     def _page_origin(self, page_px_w, page_px_h):
         """Where the sheet's top-left corner sits in widget coordinates."""
-        return self._layout.origin(self._view.width(), self._view.height(),
-                                   page_px_w, page_px_h)
+        avail_w = float(self._view.width())
+        avail_h = float(self._view.height())
+        return (max(0.0, (avail_w - page_px_w) / 2.0) - self._scroll_x,
+                max(0.0, (avail_h - page_px_h) / 2.0) - self._scroll_y)
 
     def _blit_region(self):
         """Put the rendered window on screen at the current scroll position.
@@ -539,12 +591,12 @@ class SinglePageView(QWidget):
 
         same_scale = abs(self._region_scale - scale) <= scale * 1e-6
         if same_scale and covers(self._region_rect, page_px_w, page_px_h,
-                                 avail_w, avail_h, self._layout.scroll_x, self._layout.scroll_y):
+                                 avail_w, avail_h, self._scroll_x, self._scroll_y):
             self._blit_region()          # already have these pixels
             return
 
         rect = region_for_viewport(page_px_w, page_px_h, avail_w, avail_h,
-                                   self._layout.scroll_x, self._layout.scroll_y)
+                                   self._scroll_x, self._scroll_y)
         # Something to look at while the window renders: whatever is already on
         # screen, stretched to the new zoom. Provisional by definition — the
         # render below replaces it.
@@ -573,10 +625,10 @@ class SinglePageView(QWidget):
         if self._region_img is not None and self._region_scale > 0:
             src_pm, src_rect, src_scale = (self._region_img, self._region_rect,
                                            self._region_scale)
-        elif self._stand_in_is_current() and self._layout.page_w_pt > 0:
+        elif self._stand_in_is_current() and self._page_w_pt > 0:
             src_pm = self._last_pm
             src_rect = (0, 0, self._last_pm.width(), self._last_pm.height())
-            src_scale = self._last_pm.width() / self._layout.page_w_pt
+            src_scale = self._last_pm.width() / self._page_w_pt
         if src_pm is None or src_scale <= 0:
             # Nothing of this page to stretch. An empty sheet rather than the
             # previous page left sitting there while this one renders.
@@ -589,8 +641,8 @@ class SinglePageView(QWidget):
         avail_w = float(self._view.width()); avail_h = float(self._view.height())
 
         # The visible slice, in the source image's own pixels.
-        vis_x = self._layout.scroll_x if page_px_w > avail_w else 0.0
-        vis_y = self._layout.scroll_y if page_px_h > avail_h else 0.0
+        vis_x = self._scroll_x if page_px_w > avail_w else 0.0
+        vis_y = self._scroll_y if page_px_h > avail_h else 0.0
         sx = int(max(0, math.floor(vis_x / f) - rx))
         sy = int(max(0, math.floor(vis_y / f) - ry))
         sw = int(min(src_pm.width()  - sx, math.ceil(min(avail_w, page_px_w) / f) + 2))
@@ -614,7 +666,7 @@ class SinglePageView(QWidget):
         class _W:                      # _apply_zoom_labels only reads .width()
             def __init__(self, w): self._w = int(w)
             def width(self): return self._w
-        self._apply_zoom_labels(_W(page_px_w), self._layout.page_w_pt, self._layout.page_h_pt)
+        self._apply_zoom_labels(_W(page_px_w), self._page_w_pt, self._page_h_pt)
 
     def _on_region_ready(self, gen, image, px0, py0, scale, chars):
         if gen != self._render_gen:
@@ -648,7 +700,7 @@ class SinglePageView(QWidget):
         avail_h = float(self._view.height())
         if avail_w < 50 or avail_h < 50:
             return
-        scale = self._display_scale(self._layout.zoom)
+        scale = self._display_scale(self._zoom)
         if scale is not None:
             # One path for both modes: crop to what is on screen, then scale.
             # The old whole-page branch stretched the entire sheet on every
@@ -659,7 +711,7 @@ class SinglePageView(QWidget):
             if (self._region_scale > 0
                     and abs(self._region_scale - scale) <= scale * 1e-6
                     and covers(self._region_rect, page_px_w, page_px_h,
-                               avail_w, avail_h, self._layout.scroll_x, self._layout.scroll_y)):
+                               avail_w, avail_h, self._scroll_x, self._scroll_y)):
                 self._blit_region()          # already have these pixels
             else:
                 self._region_preview(scale, page_px_w, page_px_h)
@@ -670,16 +722,16 @@ class SinglePageView(QWidget):
         # Page dimensions not known yet (nothing rendered): extrapolate.
         if self._last_pm is None or self._last_zoom <= 0:
             return
-        ratio = self._layout.zoom / self._last_zoom
+        ratio = self._zoom / self._last_zoom
         new_w = max(1, int(self._last_pm.width()  * ratio))
         new_h = max(1, int(self._last_pm.height() * ratio))
         pm = self._last_pm.scaled(new_w, new_h,
             Qt.AspectRatioMode.IgnoreAspectRatio,
             Qt.TransformationMode.FastTransformation)
-        off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._layout.scroll_x)
-        off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._layout.scroll_y)
+        off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._scroll_x)
+        off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._scroll_y)
         self._view.set_page(pm, [], off_x, off_y)
-        self._zoom_lbl.setText(f"{int(self._layout.zoom * 100)}%")
+        self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
 
     def load(self, pdf_path, model):
         # Cancel any in-flight pre-render tasks from previous file
@@ -690,10 +742,10 @@ class SinglePageView(QWidget):
         self.pdf_path  = pdf_path
         self.model     = model
         self._current  = 0
-        self._layout.page_w_pt = 0.0
-        self._layout.page_h_pt = 0.0
-        self._layout.scroll_x = 0.0
-        self._layout.scroll_y = 0.0
+        self._page_w_pt = 0.0
+        self._page_h_pt = 0.0
+        self._scroll_x = 0.0
+        self._scroll_y = 0.0
         n = len(model.order)
         self._tot_lbl.setText(f"/ {n}")
         self._prerender_aim = None   # a new file: re-aim even at the same index
@@ -842,7 +894,7 @@ class SinglePageView(QWidget):
             self._update_color_label()
 
         # ── Too big to render whole: render the window instead ────────────────
-        scale = self._display_scale(self._layout.zoom)
+        scale = self._display_scale(self._zoom)
         if self._use_region_rendering(scale):
             self._show_region(src_path, orig, rot, scale, avail_w, avail_h)
             return
@@ -874,7 +926,7 @@ class SinglePageView(QWidget):
             ratio = 1.0
             target_scale = cached_scale
             if page_w_pt > 0 and page_h_pt > 0 and cached_scale > 0:
-                target_scale = _target_scale(avail_w, avail_h, self._layout.zoom,
+                target_scale = _target_scale(avail_w, avail_h, self._zoom,
                                              page_w_pt, page_h_pt, cached_scale)
                 ratio = target_scale / cached_scale
             final = _good_enough(cached_scale, target_scale)
@@ -895,17 +947,17 @@ class SinglePageView(QWidget):
             # Clamp to the page, and settle a pending "start at the bottom"
             # from prev_page now that the height is known.
             self._place_scroll(pm.width(), pm.height(), avail_w, avail_h)
-            off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._layout.scroll_x)
-            off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._layout.scroll_y)
+            off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._scroll_x)
+            off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._scroll_y)
             # raw_chars are image-relative: multiply by ratio then add display offset
             display_chars = [(ch, off_x + x*ratio, off_y + y*ratio,
                                   off_x + x2*ratio, off_y + y2*ratio)
                              for ch, x, y, x2, y2 in raw_chars]
             self._last_pm   = pm
-            self._last_zoom = self._layout.zoom
+            self._last_zoom = self._zoom
             self._last_pm_key = (src_path, orig, rot)
-            self._layout.page_w_pt = page_w_pt   # needed by _capped_display_size
-            self._layout.page_h_pt = page_h_pt
+            self._page_w_pt = page_w_pt   # needed by _capped_display_size
+            self._page_h_pt = page_h_pt
             self._showing_provisional = not final
             self._view.set_page(pm, display_chars, off_x, off_y)
             self._apply_zoom_labels(pm, page_w_pt, page_h_pt)
@@ -923,7 +975,7 @@ class SinglePageView(QWidget):
                 # the same multi-megapixel image again on the render thread and
                 # emit an identical frame, delaying the render being waited for.
                 task = _PageRenderTask(self._render_gen, src_path, orig, rot,
-                                       avail_w, avail_h, self._layout.zoom,
+                                       avail_w, avail_h, self._zoom,
                                        self._render_signals, stand_in_shown=True)
                 self._render_task = task
                 _render_queue.submit(task, 0)   # P0: active page, preempts low-pri
@@ -972,7 +1024,7 @@ class SinglePageView(QWidget):
                 self._showing_provisional = True
 
         task = _PageRenderTask(gen, src_path, orig, rot,
-                               avail_w, avail_h, self._layout.zoom,
+                               avail_w, avail_h, self._zoom,
                                self._render_signals)
         self._render_task = task
         _render_queue.submit(task, 0)   # P0: active page
@@ -998,9 +1050,9 @@ class SinglePageView(QWidget):
                 self._phys_pct  = phys_pct
                 self._phys_base = phys_pct
             except Exception:
-                self._zoom_lbl.setText(f"{int(self._layout.zoom * 100)}%")
+                self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
         else:
-            self._zoom_lbl.setText(f"{int(self._layout.zoom * 100)}%")
+            self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
 
     def _on_page_ready(self, gen, image, off_x, off_y,
                        page_w_pt, page_h_pt, scale, raw_chars,
@@ -1023,18 +1075,18 @@ class SinglePageView(QWidget):
         avail_w = self._view.width()
         avail_h = self._view.height()
         self._place_scroll(pm.width(), pm.height(), avail_w, avail_h)
-        off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._layout.scroll_x)
-        off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._layout.scroll_y)
+        off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._scroll_x)
+        off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._scroll_y)
 
         # raw_chars: image-relative → add scroll-adjusted centering offset
         display_chars = [(ch, off_x + x, off_y + y, off_x + x2, off_y + y2)
                          for ch, x, y, x2, y2 in raw_chars]
 
         self._last_pm   = pm
-        self._last_zoom = self._layout.zoom
+        self._last_zoom = self._zoom
         self._last_pm_key = self._current_page_key()
-        self._layout.page_w_pt = page_w_pt   # needed by _capped_display_size
-        self._layout.page_h_pt = page_h_pt
+        self._page_w_pt = page_w_pt   # needed by _capped_display_size
+        self._page_h_pt = page_h_pt
         self._showing_provisional = provisional
         if not provisional:
             self._render_task = None
@@ -1049,7 +1101,7 @@ class SinglePageView(QWidget):
         # answer is knowable. _show_region emits through a different signal, so
         # this cannot come back round a second time.
         if (not provisional and page_w_pt > 0
-                and self._use_region_rendering(self._display_scale(self._layout.zoom))):
+                and self._use_region_rendering(self._display_scale(self._zoom))):
             QTimer.singleShot(0, self._render)
 
         QTimer.singleShot(0, self._update_color_label)
@@ -1104,35 +1156,35 @@ class SinglePageView(QWidget):
     def next_page(self):
         if self.model and self._current < len(self.model.order) - 1:
             self._current += 1
-            self._layout.scroll_x  = 0.0
-            self._layout.scroll_y  = 0.0
-            self._layout.want_bottom = False
-            self._layout.page_w_pt = 0.0   # clear stale dims so wheel uses only fresh renders
-            self._layout.page_h_pt = 0.0
+            self._scroll_x  = 0.0
+            self._scroll_y  = 0.0
+            self._want_bottom = False
+            self._page_w_pt = 0.0   # clear stale dims so wheel uses only fresh renders
+            self._page_h_pt = 0.0
             self._render()
 
     def prev_page(self, start_at_bottom=False):
         if self._current > 0:
             self._current -= 1
-            self._layout.scroll_x  = 0.0
-            self._layout.page_w_pt = 0.0
-            self._layout.page_h_pt = 0.0
+            self._scroll_x  = 0.0
+            self._page_w_pt = 0.0
+            self._page_h_pt = 0.0
             # Recorded as intent, not as a coordinate: _place_scroll puts the
             # view at the bottom once something knows how tall the page is.
-            self._layout.scroll_y = 0.0
-            self._layout.want_bottom = bool(start_at_bottom)
+            self._scroll_y = 0.0
+            self._want_bottom = bool(start_at_bottom)
             self._render()
 
     def go_to(self, page_1based):
         self._current  = max(0, page_1based - 1)
-        self._layout.scroll_x  = 0.0
-        self._layout.scroll_y  = 0.0
-        self._layout.want_bottom = False
+        self._scroll_x  = 0.0
+        self._scroll_y  = 0.0
+        self._want_bottom = False
         # "put me at the bottom of this page once its height is known" — see
         # _place_scroll. Never expressed as a coordinate.
-        self._layout.want_bottom = False
-        self._layout.page_w_pt = 0.0
-        self._layout.page_h_pt = 0.0
+        self._want_bottom = False
+        self._page_w_pt = 0.0
+        self._page_h_pt = 0.0
         self._render()
 
     def resizeEvent(self, e):
