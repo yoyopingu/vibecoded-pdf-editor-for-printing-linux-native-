@@ -499,6 +499,17 @@ _EN: dict[str, str] = {
     # ── Exceptions, tool status, combo items, section labels (final pass) ────────
     "Keine PDF geöffnet.\nÖffne zuerst eine PDF im Page Viewer (linke Seite).":
         "No PDF open.\nOpen a PDF in the Page Viewer first (left side).",
+    "Passwort erforderlich": "Password required",
+    "Passwort falsch": "Wrong password",
+    "Das Passwort wurde nicht akzeptiert. Erneut versuchen?":
+        "That password was not accepted. Try again?",
+    "„{p0}“ ist mit einem Passwort geschützt.\n\n"
+    "Ohne das Passwort lässt sich die Datei nicht anzeigen oder "
+    "bearbeiten. Es wird nur zum Entsperren verwendet und nicht "
+    "gespeichert.":
+        "\u201c{p0}\u201d is protected with a password.\n\n"
+        "Without it the file cannot be shown or edited. It is used only to "
+        "unlock the file and is not stored.",
     "Diese PDF ist passwortgeschützt.\nBitte zuerst entsperren (Passwort entfernen), dann erneut öffnen.":
         "This PDF is password-protected.\nPlease unlock it first (remove the password), then reopen.",
     "Keine PDF geladen.": "No PDF loaded.",

@@ -92,10 +92,17 @@ def _make_fixtures():
         c.setFont("Helvetica", 30); c.drawCentredString(pw/2, ph/2, "X")
         c.showPage()
     c.save()
-    # encrypted (from normal)
+    # locked: a real user password, nothing can read a page without it
     enc = os.path.join(_TMP, "encrypted.pdf")
     with pikepdf.open(p) as pdf:
         pdf.save(enc, encryption=pikepdf.Encryption(owner="o", user="u"))
+    # restricted: an owner password and no user password. Encrypted, and read
+    # by every viewer there is — this is what most "password-protected" files
+    # in circulation actually are.
+    restricted = os.path.join(_TMP, "restricted.pdf")
+    with pikepdf.open(p) as pdf:
+        pdf.save(restricted, encryption=pikepdf.Encryption(
+            owner="o", user="", allow=pikepdf.Permissions(extract=False)))
     # an image for Image→PDF
     img = os.path.join(_TMP, "img.png")
     Image.new("RGB", (400, 600), (40, 90, 160)).save(img)
@@ -109,7 +116,8 @@ def _make_fixtures():
         c.setFillGray(0.0);         c.rect(0, 0, W, H * 0.05, fill=1, stroke=0)
         c.showPage()
     c.save()
-    return {"normal": p, "single": s, "color": col, "encrypted": enc, "image": img,
+    return {"normal": p, "single": s, "color": col, "encrypted": enc,
+            "restricted": restricted, "image": img,
             "framed": fr, "framed_cropbox": box, "framed_rot90": rot, "mixed": mix,
             "booklet32": bk}
 

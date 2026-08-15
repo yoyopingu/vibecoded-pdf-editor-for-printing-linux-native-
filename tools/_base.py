@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QEvent
 from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
+from tools.pdf_access import is_locked
 
 
 _VIEW_SNAPSHOTS: dict = {}     # model signature -> flattened temp PDF
@@ -445,19 +446,18 @@ class BasePanel(QWidget):
             raise ValueError(tr(
                 "Keine PDF geöffnet.\n"
                 "Öffne zuerst eine PDF im Page Viewer (linke Seite)."))
-        # Central guard: password-protected PDFs can't be processed and otherwise
-        # surface as cryptic library errors (PasswordError / FileNotDecryptedError
-        # / PdfiumError) in each tool. Give one clear message instead.
-        try:
-            from pypdf import PdfReader
-            if PdfReader(path, strict=False).is_encrypted:
-                raise ValueError(tr(
-                    "Diese PDF ist passwortgeschützt.\n"
-                    "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen."))
-        except ValueError:
-            raise
-        except Exception:
-            pass   # unreadable for another reason — let the tool surface that itself
+        # Central guard: a locked PDF cannot be processed and otherwise surfaces
+        # as a cryptic library error (PasswordError / FileNotDecryptedError /
+        # PdfiumError) in each tool. Give one clear message instead.
+        #
+        # Locked, not merely encrypted. This used to test is_encrypted, which is
+        # true of every restricted file as well — an owner password with no user
+        # password — and those read perfectly. The tools were refusing documents
+        # that pikepdf and pdfium open without being asked for anything.
+        if is_locked(path):
+            raise ValueError(tr(
+                "Diese PDF ist passwortgeschützt.\n"
+                "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen."))
         # Only now flatten the page manager's view: the guards above have to run
         # on the real file (an encrypted one can't be copied page by page).
         return ensure_view_snapshot(path)

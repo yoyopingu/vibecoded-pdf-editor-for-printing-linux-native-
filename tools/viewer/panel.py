@@ -468,6 +468,15 @@ class PageViewerPanel(QWidget):
 
     def _add_pdf_tab(self, path):
         from PyQt6.QtWidgets import QMessageBox
+        from tools.pdf_access import ensure_openable
+        # A file that genuinely needs a password gets asked about, once, with an
+        # explanation — and is worked on as a decrypted copy from here on. A
+        # restricted one, which is most of what people call password-protected,
+        # needs nothing and is not asked about.
+        opened = ensure_openable(path, self)
+        if opened is None:
+            return              # cancelled at the password prompt
+        path = opened
         # A damaged, encrypted or truncated PDF makes this raise. Unhandled in a
         # slot, PyQt takes the whole process down — so a single bad file killed
         # the app instead of reporting one failed open.

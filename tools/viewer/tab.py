@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QFrame, QScrollArea, QStackedWidget
 from PyQt6.QtCore import pyqtSignal, QTimer
 from tools.app_state import AppState
 from tools.i18n import tr
+from tools.pdf_access import is_locked
 from tools.render.caches import _set_active
 from tools.viewer.model import PageModel
 from tools.printing.dialog import PrintDialog
@@ -70,7 +71,13 @@ class PdfTab(PdfTabBase):
             logging.error(f"PdfTab._load: {e}")
             raise RuntimeError(tr('Die Datei ist beschaedigt oder keine gueltige PDF.\n{p0}')
                                .format(p0=e)) from e
-        if encrypted:
+        if encrypted and is_locked(self.pdf_path):
+            # Only a file nothing can read without a password. A *restricted*
+            # one — an owner password with no user password, which is most of
+            # them — opens here as it does in every other viewer; the
+            # restrictions it carries are about copying and printing, not about
+            # looking at it. Turning those away was this application refusing
+            # files that were never locked in the first place.
             raise RuntimeError(tr(
                 "Diese PDF ist passwortgeschützt.\n"
                 "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen."))

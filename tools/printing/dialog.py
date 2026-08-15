@@ -1130,8 +1130,8 @@ class PrintDialog(QDialog):
         orient_idx = self.orient_combo.currentIndex()
 
         try:
-            from pypdf import PdfReader
-            if PdfReader(self.pdf_path, strict=False).is_encrypted:
+            from tools.pdf_access import is_locked
+            if is_locked(self.pdf_path):
                 self.status_lbl.setText(
                     tr("Fehler: PDF ist passwortgeschützt — "
                        "bitte zuerst entsperren."))

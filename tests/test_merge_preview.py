@@ -395,7 +395,6 @@ def test_opening_a_bad_file_reports_instead_of_crashing():
         broken = os.path.join(tmp, "broken.pdf")
         open(broken, "wb").write(b"%PDF-1.4 truncated, not a real pdf")
         cases.append(("corrupt pdf", broken))
-        cases.append(("encrypted pdf", FX["encrypted"]))
 
         for label, path in cases:
             before = len(said)
@@ -404,6 +403,18 @@ def test_opening_a_bad_file_reports_instead_of_crashing():
             assert len(said) > before, f"{label}: opened with no message at all"
         assert vp.tabs.count() == 0, \
             f"{vp.tabs.count()} tab(s) opened for files that cannot be read"
+
+        # A locked file is a question, not a failure: it asks for the password
+        # and opens nothing if the question is declined.
+        import tools.pdf_access as ACCESS
+        real_ask = ACCESS.ask_password
+        ACCESS.ask_password = lambda path, parent=None: None      # cancelled
+        try:
+            vp.open_file(FX["encrypted"])
+            _spin(10, 0.01)
+        finally:
+            ACCESS.ask_password = real_ask
+        assert vp.tabs.count() == 0, "a cancelled password prompt opened a tab"
 
         # a failed open must not become the file reopened at next startup
         s = QSettings("CopyShop", "PDFSuite")

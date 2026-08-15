@@ -523,3 +523,61 @@ def test_the_wheel_does_not_change_a_setting_it_is_only_passing_over():
 
     area.deleteLater(); _app.processEvents()
     return "settings untouched, panel still scrolls, scroll bar still works"
+
+
+def test_a_restricted_pdf_opens_and_a_locked_one_asks_for_the_password():
+    """"Password-protected" is two different files and this refused both.
+
+    Most of them are *restricted*: an owner password stops copying or printing
+    and the user password is empty. pikepdf and pdfium open one with no
+    password at all, which is how every other viewer shows it. This app tested
+    PdfReader.is_encrypted, true of both kinds, and turned them away at the
+    door — so files that open everywhere else did not open here.
+
+    The rest are *locked*: a real user password, and nothing can read a page
+    without it. Those are worth asking about, and now it asks."""
+    from tools.pdf_access import encryption_state, is_locked, unlock_to_temp
+    import tools.pdf_access as ACCESS
+    from tools.viewer.panel import PageViewerPanel
+    from pypdf import PdfReader
+
+    assert encryption_state(FX["normal"]) == "open"
+    assert encryption_state(FX["restricted"]) == "restricted", \
+        "an owner-password file was not recognised as merely restricted"
+    assert encryption_state(FX["encrypted"]) == "locked"
+    assert not is_locked(FX["restricted"]), \
+        "a file every other viewer opens was treated as needing a password"
+
+    vp = PageViewerPanel(); vp.resize(800, 600); vp.show()
+    asked = []
+    real_ask = ACCESS.ask_password
+    try:
+        ACCESS.ask_password = lambda path, parent=None: asked.append(path)
+        # Restricted: opens, and nothing is asked.
+        vp.open_file(FX["restricted"])
+        _spin(40)
+        assert vp.tabs.count() == 1, "a restricted PDF still refused to open"
+        assert not asked, "a restricted PDF asked for a password it does not need"
+
+        # Locked, answered correctly: opens the decrypted copy.
+        ACCESS.ask_password = lambda path, parent=None: (asked.append(path), "u")[1]
+        vp.open_file(FX["encrypted"])
+        _spin(60)
+        assert asked, "a locked PDF opened without asking for anything"
+        assert vp.tabs.count() == 2, "the right password did not open the file"
+        opened = vp.tabs.currentWidget().pdf_path
+        assert not PdfReader(opened, strict=False).is_encrypted, \
+            "the tab is on a file that still needs a password"
+    finally:
+        ACCESS.ask_password = real_ask
+        vp.deleteLater(); _app.processEvents()
+
+    # And the wrong password is refused rather than half-opening something.
+    try:
+        unlock_to_temp(FX["encrypted"], "not the password")
+        raise AssertionError("a wrong password was accepted")
+    except AssertionError:
+        raise
+    except Exception:
+        pass
+    return "restricted opens silently, locked asks once, wrong password refused"
