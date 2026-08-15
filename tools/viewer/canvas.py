@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QWidget, QApplication, QMenu, QSizePolicy
 from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtGui import QColor, QPainter, QPen, QKeySequence, QBrush, QCursor
 from tools.i18n import tr
-from tools.theme import _TV
+from tools.theme import PAPER, _TV
 
 
 class PdfPageCanvas(QWidget):
@@ -51,6 +51,23 @@ class PdfPageCanvas(QWidget):
         self._offset_x  = offset_x
         self._offset_y  = offset_y
         self._page_rect = page_rect
+        self.update()
+
+    def show_placeholder(self, x, y, w, h):
+        """An empty sheet, while the page behind it is still rendering.
+
+        Scrolling through a long document must not wait for anything: pages
+        that have not been rendered yet stand in as blank paper of the right
+        size, so the document keeps its shape and its scrollbar under you and
+        the real page arrives underneath when it is ready.
+        """
+        self._pixmap    = None
+        self._chars     = []
+        self._sel_start = -1
+        self._sel_end   = -1
+        self._offset_x  = int(x)
+        self._offset_y  = int(y)
+        self._page_rect = (int(x), int(y), int(w), int(h))
         self.update()
 
     def clear(self):
@@ -133,6 +150,16 @@ class PdfPageCanvas(QWidget):
         p.fillRect(self.rect(), QColor(_TV['viewer_bg']))
 
         if not self._pixmap:
+            # A page still rendering: draw the sheet it will be, so scrolling
+            # past it looks like a document rather than a hole. Only when its
+            # size is known — with nothing to go on there is nothing honest to
+            # draw.
+            if self._page_rect is not None:
+                rx, ry, rw, rh = self._page_rect
+                p.fillRect(int(rx), int(ry), int(rw), int(rh), QColor(PAPER))
+                p.setPen(QPen(QColor(0, 0, 0, 45), 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(int(rx), int(ry), int(rw) - 1, int(rh) - 1)
             p.end()
             return
 

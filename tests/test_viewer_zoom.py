@@ -659,3 +659,54 @@ def test_saving_over_the_open_file_does_not_leave_the_old_render_on_screen():
     finally:
         vp.deleteLater(); _app.processEvents()
     return "the rewritten file is what is shown"
+
+
+def test_the_wheel_scrolls_past_pages_that_have_not_rendered():
+    """Turning a page must never wait for a render.
+
+    The wheel only turned the page `elif self._render_task is None` — on a
+    simple document a render is in flight for a few milliseconds and nobody
+    notices, on a complex one it is in flight nearly always. Scrolling towards
+    a page further on therefore stopped dead at the first slow page in the way.
+    Measured on eight heavy pages: seven turns in 0.3 s once the gate is gone,
+    against one turn in 1.6 s with it.
+
+    The render is cancelled and re-aimed by _render() as it always was; the
+    page that has not arrived yet stands in as blank paper."""
+    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtGui import QWheelEvent
+    from PyQt6.QtCore import Qt as _Qt
+
+    src, want = _distinct_pages_pdf("wheel_pages.pdf")
+    vp, sv = _open_single_view(src, 900, 700)
+    try:
+        # Hold every render back, so a render is outstanding for the whole of
+        # this — the state the gate used to refuse to turn a page in.
+        held = []
+        real_submit = _render_queue.submit
+        _render_queue.submit = lambda task, pri=1: held.append(task)
+        try:
+            sv._render()          # puts a task in flight and leaves it there
+            _spin(2)
+            start = sv._current
+            for _ in range(len(want) * 2):
+                e = QWheelEvent(QPointF(400, 300), QPointF(400, 300),
+                                QPoint(0, -120), QPoint(0, -120),
+                                _Qt.MouseButton.NoButton,
+                                _Qt.KeyboardModifier.NoModifier,
+                                _Qt.ScrollPhase.NoScrollPhase, False)
+                sv.wheelEvent(e)
+                _spin(1)
+                if sv._current == len(want) - 1:
+                    break
+            reached = sv._current
+        finally:
+            _render_queue.submit = real_submit
+            for task in held:
+                task.cancel()
+        assert reached == len(want) - 1, (
+            f"the wheel got from page {start+1} to page {reached+1} of "
+            f"{len(want)} while a render was outstanding")
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return f"reached page {len(want)} with a render in flight throughout"

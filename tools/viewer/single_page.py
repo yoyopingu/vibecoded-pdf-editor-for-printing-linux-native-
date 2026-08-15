@@ -399,17 +399,23 @@ class SinglePageView(QWidget):
         max_sy  = max(0.0, (disp_h or 0.0) - avail_h)
         step    = max(50.0, avail_h * 0.18)
 
+        # A page turn is never refused. It used to be skipped whenever a render
+        # was in flight, which on a simple document is a few milliseconds and
+        # on a complex one is most of the time — so scrolling towards a page
+        # further on stopped dead at the first slow page in the way. The render
+        # is cancelled and re-aimed instead, and the page that has not arrived
+        # yet stands in as blank paper.
         if dy < 0:   # wheel down → scroll down, then next page
             if max_sy > 0 and self._scroll_y < max_sy - 0.5:
                 self._scroll_y = min(self._scroll_y + step, max_sy)
                 self._render_preview(); self._schedule_settle()
-            elif self._render_task is None:
+            else:
                 self.next_page()          # lands at top of next page (scroll_y=0)
         else:        # wheel up → scroll up, then prev page at its BOTTOM
             if self._scroll_y > 0.5:
                 self._scroll_y = max(self._scroll_y - step, 0.0)
                 self._render_preview(); self._schedule_settle()
-            elif self._render_task is None:
+            else:
                 self.prev_page(start_at_bottom=True)
         e.accept()
 
@@ -490,6 +496,25 @@ class SinglePageView(QWidget):
         return (self._last_pm is not None and self._last_zoom > 0
                 and self._last_pm_key is not None
                 and self._last_pm_key == self._current_page_key())
+
+    def _show_empty_sheet(self, src_path, orig, rot, avail_w, avail_h):
+        """Blank paper the size this page will be, while it renders.
+
+        The size comes from whatever already knows it — the size cache, or a
+        previous render of the same page. With nothing to go on the canvas is
+        cleared instead of guessing: a sheet of the wrong shape that then
+        jumps is worse than none.
+        """
+        w_pt, h_pt = self._known_page_size(src_path, orig, rot)
+        if w_pt <= 0 or h_pt <= 0:
+            self._view.clear()
+            return
+        scale = _target_scale(avail_w, avail_h, self._zoom, w_pt, h_pt)
+        page_px_w, page_px_h = page_px_size(w_pt, h_pt, scale, 0)
+        self._place_scroll(page_px_w, page_px_h, avail_w, avail_h)
+        ox = max(0.0, (avail_w - page_px_w) / 2.0) - self._scroll_x
+        oy = max(0.0, (avail_h - page_px_h) / 2.0) - self._scroll_y
+        self._view.show_placeholder(ox, oy, page_px_w, page_px_h)
 
     def _place_scroll(self, page_px_w, page_px_h, avail_w, avail_h):
         """Clamp the scroll to the page, honouring a pending "start at bottom".
@@ -605,9 +630,10 @@ class SinglePageView(QWidget):
             src_rect = (0, 0, self._last_pm.width(), self._last_pm.height())
             src_scale = self._last_pm.width() / self._page_w_pt
         if src_pm is None or src_scale <= 0:
-            # Nothing of this page to stretch. Clear rather than leave the
-            # previous page sitting there while this one renders.
-            self._view.clear()
+            # Nothing of this page to stretch. An empty sheet rather than the
+            # previous page left sitting there while this one renders.
+            ox, oy = self._page_origin(page_px_w, page_px_h)
+            self._view.show_placeholder(ox, oy, page_px_w, page_px_h)
             self._showing_provisional = True
             return
         f = scale / src_scale
@@ -960,10 +986,10 @@ class SinglePageView(QWidget):
                 self._view.set_page(pm, [], off_x, off_y)
                 self._showing_provisional = True
             else:
-                # Nothing of this page to show yet. Blank, not the page before
-                # it: leaving the last render on screen is how a slow document
-                # came to look like the same page over and over.
-                self._view.clear()
+                # Nothing of this page to show yet. An empty sheet, not the page
+                # before it: leaving the last render on screen is how a slow
+                # document came to look like the same page over and over.
+                self._show_empty_sheet(src_path, orig, rot, avail_w, avail_h)
                 self._showing_provisional = True
 
         task = _PageRenderTask(gen, src_path, orig, rot,
