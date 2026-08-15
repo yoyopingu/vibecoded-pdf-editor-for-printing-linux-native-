@@ -710,3 +710,67 @@ def test_the_wheel_scrolls_past_pages_that_have_not_rendered():
     finally:
         vp.deleteLater(); _app.processEvents()
     return f"reached page {len(want)} with a render in flight throughout"
+
+
+def test_a_render_that_fails_is_retried_and_never_leaves_the_page_blank():
+    """A render returning nothing meant two different things and was treated as
+    one: cancelled because a newer render is coming, or failed.
+
+    Abandoning a cancelled render is right — another is already on its way.
+    Abandoning a failed one leaves the page blank for as long as it is on
+    screen, because nothing else is going to ask for it. That is what "the
+    biggest page sometimes will not render at all" looks like from outside, and
+    the biggest page is the one whose bitmap is most likely to fail.
+
+    Every stand-in is taken away first — no cache, no thumbnail, no previous
+    render of this page — so what ends up on screen can only have come from
+    the failure path itself."""
+    import tools.render.queue as Q
+    from tools.render.caches import _ThumbnailCache
+
+    src, _ = _distinct_pages_pdf("retry_pages.pdf")
+    vp, sv = _open_single_view(src, 900, 700)
+    try:
+        real = Q.render_window
+
+        def strip_every_stand_in():
+            _FullPageCache.invalidate()
+            _ThumbnailCache.invalidate()
+            sv._last_pm = None
+            sv._last_pm_key = None
+            sv._view.clear()
+
+        # 1. Fails once, then renders. The page has to arrive.
+        calls = [0]
+        def fail_once(*a, **k):
+            calls[0] += 1
+            return None if calls[0] == 1 else real(*a, **k)
+        strip_every_stand_in()
+        Q.render_window = fail_once
+        try:
+            sv._render()
+            _settle(vp, lambda: sv._render_task is None and sv._region_task is None,
+                    tries=400)
+            _spin(10)
+            recovered = sv._view._pixmap is not None
+        finally:
+            Q.render_window = real
+        assert recovered, "one failed render left the page blank"
+
+        # 2. Never renders. Something has to be shown — the placeholder — and
+        #    it must not be blank paper pretending to be the page.
+        strip_every_stand_in()
+        Q.render_window = lambda *a, **k: None
+        try:
+            sv._render()
+            _settle(vp, lambda: sv._render_task is None and sv._region_task is None,
+                    tries=400)
+            _spin(10)
+            shown = sv._view._pixmap
+        finally:
+            Q.render_window = real
+        assert shown is not None, \
+            "a page that cannot be rendered at all was left blank"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "recovers from one failure, and shows the placeholder after two"

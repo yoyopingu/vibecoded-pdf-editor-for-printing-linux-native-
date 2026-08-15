@@ -29,6 +29,22 @@ from tools.render.region import (page_chars, page_px_size, page_size_pt,
                                  render_region, target_scale)
 
 
+def _retry_scale(scale):
+    """Half the scale, for a second attempt at a render that failed.
+
+    A render returns nothing for two very different reasons: it was cancelled
+    because a newer one is coming, or it failed. The first is routine and
+    correct to abandon. The second means nothing else is going to ask for this
+    page — so abandoning it leaves the page blank for as long as it is on
+    screen, which is exactly what "the biggest page sometimes will not render"
+    looks like from the outside.
+
+    Halving is the retry that has a chance of working: the failure that a big
+    page hits and a small one does not is a bitmap that could not be allocated.
+    """
+    return max(0.01, scale * 0.5)
+
+
 def _thumb_render_width(width, cap=2400):
     """Round a wanted thumbnail width up onto a coarse ladder.
 
@@ -236,6 +252,17 @@ class _RegionRenderTask:
             img = render_region(self._path, self._orig, self._scale,
                                 px0, py0, w, h, self._rot,
                                 should_cancel=lambda: not self._active)
+            if img is None and self._active:
+                # As in _PageRenderTask: cancelled is routine, failed is not.
+                # A window that fails is one nobody will ask for again.
+                logging.warning("region render failed for %s page %s; retrying",
+                                self._path, self._orig)
+                img = render_region(self._path, self._orig, self._scale,
+                                    px0, py0, w, h, self._rot,
+                                    should_cancel=lambda: not self._active)
+                if img is None:
+                    logging.error("region render failed twice for %s page %s",
+                                  self._path, self._orig)
             if img is None or not self._active:
                 return
             try:
@@ -368,6 +395,25 @@ class _PageRenderTask:
             img = render_window(self._path, self._orig, px_w, px_h,
                                 rotation=self._rot,
                                 should_cancel=lambda: not self._active)
+            if img is None and self._active:
+                # Failed rather than cancelled: nothing else will ask for this
+                # page. Try once at half the size, which is what a bitmap that
+                # could not be allocated needs, and if that fails too show the
+                # placeholder rather than leaving the page blank forever.
+                logging.warning("render failed for %s page %s at scale %.3f; "
+                                "retrying smaller", self._path, self._orig, scale)
+                scale = _retry_scale(scale)
+                px_w, px_h = page_px_size(raw_w_pt, raw_h_pt, scale, self._rot)
+                img = render_window(self._path, self._orig, px_w, px_h,
+                                    rotation=self._rot,
+                                    should_cancel=lambda: not self._active)
+                if img is None and self._active:
+                    logging.error("render failed twice for %s page %s",
+                                  self._path, self._orig)
+                    self._emit(_render_image(self._path, self._orig,
+                                             max(1, self._aw - 16), self._rot),
+                               page_w_pt, page_h_pt, scale, [], False)
+                    return
             if img is None or not self._active:
                 return
 
