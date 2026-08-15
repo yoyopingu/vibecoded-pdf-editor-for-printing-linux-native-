@@ -460,3 +460,59 @@ def test_every_performance_setting_changes_something():
     finally:
         dlg.deleteLater(); _app.processEvents()
     return "pre-render and cache size both bite; the thread count is gone"
+
+
+def test_the_wheel_does_not_change_a_setting_it_is_only_passing_over():
+    """Scrolling a dialog must not alter the settings the pointer crosses.
+
+    Scrolling down the print dialog quietly changed the paper size, the duplex
+    edge or the colour mode on the way past — and that dialog is a column of
+    dropdowns whose whole job is deciding what comes out of a printer. The same
+    applies to spin boxes and sliders everywhere else.
+
+    A control takes the wheel once it holds keyboard focus, which means it was
+    clicked or tabbed into deliberately. Otherwise the wheel carries on to
+    whatever scrolls behind it."""
+    from PyQt6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QSpinBox, QSlider
+    from PyQt6.QtCore import Qt, QPoint, QPointF
+    from PyQt6.QtGui import QWheelEvent
+    from tools.shell.inputs import install
+
+    install(_app)
+    w = QWidget(); lay = QVBoxLayout(w)
+    combo = QComboBox(); combo.addItems(["A4", "A3", "Letter"]); combo.setCurrentIndex(0)
+    spin  = QSpinBox(); spin.setRange(0, 99); spin.setValue(5)
+    slide = QSlider(Qt.Orientation.Horizontal); slide.setRange(0, 50); slide.setValue(10)
+    for x in (combo, spin, slide):
+        lay.addWidget(x)
+    w.show(); w.raise_(); w.activateWindow()
+    _spin(4, 0.0)
+
+    def wheel(widget):
+        pos = QPointF(widget.rect().center())
+        ev = QWheelEvent(pos, widget.mapToGlobal(widget.rect().center()).toPointF(),
+                         QPoint(0, -120), QPoint(0, -120), Qt.MouseButton.NoButton,
+                         Qt.KeyboardModifier.NoModifier,
+                         Qt.ScrollPhase.NoScrollPhase, False)
+        _app.sendEvent(widget, ev)
+        _spin(2, 0.0)
+
+    # Nothing focused: hovering and scrolling must leave every one of them alone.
+    w.setFocus(); _spin(2, 0.0)
+    before = (combo.currentIndex(), spin.value(), slide.value())
+    for widget in (combo, spin, slide):
+        wheel(widget)
+    after = (combo.currentIndex(), spin.value(), slide.value())
+    assert after == before, (
+        f"the wheel changed a setting it was only passing over: {before} -> {after}")
+
+    # Clicked into on purpose: the wheel is meant for it now.
+    spin.setFocus(); _spin(3, 0.0)
+    assert spin.hasFocus(), "could not focus the spin box to test the other half"
+    focused_before = spin.value()
+    wheel(spin)
+    assert spin.value() != focused_before, \
+        "a control the user has focused should still take the wheel"
+
+    w.deleteLater(); _app.processEvents()
+    return "hovered controls ignore it, the focused one takes it"
