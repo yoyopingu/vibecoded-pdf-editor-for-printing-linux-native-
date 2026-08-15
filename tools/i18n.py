@@ -518,6 +518,9 @@ _EN: dict[str, str] = {
         "unlock the file and is not stored.",
     "Diese PDF ist passwortgeschützt.\nBitte zuerst entsperren (Passwort entfernen), dann erneut öffnen.":
         "This PDF is password-protected.\nPlease unlock it first (remove the password), then reopen.",
+    "Lineale und Hilfslinien": "Rulers and guides",
+    "Hilfslinien dieser Seite entfernen": "Clear guides on page",
+    "Alle Hilfslinien entfernen": "Clear all guides",
     "Keine PDF geladen.": "No PDF loaded.",
     "Keine Seiten ausgewaehlt.": "No pages selected.",
     "Keine Seiten ausgewaehlt": "No pages selected",

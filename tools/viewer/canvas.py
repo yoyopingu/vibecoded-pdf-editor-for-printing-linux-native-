@@ -6,10 +6,11 @@ boxes that come back with a render, the drag that picks a range out of them, and
 the copy.
 """
 from PyQt6.QtWidgets import QWidget, QApplication, QMenu, QSizePolicy
-from PyQt6.QtCore import Qt, QRect
+from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QKeySequence, QBrush, QCursor
 from tools.i18n import tr
 from tools.theme import PAPER, _TV
+from tools.viewer.rulers import GUIDE_COLOUR
 
 
 class PdfPageCanvas(QWidget):
@@ -17,6 +18,12 @@ class PdfPageCanvas(QWidget):
     Zeigt eine PDF-Seite als Pixmap und ermöglicht
     Textauswahl per Maus sowie Kopieren mit Strg+C.
     """
+
+    # A guide was dragged to a new place: axis, which one, where it ended up in
+    # widget pixels. The view turns that back into a page coordinate.
+    guide_moved = pyqtSignal(str, int, float)
+    # Something was repainted, so the rulers need their scale again.
+    repainted = pyqtSignal()
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap     = None
@@ -27,11 +34,60 @@ class PdfPageCanvas(QWidget):
         self._offset_x   = 0
         self._offset_y   = 0
         self._page_rect  = None   # sheet outline when the pixmap is a region
+        # Guides, in this widget's pixels. The view owns them in page
+        # coordinates and hands down where they land on screen — see
+        # tools/viewer/rulers.py.
+        self._guides_h   = []     # y positions
+        self._guides_v   = []     # x positions
+        self._preview    = None   # ("h"|"v", px) while one is being dragged out
+        self._drag_guide = None   # ("h"|"v", index) while one is being moved
 
         self.setStyleSheet(f"background:{_TV['viewer_bg']};")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
+
+    # ── guides ───────────────────────────────────────────────────────────────
+
+    GUIDE_GRAB_PX = 4          # how near the pointer counts as "on the guide"
+
+    def set_guides(self, horizontal, vertical):
+        """Where the guides sit in widget pixels, from the view."""
+        if horizontal != self._guides_h or vertical != self._guides_v:
+            self._guides_h = list(horizontal)
+            self._guides_v = list(vertical)
+            self.update()
+
+    def set_guide_preview(self, preview):
+        """("h"|"v", px) while one is being dragged out of a ruler, or None."""
+        if preview != self._preview:
+            self._preview = preview
+            self.update()
+
+    def _guide_at(self, point):
+        """The guide under `point` as ("h"|"v", index), or None."""
+        for i, y in enumerate(self._guides_h):
+            if abs(point.y() - y) <= self.GUIDE_GRAB_PX:
+                return ("h", i)
+        for i, x in enumerate(self._guides_v):
+            if abs(point.x() - x) <= self.GUIDE_GRAB_PX:
+                return ("v", i)
+        return None
+
+    def _paint_guides(self, p):
+        pen = QPen(GUIDE_COLOUR, 1)
+        p.setPen(pen)
+        for y in self._guides_h:
+            p.drawLine(0, int(y), self.width(), int(y))
+        for x in self._guides_v:
+            p.drawLine(int(x), 0, int(x), self.height())
+        if self._preview is not None:
+            axis, pos = self._preview
+            p.setPen(QPen(GUIDE_COLOUR, 1, Qt.PenStyle.DashLine))
+            if axis == "h":
+                p.drawLine(0, int(pos), self.width(), int(pos))
+            else:
+                p.drawLine(int(pos), 0, int(pos), self.height())
 
     def set_page(self, pixmap, chars, offset_x, offset_y, page_rect=None):
         """
@@ -52,6 +108,7 @@ class PdfPageCanvas(QWidget):
         self._offset_y  = offset_y
         self._page_rect = page_rect
         self.update()
+        self.repainted.emit()
 
     def show_placeholder(self, x, y, w, h):
         """An empty sheet, while the page behind it is still rendering.
@@ -81,6 +138,13 @@ class PdfPageCanvas(QWidget):
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
+            # Within a few pixels of a guide, the drag moves the guide. Only
+            # then — anywhere else on the page this is still a text selection,
+            # which is what the canvas is mostly for.
+            grabbed = self._guide_at(e.position().toPoint())
+            if grabbed is not None:
+                self._drag_guide = grabbed
+                return
             idx = self._char_at(e.position().toPoint())
             self._sel_start = idx
             self._sel_end   = idx
@@ -88,6 +152,22 @@ class PdfPageCanvas(QWidget):
             self.update()
 
     def mouseMoveEvent(self, e):
+        if self._drag_guide is not None:
+            axis, index = self._drag_guide
+            point = e.position().toPoint()
+            store = self._guides_h if axis == "h" else self._guides_v
+            if 0 <= index < len(store):
+                store[index] = point.y() if axis == "h" else point.x()
+                self.update()
+            return
+        if not self._dragging:
+            # Over a guide, say so: the cursor is the only hint that the line
+            # can be picked up at all.
+            on_guide = self._guide_at(e.position().toPoint())
+            self.setCursor(QCursor(
+                Qt.CursorShape.SplitVCursor if on_guide and on_guide[0] == "h"
+                else Qt.CursorShape.SplitHCursor if on_guide
+                else Qt.CursorShape.IBeamCursor))
         if self._dragging:
             idx = self._char_at(e.position().toPoint())
             self._sel_end = idx
@@ -95,6 +175,13 @@ class PdfPageCanvas(QWidget):
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
+            if self._drag_guide is not None:
+                axis, index = self._drag_guide
+                self._drag_guide = None
+                store = self._guides_h if axis == "h" else self._guides_v
+                if 0 <= index < len(store):
+                    self.guide_moved.emit(axis, index, float(store[index]))
+                return
             self._dragging = False
 
     def mouseDoubleClickEvent(self, e):
@@ -160,6 +247,7 @@ class PdfPageCanvas(QWidget):
                 p.setPen(QPen(QColor(0, 0, 0, 45), 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(int(rx), int(ry), int(rw) - 1, int(rh) - 1)
+            self._paint_guides(p)
             p.end()
             return
 
@@ -193,6 +281,8 @@ class PdfPageCanvas(QWidget):
                         max(1, int(x1 - x0)),
                         max(1, int(y1 - y0))
                     ))
+
+        self._paint_guides(p)
         p.end()
 
     # ── Hilfsfunktionen ──────────────────────────────────────────────────────

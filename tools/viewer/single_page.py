@@ -9,7 +9,9 @@ in the meantime. A gesture shows a cheap stand-in per step and renders once,
 exactly, when it stops.
 """
 import math
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QSizePolicy
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+                             QPushButton, QLabel, QFrame, QApplication,
+                             QSizePolicy)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QPixmap
 from tools.colorspace import (cached_page_colorspaces, describe,
@@ -20,6 +22,7 @@ from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
 from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
+from tools.viewer.rulers import RULER_THICKNESS, RulerBar
 from tools.viewer.tab_base import owning_tab
 from tools.theme import _PREV_BTN, _TV, _register_themed
 
@@ -89,6 +92,11 @@ class SinglePageView(QWidget):
         self._render_signals.ready.connect(self._on_page_ready)
         # Pre-render (background warm-up) state
         self._prerender_tasks: list = []
+        # Guides, per page, in points from the sheet's top-left corner. Page
+        # coordinates rather than pixels so a guide 20 mm into the sheet stays
+        # 20 mm into the sheet through a zoom, a scroll and a page turn.
+        self._guides: dict = {}
+        self._rulers_on = False
         self._setup()
         _register_themed(self)
 
@@ -102,12 +110,37 @@ class SinglePageView(QWidget):
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
 
-        # Seiten-Anzeigebereich
+        # Seiten-Anzeigebereich, mit Linealen an den Kanten (Strg+R)
         self._view = PdfPageCanvas()
         self._view.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding)
-        main.addWidget(self._view, 1)
+        self._ruler_top  = RulerBar(horizontal=True)
+        self._ruler_left = RulerBar(horizontal=False)
+        self._ruler_corner = QWidget()
+        self._ruler_corner.setFixedSize(RULER_THICKNESS, RULER_THICKNESS)
+        page_area = QGridLayout()
+        page_area.setContentsMargins(0, 0, 0, 0)
+        page_area.setSpacing(0)
+        page_area.addWidget(self._ruler_corner, 0, 0)
+        page_area.addWidget(self._ruler_top,    0, 1)
+        page_area.addWidget(self._ruler_left,   1, 0)
+        page_area.addWidget(self._view,         1, 1)
+        page_area.setRowStretch(1, 1)
+        page_area.setColumnStretch(1, 1)
+        main.addLayout(page_area, 1)
+        # Off until Strg+R, as in Acrobat. Hidden here rather than through
+        # _set_rulers_visible, which also syncs the toolbar button that the
+        # info bar has not built yet.
+        for w in (self._ruler_top, self._ruler_left, self._ruler_corner):
+            w.setVisible(False)
+
+        for bar in (self._ruler_top, self._ruler_left):
+            bar.guide_previewed.connect(self._preview_guide)
+            bar.guide_dropped.connect(self._drop_guide)
+            bar.clear_requested.connect(self._clear_guides)
+        self._view.guide_moved.connect(self._guide_moved)
+        self._view.repainted.connect(self._sync_rulers)
 
         # Rechte Seitenleiste (Navigation)
         self._nav_side = QWidget()
@@ -160,6 +193,15 @@ class SinglePageView(QWidget):
         il.addWidget(self._color_lbl)
 
         il.addStretch()
+
+        # Lineale — Strg+R schaltet sie ebenfalls um, aber ein Kuerzel allein
+        # findet niemand, der nicht weiss, dass es die Lineale gibt.
+        self._ruler_btn = QPushButton("⊞")
+        self._ruler_btn.setCheckable(True)
+        self._ruler_btn.setFixedSize(*_PREV_BTN)
+        self._ruler_btn.setToolTip(tr("Lineale und Hilfslinien") + "  (Strg+R)")
+        self._ruler_btn.clicked.connect(lambda on: self._set_rulers_visible(on))
+        il.addWidget(self._ruler_btn)
 
         # Zoom-Steuerung
         self._zoom_btns = []
@@ -515,6 +557,105 @@ class SinglePageView(QWidget):
         ox = max(0.0, (avail_w - page_px_w) / 2.0) - self._scroll_x
         oy = max(0.0, (avail_h - page_px_h) / 2.0) - self._scroll_y
         self._view.show_placeholder(ox, oy, page_px_w, page_px_h)
+
+    # ── rulers and guides ────────────────────────────────────────────────────
+
+    MM_PER_PT = 25.4 / 72.0
+
+    def _set_rulers_visible(self, on):
+        self._rulers_on = bool(on)
+        for w in (self._ruler_top, self._ruler_left, self._ruler_corner):
+            w.setVisible(self._rulers_on)
+        # Ctrl+R and the button are two ways to the same switch; the button has
+        # to show the state even when the shortcut was what changed it.
+        if self._ruler_btn.isChecked() != self._rulers_on:
+            self._ruler_btn.setChecked(self._rulers_on)
+        if self._rulers_on:
+            self._sync_rulers()
+
+    def toggle_rulers(self):
+        """Strg+R, as in Acrobat."""
+        self._set_rulers_visible(not self._rulers_on)
+
+    def _sheet_on_screen(self):
+        """(left_px, top_px, px_per_pt) of the sheet, or None if unmeasured.
+
+        The one conversion between a place on the page and a place on screen.
+        Everything about guides and rulers goes through it, so they cannot
+        drift apart from the page they are measuring.
+        """
+        scale = self._display_scale(self._zoom)
+        if scale is None or self._page_w_pt <= 0:
+            return None
+        page_px_w, page_px_h = self._page_px(scale)
+        ox, oy = self._page_origin(page_px_w, page_px_h)
+        if page_px_w <= 0:
+            return None
+        return ox, oy, page_px_w / self._page_w_pt
+
+    def _sync_rulers(self):
+        """Put the rulers and the guides where the page currently is."""
+        if not self._rulers_on:
+            return
+        sheet = self._sheet_on_screen()
+        if sheet is None:
+            self._ruler_top.set_scale(0, 0)
+            self._ruler_left.set_scale(0, 0)
+            self._view.set_guides([], [])
+            return
+        ox, oy, px_per_pt = sheet
+        px_per_mm = px_per_pt / self.MM_PER_PT
+        self._ruler_top.set_scale(ox, px_per_mm)
+        self._ruler_left.set_scale(oy, px_per_mm)
+        page = self._guides.get(self._current_page_key(), {"h": [], "v": []})
+        self._view.set_guides([oy + y * px_per_pt for y in page["h"]],
+                              [ox + x * px_per_pt for x in page["v"]])
+
+    def _preview_guide(self, axis, px_along_ruler):
+        """Dashed line following the drag out of a ruler."""
+        if not self._rulers_on:
+            return
+        self._view.set_guide_preview((axis, px_along_ruler))
+
+    def _drop_guide(self, axis, px_along_ruler):
+        """A guide was let go. Off the page it is discarded, which is also how
+        an unwanted one is thrown away: drag it back over its ruler."""
+        self._view.set_guide_preview(None)
+        sheet = self._sheet_on_screen()
+        if sheet is None:
+            return
+        ox, oy, px_per_pt = sheet
+        origin = oy if axis == "h" else ox
+        extent = (self._page_h_pt if axis == "h" else self._page_w_pt) * px_per_pt
+        if not (-1 <= px_along_ruler - origin <= extent + 1):
+            return          # let go outside the sheet: nothing to measure from
+        pt = (px_along_ruler - origin) / px_per_pt
+        page = self._guides.setdefault(self._current_page_key(),
+                                       {"h": [], "v": []})
+        page[axis].append(pt)
+        self._sync_rulers()
+
+    def _guide_moved(self, axis, index, px):
+        """A guide was dragged across the page — or off it, which removes it."""
+        sheet = self._sheet_on_screen()
+        page = self._guides.get(self._current_page_key())
+        if sheet is None or page is None or not (0 <= index < len(page[axis])):
+            return
+        ox, oy, px_per_pt = sheet
+        origin = oy if axis == "h" else ox
+        extent = (self._page_h_pt if axis == "h" else self._page_w_pt) * px_per_pt
+        if not (-1 <= px - origin <= extent + 1):
+            page[axis].pop(index)
+        else:
+            page[axis][index] = (px - origin) / px_per_pt
+        self._sync_rulers()
+
+    def _clear_guides(self, everywhere):
+        if everywhere:
+            self._guides.clear()
+        else:
+            self._guides.pop(self._current_page_key(), None)
+        self._sync_rulers()
 
     def _place_scroll(self, page_px_w, page_px_h, avail_w, avail_h):
         """Clamp the scroll to the page, honouring a pending "start at bottom".
@@ -1206,6 +1347,9 @@ class SinglePageView(QWidget):
                 self._zoom_fit(); return
             if k == Qt.Key.Key_1:
                 self._zoom_actual_size(); return
+            # ── Rulers (Acrobat: Ctrl+R) ─────────────────────────────────────
+            if k == Qt.Key.Key_R:
+                self.toggle_rulers(); return
             # ── Navigation ───────────────────────────────────────────────────
             if k == Qt.Key.Key_Home:
                 self.go_to(1); return
