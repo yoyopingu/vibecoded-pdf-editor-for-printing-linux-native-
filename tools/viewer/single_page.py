@@ -22,7 +22,7 @@ from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
 from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
-from tools.viewer.rulers import RULER_THICKNESS, RulerBar
+from tools.viewer.rulers import RulerBar, RulerCorner
 from tools.viewer.tab_base import owning_tab
 from tools.theme import _PREV_BTN, _TV, _register_themed
 
@@ -117,8 +117,7 @@ class SinglePageView(QWidget):
             QSizePolicy.Policy.Expanding)
         self._ruler_top  = RulerBar(horizontal=True)
         self._ruler_left = RulerBar(horizontal=False)
-        self._ruler_corner = QWidget()
-        self._ruler_corner.setFixedSize(RULER_THICKNESS, RULER_THICKNESS)
+        self._ruler_corner = RulerCorner()
         page_area = QGridLayout()
         page_area.setContentsMargins(0, 0, 0, 0)
         page_area.setSpacing(0)

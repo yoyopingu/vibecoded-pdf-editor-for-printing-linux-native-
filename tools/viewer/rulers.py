@@ -33,6 +33,37 @@ from tools.theme import _TV
 RULER_THICKNESS = 22          # px; enough for a two-digit label and a tick
 GUIDE_COLOUR = QColor(0, 170, 230)
 
+# The bar is split across its width: labels near the outer edge, ticks growing
+# in from the inner one, and a gap between them. Ticks that reached back under
+# the numbers made both unreadable, so these are the only lengths that fit —
+# a major tick stops 6 px short of the label baseline.
+TICK_MAJOR     = 8
+TICK_MINOR     = 4
+LABEL_BASELINE = 10           # px from the outer edge
+
+
+class RulerCorner(QWidget):
+    """The square where the two rulers meet.
+
+    Left as a bare QWidget it showed through to whatever was behind it — a
+    hole punched in the corner of the page view. It paints the rulers' own
+    background and closes their two borders into one L, so the pair reads as a
+    single frame around the page instead of two strips with a gap.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(RULER_THICKNESS, RULER_THICKNESS)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(_TV['panel_bg']))
+        p.setPen(QPen(QColor(_TV['border']), 1))
+        w, h = self.width(), self.height()
+        p.drawLine(0, h - 1, w - 1, h - 1)     # meets the top ruler's underline
+        p.drawLine(w - 1, 0, w - 1, h - 1)     # meets the left ruler's edge
+        p.end()
+
 
 class RulerBar(QWidget):
     """One ruler. `horizontal` picks the top bar or the left one.
@@ -119,7 +150,7 @@ class RulerBar(QWidget):
             if pos < -2 or pos > length + 2:
                 continue
             major = (mm % labelled == 0)
-            size = RULER_THICKNESS - (7 if major else 4)
+            size = TICK_MAJOR if major else TICK_MINOR
             p.setPen(QPen(ink, 1))
             if self._horizontal:
                 p.drawLine(int(pos), RULER_THICKNESS - size, int(pos), RULER_THICKNESS - 1)
@@ -129,12 +160,12 @@ class RulerBar(QWidget):
                 p.setPen(QPen(text, 1))
                 label = str(mm)
                 if self._horizontal:
-                    p.drawText(int(pos) + 2, 9, label)
+                    p.drawText(int(pos) + 2, LABEL_BASELINE, label)
                 else:
                     # Down the bar rather than across it: a vertical ruler 22 px
                     # wide has no room for "150" written the usual way.
                     p.save()
-                    p.translate(9, int(pos) - 2)
+                    p.translate(LABEL_BASELINE, int(pos) - 2)
                     p.rotate(-90)
                     p.drawText(0, 0, label)
                     p.restore()
