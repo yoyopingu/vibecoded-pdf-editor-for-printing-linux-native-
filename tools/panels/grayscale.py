@@ -649,6 +649,12 @@ class GrayscalePanel(BasePanel):
             # Raised from a timer callback rather than from _run_action, so
             # _safe_run is not there to turn it into a log line.
             self.log.log(str(e), error=True)
+        except Exception as e:
+            # Nothing may escape from here. This is a QTimer callback, and an
+            # exception leaving one goes to the unhandled-exception hook rather
+            # than to the user, who is left looking at a tool that did nothing.
+            logging.exception("greyscale: conversion after the scan failed")
+            self.log.log(str(e), error=True)
 
     def _convert(self):
         src = self.require_pdf()

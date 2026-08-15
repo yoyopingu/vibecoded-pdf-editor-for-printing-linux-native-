@@ -6,6 +6,7 @@ BasePanel v3
 - Alles auf Main-Thread — keine Crashes
 - Ergebnisse werden automatisch in neuem Tab geöffnet
 """
+import logging
 import os
 import tempfile
 import traceback
@@ -149,6 +150,20 @@ def make_separator() -> QFrame:
     sep.setObjectName("separator")
     sep.setFrameShape(QFrame.Shape.HLine)
     return sep
+
+
+def _describe_os_error(exc):
+    """A file-system failure in the words of someone trying to save a file.
+
+    The path matters more than the errno: "cannot write here" is only useful
+    if it says where here is.
+    """
+    path = getattr(exc, "filename", None) or ""
+    reason = getattr(exc, "strerror", None) or str(exc)
+    if path:
+        return tr('Die Datei konnte nicht geschrieben werden:\n{p0}\n\n{p1}').format(
+            p0=path, p1=reason)
+    return tr('Die Datei konnte nicht geschrieben werden:\n{p0}').format(p0=reason)
 
 
 class CurrentFileBar(QWidget):
@@ -458,6 +473,17 @@ class BasePanel(QWidget):
             raise ValueError(tr(
                 "Diese PDF ist passwortgeschützt.\n"
                 "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen."))
+        # And a document with no pages in it, which every tool then failed at in
+        # its own way — "Accessing nonexistent PDF page number" from one,
+        # "Failed to load document (PDFium: Success)" from another.
+        try:
+            import pikepdf
+            with pikepdf.open(path) as _pdf:
+                empty = len(_pdf.pages) == 0
+        except Exception:
+            empty = False      # unreadable for another reason: let the tool say so
+        if empty:
+            raise ValueError(tr("Das PDF enthaelt keine Seiten."))
         # Only now flatten the page manager's view: the guards above have to run
         # on the real file (an encrypted one can't be copied page by page).
         return ensure_view_snapshot(path)
@@ -479,6 +505,14 @@ class BasePanel(QWidget):
             # Intentional, user-facing errors (no PDF, encrypted, bad input …):
             # show just the message, not a scary traceback.
             self.log.log(str(e), error=True)
+        except OSError as e:
+            # A read-only stick, a full disk, a folder that is no longer there.
+            # None of those is a bug in this application and none of them is
+            # helped by a traceback — but eight of the thirteen tools printed
+            # one, because "cannot write the file" arrived here as an
+            # unexpected exception like any other.
+            self.log.log(_describe_os_error(e), error=True)
+            logging.debug("tool could not write its output", exc_info=True)
         except Exception as e:
             # Unexpected error = likely a bug: keep the traceback for diagnosis.
             self.log.log(str(e), error=True)

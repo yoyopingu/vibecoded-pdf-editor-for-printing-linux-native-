@@ -499,6 +499,12 @@ _EN: dict[str, str] = {
     # ── Exceptions, tool status, combo items, section labels (final pass) ────────
     "Keine PDF geöffnet.\nÖffne zuerst eine PDF im Page Viewer (linke Seite).":
         "No PDF open.\nOpen a PDF in the Page Viewer first (left side).",
+    "Die Datei konnte nicht geschrieben werden:\n{p0}\n\n{p1}":
+        "The file could not be written:\n{p0}\n\n{p1}",
+    "Die Datei konnte nicht geschrieben werden:\n{p0}":
+        "The file could not be written:\n{p0}",
+    "Diese PDF enthält keine Formularfelder.\n\"Felder laden\" zeigt, was ausfüllbar ist.":
+        "This PDF has no form fields.\n\"Felder laden\" shows what can be filled in.",
     "Passwort erforderlich": "Password required",
     "Passwort falsch": "Wrong password",
     "Das Passwort wurde nicht akzeptiert. Erneut versuchen?":

@@ -142,6 +142,14 @@ def _fill_form(src, out, data, flatten, report):
     from pypdf import PdfReader, PdfWriter
     report(tr("Schreibe Datei …"))
     reader = PdfReader(src, strict=False); writer = PdfWriter(); writer.append(reader)
+    if not data:
+        # No fields were loaded, so there is nothing to fill in. pypdf answers
+        # this with "No /AcroForm dictionary in PDF of PdfWriter Object", which
+        # arrived as an unexpected exception and printed a traceback at someone
+        # who simply picked a PDF that is not a form.
+        raise ValueError(tr(
+            "Diese PDF enthält keine Formularfelder.\n"
+            "\"Felder laden\" zeigt, was ausfüllbar ist."))
     for page in writer.pages:
         writer.update_page_form_field_values(page, data)
     filled_fd, filled = tempfile.mkstemp(suffix=".pdf"); os.close(filled_fd)

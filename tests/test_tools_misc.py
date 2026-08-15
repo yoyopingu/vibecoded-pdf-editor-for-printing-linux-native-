@@ -330,3 +330,51 @@ def test_the_heavy_tools_hand_their_work_to_a_worker():
         cancel_owner(p)
     assert len(handed_off) >= 3, f"only {handed_off} were checked"
     return ", ".join(handed_off)
+
+
+def test_special_cases_are_reported_rather_than_dumped():
+    """A tool that cannot do its job must say why, not print a traceback.
+
+    Measured across all thirteen tools: an output path that cannot be written —
+    a read-only stick, a full disk, a folder that is gone — produced a
+    traceback from eight of them, because "cannot write the file" reached
+    _safe_run as an unexpected exception like any other. A document with no
+    pages produced "Accessing nonexistent PDF page number" from one tool and
+    "Failed to load document (PDFium: Success)" from another.
+
+    Neither is a bug in this application and neither is helped by a traceback."""
+    from tools.shell.window import TOOLS
+    import pikepdf
+
+    zero = os.path.join(_TMP, "edge_zero.pdf")
+    with pikepdf.new() as pdf:
+        pdf.save(zero)
+    ro_dir = os.path.join(_TMP, "edge_readonly")
+    os.makedirs(ro_dir, exist_ok=True)
+
+    def sweep(label, src, out_path):
+        dumped = []
+        for name, cls in TOOLS:
+            _open(src)
+            p = cls(); _sync_async(p)
+            p.save_pdf = lambda *a, **k: out_path
+            p.save_dir = lambda *a, **k: os.path.dirname(out_path)
+            p.open_result = lambda *a, **k: None
+            said = []
+            p.log.log = lambda m, *a, **k: said.append(str(m))
+            p._safe_run()
+            if any("Traceback" in m for m in said):
+                dumped.append(name)
+            p.deleteLater()
+        _app.processEvents()
+        assert not dumped, f"{label}: traceback shown by {dumped}"
+
+    sweep("a document with no pages", zero, os.path.join(_TMP, "edge_z_out.pdf"))
+
+    os.chmod(ro_dir, 0o500)
+    try:
+        sweep("an output path that cannot be written",
+              FX["normal"], os.path.join(ro_dir, "out.pdf"))
+    finally:
+        os.chmod(ro_dir, 0o700)
+    return f"{len(TOOLS)} tools, both cases reported as messages"
