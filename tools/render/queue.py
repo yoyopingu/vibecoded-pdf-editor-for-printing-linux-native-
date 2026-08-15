@@ -25,7 +25,8 @@ from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.document_cache import close_all
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough, _render_image
 from tools.render.raster import render_window
-from tools.render.region import page_chars, page_px_size, page_size_pt, render_region, snap_scale
+from tools.render.region import (page_chars, page_px_size, page_size_pt,
+                                 render_region, target_scale)
 
 
 def _thumb_render_width(width, cap=2400):
@@ -251,28 +252,13 @@ class _RegionRenderTask:
 
 
 def _target_scale(avail_w, avail_h, zoom, page_w_pt, page_h_pt, fallback=1.0):
-    """Pixels per point a page should be rendered at to fill `avail_w` x
-    `avail_h` at `zoom`, with MAX_RENDER_PX applied.
+    """The scale to *display* this page at, with MAX_RENDER_PX applied.
 
-    One function, called from both the GUI thread (deciding whether the cached
-    render is good enough) and the render thread (deciding what to render). The
-    two used to compute it separately, and any disagreement between them — a
-    snapped scale against an unsnapped one, say — is a page that re-renders on
-    every repaint, because the render never lands on the scale that was asked
-    for.
-
-    Snapped, because the only scales that can be rendered are the ones that put
-    a whole number of pixels across the page; see snap_scale in
-    tools/render/region.py.
+    The arithmetic is region.target_scale; this supplies the cap. Two callers
+    that disagree about the scale re-render forever, so there is one of it.
     """
-    if page_w_pt <= 0 or page_h_pt <= 0:
-        return fallback
-    pad = 16
-    fit = min((avail_w - pad) / page_w_pt, (avail_h - pad) / page_h_pt)
-    return snap_scale(page_w_pt, page_h_pt,
-                      min(fit * zoom,
-                          MAX_RENDER_PX / page_w_pt,
-                          MAX_RENDER_PX / page_h_pt))
+    return target_scale(avail_w, avail_h, zoom, page_w_pt, page_h_pt,
+                        MAX_RENDER_PX, fallback)
 
 
 class _PageRenderTask:
@@ -393,7 +379,9 @@ class _PageRenderTask:
             raw_chars = page_chars(self._path, self._orig, scale, self._rot)
 
             # A display render is the exact one for the current zoom, so it
-            # takes the slot; a pre-render only fills an empty one.
+            # takes the slot; a pre-render only fills an empty one. The fine
+            # image is what is cached — that is the point of rendering finer
+            # than the screen needs.
             _FullPageCache.put(self._path, self._orig, self._rot,
                                self._aw, self._ah,
                                (img, page_w_pt, page_h_pt, scale, raw_chars),

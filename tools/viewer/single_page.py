@@ -917,9 +917,14 @@ class SinglePageView(QWidget):
             final = _good_enough(cached_scale, target_scale)
             # Qt-scale the cached pixmap to the requested zoom (GUI thread — fast)
             if abs(ratio - 1.0) > _SCALE_EPS:
+                # Exactly the pixels a render at target_scale would have made,
+                # computed the same way rather than by multiplying out a ratio.
+                # One pixel narrower is a page shown at the wrong physical size,
+                # and this tool puts that size on the status bar.
+                disp_w, disp_h = page_px_size(page_w_pt, page_h_pt,
+                                              target_scale, 0)
                 pm = QPixmap.fromImage(img).scaled(
-                    max(1, int(img.width()  * ratio)),
-                    max(1, int(img.height() * ratio)),
+                    max(1, disp_w), max(1, disp_h),
                     Qt.AspectRatioMode.IgnoreAspectRatio,
                     Qt.TransformationMode.SmoothTransformation)
             else:
