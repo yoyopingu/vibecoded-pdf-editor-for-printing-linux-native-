@@ -17,6 +17,7 @@ from tools.render.images import pil_to_qpixmap
 from tools.printing import prefs
 from tools.printing.spool import (_PAPER_PTS, print_via_gs, prerender_for_qt,
                                   paper_sources, queue_defaults)
+from tools.viewer.model import _positions_to_str
 from tools.viewer.tab_base import owning_tab
 from tools.theme import _TV
 
@@ -70,6 +71,24 @@ class PrintDialog(QDialog):
         self.setMinimumSize(820, 540)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._setup()
+
+    def _sync_scale_pct(self, index):
+        """The percentage only means anything beside "Originalgrösse"."""
+        on = (index == 1)
+        self.scale_pct.setVisible(on)
+        self.scale_pct.setEnabled(on)
+
+    def _selected_pages_text(self):
+        """The pages picked in the page manager, as "1-3, 5" — or "" if none."""
+        try:
+            order = self.model.order
+            positions = sorted(i + 1 for i, uid in enumerate(order)
+                               if uid in self.model.selected)
+            return _positions_to_str(positions)
+        except Exception:
+            logging.debug("print dialog: could not read the page selection",
+                          exc_info=True)
+            return ""
 
     def _setup(self):
         from PyQt6.QtWidgets import QGridLayout, QRadioButton, QComboBox
@@ -188,6 +207,12 @@ class PrintDialog(QDialog):
         self.range_edit.setPlaceholderText(tr("z.B.  1-3, 5, 7-9"))
         self.range_edit.setFixedWidth(160)
         self.range_edit.setEnabled(False)
+        # Start from whatever is picked in "Seiten verwalten", written the same
+        # way its own selection field writes it — _positions_to_str is shared,
+        # so the two read identically rather than merely similarly. Nothing
+        # selected there means nothing here, and the radio is left alone: the
+        # pages are ready if you want them, not chosen on your behalf.
+        self.range_edit.setText(self._selected_pages_text())
         self.radio_range.toggled.connect(self.range_edit.setEnabled)
         range_row.addWidget(self.range_edit)
         range_row.addStretch()
@@ -206,19 +231,38 @@ class PrintDialog(QDialog):
         self.scale_combo = QComboBox()
         self.scale_combo.addItems([
             tr("An Seite anpassen"),
-            tr("Originalgrösse  (100%)"),
+            tr("Originalgrösse"),
             tr("Auf bedruckbaren Bereich verkleinern"),
         ])
         self.scale_combo.setItemData(
             0, tr("Skaliert hoch und runter — Seite füllt den Druckbereich vollständig (Acrobat: Fit Page)"),
             Qt.ItemDataRole.ToolTipRole)
         self.scale_combo.setItemData(
-            1, tr("Druckt in Originalgrösse — Inhalt kann am Rand beschnitten werden"),
+            1, tr("Druckt in der Größe daneben — 100 % ist 1:1, Inhalt kann am Rand beschnitten werden"),
             Qt.ItemDataRole.ToolTipRole)
         self.scale_combo.setItemData(
             2, tr("Verkleinert nur wenn nötig, vergrössert nie (Acrobat: Shrink to Printable Area)"),
             Qt.ItemDataRole.ToolTipRole)
-        pg.addWidget(self.scale_combo, 0, 1)
+
+        # The percentage that "Originalgrösse" is a percentage *of*. 100 is the
+        # page at its own size, which is what that option used to mean and all
+        # it could mean; anything else scales the file that is sent to the
+        # printer, not just the preview.
+        self.scale_pct = QSpinBox()
+        self.scale_pct.setRange(10, 400)
+        self.scale_pct.setValue(100)
+        self.scale_pct.setSuffix(" %")
+        self.scale_pct.setFixedWidth(78)
+        self.scale_pct.setToolTip(tr(
+            "Größe relativ zum Original. 100 % druckt 1:1."))
+        scale_row = QHBoxLayout()
+        scale_row.setContentsMargins(0, 0, 0, 0)
+        scale_row.setSpacing(6)
+        scale_row.addWidget(self.scale_combo, 1)
+        scale_row.addWidget(self.scale_pct)
+        pg.addLayout(scale_row, 0, 1)
+        self.scale_combo.currentIndexChanged.connect(self._sync_scale_pct)
+        self._sync_scale_pct(self.scale_combo.currentIndex())
 
         self._margin_lbl = QLabel("")
         self._margin_lbl.setStyleSheet(
@@ -386,6 +430,7 @@ class PrintDialog(QDialog):
                 (self.color_combo, "currentIndexChanged"),
                 (self.colorconv_combo, "currentIndexChanged"),
                 (self.scale_combo, "currentIndexChanged"),
+                (self.scale_pct, "valueChanged"),
                 (self.source_combo, "currentIndexChanged"),
                 (self.duplex_edge_combo, "currentIndexChanged"),
                 (self.collate_check, "toggled"),
@@ -397,6 +442,7 @@ class PrintDialog(QDialog):
 
         # Live preview: update whenever any print-affecting setting changes
         self.scale_combo.currentIndexChanged.connect(self._sync_preview)
+        self.scale_pct.valueChanged.connect(self._sync_preview)
         self.paper_combo.currentIndexChanged.connect(self._sync_preview)
         self.orient_combo.currentIndexChanged.connect(self._sync_preview)
 
@@ -631,6 +677,7 @@ class PrintDialog(QDialog):
             "color":        self.color_combo.currentData(),
             "colorconv":    self.colorconv_combo.currentIndex(),
             "scale":        self.scale_combo.currentIndex(),
+            "scale_pct":    self.scale_pct.value(),
             "collate":      self.collate_check.isChecked(),
             "duplex":       self.duplex_check.isChecked(),
             "duplex_edge":  self.duplex_edge_combo.currentData(),
@@ -669,6 +716,8 @@ class PrintDialog(QDialog):
         _combo_by_data(self.color_combo, saved.get("color"))
         _combo_by_index(self.colorconv_combo, saved.get("colorconv"))
         _combo_by_index(self.scale_combo, saved.get("scale"))
+        if isinstance(saved.get("scale_pct"), int):
+            self.scale_pct.setValue(saved["scale_pct"])
         if isinstance(saved.get("collate"), bool):
             self.collate_check.setChecked(saved["collate"])
         if isinstance(saved.get("duplex"), bool):
@@ -931,6 +980,7 @@ class PrintDialog(QDialog):
         """Push current dialog settings into the preview widget."""
         self._preview.update_settings(
             scale_idx  = self.scale_combo.currentIndex(),
+            scale_pct  = self.scale_pct.value(),
             paper_key  = self.paper_combo.currentData() or "A4",
             orient_idx = self.orient_combo.currentIndex(),
             margin_mm  = self._hw_margin_mm,
@@ -1051,6 +1101,7 @@ class PrintDialog(QDialog):
         choice = self.source_combo.currentData()         # None = printer default
         paper_source = (self._source_keyword, choice) if choice else None
         scale_idx  = self.scale_combo.currentIndex()
+        scale_pct  = self.scale_pct.value()
         paper_key  = self.paper_combo.currentData() or "A4"
         orient_idx = self.orient_combo.currentIndex()
 
@@ -1122,7 +1173,8 @@ class PrintDialog(QDialog):
                     skipped = print_via_gs(self.pdf_path, self.model,
                         pages_to_print, copies, color_mode, collate, duplex,
                         duplex_edge, colorconv, printer_name, scale_idx,
-                        paper_key, orient_idx, hw_margin_mm, _report, paper_source=paper_source)
+                        paper_key, orient_idx, hw_margin_mm, _report,
+                        paper_source=paper_source, scale_pct=scale_pct)
                     obj = self_ref()
                     if obj is not None:
                         obj._print_finished.emit(pages_to_print, copies, skipped)
@@ -1144,7 +1196,8 @@ class PrintDialog(QDialog):
             try:
                 rendered, skipped = prerender_for_qt(self.pdf_path, self.model,
                     pages_to_print, color_mode, scale_idx, orient_idx,
-                    paper_key, qt_dpi, hw_margin_mm, _report)
+                    paper_key, qt_dpi, hw_margin_mm, _report,
+                    scale_pct=scale_pct)
             except Exception as e:
                 errors.append(f"Qt render: {e}")
                 msg = tr("Druckfehler:") + "\n" + "\n".join(errors)

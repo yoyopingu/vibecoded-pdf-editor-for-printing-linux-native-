@@ -643,3 +643,83 @@ def test_a_refresh_never_undoes_a_deliberate_choice():
     finally:
         D.prefs.last_printer = old_last
         D._PRINTER_LIST_CACHE = old_cache
+
+
+def test_original_size_takes_a_percentage_that_reaches_the_file():
+    """"Originalgrösse" could only ever mean 100 %. It now has a percentage
+    beside it, and the number has to change the file that is sent to the
+    printer — not merely the preview.
+
+    The box only appears for that option: a percentage of "fit to page" or of
+    "shrink only" is not a thing, since both of those already decide the size."""
+    from tools.printing.dialog import PrintDialog
+    from tools.printing.spool import recenter_on_paper
+    from tools.viewer.tab import PdfTab
+    import pypdfium2 as pdfium
+
+    tab = PdfTab(FX["normal"])
+    dlg = PrintDialog(tab.pdf_path, tab.model, tab)
+    try:
+        dlg.scale_combo.setCurrentIndex(1)           # Originalgrösse
+        _spin(5)
+        assert dlg.scale_pct.isEnabled(), "no percentage beside Originalgrösse"
+        assert dlg.scale_pct.value() == 100, "the default is not 100 %"
+        dlg.scale_combo.setCurrentIndex(0)           # An Seite anpassen
+        _spin(5)
+        assert not dlg.scale_pct.isEnabled(), \
+            "a percentage of 'fit to page' is not a thing"
+    finally:
+        dlg.close(); tab.deleteLater(); _app.processEvents()
+
+    # And the number really scales the content that goes to the printer.
+    def ink_span(path):
+        doc = pdfium.PdfDocument(path)
+        try:
+            im = doc[0].render(scale=0.5).to_pil().convert("L")
+            px = list(im.get_flattened_data()); w, h = im.size
+            cols = [x for x in range(w) if any(px[y * w + x] < 200 for y in range(h))]
+            rows = [y for y in range(h) if any(px[y * w + x] < 200 for x in range(w))]
+            return (max(cols) - min(cols), max(rows) - min(rows)) if cols and rows else (0, 0)
+        finally:
+            doc.close()
+
+    full = os.path.join(_TMP, "pct_100.pdf")
+    half = os.path.join(_TMP, "pct_50.pdf")
+    recenter_on_paper(FX["normal"], full, 595.276, 841.89, factor=1.0)
+    recenter_on_paper(FX["normal"], half, 595.276, 841.89, factor=0.5)
+    fw, fh = ink_span(full)
+    hw, hh = ink_span(half)
+    assert fw > 0 and hw > 0, "nothing was drawn to measure"
+    assert abs(hw / fw - 0.5) < 0.12 and abs(hh / fh - 0.5) < 0.15, \
+        f"50 % produced ink of {hw}x{hh} against {fw}x{fh} at 100 %"
+    return f"100 % -> {fw}x{fh} px of ink, 50 % -> {hw}x{hh}"
+
+
+def test_the_page_range_starts_from_what_is_selected_in_the_page_manager():
+    """The range field starts as the pages picked in "Seiten verwalten", written
+    the way that window writes them — _positions_to_str is shared, so the two
+    read identically rather than merely similarly. Nothing picked there means an
+    empty field here."""
+    from tools.printing.dialog import PrintDialog
+    from tools.viewer.tab import PdfTab
+
+    tab = PdfTab(FX["normal"])
+    tab._build_manage_once()
+    _spin(10)
+    try:
+        for picked, expected in (([], ""), ([0], "1"), ([0, 1, 2, 4], "1-3, 5")):
+            tab.model.selected = {tab.model.order[i] for i in picked}
+            dlg = PrintDialog(tab.pdf_path, tab.model, tab)
+            try:
+                assert dlg.range_edit.text() == expected, (
+                    f"pages {picked} in the page manager gave "
+                    f"{dlg.range_edit.text()!r}, expected {expected!r}")
+                # The radio is left alone: the pages are ready if wanted, not
+                # chosen on the operator's behalf.
+                assert dlg.radio_all.isChecked(), \
+                    "filling the field must not change what gets printed"
+            finally:
+                dlg.close(); _app.processEvents()
+    finally:
+        tab.deleteLater(); _app.processEvents()
+    return "empty, single page, and a mixed run all match the page manager"

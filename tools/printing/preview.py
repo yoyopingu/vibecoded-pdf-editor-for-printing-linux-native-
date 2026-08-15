@@ -49,6 +49,7 @@ class _PrintPreview(QWidget):
         # Settings mirrored from the dialog
         self._margin_mm  = 3.0
         self._scale_idx  = 2        # default: Shrink to Printable Area
+        self._scale_pct  = 100      # what "Originalgrösse" is a % of
         self._paper_key  = "A4"
         self._orient_idx = 0        # 0=auto, 1=portrait, 2=landscape
         self.setObjectName("printPreviewPanel")
@@ -111,12 +112,15 @@ class _PrintPreview(QWidget):
 
     # ── Public API called by PrintDialog ──────────────────────────────────────
 
-    def update_settings(self, scale_idx, paper_key, orient_idx, margin_mm):
+    def update_settings(self, scale_idx, paper_key, orient_idx, margin_mm,
+                        scale_pct=100):
         changed = (self._scale_idx  != scale_idx  or
+                   self._scale_pct  != scale_pct  or
                    self._paper_key  != paper_key  or
                    self._orient_idx != orient_idx or
                    self._margin_mm  != margin_mm)
         self._scale_idx  = scale_idx
+        self._scale_pct  = scale_pct
         self._paper_key  = paper_key
         self._orient_idx = orient_idx
         self._margin_mm  = margin_mm
@@ -267,8 +271,8 @@ class _PrintPreview(QWidget):
                          printable_h / max(page_h_mm, 0.001))
         if self._scale_idx == 0:        # Fit
             content_scale = scale_fit
-        elif self._scale_idx == 1:      # 100 %
-            content_scale = 1.0
+        elif self._scale_idx == 1:      # Originalgrösse, at the chosen %
+            content_scale = self._scale_pct / 100.0
         else:                           # Shrink only
             content_scale = min(1.0, scale_fit)
 

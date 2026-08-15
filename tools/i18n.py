@@ -206,12 +206,13 @@ _EN: dict[str, str] = {
     "Aktuelle Seite": "Current page",
     "z.B.  1-3, 5, 7-9": "e.g.  1-3, 5, 7-9",
     "Skalierung:": "Scaling:",
-    "Originalgrösse  (100%)": "Original size  (100%)",
+    "Originalgrösse": "Original size",
+    "Druckt in der Größe daneben — 100 % ist 1:1, Inhalt kann am Rand beschnitten werden":
+        "Prints at the size beside it — 100 % is 1:1, content may be clipped at the edge",
+    "Größe relativ zum Original. 100 % druckt 1:1.": "Size relative to the original. 100 % prints 1:1.",
     "Auf bedruckbaren Bereich verkleinern": "Shrink to printable area",
     "Skaliert hoch und runter — Seite füllt den Druckbereich vollständig (Acrobat: Fit Page)":
         "Scales up and down — the page completely fills the print area (Acrobat: Fit Page)",
-    "Druckt in Originalgrösse — Inhalt kann am Rand beschnitten werden":
-        "Prints at original size — content may be clipped at the edges",
     "Verkleinert nur wenn nötig, vergrössert nie (Acrobat: Shrink to Printable Area)":
         "Shrinks only when necessary, never enlarges (Acrobat: Shrink to Printable Area)",
     "Automatisch": "Automatic",

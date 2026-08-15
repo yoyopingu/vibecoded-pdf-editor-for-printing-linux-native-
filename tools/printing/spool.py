@@ -193,9 +193,16 @@ def paper_sources(printer_name):
     return None
 
 
-def recenter_on_paper(src_path, dest_path, paper_w_pt, paper_h_pt):
+def recenter_on_paper(src_path, dest_path, paper_w_pt, paper_h_pt, factor=1.0):
     """Enlarge every page's media box to the full physical sheet size and
-    centre the existing (already-scaled) content on it.
+    centre the existing content on it, optionally scaled by `factor`.
+
+    `factor` is what the percentage box beside "Originalgrösse" asks for: 1.0
+    is the page at its own size, 0.5 half of it, 2.0 twice. It is applied here
+    rather than by Ghostscript because GS can fit a page to the media or leave
+    it alone, and neither of those is "make it 70 % of what it is". Scaling the
+    content and re-centring it on a full sheet is the same operation this
+    already did for the printable-area fit, with one more number in it.
 
     Ghostscript fits the content to the *printable area* (media set to
     paper − hardware margins).  This step places that printable-area page,
@@ -213,9 +220,15 @@ def recenter_on_paper(src_path, dest_path, paper_w_pt, paper_h_pt):
         box = page.mediabox
         x0 = float(box.left);   y0 = float(box.bottom)
         w0 = float(box.width);  h0 = float(box.height)
-        tx = (paper_w_pt - w0) / 2.0 - x0
-        ty = (paper_h_pt - h0) / 2.0 - y0
-        page.add_transformation(Transformation().translate(tx, ty))
+        # Scale about the page's own origin first, then centre what that
+        # produced — centring a page and then scaling it moves it off centre.
+        w1, h1 = w0 * factor, h0 * factor
+        tx = (paper_w_pt - w1) / 2.0 - x0 * factor
+        ty = (paper_h_pt - h1) / 2.0 - y0 * factor
+        t = Transformation()
+        if abs(factor - 1.0) > 1e-9:
+            t = t.scale(factor, factor)
+        page.add_transformation(t.translate(tx, ty))
         full = RectangleObject([0, 0, paper_w_pt, paper_h_pt])
         page.mediabox = full
         page.cropbox  = full
@@ -261,7 +274,7 @@ def write_subset_pdf(pdf_path, model, pages, dest_path):
 
 
 def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
-                      paper_key, qt_dpi, hw_margin_mm, report):
+                     paper_key, qt_dpi, hw_margin_mm, report, scale_pct=100):
     """Rasterise PDF pages via pypdfium2 in background.
 
     No QPrinter usage here — Qt objects must stay on the GUI thread.
@@ -317,7 +330,8 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
                     if scale_idx == 0:
                         scale = scale_fit
                     elif scale_idx == 1:
-                        scale = scale_100
+                        # Original size, times whatever the percentage box says.
+                        scale = scale_100 * (scale_pct / 100.0)
                     else:
                         scale = min(scale_100, scale_fit)
 
@@ -348,7 +362,8 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
 
 def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                   duplex_edge, colorconv, printer_name, scale_idx,
-                  paper_key, orient_idx, hw_margin_mm, report, paper_source=None):
+                  paper_key, orient_idx, hw_margin_mm, report,
+                  paper_source=None, scale_pct=100):
     """Full-quality print via Ghostscript + CUPS/lp.
 
     GS normalises, embeds fonts, applies colour conversion AND pre-scales the
@@ -391,6 +406,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
     os.close(sub_fd)
     norm_tmp = None
     recenter_tmp = None
+    scaled_tmps = []
     printable_unrecentered = False
     try:
         report(tr("Seiten zusammenstellen… ({count})").format(count=len(pages)))
@@ -409,7 +425,11 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             # actual margins, exactly like Acrobat's "Fit to Printable Area"
             # (and it adapts per printer). GS just normalises at natural size.
             # "Shrink" (scale_idx 2) pre-fits to our printable-area estimate
-            # and re-centres it; "100 %" (scale_idx 1) prints 1:1 on full media.
+            # and re-centres it; "Originalgrösse" (scale_idx 1) prints at the
+            # percentage asked for on full media — 100 % being 1:1, and
+            # anything else applied by recenter_on_paper afterwards, because
+            # Ghostscript can fit a page or leave it alone and neither of those
+            # is "make it 70 % of what it is".
             margin_pt = (0.0 if hw_margin_mm < 0.5
                          else hw_margin_mm * 72.0 / 25.4)
             fit_to_printable = (scale_idx == 2) and margin_pt > 0.0
@@ -532,6 +552,24 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         # everything else was already sized exactly by GS (+ re-centre).
         if cups_fit:
             cmd += ["-o", "fit-to-page"]
+        # Originalgrösse at anything but 100 %: scale the content and centre it
+        # on the full sheet. Same step the printable-area fit uses, with the
+        # percentage as its factor.
+        if (scale_idx == 1 and abs(scale_pct - 100) > 0
+                and print_src in (norm_tmp, sub_tmp)):
+            try:
+                pct_fd, pct_tmp = tempfile.mkstemp(suffix="_pct.pdf")
+                os.close(pct_fd)
+                recenter_on_paper(print_src, pct_tmp, pw_pt, ph_pt,
+                                  factor=scale_pct / 100.0)
+                if os.path.getsize(pct_tmp) > 100:
+                    print_src = pct_tmp
+                    recenter_tmp = recenter_tmp or pct_tmp
+                    scaled_tmps.append(pct_tmp)
+            except Exception:
+                logging.warning("print: could not apply %d%% scaling; printing "
+                                "at original size", scale_pct, exc_info=True)
+
         elif print_src in (norm_tmp, recenter_tmp) and not printable_unrecentered:
             cmd += ["-o", "print-scaling=none"]
         elif printable_unrecentered:
@@ -613,7 +651,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         return skipped
 
     finally:
-        for f in [sub_tmp, norm_tmp, recenter_tmp]:
+        for f in [sub_tmp, norm_tmp, recenter_tmp] + scaled_tmps:
             if f:
                 try: os.unlink(f)
                 except OSError: pass   # temp file already gone
