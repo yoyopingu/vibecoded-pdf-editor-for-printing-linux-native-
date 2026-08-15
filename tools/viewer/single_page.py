@@ -900,6 +900,21 @@ class SinglePageView(QWidget):
             return
         self._leave_region_mode()
 
+        # Whole page. A cached render answers straight away when it is at
+        # least as fine as this zoom needs; otherwise one is started and
+        # something stands in until it lands.
+        if self._show_cached_page(src_path, orig, rot, avail_w, avail_h):
+            return
+        self._start_page_render(src_path, orig, rot, avail_w, avail_h)
+
+    def _show_cached_page(self, src_path, orig, rot, avail_w, avail_h):
+        """Put an already-rendered page on screen, if there is one good enough.
+
+        Returns True when nothing more is needed — the cached render was made
+        at this scale or finer, so shrinking it is the finished article.
+        Returns False when there is nothing cached, or only something coarser
+        that would have to be enlarged, which is _start_page_render's job.
+        """
         # ── Something to look at now; the real render may follow ──────────────
         # The cached render is resized to this zoom so the page appears at once.
         # Whether that resize is the finished article or only a stand-in is
@@ -964,8 +979,15 @@ class SinglePageView(QWidget):
                                        self._render_signals, stand_in_shown=True)
                 self._render_task = task
                 _render_queue.submit(task, 0)   # P0: active page, preempts low-pri
-            return
+            # Answered either way: with the finished image, or with a stand-in
+            # and the exact render already on its way. Returning False here
+            # would start a second render of the same page.
+            return True
 
+        return False
+
+    def _start_page_render(self, src_path, orig, rot, avail_w, avail_h):
+        """Render this page in the background, showing a stand-in meanwhile."""
         # ── Cache miss: show preview, submit background render ────────────────
         if self._render_task is not None:
             self._render_task.cancel()
