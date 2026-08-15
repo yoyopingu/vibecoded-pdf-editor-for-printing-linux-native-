@@ -206,7 +206,7 @@ _EN: dict[str, str] = {
     "Aktuelle Seite": "Current page",
     "z.B.  1-3, 5, 7-9": "e.g.  1-3, 5, 7-9",
     "Skalierung:": "Scaling:",
-    "Originalgrösse": "Original size",
+    "Feste Größe": "Fixed size",
     "Druckt in der Größe daneben — 100 % ist 1:1, Inhalt kann am Rand beschnitten werden":
         "Prints at the size beside it — 100 % is 1:1, content may be clipped at the edge",
     "Größe relativ zum Original. 100 % druckt 1:1.": "Size relative to the original. 100 % prints 1:1.",

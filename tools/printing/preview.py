@@ -91,9 +91,15 @@ class _PrintPreview(QWidget):
         # Page navigation
         nav = QHBoxLayout()
         nav.setSpacing(4)
+        # iconBtn, not secondaryBtn: the latter's padding is 6px by 14px with a
+        # 28px minimum height, which on a button fixed at 28x28 pushes the glyph
+        # clean outside the box — the two page buttons rendered as empty
+        # rectangles. The same mistake is written up at QPushButton#iconBtn in
+        # tools/shell/style.py and again beside the zoom buttons in
+        # tools/panels/_shared.py; this was the third place with it.
         self._prev_btn = QPushButton("◀")
         self._prev_btn.setFixedSize(28, 28)
-        self._prev_btn.setObjectName("secondaryBtn")
+        self._prev_btn.setObjectName("iconBtn")
         self._prev_btn.clicked.connect(self._prev_page)
         self._page_lbl = QLabel(tr("Seite 1 / 1"))
         self._page_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -101,7 +107,7 @@ class _PrintPreview(QWidget):
             f"font-size:10px;color:{_TV['dim']};background:transparent;")
         self._next_btn = QPushButton("▶")
         self._next_btn.setFixedSize(28, 28)
-        self._next_btn.setObjectName("secondaryBtn")
+        self._next_btn.setObjectName("iconBtn")
         self._next_btn.clicked.connect(self._next_page)
         nav.addWidget(self._prev_btn)
         nav.addWidget(self._page_lbl, 1)
@@ -278,8 +284,16 @@ class _PrintPreview(QWidget):
 
         content_w_mm = page_w_mm * content_scale
         content_h_mm = page_h_mm * content_scale
-        will_clip = (content_w_mm > printable_w + 0.5 or
+        overflows = (content_w_mm > printable_w + 0.5 or
                      content_h_mm > printable_h + 0.5)
+        # Overflowing the printable area only matters if something is actually
+        # out there. Nearly every page has a white border wider than the 3.5 mm
+        # a printer cannot reach, so warning on the geometry alone made the
+        # preview go red for jobs that print perfectly — and a warning that
+        # cries wolf on every file is one nobody reads on the file that
+        # deserves it.
+        will_clip = overflows and self._ink_outside(
+            content_w_mm, content_h_mm, printable_w, printable_h)
 
         # Map the paper rectangle into the canvas
         pad = 14
@@ -324,15 +338,23 @@ class _PrintPreview(QWidget):
                 Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
             p.drawPixmap(int(cx), int(cy), scaled_page)
-            # Tint the clipped-off region red so the user sees what gets cut
-            if will_clip:
-                p.setCompositionMode(
-                    QPainter.CompositionMode.CompositionMode_SourceOver)
-                # draw a red overlay on the content rect outside the printable area
-                full_content = QRectF(cx, cy, cw_px, ch_px)
-                clip_tint = QColor(220, 60, 60, 60)
-                p.fillRect(full_content, clip_tint)
             p.restore()
+            # Mark what will be lost — outside the clip, which is where it is.
+            # The tint used to be drawn inside it, so it landed on the printable
+            # area instead of on the overhang: the whole visible page went red,
+            # saying "this page is a problem" when what is true is "these edges
+            # are".
+            if will_clip:
+                clip_tint = QColor(220, 60, 60, 70)
+                left   = QRectF(cx, cy, max(0.0, pr.left() - cx), ch_px)
+                right  = QRectF(pr.right(), cy,
+                                max(0.0, cx + cw_px - pr.right()), ch_px)
+                top    = QRectF(cx, cy, cw_px, max(0.0, pr.top() - cy))
+                bottom = QRectF(cx, pr.bottom(), cw_px,
+                                max(0.0, cy + ch_px - pr.bottom()))
+                for band in (left, right, top, bottom):
+                    if band.width() > 0.5 and band.height() > 0.5:
+                        p.fillRect(band, clip_tint)
         else:
             # No image yet — grey placeholder
             p.fillRect(content_rect, QColor(200, 200, 200))
@@ -357,6 +379,56 @@ class _PrintPreview(QWidget):
                 f"{paper_w_mm:.0f}×{paper_h_mm:.0f} mm")
         self._info_lbl.setText(info)
         self._clip_lbl.setVisible(will_clip)
+
+    def _ink_outside(self, content_w_mm, content_h_mm, printable_w, printable_h):
+        """Is there anything drawn in the part that will not print?
+
+        The bands that fall outside the printable area are mapped back onto the
+        rendered page and sampled. Anything appreciably darker than white counts
+        as ink; a page whose overhang is blank paper is not clipped in any sense
+        the operator cares about.
+
+        Sampled on a grid rather than pixel by pixel — this runs on every change
+        to the dialog, and a stray dot of colour large enough to matter on paper
+        is many pixels across at preview resolution. Errs towards warning: if
+        the page cannot be measured, say it clips.
+        """
+        pm = self._pixmap
+        if pm is None or pm.isNull():
+            return True
+        try:
+            img = pm.toImage()
+            w, h = img.width(), img.height()
+            if w < 4 or h < 4:
+                return True
+            # How much of the page, as a fraction of its own width and height,
+            # sticks out past what the printer can reach. Symmetric: the content
+            # is centred, so an overhang appears on both sides.
+            over_x = max(0.0, (content_w_mm - printable_w) / 2.0 / max(content_w_mm, 1e-6))
+            over_y = max(0.0, (content_h_mm - printable_h) / 2.0 / max(content_h_mm, 1e-6))
+            band_x = int(w * over_x)
+            band_y = int(h * over_y)
+            step = max(1, min(w, h) // 120)
+            WHITE = 246          # anything lighter than this is paper
+
+            def dark(x0, x1, y0, y1):
+                for y in range(max(0, y0), min(h, y1), step):
+                    for x in range(max(0, x0), min(w, x1), step):
+                        c = img.pixel(x, y)
+                        if (c & 0xFF) < WHITE or ((c >> 8) & 0xFF) < WHITE \
+                           or ((c >> 16) & 0xFF) < WHITE:
+                            return True
+                return False
+
+            if band_x > 0 and (dark(0, band_x, 0, h) or dark(w - band_x, w, 0, h)):
+                return True
+            if band_y > 0 and (dark(0, w, 0, band_y) or dark(0, w, h - band_y, h)):
+                return True
+            return False
+        except Exception:
+            logging.debug("print preview: could not check the overhang",
+                          exc_info=True)
+            return True
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

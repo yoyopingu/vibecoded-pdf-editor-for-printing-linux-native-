@@ -6,7 +6,8 @@ collation, resolved against what the printer says it can do. The sending
 itself is tools/printing/spool.py; this decides what to ask it for.
 """
 import os, logging
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+from PyQt6.QtWidgets import (QButtonGroup, QWidget, QVBoxLayout, QHBoxLayout,
+                             QPushButton,
                              QLabel, QFrame, QApplication, QScrollArea, QDialog,
                              QSpinBox, QLineEdit, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
@@ -72,10 +73,23 @@ class PrintDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._setup()
 
-    def _sync_scale_pct(self, index):
-        """The percentage only means anything beside "Originalgrösse"."""
-        on = (index == 1)
-        self.scale_pct.setVisible(on)
+    def _scale_buttons(self):
+        """The three scaling modes, in the order the rest of the code numbers
+        them: 0 fit, 1 fixed size, 2 shrink only."""
+        return (self.scale_fit, self.scale_fixed, self.scale_shrink)
+
+    def _scale_index(self):
+        """Which mode is chosen, as the index spool.py expects."""
+        checked = self._scale_group.checkedId()
+        return checked if checked >= 0 else 0
+
+    def _set_scale_index(self, index):
+        if isinstance(index, int) and 0 <= index < 3:
+            self._scale_buttons()[index].setChecked(True)
+
+    def _sync_scale_pct(self):
+        """The percentage only means anything beside "Feste Größe"."""
+        on = self.scale_fixed.isChecked()
         self.scale_pct.setEnabled(on)
 
     def _selected_pages_text(self):
@@ -228,26 +242,28 @@ class PrintDialog(QDialog):
         pg.setColumnStretch(1, 1)
 
         pg.addWidget(_lbl(tr("Skalierung:")), 0, 0)
-        self.scale_combo = QComboBox()
-        self.scale_combo.addItems([
-            tr("An Seite anpassen"),
-            tr("Originalgrösse"),
-            tr("Auf bedruckbaren Bereich verkleinern"),
-        ])
-        self.scale_combo.setItemData(
-            0, tr("Skaliert hoch und runter — Seite füllt den Druckbereich vollständig (Acrobat: Fit Page)"),
-            Qt.ItemDataRole.ToolTipRole)
-        self.scale_combo.setItemData(
-            1, tr("Druckt in der Größe daneben — 100 % ist 1:1, Inhalt kann am Rand beschnitten werden"),
-            Qt.ItemDataRole.ToolTipRole)
-        self.scale_combo.setItemData(
-            2, tr("Verkleinert nur wenn nötig, vergrössert nie (Acrobat: Shrink to Printable Area)"),
-            Qt.ItemDataRole.ToolTipRole)
 
-        # The percentage that "Originalgrösse" is a percentage *of*. 100 is the
-        # page at its own size, which is what that option used to mean and all
-        # it could mean; anything else scales the file that is sent to the
-        # printer, not just the preview.
+        # On show, not behind a dropdown: three settings that decide how big the
+        # job prints, one click each instead of two. Radio buttons rather than
+        # tick boxes because exactly one of them applies — two ticked would be a
+        # state the printer cannot be in — and because the page options above
+        # are already radio buttons, so the section reads the same way twice.
+        self.scale_fit    = QRadioButton(tr("An Seite anpassen"))
+        self.scale_fixed  = QRadioButton(tr("Feste Größe"))
+        self.scale_shrink = QRadioButton(tr("Auf bedruckbaren Bereich verkleinern"))
+        self.scale_fit.setToolTip(tr(
+            "Skaliert hoch und runter — Seite füllt den Druckbereich vollständig (Acrobat: Fit Page)"))
+        self.scale_fixed.setToolTip(tr(
+            "Druckt in der Größe daneben — 100 % ist 1:1, Inhalt kann am Rand beschnitten werden"))
+        self.scale_shrink.setToolTip(tr(
+            "Verkleinert nur wenn nötig, vergrössert nie (Acrobat: Shrink to Printable Area)"))
+        self._scale_group = QButtonGroup(self)
+        for i, btn in enumerate(self._scale_buttons()):
+            self._scale_group.addButton(btn, i)
+        self.scale_fit.setChecked(True)
+
+        # The size that "Feste Größe" is a size *of*. 100 is the page at its own
+        # size, which is all that option could once mean.
         self.scale_pct = QSpinBox()
         self.scale_pct.setRange(10, 400)
         self.scale_pct.setValue(100)
@@ -255,14 +271,22 @@ class PrintDialog(QDialog):
         self.scale_pct.setFixedWidth(78)
         self.scale_pct.setToolTip(tr(
             "Größe relativ zum Original. 100 % druckt 1:1."))
-        scale_row = QHBoxLayout()
-        scale_row.setContentsMargins(0, 0, 0, 0)
-        scale_row.setSpacing(6)
-        scale_row.addWidget(self.scale_combo, 1)
-        scale_row.addWidget(self.scale_pct)
-        pg.addLayout(scale_row, 0, 1)
-        self.scale_combo.currentIndexChanged.connect(self._sync_scale_pct)
-        self._sync_scale_pct(self.scale_combo.currentIndex())
+
+        scale_col = QVBoxLayout()
+        scale_col.setContentsMargins(0, 0, 0, 0)
+        scale_col.setSpacing(2)
+        scale_col.addWidget(self.scale_fit)
+        fixed_row = QHBoxLayout()
+        fixed_row.setContentsMargins(0, 0, 0, 0)
+        fixed_row.setSpacing(6)
+        fixed_row.addWidget(self.scale_fixed)
+        fixed_row.addWidget(self.scale_pct)
+        fixed_row.addStretch()
+        scale_col.addLayout(fixed_row)
+        scale_col.addWidget(self.scale_shrink)
+        pg.addLayout(scale_col, 0, 1)
+        self._scale_group.idToggled.connect(lambda _i, _on: self._sync_scale_pct())
+        self._sync_scale_pct()
 
         self._margin_lbl = QLabel("")
         self._margin_lbl.setStyleSheet(
@@ -429,7 +453,7 @@ class PrintDialog(QDialog):
                 (self.orient_combo, "currentIndexChanged"),
                 (self.color_combo, "currentIndexChanged"),
                 (self.colorconv_combo, "currentIndexChanged"),
-                (self.scale_combo, "currentIndexChanged"),
+                (self._scale_group, "idToggled"),
                 (self.scale_pct, "valueChanged"),
                 (self.source_combo, "currentIndexChanged"),
                 (self.duplex_edge_combo, "currentIndexChanged"),
@@ -441,7 +465,7 @@ class PrintDialog(QDialog):
         self._load_printers()
 
         # Live preview: update whenever any print-affecting setting changes
-        self.scale_combo.currentIndexChanged.connect(self._sync_preview)
+        self._scale_group.idToggled.connect(lambda *_: self._sync_preview())
         self.scale_pct.valueChanged.connect(self._sync_preview)
         self.paper_combo.currentIndexChanged.connect(self._sync_preview)
         self.orient_combo.currentIndexChanged.connect(self._sync_preview)
@@ -676,7 +700,7 @@ class PrintDialog(QDialog):
             "orientation":  self.orient_combo.currentIndex(),
             "color":        self.color_combo.currentData(),
             "colorconv":    self.colorconv_combo.currentIndex(),
-            "scale":        self.scale_combo.currentIndex(),
+            "scale":        self._scale_index(),
             "scale_pct":    self.scale_pct.value(),
             "collate":      self.collate_check.isChecked(),
             "duplex":       self.duplex_check.isChecked(),
@@ -715,7 +739,7 @@ class PrintDialog(QDialog):
         _combo_by_index(self.orient_combo, saved.get("orientation"))
         _combo_by_data(self.color_combo, saved.get("color"))
         _combo_by_index(self.colorconv_combo, saved.get("colorconv"))
-        _combo_by_index(self.scale_combo, saved.get("scale"))
+        self._set_scale_index(saved.get("scale"))
         if isinstance(saved.get("scale_pct"), int):
             self.scale_pct.setValue(saved["scale_pct"])
         if isinstance(saved.get("collate"), bool):
@@ -974,12 +998,12 @@ class PrintDialog(QDialog):
                       "'An Seite anpassen' verkleinert den Inhalt auf den bedruckbaren Bereich.").format(m=m)
         self._margin_lbl.setText(text)
         self._margin_lbl.setToolTip(tip)
-        self.scale_combo.setToolTip(tip)
+        self.scale_shrink.setToolTip(tip)
 
     def _sync_preview(self):
         """Push current dialog settings into the preview widget."""
         self._preview.update_settings(
-            scale_idx  = self.scale_combo.currentIndex(),
+            scale_idx  = self._scale_index(),
             scale_pct  = self.scale_pct.value(),
             paper_key  = self.paper_combo.currentData() or "A4",
             orient_idx = self.orient_combo.currentIndex(),
@@ -1062,7 +1086,7 @@ class PrintDialog(QDialog):
     def _set_printing(self, busy):
         """Disable/re-enable controls while a print job is in progress."""
         for w in [self.printer_combo, self.copies_spin,
-                  self.scale_combo, self.paper_combo, self.orient_combo,
+                  self.paper_combo, self.orient_combo,
                   self.color_combo, self.colorconv_combo,
                   self.collate_check, self.duplex_check, self.duplex_edge_combo,
                   self.source_combo,
@@ -1100,7 +1124,7 @@ class PrintDialog(QDialog):
         duplex_edge = self.duplex_edge_combo.currentData() or "long"
         choice = self.source_combo.currentData()         # None = printer default
         paper_source = (self._source_keyword, choice) if choice else None
-        scale_idx  = self.scale_combo.currentIndex()
+        scale_idx  = self._scale_index()
         scale_pct  = self.scale_pct.value()
         paper_key  = self.paper_combo.currentData() or "A4"
         orient_idx = self.orient_combo.currentIndex()

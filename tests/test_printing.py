@@ -660,14 +660,20 @@ def test_original_size_takes_a_percentage_that_reaches_the_file():
     tab = PdfTab(FX["normal"])
     dlg = PrintDialog(tab.pdf_path, tab.model, tab)
     try:
-        dlg.scale_combo.setCurrentIndex(1)           # Originalgrösse
+        assert dlg._scale_index() == 0, "the dialog should open on 'fit to page'"
+        dlg.scale_fixed.setChecked(True)             # Feste Größe
         _spin(5)
-        assert dlg.scale_pct.isEnabled(), "no percentage beside Originalgrösse"
+        assert dlg._scale_index() == 1
+        assert dlg.scale_pct.isEnabled(), "no percentage beside Feste Größe"
         assert dlg.scale_pct.value() == 100, "the default is not 100 %"
-        dlg.scale_combo.setCurrentIndex(0)           # An Seite anpassen
+        dlg.scale_fit.setChecked(True)               # An Seite anpassen
         _spin(5)
         assert not dlg.scale_pct.isEnabled(), \
             "a percentage of 'fit to page' is not a thing"
+        # One at a time: the three modes are exclusive, so they are radio
+        # buttons on show rather than a dropdown to open.
+        dlg.scale_shrink.setChecked(True)
+        assert [b.isChecked() for b in dlg._scale_buttons()] == [False, False, True]
     finally:
         dlg.close(); tab.deleteLater(); _app.processEvents()
 
@@ -723,3 +729,55 @@ def test_the_page_range_starts_from_what_is_selected_in_the_page_manager():
     finally:
         tab.deleteLater(); _app.processEvents()
     return "empty, single page, and a mixed run all match the page manager"
+
+
+def test_the_preview_only_warns_when_something_will_actually_be_clipped():
+    """The preview went red as soon as the page was geometrically larger than
+    the printable area — which nearly every page is, because a printer cannot
+    reach the outer 3.5 mm and nearly every page has a white border wider than
+    that. A warning that cries wolf on every file is one nobody reads on the
+    file that deserves it.
+
+    It now asks whether anything is actually drawn out there."""
+    from PyQt6.QtGui import QPixmap, QPainter, QColor
+    from tools.printing.preview import _PrintPreview
+    from tools.viewer.tab import PdfTab
+
+    tab = PdfTab(FX["normal"])
+    _spin(10)
+    pv = _PrintPreview(tab.pdf_path, tab.model)
+    try:
+        pv._page_w_pt, pv._page_h_pt = 595.276, 841.89
+        pv._margin_mm = 3.5
+
+        def page(edge_to_edge):
+            pm = QPixmap(400, 566); pm.fill(QColor("white"))
+            p = QPainter(pm)
+            if edge_to_edge:
+                p.fillRect(0, 0, 400, 566, QColor(30, 30, 30))
+            else:
+                p.fillRect(60, 80, 280, 400, QColor(30, 30, 30))
+            p.end()
+            return pm
+
+        # Content 9 mm wider than the printable area, either way.
+        big_w, big_h, pr_w, pr_h = 222.0, 314.0, 203.0, 290.0
+
+        pv._pixmap = page(False)
+        assert not pv._ink_outside(big_w, big_h, pr_w, pr_h), \
+            "warned about an overhang that is blank paper"
+
+        pv._pixmap = page(True)
+        assert pv._ink_outside(big_w, big_h, pr_w, pr_h), \
+            "did not warn about ink that will be cut off"
+
+        # Nothing sticking out: nothing to warn about, whatever is on the page.
+        assert not pv._ink_outside(200.0, 280.0, pr_w, pr_h)
+
+        # And with no render to look at, err towards warning.
+        pv._pixmap = None
+        assert pv._ink_outside(big_w, big_h, pr_w, pr_h), \
+            "an unmeasurable page should still warn"
+    finally:
+        pv.deleteLater(); tab.deleteLater(); _app.processEvents()
+    return "blank overhang stays quiet, ink at the edge warns"
