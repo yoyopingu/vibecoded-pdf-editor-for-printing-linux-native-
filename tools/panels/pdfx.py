@@ -13,14 +13,20 @@ it cannot resolve is forbidden. Concretely, for the X-3 profile written here:
     ends;
   * /GTS_PDFXVersion in the document info says which profile it claims.
 
-This panel replaced the old "Ebenen (OCG)" tool. Optional-content groups are
-not part of PDF/X-3 at all, and Ghostscript resolves them on the way out using
-the file's own default configuration: a layer switched off in the source — a
+One button, and no options on it. Which press the shop separates for and how
+much image resolution that press can use are properties of the press, not of
+the job, so they live in Einstellungen → Druckvorstufe and are set once. What
+a *file* brings with it — its bleed, its fonts, its image resolution — is
+reporting, and belongs to "Druckvorstufenpruefung"; this panel converts.
+
+It replaced the old "Ebenen (OCG)" tool. Optional-content groups are not part
+of PDF/X-3 at all, and Ghostscript resolves them on the way out using the
+file's own default configuration: a layer switched off in the source — a
 cutter contour, a varnish plate, a "nicht drucken" guide layer — stays off and
 is gone from the output. That is the behaviour the layers tool existed to
-guarantee, now applied automatically. The check button reports which layers a
-file has and what will happen to each, because the one thing worse than a
-cutter line on the plate is not being told it was there.
+guarantee, now applied automatically, and the export names the layers it
+dropped, because the one thing worse than a cutter line on the plate is not
+being told it was there.
 
 Why X-3 and nothing else
 ------------------------
@@ -41,12 +47,12 @@ import os
 import shutil
 import subprocess
 
-from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QTextEdit
+from PyQt6.QtWidgets import QPushButton
 
 from tools._base import BasePanel, make_label
 from tools.i18n import tr
-from tools.panels._icc import CMYK_PROFILES, ICC_DIR, fallback_cmyk_icc, resolve_icc
-from tools.panels._shared import row
+from tools.panels._icc import (ICC_DIR, fallback_cmyk_icc, profile_by_key,
+                               resolve_icc)
 from tools.panels._verify import _verify_pages_intact
 
 
@@ -85,76 +91,51 @@ class PdfxPanel(BasePanel):
     OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
-        cb = QPushButton(tr("  Datei pruefen")); cb.setObjectName("secondaryBtn")
-        cb.clicked.connect(self._inspect); layout.addWidget(cb)
-        self.report = QTextEdit(); self.report.setReadOnly(True)
-        self.report.setMaximumHeight(170)
-        self.report.setPlaceholderText(tr("PDF/X-Pruefbericht erscheint hier..."))
-        layout.addWidget(self.report)
-
-        box = QGroupBox(tr("AUSGABEBEDINGUNG")); bl = QVBoxLayout(box)
-        bl.addWidget(make_label(tr(
-            "Das Ausgabeprofil beschreibt, fuer welche Druckbedingung die Datei "
-            "separiert wurde. Es wird als Output-Intent eingebettet — die "
-            "Druckerei liest daran ab, ob die Datei zu ihrer Maschine passt."),
-            dim=True))
-        self.profile_combo = QComboBox()
-        for label, cands, oci, condition in CMYK_PROFILES:
-            self.profile_combo.addItem(tr(label), (cands, oci, condition))
-        bl.addLayout(row(tr("Ausgabeprofil:"), self.profile_combo))
-        bl.addWidget(make_label(tr(
-            "Benannte Profile nutzen die passende .icc-Datei aus "
-            "~/.local/share/copyshop_pdf_suite/icc/ — fehlt sie, wird ein "
-            "generisches CMYK-Profil eingebettet und im Bericht vermerkt."),
-            dim=True))
-        layout.addWidget(box)
-
         layout.addWidget(make_label(tr(
-            "Der Export erzeugt {p0}: alle Farben in CMYK, alle Schriften "
-            "eingebettet, Transparenz reduziert, TrimBox auf jeder Seite. "
-            "Ebenen (OCG) werden dabei gemaess ihrer Standard-Sichtbarkeit "
-            "aufgeloest — ausgeschaltete Ebenen sind in der Ausgabe nicht "
-            "mehr enthalten.").format(p0=PDFX_VERSION), dim=True))
+            "Erzeugt {p0}: alle Farben in CMYK gegen das eingestellte "
+            "Ausgabeprofil, alle Schriften eingebettet, Transparenz reduziert, "
+            "Ebenen aufgeloest, Bilder auf Druckauflösung. Das Ergebnis wird "
+            "geprueft, bevor es gespeichert wird.").format(p0=PDFX_VERSION),
+            dim=True))
+        layout.addWidget(make_label(tr(
+            "Was die Datei mitbringt — Anschnitt, Schriften, Bildauflösung — "
+            "zeigt „Druckvorstufenpruefung“."), dim=True))
+
+        # The condition and the resolution belong to the press, not to the job,
+        # so they live in Einstellungen and the panel is one button. This line
+        # is here so the setting in force is never invisible at the moment it
+        # is being applied.
+        self._cond_lbl = make_label("", dim=True)
+        layout.addWidget(self._cond_lbl)
+        change = QPushButton(tr("Ausgabebedingung ändern…"))
+        change.setObjectName("secondaryBtn")
+        change.setMaximumWidth(260)
+        change.clicked.connect(self._open_settings)
+        layout.addWidget(change)
+
         gs_ok = bool(shutil.which("gs"))
         layout.addWidget(make_label(
             tr("✓  Ghostscript verfuegbar") if gs_ok else
             tr("✗  Ghostscript fehlt  →  sudo pacman -S ghostscript"), dim=True))
+        layout.addStretch()
+        self._refresh_condition()
 
-    # ── the check button ─────────────────────────────────────────────────────
+    def _refresh_condition(self):
+        from tools.shell.settings import AppSettings
+        label, candidates, _oci, _cond = profile_by_key(
+            AppSettings.get().pdfx_condition())
+        dpi = AppSettings.get().pdfx_image_dpi()
+        name = label.split(" — ")[0]
+        if candidates and not resolve_icc(candidates):
+            name = tr("{p0}  (Profil fehlt — generisches CMYK)").format(p0=name)
+        self._cond_lbl.setText(
+            tr("Ausgabebedingung: {p0}   ·   Bilder: {p1} dpi").format(
+                p0=name, p1=dpi))
 
-    def _inspect(self):
-        try:
-            src = self.require_pdf()
-        except ValueError as e:
-            self.log.log(str(e), error=True); return
-        try:
-            from tools.colorspace import document_colorspaces, has_rgb
-            import pikepdf
-            found = set(document_colorspaces(src))
-            with pikepdf.open(src) as pdf:
-                n_pages = len(pdf.pages)
-                no_trim = [i + 1 for i, p in enumerate(pdf.pages)
-                           if "/TrimBox" not in p.obj and "/ArtBox" not in p.obj]
-            on, off = _layer_report(src)
-
-            lines = [tr('Datei:   {p0}').format(p0=os.path.basename(src)),
-                     tr('Seiten:  {p0}').format(p0=n_pages), ""]
-            lines.append(tr("⚠  RGB vorhanden — wird beim Export nach CMYK konvertiert.")
-                         if has_rgb(found) else
-                         tr("✓  Keine RGB-Farben gefunden."))
-            lines.append(tr("⚠  {p0} Seite(n) ohne TrimBox — wird beim Export ergaenzt.")
-                         .format(p0=len(no_trim)) if no_trim else
-                         tr("✓  Jede Seite hat eine TrimBox."))
-            if on or off:
-                lines += ["", tr("Ebenen (in PDF/X-3 nicht zulaessig, werden aufgeloest):")]
-                lines += [tr('   ✓ {p0} — sichtbar, wird eingerechnet').format(p0=n) for n in on]
-                lines += [tr('   ✗ {p0} — ausgeschaltet, entfaellt').format(p0=n) for n in off]
-            else:
-                lines.append(tr("✓  Keine Ebenen (OCG)."))
-            self.report.setPlainText("\n".join(lines))
-            self.log.log(tr("Pruefung abgeschlossen."))
-        except Exception as e:
-            self.log.log(str(e), error=True)
+    def _open_settings(self):
+        from tools.shell.settings import PrepressDialog
+        PrepressDialog(self).exec()
+        self._refresh_condition()
 
     # ── the export ───────────────────────────────────────────────────────────
 
@@ -166,8 +147,12 @@ class PdfxPanel(BasePanel):
             raise RuntimeError(tr("Ghostscript nicht gefunden.\n"
                                   "Installation:  sudo pacman -S ghostscript"))
 
-        candidates, oci, condition = self.profile_combo.currentData()
-        label = self.profile_combo.currentText().split(" — ")[0]
+        from tools.shell.settings import AppSettings
+        settings = AppSettings.get()
+        full_label, candidates, oci, condition = profile_by_key(
+            settings.pdfx_condition())
+        label = full_label.split(" — ")[0]
+        dpi = settings.pdfx_image_dpi()
         icc = resolve_icc(candidates)
         if icc is None:
             icc = fallback_cmyk_icc()
@@ -195,7 +180,7 @@ class PdfxPanel(BasePanel):
             raise ValueError(tr("Kein Ausgabepfad angegeben."))
 
         self.run_async(
-            lambda report: _export_pdfx(src, out, icc, oci, condition, report),
+            lambda report: _export_pdfx(src, out, icc, oci, condition, dpi, report),
             on_done=lambda result: self._done(result, note),
             busy_label="PDF/X wird erzeugt …",
         )
@@ -275,7 +260,57 @@ def _check_conformance(path):
                 p0=", ".join(str(i) for i in missing)))
 
 
-def _export_pdfx(src, out, icc, oci, condition, report):
+def _boxes_survived(src, dst):
+    """Page numbers whose trim geometry changed, described. Empty is good.
+
+    The TrimBox is where the guillotine goes. Ghostscript does carry it and
+    the BleedBox through — including swapping them correctly when it bakes a
+    /Rotate into the page — so this is a check, not a repair. It exists
+    because "Ghostscript preserves it" is an assumption about someone else's
+    program, and the cost of that assumption being wrong one day is a job
+    trimmed to the wrong size.
+
+    A page whose MediaBox was rotated is compared against the rotated source
+    box, since that is the same rectangle described in the new page space. A
+    source page with no TrimBox is skipped: Ghostscript's TrimBox = MediaBox
+    is the right answer for "no trim declared", and inventing one is how you
+    crop a job that never asked for bleed.
+    """
+    import pikepdf
+
+    def rect(page, key):
+        if key not in page.obj:
+            return None
+        v = [float(x) for x in page.obj[key]]
+        return (min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3]))
+
+    def swap(r):
+        return None if r is None else (r[1], r[0], r[3], r[2])
+
+    problems = []
+    with pikepdf.open(src) as s_pdf, pikepdf.open(dst) as d_pdf:
+        for i, (s_page, d_page) in enumerate(zip(s_pdf.pages, d_pdf.pages)):
+            s_media, d_media = rect(s_page, "/MediaBox"), rect(d_page, "/MediaBox")
+            if s_media is None or d_media is None:
+                continue
+            # Rotation baked in: the page is the same sheet described sideways.
+            rotated = (abs((s_media[2] - s_media[0]) - (d_media[3] - d_media[1])) < 1.0
+                       and abs((s_media[3] - s_media[1]) - (d_media[2] - d_media[0])) < 1.0
+                       and abs((s_media[2] - s_media[0]) - (d_media[2] - d_media[0])) > 1.0)
+            for key in ("/TrimBox", "/BleedBox"):
+                want = rect(s_page, key)
+                if want is None:
+                    continue
+                if rotated:
+                    want = swap(want)
+                got = rect(d_page, key)
+                if got is None or any(abs(a - b) > 1.0 for a, b in zip(want, got)):
+                    problems.append(tr('{p0} ({p1})').format(
+                        p0=i + 1, p1=key.lstrip("/")))
+    return problems
+
+
+def _export_pdfx(src, out, icc, oci, condition, dpi, report):
     """Write `src` to `out` as PDF/X. Plain data only — runs on a worker."""
     import tempfile
     import pikepdf
@@ -298,6 +333,18 @@ def _export_pdfx(src, out, icc, oci, condition, report):
             "-sColorConversionStrategy=CMYK",
             "-dEmbedAllFonts=true",
             "-dSubsetFonts=true",
+            # After /prepress, which keeps images at source resolution — these
+            # override it (verified: a 600 dpi image comes back at 300 and the
+            # file halves; a 200 dpi one is left alone rather than upsampled).
+            # Resolution above what the press can image is RIP time nobody sees
+            # on paper, and it is the main reason a job is slow to print.
+            "-dDownsampleColorImages=true", f"-dColorImageResolution={dpi}",
+            "-dColorImageDownsampleType=/Bicubic",
+            "-dDownsampleGrayImages=true", f"-dGrayImageResolution={dpi}",
+            "-dGrayImageDownsampleType=/Bicubic",
+            # Bilevel line art is left alone: downsampling it is what makes a
+            # scanned drawing come out ragged.
+            "-dDownsampleMonoImages=false",
             f"-sOutputFile={tmp}",
             defs, src,
         ]
@@ -311,6 +358,11 @@ def _export_pdfx(src, out, icc, oci, condition, report):
             raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
 
         _check_conformance(tmp)
+        moved = _boxes_survived(src, tmp)
+        if moved:
+            raise RuntimeError(tr(
+                'Der Beschnitt hat sich veraendert auf Seite(n): {p0} — die '
+                'Datei wurde nicht gespeichert.').format(p0=", ".join(moved)))
 
         # Same guard the CMYK and greyscale conversions use: pdfwrite can black
         # a page out while exiting 0, and on a prepress file nobody notices

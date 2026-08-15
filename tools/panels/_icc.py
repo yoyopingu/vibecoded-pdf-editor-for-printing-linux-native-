@@ -69,6 +69,89 @@ def resolve_icc(candidates):
     return None
 
 
+def profile_by_key(key):
+    """The CMYK_PROFILES row whose label starts with `key`, or the first row.
+
+    The stored setting is the label, so an entry renamed in the table falls
+    back to generic rather than to a condition the user never chose.
+    """
+    for entry in CMYK_PROFILES:
+        if entry[0] == key:
+            return entry
+    return CMYK_PROFILES[0]
+
+
+def icc_colour_space(path):
+    """The four-character colour space of an ICC profile — "CMYK", "RGB ",
+    "GRAY" — or None if `path` is not one.
+
+    Bytes 16..20 of the 128-byte header are the data colour space signature
+    (ICC.1:2010 §7.2.6). Checked before a profile is installed under a name
+    the export will later separate against: an RGB profile filed as
+    ISOcoated_v2_eci.icc would make every export silently wrong, and the
+    output intent would state a condition the file was never separated for.
+
+    Bytes 36..40 must be 'acsp' — the profile file signature. Without that
+    test *any* file answers this question, because every file has four bytes
+    at offset 16; a PDF picked by mistake came back as a colour space.
+    """
+    try:
+        with open(path, "rb") as f:
+            header = f.read(128)
+    except OSError:
+        return None
+    if len(header) < 40 or header[36:40] != b"acsp":
+        return None
+    space = header[16:20].decode("latin-1", "replace")
+    return space if space.strip() else None
+
+
+def profile_description(path):
+    """The profile's own name, for confirming the right file was picked.
+
+    Read out of the 'desc' tag rather than trusting the filename, which is
+    exactly what is in question at the point this is called. Returns None if
+    the tag cannot be read — a profile is still installable without it.
+    """
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        count = int.from_bytes(data[128:132], "big")
+        for i in range(count):
+            off = 132 + i * 12
+            sig = data[off:off + 4]
+            if sig != b"desc":
+                continue
+            start = int.from_bytes(data[off + 4:off + 8], "big")
+            size = int.from_bytes(data[off + 8:off + 12], "big")
+            tag = data[start:start + size]
+            if tag[:4] == b"desc":          # ICC v2 textDescriptionType
+                length = int.from_bytes(tag[8:12], "big")
+                return tag[12:12 + length].rstrip(b"\x00").decode("latin-1")
+            if tag[:4] == b"mluc":          # ICC v4 multiLocalizedUnicodeType
+                length = int.from_bytes(tag[20:24], "big")
+                start2 = int.from_bytes(tag[24:28], "big")
+                return tag[start2:start2 + length].decode("utf-16-be").rstrip("\x00")
+    except (OSError, IndexError, ValueError, UnicodeDecodeError):
+        return None
+    return None
+
+
+def install_profile(src_path, filename):
+    """Copy an ICC profile into the app's profile directory as `filename`.
+
+    Raises ValueError if it is not a CMYK profile. Returns where it landed.
+    """
+    import shutil
+    space = icc_colour_space(src_path)
+    if space != "CMYK":
+        raise ValueError(space or "")
+    os.makedirs(ICC_DIR, exist_ok=True)
+    dest = os.path.join(ICC_DIR, filename)
+    shutil.copyfile(src_path, dest)
+    return dest
+
+
 def fallback_cmyk_icc():
     """Some embeddable CMYK profile, or None if the system has none.
 

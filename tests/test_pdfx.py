@@ -7,8 +7,8 @@ import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
 from tools.panels._icc import CMYK_PROFILES, fallback_cmyk_icc, resolve_icc
-from tools.panels.pdfx import (PDFX_VERSION, _check_conformance, _export_pdfx,
-                               _layer_report, _pdfx_defs)
+from tools.panels.pdfx import (PDFX_VERSION, _boxes_survived, _check_conformance,
+                               _export_pdfx, _layer_report, _pdfx_defs)
 from tests.support import FX, _TMP
 
 
@@ -48,7 +48,7 @@ def test_the_export_carries_everything_pdfx_requires():
     assert icc, "no CMYK ICC profile on this system to embed"
     out = _out("conform")
     result, dropped = _export_pdfx(FX["color"], out, icc, "Custom",
-                                   "Generic CMYK", lambda _m: None)
+                                   "Generic CMYK", 300, lambda _m: None)
     assert result == out and not dropped
 
     with pikepdf.open(out) as pdf:
@@ -80,7 +80,7 @@ def test_a_layer_switched_off_never_reaches_the_plate():
 
     out = _out("layered")
     _result, dropped = _export_pdfx(src, out, fallback_cmyk_icc(), "Custom",
-                                    "Generic CMYK", lambda _m: None)
+                                    "Generic CMYK", 300, lambda _m: None)
     assert dropped == ["Stanzkontur"], "the export did not report the dropped layer"
 
     with pikepdf.open(out) as pdf:
@@ -151,6 +151,185 @@ def test_a_profile_path_cannot_break_out_of_the_postscript_prologue():
             bare = inner.replace(r"\(", "").replace(r"\)", "")
             assert "(" not in bare and ")" not in bare, line
     return "parentheses in a path or a condition name are escaped"
+
+
+def _bleed_fixture():
+    """A page with 3 mm of bleed: TrimBox inset 8.5 pt inside the MediaBox.
+
+    What an InDesign print export looks like, and the geometry the guillotine
+    is set from.
+    """
+    path = os.path.join(_TMP, "pdfx_bleed.pdf")
+    if os.path.exists(path):
+        return path
+    with pikepdf.open(FX["color"]) as pdf:
+        for page in pdf.pages:
+            m = [float(x) for x in page.obj["/MediaBox"]]
+            page.obj["/TrimBox"] = Array([m[0] + 8.5, m[1] + 8.5,
+                                          m[2] - 8.5, m[3] - 8.5])
+            page.obj["/BleedBox"] = Array([m[0] + 2.0, m[1] + 2.0,
+                                           m[2] - 2.0, m[3] - 2.0])
+        pdf.save(path)
+    return path
+
+
+def test_the_trim_the_source_declared_survives_the_export():
+    """The TrimBox is where the guillotine goes.
+
+    A file that arrives with 3 mm of bleed has to leave with it. Losing it
+    would silently redefine the finished size as the full sheet, and the job
+    would be trimmed wrong — which is not something anyone notices before the
+    stack comes off the cutter.
+    """
+    src = _bleed_fixture()
+    out = _out("bleed")
+    _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
+                 300, lambda _m: None)
+    with pikepdf.open(src) as s_pdf, pikepdf.open(out) as o_pdf:
+        for i, (s_page, o_page) in enumerate(zip(s_pdf.pages, o_pdf.pages)):
+            for key in ("/TrimBox", "/BleedBox"):
+                want = [float(x) for x in s_page.obj[key]]
+                got = [float(x) for x in o_page.obj[key]]
+                assert all(abs(a - b) < 1.0 for a, b in zip(want, got)), \
+                    f"page {i + 1} {key}: {got} != {want}"
+    return "3 mm bleed and its TrimBox come through unchanged"
+
+
+def test_a_file_without_a_trim_box_is_not_given_a_guessed_one():
+    """No TrimBox means no declared trim, and the honest answer is the page
+    edge. Inferring "this is A4 plus bleed" from the page size would crop 3 mm
+    off every job that is genuinely that size."""
+    out = _out("notrim")
+    _export_pdfx(FX["color"], out, fallback_cmyk_icc(), "Custom",
+                 "Generic CMYK", 300, lambda _m: None)
+    with pikepdf.open(out) as pdf:
+        for i, page in enumerate(pdf.pages):
+            media = [float(x) for x in page.obj["/MediaBox"]]
+            trim = [float(x) for x in page.obj["/TrimBox"]]
+            assert all(abs(a - b) < 1.0 for a, b in zip(media, trim)), \
+                f"page {i + 1} gained a trim nobody asked for: {trim} in {media}"
+    return "TrimBox = MediaBox, no invented bleed"
+
+
+def test_a_trim_box_that_moved_stops_the_export():
+    """_boxes_survived is the guard behind the two tests above: if Ghostscript
+    ever stops carrying the boxes, the export must fail loudly rather than
+    hand over a file trimmed to the wrong size."""
+    src = _bleed_fixture()
+    moved = os.path.join(_TMP, "pdfx_moved.pdf")
+    with pikepdf.open(src) as pdf:
+        pdf.pages[1].obj["/TrimBox"] = Array([0, 0, 100, 100])
+        pdf.save(moved)
+    problems = _boxes_survived(src, moved)
+    assert problems, "a TrimBox moved by 400 pt was not noticed"
+    assert any("2" in p for p in problems), problems
+    assert not _boxes_survived(src, src), "a file disagreed with itself"
+    return f"caught: {', '.join(problems)}"
+
+
+def test_images_come_down_to_press_resolution():
+    """Resolution above what the press can image is RIP time nobody sees on
+    paper, and it is the main reason a job is slow to print. Downsampling is
+    also the one thing here that must not run backwards: upsampling a 200 dpi
+    scan invents detail and makes the file bigger for nothing."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from PIL import Image
+
+    # Not _out(...): that names the *output* files, and a source sharing a
+    # name with one of them gets exported over itself.
+    src = os.path.join(_TMP, "pdfx_image_source.pdf")
+    if not os.path.exists(src):
+        w, h = A4
+        base = Image.new("RGB", (620, 877))
+        pixels = base.load()
+        for y in range(877):
+            for x in range(620):
+                pixels[x, y] = (x * 7 % 256, y * 11 % 256, (x + y) % 256)
+        high = os.path.join(_TMP, "pdfx_600.png")
+        low = os.path.join(_TMP, "pdfx_200.png")
+        base.resize((4960, 7016)).save(high)     # ~600 dpi on A4
+        base.resize((1653, 2339)).save(low)      # ~200 dpi on A4
+        c = canvas.Canvas(src, pagesize=A4)
+        c.drawImage(high, 0, 0, w, h); c.showPage()
+        c.drawImage(low, 0, 0, w, h); c.showPage()
+        c.save()
+
+    def widths(path):
+        found = []
+        with pikepdf.open(path) as pdf:
+            for page in pdf.pages:
+                xobjects = page.obj.get("/Resources", {}).get("/XObject")
+                for value in (xobjects or {}).values():
+                    if value.get("/Subtype") == Name("/Image"):
+                        found.append(int(value.Width))
+        return found
+
+    before = widths(src)          # before, while it is still the source
+    out = _out("imgs")
+    _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
+                 300, lambda _m: None)
+    after = widths(out)
+    assert len(before) == len(after) == 2, (before, after)
+    assert 2200 < after[0] < 2700, f"the 600 dpi image came out at {after[0]} px"
+    assert after[1] == before[1], "a 200 dpi image was resampled"
+
+    # Against the same export with downsampling effectively off, not against
+    # the source: RGB to CMYK adds a fourth channel, so a converted file can
+    # legitimately be larger than what went in. This isolates the saving.
+    big = _out("imgs_full")
+    _export_pdfx(src, big, fallback_cmyk_icc(), "Custom", "Generic CMYK",
+                 2400, lambda _m: None)
+    small_kb, big_kb = os.path.getsize(out) // 1024, os.path.getsize(big) // 1024
+    assert small_kb < big_kb, f"downsampling saved nothing ({small_kb} vs {big_kb} KB)"
+    return (f"600 dpi -> {after[0] / (595.28 / 72):.0f} dpi, 200 dpi untouched, "
+            f"{big_kb} KB -> {small_kb} KB")
+
+
+def test_only_a_cmyk_profile_can_be_installed_as_one():
+    """An RGB profile filed under a CMYK name would make every later export
+    separate against the wrong space while the output intent claimed the
+    right one — wrong in exactly the way nobody checks for."""
+    from tools.panels._icc import (icc_colour_space, install_profile,
+                                   profile_description)
+    cmyk = fallback_cmyk_icc()
+    assert icc_colour_space(cmyk) == "CMYK"
+    assert profile_description(cmyk), "the profile has no readable description"
+
+    rgb = "/usr/share/ghostscript/iccprofiles/srgb.icc"
+    if os.path.isfile(rgb):
+        assert icc_colour_space(rgb) == "RGB "
+        try:
+            install_profile(rgb, "should_not_appear.icc")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an RGB profile was installed as CMYK")
+    assert icc_colour_space(FX["normal"]) is None, "a PDF passed as an ICC profile"
+    return "CMYK accepted, RGB refused, a non-profile refused"
+
+
+def test_the_panel_is_one_button():
+    """The whole point of the rework: a conversion, not a form.
+
+    The press condition and the image resolution are properties of the press,
+    so they live in the settings and the panel just runs.
+    """
+    from tools.panels.pdfx import PdfxPanel
+    from tools.shell.settings import AppSettings
+    from tests.support import _app
+
+    panel = PdfxPanel()
+    try:
+        assert not hasattr(panel, "profile_combo"), "the dropdown is back"
+        assert not hasattr(panel, "report"), "the report pane is back"
+        assert hasattr(panel, "run_btn")
+        # And what it will do is stated, not hidden in the settings dialog.
+        shown = panel._cond_lbl.text()
+        assert str(AppSettings.get().pdfx_image_dpi()) in shown, shown
+    finally:
+        panel.deleteLater(); _app.processEvents()
+    return f"one action button; it says: {shown!r}"
 
 
 def test_a_named_profile_that_is_installed_is_the_one_used():

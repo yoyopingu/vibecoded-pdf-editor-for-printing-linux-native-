@@ -585,6 +585,58 @@ _EN: dict[str, str] = {
         '  Export PDF/X',
     'PDF/X wird erzeugt …':
         'Producing PDF/X …',
+    'Ausgabebedingung ändern…':
+        'Change output condition…',
+    'Was die Datei mitbringt — Anschnitt, Schriften, Bildauflösung — zeigt „Druckvorstufenpruefung“.':
+        'What the file brings with it — bleed, fonts, image resolution — is shown by “Druckvorstufenpruefung”.',
+    '{p0}  (Profil fehlt — generisches CMYK)':
+        '{p0}  (profile missing — generic CMYK)',
+    'Ausgabebedingung: {p0}   ·   Bilder: {p1} dpi':
+        'Output condition: {p0}   ·   Images: {p1} dpi',
+    'Erzeugt {p0}: alle Farben in CMYK gegen das eingestellte Ausgabeprofil, alle Schriften eingebettet, Transparenz reduziert, Ebenen aufgeloest, Bilder auf Druckauflösung. Das Ergebnis wird geprueft, bevor es gespeichert wird.':
+        'Produces {p0}: all colour in CMYK against the configured output profile, all fonts embedded, transparency flattened, layers resolved, images at press resolution. The result is checked before it is saved.',
+    'Der Beschnitt hat sich veraendert auf Seite(n): {p0} — die Datei wurde nicht gespeichert.':
+        'The trim geometry changed on page(s): {p0} — the file was not saved.',
+    '{p0} ({p1})':
+        '{p0} ({p1})',
+    'Druckvorstufe':
+        'Prepress',
+    'Ausgabebedingung:':
+        'Output condition:',
+    'Bildauflösung:':
+        'Image resolution:',
+    'Profil installieren…':
+        'Install profile…',
+    'Bilder über der eingestellten Auflösung werden beim PDF/X-Export\nreduziert — 300 dpi ist, was die Maschine belichten kann. Bilder\ndarunter bleiben unverändert.':
+        'Images above the configured resolution are downsampled on PDF/X export\n— 300 dpi is what the press can image. Images below it are left\nunchanged.',
+    'ICC-Profil auswählen':
+        'Choose an ICC profile',
+    'Profil installiert':
+        'Profile installed',
+    'Generisches CMYK — kein ICC-Profil nötig.':
+        'Generic CMYK — no ICC profile needed.',
+    'Kein Profil nötig':
+        'No profile needed',
+    'Die generische Ausgabebedingung braucht keine ICC-Datei.':
+        'The generic output condition needs no ICC file.',
+    'Kein CMYK-Profil':
+        'Not a CMYK profile',
+    'Profil installieren':
+        'Install profile',
+    'Installiert nach {p0}':
+        'Installed to {p0}',
+    '✓  Profil installiert: {p0}':
+        '✓  Profile installed: {p0}',
+    '✗  Profil fehlt ({p0}). Der Export nutzt so lange generisches CMYK und vermerkt das im Bericht. Mit „Profil installieren…“ eine heruntergeladene .icc-Datei hinzufügen.':
+        '✗  Profile missing ({p0}). Until it is there the export uses generic CMYK and says so in the report. Use “Install profile…” to add a downloaded .icc file.',
+    'Diese Datei ist kein CMYK-Profil ({p0}). Ein Profil in einem anderen Farbraum würde jeden Export falsch separieren.':
+        'This file is not a CMYK profile ({p0}). A profile in another colour space would separate every export wrongly.',
+    '„{p0}“ als Profil für {p1} installieren?':
+        'Install “{p0}” as the profile for {p1}?',
+    'unlesbar':
+        'unreadable',
+    'Druckvorstufe…':
+        'Prepress…',
     "Keine PDF geladen.": "No PDF loaded.",
     "Keine Seiten ausgewaehlt.": "No pages selected.",
     "Keine Seiten ausgewaehlt": "No pages selected",

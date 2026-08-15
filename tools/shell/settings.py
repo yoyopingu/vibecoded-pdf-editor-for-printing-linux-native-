@@ -1,8 +1,9 @@
 """
-Persisted preferences, and the three dialogs over them — appearance,
-performance and general.
+Persisted preferences, and the four dialogs over them — appearance,
+performance, prepress and general.
 """
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QDialog, QRadioButton, QCheckBox, QSpinBox, QFormLayout
+import os
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QDialog, QRadioButton, QCheckBox, QComboBox, QSpinBox, QFormLayout
 from PyQt6.QtCore import QSettings, pyqtSignal
 from tools.i18n import tr
 
@@ -78,6 +79,29 @@ class AppSettings:
 
     def set_ram_percent(self, val: int):
         self._qs.setValue("performance/ram_percent", int(val))
+
+    # Prepress — the shop's press, set once rather than per job
+    def pdfx_condition(self) -> str:
+        """The output condition the PDF/X export separates against.
+
+        Stored as the profile's label. An empty value means "whatever the
+        table lists first", which is the generic entry.
+        """
+        return self._qs.value("prepress/pdfx_condition", "")
+
+    def set_pdfx_condition(self, val: str):
+        self._qs.setValue("prepress/pdfx_condition", val)
+
+    def pdfx_image_dpi(self) -> int:
+        """Images above this are downsampled on export.
+
+        300 is what the press can image and what Acrobat's press-quality
+        preset uses; anything above it is RIP time nobody sees on paper.
+        """
+        return int(self._qs.value("prepress/pdfx_image_dpi", 300))
+
+    def set_pdfx_image_dpi(self, val: int):
+        self._qs.setValue("prepress/pdfx_image_dpi", int(val))
 
     # General
     def reopen_last(self) -> bool:
@@ -233,6 +257,151 @@ class PerformanceDialog(QDialog):
             thumb_bytes     = _thumb_cache_bytes(s.ram_percent()),
             full_page_bytes = _full_page_cache_bytes(s.ram_percent()),
         )
+        self.accept()
+
+
+class PrepressDialog(QDialog):
+    """The press the shop prints on, and how much resolution it can use.
+
+    These live here rather than on the PDF/X panel because they are a property
+    of the press, not of the job: set once, then every export is one button.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("Druckvorstufe"))
+        self.setMinimumWidth(560)
+        self.setModal(True)
+        self._s = AppSettings.get()
+        self._build()
+
+    def _build(self):
+        from tools.panels._icc import CMYK_PROFILES, resolve_icc
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 20, 24, 20)
+        outer.setSpacing(10)
+
+        _dlg_section(outer, "DRUCKVORSTUFE")
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(20)
+        form.setVerticalSpacing(10)
+
+        self._cond_combo = QComboBox()
+        # Capped: the profile labels carry their paper and use-case, and an
+        # uncapped combo takes the whole row width and clips the field label.
+        self._cond_combo.setMaximumWidth(400)
+        current = self._s.pdfx_condition()
+        for label, candidates, _oci, _condition in CMYK_PROFILES:
+            self._cond_combo.addItem(tr(label), label)
+            if label == current:
+                self._cond_combo.setCurrentIndex(self._cond_combo.count() - 1)
+        self._cond_combo.currentIndexChanged.connect(self._update_profile_hint)
+        form.addRow(tr("Ausgabebedingung:"), self._cond_combo)
+
+        self._dpi_spin = QSpinBox()
+        self._dpi_spin.setRange(72, 2400)
+        self._dpi_spin.setSingleStep(50)
+        self._dpi_spin.setValue(self._s.pdfx_image_dpi())
+        self._dpi_spin.setSuffix("  dpi")
+        self._dpi_spin.setMaximumWidth(140)
+        form.addRow(tr("Bildauflösung:"), self._dpi_spin)
+        outer.addLayout(form)
+
+        self._prof_hint = QLabel()
+        self._prof_hint.setObjectName("dimLabel")
+        self._prof_hint.setWordWrap(True)
+        outer.addWidget(self._prof_hint)
+
+        install_row = QHBoxLayout()
+        install_btn = QPushButton(tr("Profil installieren…"))
+        install_btn.setObjectName("secondaryBtn")
+        install_btn.clicked.connect(self._install)
+        install_row.addWidget(install_btn)
+        install_row.addStretch()
+        outer.addLayout(install_row)
+
+        note = QLabel(tr(
+            "Bilder über der eingestellten Auflösung werden beim PDF/X-Export\n"
+            "reduziert — 300 dpi ist, was die Maschine belichten kann. Bilder\n"
+            "darunter bleiben unverändert."))
+        note.setObjectName("dimLabel")
+        outer.addWidget(note)
+        outer.addStretch()
+        self._resolve_icc = resolve_icc
+        self._update_profile_hint()
+        cancel = _dlg_buttons(outer, self._save)
+        cancel.clicked.connect(self.reject)
+
+    def _selected_row(self):
+        from tools.panels._icc import profile_by_key
+        return profile_by_key(self._cond_combo.currentData())
+
+    def _update_profile_hint(self):
+        """Say whether the chosen condition has its profile, because the
+        export quietly falls back to generic when it does not — and a file
+        separated generically under a named condition is a false claim."""
+        _label, candidates, _oci, _cond = self._selected_row()
+        if not candidates:
+            self._prof_hint.setText(tr(
+                "Generisches CMYK — kein ICC-Profil nötig."))
+            return
+        found = self._resolve_icc(candidates)
+        if found:
+            self._prof_hint.setText(tr("✓  Profil installiert: {p0}").format(
+                p0=os.path.basename(found)))
+        else:
+            self._prof_hint.setText(tr(
+                "✗  Profil fehlt ({p0}). Der Export nutzt so lange generisches "
+                "CMYK und vermerkt das im Bericht. Mit „Profil installieren…“ "
+                "eine heruntergeladene .icc-Datei hinzufügen.").format(
+                    p0=candidates[0]))
+
+    def _install(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from tools.panels._icc import (install_profile, icc_colour_space,
+                                       profile_description)
+        label, candidates, _oci, _cond = self._selected_row()
+        if not candidates:
+            QMessageBox.information(
+                self, tr("Kein Profil nötig"),
+                tr("Die generische Ausgabebedingung braucht keine ICC-Datei."))
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("ICC-Profil auswählen"), os.path.expanduser("~"),
+            "ICC (*.icc *.icm)")
+        if not path:
+            return
+        space = icc_colour_space(path)
+        if space != "CMYK":
+            QMessageBox.warning(
+                self, tr("Kein CMYK-Profil"),
+                tr("Diese Datei ist kein CMYK-Profil ({p0}). Ein Profil in "
+                   "einem anderen Farbraum würde jeden Export falsch "
+                   "separieren.").format(p0=space or tr("unlesbar")))
+            return
+        described = profile_description(path) or os.path.basename(path)
+        if QMessageBox.question(
+                self, tr("Profil installieren"),
+                tr('„{p0}“ als Profil für {p1} installieren?').format(
+                    p0=described, p1=label.split(" — ")[0]),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            dest = install_profile(path, candidates[0])
+        except (ValueError, OSError) as e:
+            QMessageBox.warning(self, tr("Installation fehlgeschlagen"), str(e))
+            return
+        self._update_profile_hint()
+        QMessageBox.information(
+            self, tr("Profil installiert"),
+            tr("Installiert nach {p0}").format(p0=dest))
+
+    def _save(self):
+        self._s.set_pdfx_condition(self._cond_combo.currentData())
+        self._s.set_pdfx_image_dpi(self._dpi_spin.value())
         self.accept()
 
 

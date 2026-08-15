@@ -20,7 +20,7 @@ from tools.panels.ocr import OcrPanel
 from tools.panels.page_numbers import PageNumbersPanel
 from tools.panels.pdfx import PdfxPanel
 from tools.panels.preflight import PreflightPanel
-from tools.shell.settings import AppearanceDialog, GeneralDialog, PerformanceDialog
+from tools.shell.settings import AppearanceDialog, GeneralDialog, PerformanceDialog, PrepressDialog
 from tools.shell.style import apply_theme_globally
 from tools.shell.titlebar import NavBtn, TitleBar
 
@@ -276,6 +276,9 @@ class MainWindow(QMainWindow):
 
     def _open_performance(self):
         PerformanceDialog(self).exec()
+
+    def _open_prepress(self):
+        PrepressDialog(self).exec()
 
     def _open_general(self):
         GeneralDialog(self).exec()
