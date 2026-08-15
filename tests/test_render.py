@@ -400,3 +400,55 @@ def test_render_paths_go_through_the_document_cache():
     finally:
         restore()
         dc.close_all()
+
+
+def test_the_page_cache_is_bounded_by_memory_not_by_a_page_count():
+    """How many pages stay rendered depends on how big they are.
+
+    Both caches counted entries. The full-page one stopped at twelve from 40 %
+    of RAM upwards — so the slider did nothing above that — and each entry was
+    assumed to be 70 MB when a page rendered to a normal window is nearer 2.
+    A count of entries says nothing about the memory in use, which is what the
+    setting is choosing.
+    """
+    from PyQt6.QtGui import QImage
+    from tools.render.caches import _FullPageCache
+
+    before = _FullPageCache.MAX_BYTES
+    try:
+        _FullPageCache.invalidate()
+        # Ten identical renders, budget for about four of them.
+        img = QImage(500, 500, QImage.Format.Format_RGB32)
+        one = int(img.sizeInBytes())
+        _FullPageCache.MAX_BYTES = one * 4 + one // 2
+        for i in range(10):
+            _FullPageCache.put(f"/nonexistent/doc.pdf", i, 0, 800, 600,
+                               (img, 595.0, 842.0, 1.0, []), force=True)
+        held = len(_FullPageCache._store)
+        assert _FullPageCache._bytes <= _FullPageCache.MAX_BYTES, \
+            f"{_FullPageCache._bytes} bytes held against a budget of " \
+            f"{_FullPageCache.MAX_BYTES}"
+        assert 3 <= held <= 5, f"expected about four pages to fit, held {held}"
+
+        # Twice the budget, twice the pages — the thing the old count could not
+        # express once it hit its ceiling.
+        _FullPageCache.MAX_BYTES = one * 8 + one // 2
+        for i in range(10, 20):
+            _FullPageCache.put("/nonexistent/doc.pdf", i, 0, 800, 600,
+                               (img, 595.0, 842.0, 1.0, []), force=True)
+        assert 7 <= len(_FullPageCache._store) <= 9, \
+            f"doubling the budget held {len(_FullPageCache._store)}, not ~8"
+
+        # And a bigger page means fewer of them fit, without anyone saying so.
+        small_capacity = _FullPageCache.capacity()
+        _FullPageCache.invalidate()
+        big = QImage(1500, 1500, QImage.Format.Format_RGB32)
+        _FullPageCache.put("/nonexistent/big.pdf", 0, 0, 800, 600,
+                           (big, 595.0, 842.0, 1.0, []), force=True)
+        assert _FullPageCache.capacity() < small_capacity, (
+            f"a page {int(big.sizeInBytes()) // one}x the size still reports "
+            f"room for {_FullPageCache.capacity()} of them")
+    finally:
+        _FullPageCache.MAX_BYTES = before
+        _FullPageCache.invalidate()
+    return "budget honoured, capacity follows page size"

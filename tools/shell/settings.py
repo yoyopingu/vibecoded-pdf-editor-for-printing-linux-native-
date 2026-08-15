@@ -19,21 +19,25 @@ def _total_ram_kb() -> int:
     return 4 * 1024 * 1024
 
 
-def _ram_percent_to_pages(percent: int) -> int:
-    """Convert a RAM-% to a thumbnail cache page count (~200 KB per thumb)."""
-    allowed_kb = _total_ram_kb() * percent // 100
-    return max(50, allowed_kb // 200)
+def _ram_cache_bytes(percent: int) -> int:
+    """The memory this app may keep rendered pages in, from a share of RAM."""
+    return max(64 * 1024 * 1024, _total_ram_kb() * 1024 * percent // 100)
 
 
-def _ram_percent_to_full_pages(percent: int) -> int:
-    """Convert a RAM-% to a full-page render cache count.
-    Each full-page render is roughly 70 MB (4000 x 5660 px RGB).
-    We reserve 1/4 of the allowed RAM for this cache and cap at 12
-    so the app never monopolises memory on large files.
+def _thumb_cache_bytes(percent: int) -> int:
+    """Of that, the thumbnails' share.
+
+    Capped: a thumbnail is a couple of hundred kilobytes and there are only
+    ever a few hundred worth keeping, so past a point more of them buys
+    nothing and the rest belongs to whole pages — which is what "how many
+    pages stay rendered" means.
     """
-    allowed_kb = _total_ram_kb() * percent // 100
-    quarter_kb = allowed_kb // 4
-    return max(2, min(12, quarter_kb // (70 * 1024)))
+    return min(256 * 1024 * 1024, _ram_cache_bytes(percent) // 4)
+
+
+def _full_page_cache_bytes(percent: int) -> int:
+    """And the rest, for whole rendered pages."""
+    return _ram_cache_bytes(percent) - _thumb_cache_bytes(percent)
 
 
 def _ram_percent_to_gb(percent: int) -> float:
@@ -193,7 +197,7 @@ class PerformanceDialog(QDialog):
         cache_col.setSpacing(2)
         cache_col.addWidget(self._ram_spin)
         cache_col.addWidget(self._ram_hint)
-        form.addRow(tr("Thumbnail-Cache:"), cache_col)
+        form.addRow(tr("Seitenspeicher:"), cache_col)
 
         outer.addLayout(form)
         note = QLabel(tr(
@@ -207,7 +211,17 @@ class PerformanceDialog(QDialog):
         cancel.clicked.connect(self.reject)
 
     def _update_ram_hint(self, pct: int):
-        self._ram_hint.setText(f"≈ {_ram_percent_to_gb(pct):.1f} GB")
+        """What that share of RAM buys, in the terms the user is choosing in.
+
+        The number of pages is not a setting because it is not a constant: it
+        is the budget divided by what a page of *this* document costs, and a
+        poster costs twenty times a paperback. The example is a page rendered
+        to a normal window, which is what most of them are."""
+        typical = 2.5 * 1024 * 1024
+        pages = int(_full_page_cache_bytes(pct) / typical)
+        self._ram_hint.setText(tr(
+            "≈ {p0:.1f} GB — etwa {p1} Seiten üblicher Größe").format(
+                p0=_ram_percent_to_gb(pct), p1=pages))
 
     def _save(self):
         s = self._s
@@ -216,8 +230,8 @@ class PerformanceDialog(QDialog):
         from tools.render.queue import apply_performance_settings
         apply_performance_settings(
             prerender       = s.prerender(),
-            cache_size      = _ram_percent_to_pages(s.ram_percent()),
-            full_page_cache = _ram_percent_to_full_pages(s.ram_percent()),
+            thumb_bytes     = _thumb_cache_bytes(s.ram_percent()),
+            full_page_bytes = _full_page_cache_bytes(s.ram_percent()),
         )
         self.accept()
 

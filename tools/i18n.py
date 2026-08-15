@@ -704,7 +704,6 @@ _EN: dict[str, str] = {
     "Vorschau-Threads:": "Preview threads:",
     "Voraus-Rendering:": "Pre-rendering:",
     "Seiten": "Pages",
-    "Thumbnail-Cache:": "Thumbnail cache:",
     "% RAM": "% RAM",
     "Abbrechen": "Cancel",
 
@@ -986,6 +985,9 @@ _EN: dict[str, str] = {
     "Wirkung.":
         "Rendering runs on one thread: pdfium is not thread-safe and every\n"
         "call shares one lock. More threads would make no difference here.",
+    "Seitenspeicher:": "Page memory:",
+    "≈ {p0:.1f} GB — etwa {p1} Seiten üblicher Größe":
+        "≈ {p0:.1f} GB — about {p1} pages of a typical size",
     "Vorab-Rendering:": "Pre-rendering:",
     "Thumbnail-Cache:": "Thumbnail cache:",
     "ALLGEMEIN": "GENERAL",

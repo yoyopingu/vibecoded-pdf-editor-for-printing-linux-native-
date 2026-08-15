@@ -814,7 +814,11 @@ class SinglePageView(QWidget):
         cur     = max(0, min(self._current, n - 1))
         # Window: fill the cache forward then backward from current page.
         # Cap at _FullPageCache.MAX so we never queue more than the cache holds.
-        window  = _FullPageCache.MAX          # e.g. 30
+        # As many as the memory budget affords at this document's page size —
+        # see _FullPageCache.capacity. This used to be a fixed entry count,
+        # which meant a window of poster pages and a window of paperback pages
+        # were the same number and only one of them fitted.
+        window  = _FullPageCache.capacity()
         ahead   = min(window * 3 // 4, n)    # ~75 % forward
         behind  = window - ahead
         start   = max(0, cur - behind)

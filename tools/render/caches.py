@@ -14,6 +14,14 @@ So each entry carries the revision of the file it was rendered from, and a read
 that finds a different one drops it and misses. tools/colorspace.py and
 tools/render/region.py key on the same _stat_key for the same reason.
 
+Both are bounded by *bytes*, not by a number of entries. A rendered page is
+whatever its size and the window make it — a few hundred kilobytes for a small
+page in a small window, tens of megabytes for a poster at full zoom — so a
+count of entries says nothing about the memory in use. Counting them was also
+why the RAM setting appeared to do nothing: the full-page cache was capped at
+twelve entries from 40 % of RAM upwards, and each was assumed to be 70 MB when
+a real one is nearer 2 MB.
+
 Eviction is by priority, not by age. _set_active names the page the user is
 looking at, and _priority_evict drops other tabs first, then other pages of this
 tab, and the page on screen last of all — an LRU alone would happily evict the
@@ -23,6 +31,18 @@ import threading
 from collections import OrderedDict
 
 from tools.render.document_cache import _stat_key
+
+
+def _image_bytes(image):
+    """How much memory this render actually occupies.
+
+    The whole point of budgeting in bytes: a page is whatever its size and the
+    window make it, and counting entries said nothing about that.
+    """
+    try:
+        return int(image.sizeInBytes())
+    except Exception:
+        return max(1, image.width() * image.height() * 4)
 
 
 def _revision(path):
@@ -43,20 +63,21 @@ def _set_active(path: str, page: int):
 
 
 def _priority_evict(store: "OrderedDict", key_path_fn, key_page_fn, active_path, active_page):
-    """Evict one entry from store with priority: other-tab > same-tab-other-page > current page.
-    key_path_fn(k) and key_page_fn(k) extract path and page index from a key."""
+    """Evict one entry with priority: other-tab > same-tab-other-page > current
+    page. key_path_fn(k) and key_page_fn(k) extract path and page index from a
+    key. Returns the entry removed as (key, value), or None if empty."""
     # 1st pass: evict oldest entry from a non-active tab
     for k in store:
         if key_path_fn(k) != active_path:
-            del store[k]
-            return
+            return k, store.pop(k)
     # 2nd pass: evict oldest entry from active tab that isn't the current page
     for k in store:
         if key_page_fn(k) != active_page:
-            del store[k]
-            return
+            return k, store.pop(k)
     # Last resort: evict true LRU (current page — should almost never happen)
-    store.popitem(last=False)
+    if store:
+        return store.popitem(last=False)
+    return None
 
 
 class _ThumbnailCache:
@@ -65,8 +86,9 @@ class _ThumbnailCache:
     Stores QImage (thread-safe); caller converts to QPixmap on GUI thread.
     """
     _lock  = threading.Lock()
-    _store: OrderedDict = OrderedDict()
-    MAX    = 300   # ~300 small thumbnails ≈ reasonable memory
+    _store: OrderedDict = OrderedDict()   # key -> (revision, nbytes, QImage)
+    MAX_BYTES = 64 * 1024 * 1024          # raised by apply_performance_settings
+    _bytes = 0
 
     @classmethod
     def get(cls, key):
@@ -74,9 +96,10 @@ class _ThumbnailCache:
             entry = cls._store.get(key)
             if entry is None:
                 return None
-            rev, image = entry
+            rev, nbytes, image = entry
             if rev != _revision(key[0]):
-                del cls._store[key]      # the file has been written since
+                cls._store.pop(key)      # the file has been written since
+                cls._bytes -= nbytes
                 return None
             cls._store.move_to_end(key)
             return image
@@ -84,21 +107,23 @@ class _ThumbnailCache:
     @classmethod
     def put(cls, key, image):
         with cls._lock:
-            cls._store[key] = (_revision(key[0]), image)
-            cls._store.move_to_end(key)
-            while len(cls._store) > cls.MAX:
-                _priority_evict(cls._store,
-                                lambda k: k[0], lambda k: k[1],
-                                _active_path, _active_page)
+            old = cls._store.pop(key, None)
+            if old is not None:
+                cls._bytes -= old[1]
+            nbytes = _image_bytes(image)
+            cls._store[key] = (_revision(key[0]), nbytes, image)
+            cls._bytes += nbytes
+            cls._trim_locked()
 
     @classmethod
     def invalidate(cls, pdf_path=None):
         with cls._lock:
             if pdf_path is None:
                 cls._store.clear()
+                cls._bytes = 0
             else:
                 for k in [k for k in cls._store if k[0] == pdf_path]:
-                    del cls._store[k]
+                    cls._bytes -= cls._store.pop(k)[1]
 
     @classmethod
     def evict_tab(cls, pdf_path, keep_page=None):
@@ -107,7 +132,18 @@ class _ThumbnailCache:
             drop = [k for k in cls._store
                     if k[0] == pdf_path and (keep_page is None or k[1] != keep_page)]
             for k in drop:
-                del cls._store[k]
+                cls._bytes -= cls._store.pop(k)[1]
+
+    @classmethod
+    def _trim_locked(cls):
+        """Evict until inside the budget. Never below one entry: the page on
+        screen has to stay cached however small the budget is set."""
+        while cls._bytes > cls.MAX_BYTES and len(cls._store) > 1:
+            dropped = _priority_evict(cls._store, lambda k: k[0], lambda k: k[1],
+                                      _active_path, _active_page)
+            if dropped is None:
+                break
+            cls._bytes -= dropped[1][1]
 
     @classmethod
     def get_any(cls, path, pidx, rot):
@@ -115,7 +151,7 @@ class _ThumbnailCache:
         Used as a placeholder when the exact render_width is not cached yet."""
         rev = _revision(path)
         with cls._lock:
-            for k, (entry_rev, image) in cls._store.items():
+            for k, (entry_rev, _nbytes, image) in cls._store.items():
                 if (k[0] == path and k[1] == pidx and k[2] == rot
                         and entry_rev == rev):
                     return image
@@ -137,7 +173,7 @@ class _ThumbnailCache:
         best = None
         rev = _revision(path)
         with cls._lock:
-            for (p, pi, r, w), (entry_rev, image) in cls._store.items():
+            for (p, pi, r, w), (entry_rev, _nbytes, image) in cls._store.items():
                 if (p == path and pi == pidx and r == rot and w >= width
                         and entry_rev == rev):
                     if best is None or w < best[0]:
@@ -161,8 +197,9 @@ class _FullPageCache:
            Multiply by (target_scale / render_scale) to rescale for any zoom.
     """
     _lock  = threading.Lock()
-    _store: OrderedDict = OrderedDict()
-    MAX    = 6     # 6 full pages ≈ safe default (~400 MB); raised by apply_performance_settings
+    _store: OrderedDict = OrderedDict()   # key -> (revision, nbytes, entry)
+    MAX_BYTES = 192 * 1024 * 1024         # raised by apply_performance_settings
+    _bytes = 0
 
     @classmethod
     def _key(cls, path, pidx, rot, aw, ah):
@@ -175,9 +212,10 @@ class _FullPageCache:
             stored = cls._store.get(key)
             if stored is None:
                 return None
-            rev, entry = stored
+            rev, nbytes, entry = stored
             if rev != _revision(path):
-                del cls._store[key]      # the file has been written since
+                cls._store.pop(key)      # the file has been written since
+                cls._bytes -= nbytes
                 return None
             cls._store.move_to_end(key)
             return entry   # (QImage, pw_pt, ph_pt, render_scale, raw_chars)
@@ -201,25 +239,53 @@ class _FullPageCache:
         with cls._lock:
             existing = cls._store.get(key)
             if existing is not None and not force and existing[0] == rev:
-                _, _, _, ex_scale, _ = existing[1]
+                _, _, _, ex_scale, _ = existing[2]
                 if new_scale < ex_scale * 0.99:
                     cls._store.move_to_end(key)  # refresh LRU even if not replacing
                     return
-            cls._store[key] = (rev, entry)
-            cls._store.move_to_end(key)
-            while len(cls._store) > cls.MAX:
-                _priority_evict(cls._store,
-                                lambda k: k[0], lambda k: k[1],
-                                _active_path, _active_page)
+            if existing is not None:
+                cls._bytes -= existing[1]
+                cls._store.pop(key, None)
+            nbytes = _image_bytes(entry[0])
+            cls._store[key] = (rev, nbytes, entry)
+            cls._bytes += nbytes
+            cls._trim_locked()
+
+    @classmethod
+    def capacity(cls, default=8):
+        """Roughly how many pages fit in the budget, at the size being rendered.
+
+        "How many pages stay rendered" is not a number anyone can set directly:
+        it is the memory budget divided by what a page of this document, in
+        this window, actually costs. Measured from what is cached rather than
+        assumed, so a poster and a paperback get different answers.
+        """
+        with cls._lock:
+            if not cls._store:
+                return default
+            average = max(1, cls._bytes // len(cls._store))
+        return max(2, min(64, cls.MAX_BYTES // average))
+
+    @classmethod
+    def _trim_locked(cls):
+        """Evict until inside the budget, keeping at least one entry — the page
+        on screen has to stay cached however small the budget is set."""
+        while cls._bytes > cls.MAX_BYTES and len(cls._store) > 1:
+            dropped = _priority_evict(cls._store, lambda k: k[0], lambda k: k[1],
+                                      _active_path, _active_page)
+            if dropped is None:
+                break
+            cls._bytes -= dropped[1][1]
 
     @classmethod
     def invalidate(cls, pdf_path=None):
         with cls._lock:
             if pdf_path is None:
                 cls._store.clear()
+                cls._bytes = 0
             else:
                 for k in [k for k in cls._store if k[0] == pdf_path]:
-                    del cls._store[k]
+                    cls._bytes -= cls._store.pop(k)[1]
 
     @classmethod
     def evict_tab(cls, pdf_path, keep_page=None):
@@ -228,7 +294,7 @@ class _FullPageCache:
             drop = [k for k in cls._store
                     if k[0] == pdf_path and (keep_page is None or k[1] != keep_page)]
             for k in drop:
-                del cls._store[k]
+                cls._bytes -= cls._store.pop(k)[1]
 
     @classmethod
     def get_at_least(cls, path, pidx, rot, width):
@@ -240,7 +306,7 @@ class _FullPageCache:
         best = None
         rev = _revision(path)
         with cls._lock:
-            for (p, pi, r, _aw, _ah), (entry_rev, entry) in cls._store.items():
+            for (p, pi, r, _aw, _ah), (entry_rev, _nbytes, entry) in cls._store.items():
                 if p == path and pi == pidx and r == rot and entry_rev == rev:
                     img = entry[0]
                     if img.width() >= width and (best is None
@@ -254,7 +320,7 @@ class _FullPageCache:
         Returns (0, 0) if not cached yet."""
         rev = _revision(path)
         with cls._lock:
-            for (p, pi, r, _aw, _ah), (entry_rev, entry) in cls._store.items():
+            for (p, pi, r, _aw, _ah), (entry_rev, _nbytes, entry) in cls._store.items():
                 if p == path and pi == pidx and r == rot and entry_rev == rev:
                     return entry[1], entry[2]
         return 0.0, 0.0

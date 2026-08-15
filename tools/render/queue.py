@@ -422,24 +422,30 @@ def prerender_enabled():
     return _prerender_enabled
 
 
-def apply_performance_settings(prerender=True, cache_size=300,
-                               full_page_cache=6):
+def apply_performance_settings(prerender=True, thumb_bytes=None,
+                               full_page_bytes=None):
     """Apply performance settings at runtime (called from PerformanceDialog).
+
+    The two caches are bounded by memory, not by a number of entries: a
+    rendered page is whatever its size and the window make it. Counting them
+    is why the RAM setting looked inert — the full-page cache stopped at twelve
+    entries from 40 % of RAM upwards, and each was assumed to be 70 MB when a
+    real one is nearer 2.
 
     There is no thread count here. Rendering runs on one priority queue thread,
     and every pdfium call in the process is serialised by PDFIUM_LOCK anyway
     (tools/render/document_cache explains why), so more threads could not render
-    anything faster. The dialog used to offer "Maximum (alle Kerne)" and pass a
-    render_threads/thumb_threads pair that this function then ignored.
+    anything faster.
     """
     global _prerender_enabled
     _prerender_enabled = bool(prerender)
-    _ThumbnailCache.MAX = max(50, int(cache_size))
-    _FullPageCache.MAX  = max(2, int(full_page_cache))
-    # Immediately evict surplus entries so RAM drops right away
+    if thumb_bytes is not None:
+        _ThumbnailCache.MAX_BYTES = max(8 * 1024 * 1024, int(thumb_bytes))
+    if full_page_bytes is not None:
+        _FullPageCache.MAX_BYTES = max(16 * 1024 * 1024, int(full_page_bytes))
+    # Immediately evict surplus so RAM drops right away rather than at the next
+    # render, which on a document nobody is scrolling never comes.
     with _ThumbnailCache._lock:
-        while len(_ThumbnailCache._store) > _ThumbnailCache.MAX:
-            _ThumbnailCache._store.popitem(last=False)
+        _ThumbnailCache._trim_locked()
     with _FullPageCache._lock:
-        while len(_FullPageCache._store) > _FullPageCache.MAX:
-            _FullPageCache._store.popitem(last=False)
+        _FullPageCache._trim_locked()

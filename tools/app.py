@@ -27,8 +27,8 @@ from tools.render.queue   import shutdown_render_queue, apply_performance_settin
 from tools.shell.inputs   import install as install_number_field_behaviour
 from tools.shell.instance import (_forward_to_running_instance,
                                   _listen_for_open_requests)
-from tools.shell.settings import (AppSettings, _ram_percent_to_pages,
-                                  _ram_percent_to_full_pages)
+from tools.shell.settings import (AppSettings, _full_page_cache_bytes,
+                                  _thumb_cache_bytes)
 from tools.shell.style    import AppStyle, apply_theme_globally, app_icon
 from tools.shell.window   import MainWindow
 
@@ -96,8 +96,8 @@ def main():
 
     apply_performance_settings(
         prerender        = s.prerender(),
-        cache_size       = _ram_percent_to_pages(s.ram_percent()),
-        full_page_cache  = _ram_percent_to_full_pages(s.ram_percent()),
+        thumb_bytes      = _thumb_cache_bytes(s.ram_percent()),
+        full_page_bytes  = _full_page_cache_bytes(s.ram_percent()),
     )
 
     app.setWindowIcon(app_icon())
