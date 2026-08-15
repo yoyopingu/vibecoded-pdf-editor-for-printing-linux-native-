@@ -15,10 +15,10 @@ from tools.panels.forms import FormsPanel
 from tools.panels.grayscale import GrayscalePanel
 from tools.panels.img_pdf import ImgPdfPanel
 from tools.panels.impose import ImposePanel
-from tools.panels.layers import LayersPanel
 from tools.panels.nup import NUpPanel
 from tools.panels.ocr import OcrPanel
 from tools.panels.page_numbers import PageNumbersPanel
+from tools.panels.pdfx import PdfxPanel
 from tools.panels.preflight import PreflightPanel
 from tools.shell.settings import AppearanceDialog, GeneralDialog, PerformanceDialog
 from tools.shell.style import apply_theme_globally
@@ -36,7 +36,7 @@ TOOLS = [
     ("Formulare / Reduzieren",    FormsPanel),
     ("OCR — Texterkennung",       OcrPanel),
     ("Druckvorstufenprüfung",     PreflightPanel),
-    ("Ebenen (OCG)",              LayersPanel),
+    ("PDF/X-Export",              PdfxPanel),
     ("Farbprofil / CMYK",         ColourProfilePanel),
     ("Plugin-Manager",            PluginManagerPanel),
 ]

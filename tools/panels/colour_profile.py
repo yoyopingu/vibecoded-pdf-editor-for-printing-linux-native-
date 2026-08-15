@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QTex
 from tools._base import BasePanel, make_label
 from tools.colorspace import document_colorspaces, has_cmyk, has_rgb
 from tools.i18n import tr
+from tools.panels._icc import CMYK_PROFILES, ICC_DIR, resolve_icc
 from tools.panels._shared import row
 from tools.panels._verify import _verify_pages_intact
 
@@ -20,23 +21,6 @@ class ColourProfilePanel(BasePanel):
     SUBTITLE      = "ICC-Profile pruefen und in CMYK umwandeln."
     OPENS_NEW_TAB = True
 
-    # (label incl. real profile name + paper/use-case, candidate .icc filenames).
-    # The generic option needs no ICC file; the named ones use the matching .icc
-    # via Ghostscript when present (drop them in ~/.local/share/copyshop_pdf_suite/icc/).
-    CMYK_PROFILES = [
-        (tr("Standard (generisch) — universell, ohne ICC-Datei"), None),
-        (tr("ISO Coated v2 (FOGRA39) — gestrichenes Papier, EU-Offset-Standard"),
-            ("ISOcoated_v2_eci.icc", "ISOcoated_v2_300_eci.icc")),
-        (tr("PSO Coated v3 (FOGRA51) — modernes gestrichenes Papier, Premium-Offset"),
-            ("PSOcoated_v3.icc",)),
-        (tr("PSO Uncoated v3 (FOGRA52) — ungestrichenes/Naturpapier, Bücher & Briefbögen"),
-            ("PSOuncoated_v3_FOGRA52.icc", "PSO_Uncoated_ISO12647_eci.icc")),
-        (tr("U.S. Web Coated (SWOP) v2 — US-Rollenoffset, Magazine (gestrichen)"),
-            ("USWebCoatedSWOP.icc",)),
-        (tr("Coated GRACoL 2006 — US-Bogenoffset, hochwertiges gestrichenes Papier"),
-            ("GRACoL2006_Coated1v2.icc", "CGATS21_CRPC6.icc")),
-    ]
-
     def build_ui(self, layout):
         ib=QPushButton(tr("  Farbprofil pruefen")); ib.setObjectName("secondaryBtn")
         ib.clicked.connect(self._inspect); layout.addWidget(ib)
@@ -48,7 +32,7 @@ class ColourProfilePanel(BasePanel):
             "Konvertiert via Ghostscript nach DeviceCMYK. "
             "Qualitaetsstufe: Prepress (hoechste Qualitaet, alle Fonts eingebettet)."), dim=True))
         self.profile_combo = QComboBox()
-        for label, cands in self.CMYK_PROFILES:
+        for label, cands, _oci, _condition in CMYK_PROFILES:
             self.profile_combo.addItem(tr(label), cands)
         cl.addLayout(row(tr("CMYK-Profil:"), self.profile_combo))
         cl.addWidget(make_label(tr(
@@ -59,23 +43,6 @@ class ColourProfilePanel(BasePanel):
         status = tr("✓  Ghostscript verfuegbar") if gs_ok else tr("✗  Ghostscript fehlt  →  sudo pacman -S ghostscript")
         cl.addWidget(make_label(status, dim=True))
         layout.addWidget(cb)
-
-    def _resolve_icc(self, candidates):
-        """Return the path to the first available .icc among `candidates`
-        (searching the app icc dir + common system dirs), or None."""
-        if not candidates:
-            return None
-        dirs = [
-            os.path.expanduser("~/.local/share/copyshop_pdf_suite/icc/"),
-            "/usr/share/color/icc/",
-            "/usr/share/color/icc/colord/",
-        ]
-        for name in candidates:
-            for d in dirs:
-                p = os.path.join(d, name)
-                if os.path.isfile(p):
-                    return p
-        return None
 
     def _inspect(self):
         try: src=self.require_pdf()
@@ -132,12 +99,12 @@ class ColourProfilePanel(BasePanel):
 
         # Selected CMYK target profile (None = generic). Use its .icc if present.
         candidates = self.profile_combo.currentData()
-        icc = self._resolve_icc(candidates)
+        icc = resolve_icc(candidates)
         prof_label = self.profile_combo.currentText().split(" — ")[0]
         if icc:
             prof_note = f"Profil: {prof_label}  ({os.path.basename(icc)})"
         elif candidates:
-            prof_note = (tr("⚠  Profil '{p0}' nicht installiert — generische CMYK-Konvertierung verwendet.\n   .icc-Datei nach ~/.local/share/copyshop_pdf_suite/icc/ legen.").format(p0=prof_label))
+            prof_note = (tr("⚠  Profil '{p0}' nicht installiert — generische CMYK-Konvertierung verwendet.\n   .icc-Datei nach {p1} legen.").format(p0=prof_label, p1=ICC_DIR))
         else:
             prof_note = "Profil: Standard (generisch)"
 

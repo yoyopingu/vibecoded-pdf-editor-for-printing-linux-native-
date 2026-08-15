@@ -46,7 +46,7 @@ Written in Python with PyQt6. The interface ships in German and English
 | Formulare / Reduzieren | fill and flatten AcroForms |
 | OCR — Texterkennung | make scanned PDFs searchable |
 | Druckvorstufenprüfung | preflight: colour, resolution, fonts, boxes |
-| Ebenen (OCG) | inspect and flatten optional content groups |
+| PDF/X-Export | press-ready PDF/X-3 with an embedded output intent |
 | Farbprofil / CMYK | colour profile conversion |
 | Plugin-Manager | install your own tool panels |
 
@@ -220,8 +220,8 @@ output.
 
 **`tools/panels/` — the tools.** One module per sidebar entry — N-Up,
 imposition, compress, crop/scale, page numbers, image↔PDF, greyscale, forms,
-OCR, preflight, layers, colour profile — over shared helpers in `_shared.py`,
-`_verify.py`, `_colour.py`, `_cropmarks.py` and `_imposition.py`.
+OCR, preflight, PDF/X, colour profile — over shared helpers in `_shared.py`,
+`_verify.py`, `_colour.py`, `_cropmarks.py`, `_icc.py` and `_imposition.py`.
 
 **`tools/shell/` — everything around the documents.** `style` (palette,
 stylesheets, window icon), `settings` (persisted preferences and their

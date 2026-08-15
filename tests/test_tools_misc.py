@@ -16,7 +16,7 @@ from tools.panels.crop_resize import CropResizePanel
 from tools.panels.forms import FormsPanel
 from tools.panels.img_pdf import ImgPdfPanel
 from tools.panels.impose import ImposePanel
-from tools.panels.layers import LayersPanel
+from tools.panels.pdfx import PdfxPanel
 from tools.panels.merge_split import MergeSplitPanel
 from tools.panels.nup import NUpPanel
 from tools.panels.page_numbers import PageNumbersPanel
@@ -278,7 +278,7 @@ def test_output_validity():
     # transformers on a 3-page doc -> valid output
     _open(FX["color"])
     for cls in (CompressPanel, PageNumbersPanel, ImposePanel,
-                LayersPanel, ColourProfilePanel):
+                PdfxPanel, ColourProfilePanel):
         _open(FX["color"]); p = cls(); _sync_async(p)
         o = out(cls.__name__); p.save_pdf = lambda *a, **k: o
         cap = {}; p.open_result = lambda path, t="": cap.update(p=path)
@@ -301,13 +301,13 @@ def test_the_heavy_tools_hand_their_work_to_a_worker():
     heavy part is somewhere else."""
     from tools.panels.compress import CompressPanel
     from tools.panels.colour_profile import ColourProfilePanel
-    from tools.panels.layers import LayersPanel
+    from tools.panels.pdfx import PdfxPanel
     from tools.panels.impose import ImposePanel
     from tools.panels.nup import NUpPanel
 
     _open(FX["color"])
     handed_off = []
-    for cls in (CompressPanel, ColourProfilePanel, LayersPanel,
+    for cls in (CompressPanel, ColourProfilePanel, PdfxPanel,
                 ImposePanel, NUpPanel):
         p = cls()
         p.save_pdf = lambda *a, **k: os.path.join(_TMP, f"hand_{cls.__name__}.pdf")

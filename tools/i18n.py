@@ -72,8 +72,6 @@ _EN: dict[str, str] = {
     "OCR": "OCR",
     "OCR — Texterkennung": "OCR — Text Recognition",
     "Druckvorstufenprüfung": "Preflight Check",
-    "Ebenen": "Layers",
-    "Ebenen (OCG)": "Layers (OCG)",
     "Farbprofil": "Color Profile",
     "Farbprofil / CMYK": "Color Profile / CMYK",
     "Aufschlag / Ausschuss": "Imposition",
@@ -120,10 +118,6 @@ _EN: dict[str, str] = {
         "Check PDF for print issues",
     "PDF auf Drucktauglichkeit pruefen.":
         "Check PDF for print readiness.",
-    "PDF-Ebenen verwalten":
-        "Manage PDF layers",
-    "Optionale Inhaltsgruppen steuern.":
-        "Control optional content groups.",
     "ICC-Farbprofil einbetten oder entfernen":
         "Embed or remove ICC color profile",
     "ICC-Profile pruefen und in CMYK umwandeln.":
@@ -521,6 +515,76 @@ _EN: dict[str, str] = {
     "Lineale und Hilfslinien": "Rulers and guides",
     "Hilfslinien dieser Seite entfernen": "Clear guides on page",
     "Alle Hilfslinien entfernen": "Clear all guides",
+    '  Datei pruefen':
+        '  Check file',
+    'PDF/X-Pruefbericht erscheint hier...':
+        'PDF/X check report appears here...',
+    'AUSGABEBEDINGUNG':
+        'OUTPUT CONDITION',
+    'PDF/X exportiert':
+        'PDF/X exported',
+    'Ghostscript: PDF/X-Konvertierung …':
+        'Ghostscript: PDF/X conversion …',
+    '(unbenannt)':
+        '(unnamed)',
+    'Das Ausgabeprofil beschreibt, fuer welche Druckbedingung die Datei separiert wurde. Es wird als Output-Intent eingebettet — die Druckerei liest daran ab, ob die Datei zu ihrer Maschine passt.':
+        'The output profile records which printing condition the file was separated for. It is embedded as an output intent — the print shop reads it to tell whether the file suits their press.',
+    'Ausgabeprofil:':
+        'Output profile:',
+    'Benannte Profile nutzen die passende .icc-Datei aus ~/.local/share/copyshop_pdf_suite/icc/ — fehlt sie, wird ein generisches CMYK-Profil eingebettet und im Bericht vermerkt.':
+        'Named profiles use the matching .icc file from ~/.local/share/copyshop_pdf_suite/icc/ — without it a generic CMYK profile is embedded and the report says so.',
+    'Die Ausgabe traegt keine PDF/X-Kennung.':
+        'The output carries no PDF/X identifier.',
+    'Die Ausgabe hat keinen Output-Intent.':
+        'The output has no output intent.',
+    'Der Output-Intent enthaelt kein ICC-Profil.':
+        'The output intent contains no ICC profile.',
+    '⚠  RGB vorhanden — wird beim Export nach CMYK konvertiert.':
+        '⚠  RGB present — will be converted to CMYK on export.',
+    '✓  Keine RGB-Farben gefunden.':
+        '✓  No RGB colours found.',
+    '✓  Jede Seite hat eine TrimBox.':
+        '✓  Every page has a TrimBox.',
+    'Ebenen (in PDF/X-3 nicht zulaessig, werden aufgeloest):':
+        'Layers (not permitted in PDF/X-3, resolved on export):',
+    '✓  Keine Ebenen (OCG).':
+        '✓  No layers (OCG).',
+    'Ausgabebedingung: {p0}  ({p1})':
+        'Output condition: {p0}  ({p1})',
+    'PDF/X-Export abgeschlossen ({p0}).':
+        'PDF/X export finished ({p0}).',
+    'Der Export erzeugt {p0}: alle Farben in CMYK, alle Schriften eingebettet, Transparenz reduziert, TrimBox auf jeder Seite. Ebenen (OCG) werden dabei gemaess ihrer Standard-Sichtbarkeit aufgeloest — ausgeschaltete Ebenen sind in der Ausgabe nicht mehr enthalten.':
+        'The export produces {p0}: all colour in CMYK, all fonts embedded, transparency flattened, a TrimBox on every page. Layers (OCG) are resolved by their default visibility — a layer switched off is not in the output.',
+    "⚠  Profil '{p0}' nicht installiert — generisches CMYK eingebettet.\n   .icc-Datei nach {p1} legen.":
+        "⚠  Profile '{p0}' is not installed — generic CMYK embedded.\n   Put the .icc file in {p1}.",
+    'Ausgabebedingung: {p0}':
+        'Output condition: {p0}',
+    'Aufgeloeste Ebenen (nicht in der Ausgabe): {p0}':
+        'Resolved layers (not in the output): {p0}',
+    'Seiten ohne TrimBox: {p0}':
+        'Pages without a TrimBox: {p0}',
+    'Seitenzahl stimmt nicht: {p0} statt {p1} — die Datei wurde nicht gespeichert.':
+        'Page count does not match: {p0} instead of {p1} — the file was not saved.',
+    'PDF/X-Export hat Seite(n) beschaedigt: {p0} — die Datei wurde nicht gespeichert.':
+        'The PDF/X export damaged page(s): {p0} — the file was not saved.',
+    '⚠  {p0} Seite(n) ohne TrimBox — wird beim Export ergaenzt.':
+        '⚠  {p0} page(s) without a TrimBox — added on export.',
+    '   ✓ {p0} — sichtbar, wird eingerechnet':
+        '   ✓ {p0} — visible, will be included',
+    '   ✗ {p0} — ausgeschaltet, entfaellt':
+        '   ✗ {p0} — switched off, dropped',
+    'Kein CMYK-ICC-Profil gefunden. PDF/X verlangt ein eingebettetes Ausgabeprofil.\n.icc-Datei nach {p0} legen.':
+        'No CMYK ICC profile found. PDF/X requires an embedded output profile.\nPut the .icc file in {p0}.',
+    "⚠  Profil '{p0}' nicht installiert — generische CMYK-Konvertierung verwendet.\n   .icc-Datei nach {p1} legen.":
+        "⚠  Profile '{p0}' is not installed — generic CMYK conversion used.\n   Put the .icc file in {p1}.",
+    'PDF/X-Export':
+        'PDF/X export',
+    'Druckfertige PDF/X-3 erzeugen.':
+        'Produce a press-ready PDF/X-3.',
+    '  PDF/X exportieren':
+        '  Export PDF/X',
+    'PDF/X wird erzeugt …':
+        'Producing PDF/X …',
     "Keine PDF geladen.": "No PDF loaded.",
     "Keine Seiten ausgewaehlt.": "No pages selected.",
     "Keine Seiten ausgewaehlt": "No pages selected",
@@ -545,7 +609,6 @@ _EN: dict[str, str] = {
     "Prüfe Seiten …": "Checking pages …",
     "Komprimiere …": "Compressing …",
     "CMYK-Konvertierung …": "Converting to CMYK …",
-    "Ebenen werden verarbeitet …": "Processing layers …",
     "Ghostscript hat keine Ausgabedatei erzeugt.": "Ghostscript produced no output file.",
     "Konvertierte Seiten prüfen …": "Verifying converted pages …",
     "Drucker-Standard": "Printer default",
@@ -1046,11 +1109,6 @@ _EN: dict[str, str] = {
     "Broschuere (Sattelheftung)": "Booklet (saddle stitch)",
 
     # ── Layers panel ─────────────────────────────────────────────────────────
-    "Ebenen laden": "Load layers",
-    "Alle AN": "All ON",
-    "Alle AUS": "All OFF",
-    "Keine Ebenen gefunden.": "No layers found.",
-    "Ausgabe reduzieren": "Flatten output",
 
     # ── Color profile panel ───────────────────────────────────────────────────
     "  Farbprofil pruefen": "  Check color profile",
