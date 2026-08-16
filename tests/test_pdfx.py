@@ -8,7 +8,7 @@ from pikepdf import Array, Dictionary, Name, String
 
 from tools.jobs import null_progress
 from tools.panels._icc import CMYK_PROFILES, fallback_cmyk_icc, resolve_icc
-from tools.panels._prepress import layer_summary
+from tools.panels._prepress import highest_image_dpi, layer_summary
 from tools.panels.pdfx import (PDFX_STANDARDS, _boxes_survived,
                                _check_conformance, _export_pdfx, _pdfx_defs)
 from tests.support import FX, _TMP
@@ -804,6 +804,21 @@ def test_a_file_that_is_already_pdfx_is_left_alone():
     assert _conversion_reason(with_photo, "x4", "Custom", 600) is None
     assert _conversion_reason(with_photo, "x4", "Custom", 72), \
         "images finer than the target were left undownsampled"
+
+    # The export has to actually hit its own target, or its output never
+    # matches and every re-run converts the whole file again. Ghostscript
+    # downsamples only above threshold x target, and its default threshold of
+    # 1.5 left a 600 dpi export full of 840 dpi images — which is exactly how
+    # this was found, on a real four-page A0 poster that re-converted for
+    # sixty seconds every time.
+    tight = _out("idem_tight")
+    _export_pdfx(_photo_fixture(), tight, icc, "Custom", "Generic CMYK", 150,
+                 "x4", null_progress())
+    finest = highest_image_dpi(tight)
+    assert finest is not None and finest <= 150 * 1.01, \
+        f"asked for 150 dpi and got {finest:.0f} dpi"
+    assert _conversion_reason(tight, "x4", "Custom", 150) is None, \
+        "the export cannot reproduce its own output"
 
     again = _out("idem_second")
     started = time.time()

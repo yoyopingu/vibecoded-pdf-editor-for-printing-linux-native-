@@ -397,7 +397,7 @@ def _conversion_reason(src, standard, oci, dpi):
             return tr('Datei ist fuer {p0} separiert, eingestellt ist {p1}').format(
                 p0=found or tr("unbenannt"), p1=oci)
 
-        finest = highest_image_dpi(src)
+        finest = highest_image_dpi(src, stop_above=dpi * 1.01)
         if finest is not None and finest > dpi * 1.01:
             return tr('Bilder mit bis zu {p0} dpi, Ziel sind {p1} dpi').format(
                 p0=int(round(finest)), p1=dpi)
@@ -545,6 +545,14 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
             "-dColorImageDownsampleType=/Bicubic",
             "-dDownsampleGrayImages=true", f"-dGrayImageResolution={dpi}",
             "-dGrayImageDownsampleType=/Bicubic",
+            # Downsample anything above the target, not only what is half again
+            # above it. Ghostscript's default threshold is 1.5, so a 600 dpi
+            # setting actually left everything up to 900 dpi alone — the
+            # setting did not mean what it says, and the export could not
+            # reproduce its own output: re-running it found 840 dpi images
+            # still above target and converted the whole file again.
+            "-dColorImageDownsampleThreshold=1.0",
+            "-dGrayImageDownsampleThreshold=1.0",
             # Bilevel line art is left alone: downsampling it is what makes a
             # scanned drawing come out ragged.
             "-dDownsampleMonoImages=false",

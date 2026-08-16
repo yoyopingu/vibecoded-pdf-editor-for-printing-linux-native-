@@ -163,7 +163,7 @@ def low_resolution_images(path, min_dpi=300):
     return findings
 
 
-def highest_image_dpi(path):
+def highest_image_dpi(path, stop_above=None):
     """The finest image resolution anywhere in `path`, or None if it has none.
 
     The mirror of low_resolution_images, and asked for the opposite reason:
@@ -171,6 +171,12 @@ def highest_image_dpi(path):
     "is there more detail than the export was told to keep" — which is how an
     already-conformant file is told apart from one that still needs
     downsampling.
+
+    `stop_above` returns as soon as something exceeds it. Answering this means
+    tracking the placement of every image, which means tokenising every
+    content stream — 7 s on a four-page A0 poster carrying 94 MB of them. When
+    the caller only wants to know *whether* anything is too fine, the first
+    one that is settles it.
     """
     import pikepdf
     best = None
@@ -190,6 +196,8 @@ def highest_image_dpi(path):
                 continue
             if page_best is not None:
                 best = page_best if best is None else max(best, page_best)
+                if stop_above is not None and best > stop_above:
+                    return best
     return best
 
 
