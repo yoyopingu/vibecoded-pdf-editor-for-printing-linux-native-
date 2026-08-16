@@ -153,7 +153,7 @@ def low_resolution_images(path, min_dpi=300):
                 continue
             rot = _inherited_rotate(page)
             try:
-                worst = _worst_image_dpi(page, xobjects, rot)
+                worst, _best = _page_image_dpi(page, xobjects, rot)
             except Exception:
                 logging.debug("could not measure image resolution on page %d "
                               "of %s", i + 1, path, exc_info=True)
@@ -163,14 +163,47 @@ def low_resolution_images(path, min_dpi=300):
     return findings
 
 
-def _worst_image_dpi(page, xobjects, rot):
-    """The lowest effective dpi of any image drawn by `page`, or None."""
+def highest_image_dpi(path):
+    """The finest image resolution anywhere in `path`, or None if it has none.
+
+    The mirror of low_resolution_images, and asked for the opposite reason:
+    that one answers "is there enough detail for the press", this one answers
+    "is there more detail than the export was told to keep" — which is how an
+    already-conformant file is told apart from one that still needs
+    downsampling.
+    """
+    import pikepdf
+    best = None
+    with pikepdf.open(path) as pdf:
+        for i, page in enumerate(pdf.pages):
+            if i >= MAX_PAGES:
+                break
+            xobjects = (page.obj.get("/Resources") or {}).get("/XObject")
+            if not xobjects:
+                continue
+            try:
+                _worst, page_best = _page_image_dpi(
+                    page, xobjects, _inherited_rotate(page))
+            except Exception:
+                logging.debug("could not measure image resolution on page %d "
+                              "of %s", i + 1, path, exc_info=True)
+                continue
+            if page_best is not None:
+                best = page_best if best is None else max(best, page_best)
+    return best
+
+
+def _page_image_dpi(page, xobjects, rot):
+    """(lowest, highest) effective dpi of the images `page` draws, or (None, None).
+
+    Effective resolution is pixels divided by the size the image is *placed*
+    at, so this walks the content stream tracking the CTM through q/Q/cm."""
     import pikepdf
     # A PDF unit is 1/72 inch, so an image drawn across `w` units at `px`
     # pixels wide is px / (w / 72) dpi.
     ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
     stack = []
-    worst = None
+    worst = best = None
     for instruction in pikepdf.parse_content_stream(page, "q Q cm Do"):
         op = str(instruction.operator)
         if op == "q":
@@ -200,7 +233,8 @@ def _worst_image_dpi(page, xobjects, rot):
             dpi = min(int(obj.Width) / (drawn_w / 72.0),
                       int(obj.Height) / (drawn_h / 72.0))
             worst = dpi if worst is None else min(worst, dpi)
-    return worst
+            best = dpi if best is None else max(best, dpi)
+    return worst, best
 
 
 def transparent_pages(path):

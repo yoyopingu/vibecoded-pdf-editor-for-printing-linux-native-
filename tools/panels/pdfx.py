@@ -55,6 +55,7 @@ There are deliberately no "embed fonts" or "convert to CMYK" switches. Both
 are requirements of the standard, not preferences; a PDF/X export with them
 turned off would be an ordinary PDF wearing a PDF/X label.
 """
+import logging
 import os
 import shutil
 
@@ -66,8 +67,8 @@ from tools.panels import _images
 from tools.panels._icc import (ICC_DIR, fallback_cmyk_icc, profile_by_key,
                                resolve_icc)
 from tools.panels._prepress import (DEFAULT_STANDARD, PDFX_STANDARDS,
-                                    layer_summary, standard_of,
-                                    transparent_pages)
+                                    highest_image_dpi, layer_summary,
+                                    standard_of, transparent_pages)
 from tools.panels._verify import _verify_pages_intact
 
 
@@ -324,6 +325,40 @@ def _flatten_dpi(src, requested):
     return allowed, allowed < requested
 
 
+def _already_conformant(src, standard, oci, dpi):
+    """Is `src` already exactly what this export would produce?
+
+    Re-exporting a file that is already PDF/X is not merely slow, it is
+    lossy: every image is decoded and re-encoded, so a file that goes through
+    twice is a generation worse than one that went through once. And the
+    honest answer to "make this PDF/X" for a file that already is one is that
+    there is nothing to do.
+
+    Everything is checked, not just the version marker. A file separated for a
+    different press carries a different output condition and does have to be
+    converted; so does one whose images are finer than the export is now told
+    to keep, since those still need downsampling.
+    """
+    import pikepdf
+    try:
+        _check_conformance(src, standard)
+    except Exception:
+        return False
+    try:
+        with pikepdf.open(src) as pdf:
+            intent = pdf.Root["/OutputIntents"][0]
+            if str(intent.get("/OutputConditionIdentifier", "")) != oci:
+                return False
+        finest = highest_image_dpi(src)
+        if finest is not None and finest > dpi * 1.01:
+            return False
+    except Exception:
+        logging.debug("could not decide whether %s is already PDF/X", src,
+                      exc_info=True)
+        return False
+    return True
+
+
 def _boxes_survived(src, dst):
     """Page numbers whose trim geometry changed, described. Empty is good.
 
@@ -381,6 +416,14 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
 
     standard, version, _label = standard_of(standard)
     flattens = standard != "x4"
+
+    # A file that is already this exact thing is left alone. Running it through
+    # again would re-encode every image for no gain — see _already_conformant.
+    if _already_conformant(src, standard, oci, dpi):
+        report(tr("Datei ist bereits {p0} — unveraendert uebernommen.")
+               .format(p0=version))
+        shutil.copyfile(src, out)
+        return out, [], None, version
     # X-4 keeps optional content, so there is nothing dropped to report; only
     # the flattening profile resolves layers away.
     on, off = layer_summary(src) if flattens else ([], [])

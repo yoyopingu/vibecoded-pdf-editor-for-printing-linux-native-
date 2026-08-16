@@ -725,6 +725,8 @@ _EN: dict[str, str] = {
         'Separating images …',
     '  Komprimieren':
         '  Compress',
+    'Datei ist bereits {p0} — unveraendert uebernommen.':
+        'The file is already {p0} — passed through unchanged.',
     "Keine PDF geladen.": "No PDF loaded.",
     "Keine Seiten ausgewaehlt.": "No pages selected.",
     "Keine Seiten ausgewaehlt": "No pages selected",

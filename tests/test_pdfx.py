@@ -666,6 +666,27 @@ def test_x4_may_keep_layers_and_x3_may_not():
     return "X-4 keeps optional content, X-3 resolves it away"
 
 
+def _photo_fixture():
+    """One A4 page carrying a full-page RGB photograph."""
+    path = os.path.join(_TMP, "pdfx_src_photo.pdf")
+    if os.path.exists(path):
+        return path
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from PIL import Image
+    photo = os.path.join(_TMP, "pdfx_photo.png")
+    image = Image.new("RGB", (900, 1200))
+    pixels = image.load()
+    for y in range(1200):
+        for x in range(900):
+            pixels[x, y] = ((x * 7) % 256, (y * 5) % 256, (x + y) % 256)
+    image.save(photo)
+    w, h = A4
+    c = canvas.Canvas(path, pagesize=A4)
+    c.drawImage(photo, 0, 0, w, h); c.showPage(); c.save()
+    return path
+
+
 def test_images_are_separated_before_ghostscript_sees_them():
     """Converting RGB to CMYK is the whole cost of an export — 20.7 s against
     0.5 s for the same file's vectors — and Ghostscript is about ten times
@@ -675,21 +696,7 @@ def test_images_are_separated_before_ghostscript_sees_them():
     from tools.panels._images import to_cmyk
     from tools.jobs import null_progress
 
-    src = os.path.join(_TMP, "pdfx_src_photo.pdf")
-    if not os.path.exists(src):
-        from reportlab.lib.pagesizes import A4
-        from reportlab.pdfgen import canvas
-        from PIL import Image
-        photo = os.path.join(_TMP, "pdfx_photo.png")
-        image = Image.new("RGB", (900, 1200))
-        pixels = image.load()
-        for y in range(1200):
-            for x in range(900):
-                pixels[x, y] = ((x * 7) % 256, (y * 5) % 256, (x + y) % 256)
-        image.save(photo)
-        w, h = A4
-        c = canvas.Canvas(src, pagesize=A4)
-        c.drawImage(photo, 0, 0, w, h); c.showPage(); c.save()
+    src = _photo_fixture()
 
     staged = os.path.join(_TMP, "pdfx_staged.pdf")
     converted, skipped = to_cmyk(src, staged, fallback_cmyk_icc(), null_progress())
@@ -761,3 +768,51 @@ def test_pre_conversion_leaves_alone_what_it_cannot_be_sure_of():
     assert (converted, skipped) == (0, 0) and os.path.exists(out2), \
         "an unreadable file did not fall through to a copy"
     return "16-bit refused, unreadable file copied through, nothing guessed"
+
+
+def test_a_file_that_is_already_pdfx_is_left_alone():
+    """Re-exporting a conformant file is not just slow, it is lossy: every
+    image would be decoded and re-encoded, so a file that goes through twice
+    is a generation worse than one that went through once. And the honest
+    answer to "make this PDF/X" for a file that already is one is that there
+    is nothing to do.
+
+    It has to be the *same* thing, though. A file separated for another press,
+    written to another profile, or carrying finer images than the export is
+    now told to keep all still need converting."""
+    import time
+    from tools.panels.pdfx import _already_conformant
+
+    icc = fallback_cmyk_icc()
+    plain = _out("idem_first")
+    _export_pdfx(FX["color"], plain, icc, "Custom", "Generic CMYK", 600, "x4",
+                 null_progress())
+
+    assert _already_conformant(plain, "x4", "Custom", 600)
+    assert not _already_conformant(plain, "x4", "FOGRA39L", 600), \
+        "a file separated for another condition was called done"
+    assert not _already_conformant(plain, "x3", "Custom", 600), \
+        "an X-4 file was accepted as an X-3 one"
+    assert not _already_conformant(FX["color"], "x4", "Custom", 600), \
+        "an ordinary RGB file was called done"
+
+    # The image-resolution part needs a file that actually has an image: one
+    # made only of paths never needs downsampling, whatever the target.
+    with_photo = _out("idem_photo")
+    _export_pdfx(_photo_fixture(), with_photo, icc, "Custom", "Generic CMYK",
+                 600, "x4", null_progress())
+    assert _already_conformant(with_photo, "x4", "Custom", 600)
+    assert not _already_conformant(with_photo, "x4", "Custom", 72), \
+        "images finer than the target were left undownsampled"
+
+    again = _out("idem_second")
+    started = time.time()
+    result, dropped, capped, version = _export_pdfx(
+        plain, again, icc, "Custom", "Generic CMYK", 600, "x4", null_progress())
+    elapsed = time.time() - started
+
+    assert (result, dropped, capped, version) == (again, [], None, "PDF/X-4")
+    assert open(again, "rb").read() == open(plain, "rb").read(), \
+        "the file was rewritten rather than passed through"
+    _check_conformance(again, "x4")
+    return f"second export was a pass-through in {elapsed:.2f}s"

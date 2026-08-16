@@ -137,3 +137,57 @@ def test_a_guide_dropped_off_the_sheet_is_not_kept():
     finally:
         vp.deleteLater(); _app.processEvents()
     return "dropped outside: discarded; dragged outside: removed"
+
+
+def test_opening_a_file_gives_the_preview_the_keyboard():
+    """The arrow keys have to work as soon as a file is open.
+
+    They did not: focus was set from the tab-change handler, which never runs
+    for the *first* file — addTab makes the new tab current by itself, so the
+    following setCurrentIndex is a no-op and the signal is not emitted. And at
+    startup, where a file is opened before the window is shown, focus set on a
+    widget that is not on screen yet does not survive. Either way the keys went
+    to whatever was focused before, until the preview was clicked.
+
+    Tested by the mechanism rather than the symptom: the offscreen platform
+    hands focus to the canvas on its own, so simply opening a file and looking
+    proves nothing. Focus is deliberately taken away in the same event-loop
+    turn — the deferred claim must win, which is exactly what makes it survive
+    a window that is not visible yet.
+    """
+    from PyQt6.QtWidgets import QApplication, QPushButton
+    from tools.viewer.panel import PageViewerPanel
+
+    vp = PageViewerPanel(); vp.resize(900, 700); vp.show()
+    try:
+        _spin(10)
+        vp.open_file(FX["normal"])
+        _settle(vp, lambda: vp.tabs.count() and vp.tabs.currentWidget().single._last_pm,
+                tries=300)
+
+        # Whatever the platform or the tab widget did with focus, take it away
+        # again before the event loop next turns — standing in for a window
+        # that had not been shown when the focus was first set.
+        elsewhere = [b for b in vp.findChildren(QPushButton) if b.isVisible()]
+        assert elsewhere, "no button to park focus on"
+        elsewhere[0].setFocus()
+        assert not vp.tabs.currentWidget().single._view.hasFocus()
+
+        vp.focus_page_view()
+        _spin(20)
+        view = vp.tabs.currentWidget().single._view
+        assert view.hasFocus(), (
+            "the preview did not claim the keyboard; focus is on "
+            f"{type(QApplication.focusWidget()).__name__}")
+
+        # And the keys really turn pages, which is what the focus is for.
+        single = vp.tabs.currentWidget().single
+        before = single._current
+        press = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Down,
+                          Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(QApplication.focusWidget(), press)
+        _spin(20)
+        assert single._current != before, "Down did not move off the first page"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "the preview claims the keyboard, and Down turns the page"

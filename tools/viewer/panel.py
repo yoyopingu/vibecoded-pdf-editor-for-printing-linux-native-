@@ -493,9 +493,32 @@ class PageViewerPanel(QWidget):
         idx  = self.tabs.addTab(tab, f"  {disp}  ")
         self.tabs.setCurrentIndex(idx)
         AppState.get().open_pdf(path)
+        self.focus_page_view()
         self.tab_opened.emit()
         self.tabs_changed.emit()
         return tab
+
+    def focus_page_view(self):
+        """Give the page view the keyboard, once it is actually on screen.
+
+        Two reasons this is not simply setFocus() here. addTab on an empty
+        tab bar makes the new tab current by itself, so setCurrentIndex is a
+        no-op and _on_tab_changed — which is where focus was being set — never
+        runs for the first file opened. And even when it does run, the widget
+        is not visible yet at that moment, and Qt drops focus set on a widget
+        that cannot take it.
+
+        The result was that after opening a file the arrow keys did nothing
+        until the preview had been clicked, because the keys were still going
+        to whatever was focused before — usually the Öffnen button.
+        """
+        from PyQt6.QtCore import QTimer
+
+        def _focus():
+            widget = self._current()
+            if widget is not None and widget.isVisible():
+                widget.single._view.setFocus()
+        QTimer.singleShot(0, _focus)
 
     def open_file(self, path):
         tab = self._open(path)
@@ -867,7 +890,7 @@ class PageViewerPanel(QWidget):
             self._manage_btn.setEnabled(True)
             self._print_btn.setEnabled(True)
             self._viewer_info.setText(os.path.basename(w.pdf_path))
-            w.single._view.setFocus()
+            self.focus_page_view()
         elif isinstance(w, MergeOrderWidget):
             self._manage_btn.setEnabled(False)
             self._print_btn.setEnabled(False)
