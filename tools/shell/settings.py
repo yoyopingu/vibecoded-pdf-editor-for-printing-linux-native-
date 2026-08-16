@@ -93,12 +93,17 @@ class AppSettings:
         self._qs.setValue("prepress/pdfx_condition", val)
 
     def pdfx_image_dpi(self) -> int:
-        """Images above this are downsampled on export.
+        """Images above this are downsampled on export, and any page that has
+        to be flattened is rendered at it.
 
-        300 is what the press can image and what Acrobat's press-quality
-        preset uses; anything above it is RIP time nobody sees on paper.
+        600 rather than the 300 a press images at, because this number does
+        double duty: it is also the resolution transparency is flattened to,
+        and flattening is the one step that turns vector artwork into pixels.
+        300 is enough for a photograph and visibly soft for a flattened logo
+        or a hairline. The cost of the extra detail is size and time, both of
+        which the operator can trade back here.
         """
-        return int(self._qs.value("prepress/pdfx_image_dpi", 300))
+        return int(self._qs.value("prepress/pdfx_image_dpi", 600))
 
     def set_pdfx_image_dpi(self, val: int):
         self._qs.setValue("prepress/pdfx_image_dpi", int(val))
@@ -323,9 +328,11 @@ class PrepressDialog(QDialog):
         outer.addLayout(install_row)
 
         note = QLabel(tr(
-            "Bilder über der eingestellten Auflösung werden beim PDF/X-Export\n"
-            "reduziert — 300 dpi ist, was die Maschine belichten kann. Bilder\n"
-            "darunter bleiben unverändert."))
+            "Gilt für zwei Dinge: Bilder über diesem Wert werden reduziert\n"
+            "(darunterliegende bleiben unverändert), und Seiten mit Transparenz\n"
+            "werden mit dieser Auflösung in Pixel umgewandelt. Vektoren und\n"
+            "Schrift bleiben davon unberührt und bleiben in jeder Größe scharf.\n"
+            "Höher heißt größere Dateien und längere Exportzeiten."))
         note.setObjectName("dimLabel")
         outer.addWidget(note)
         outer.addStretch()

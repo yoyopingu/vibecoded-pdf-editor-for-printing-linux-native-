@@ -48,8 +48,8 @@ def test_the_export_carries_everything_pdfx_requires():
     icc = fallback_cmyk_icc()
     assert icc, "no CMYK ICC profile on this system to embed"
     out = _out("conform")
-    result, dropped = _export_pdfx(FX["color"], out, icc, "Custom",
-                                   "Generic CMYK", 300, lambda _m: None)
+    result, dropped, _capped = _export_pdfx(FX["color"], out, icc, "Custom",
+                                           "Generic CMYK", 300, lambda _m: None)
     assert result == out and not dropped
 
     with pikepdf.open(out) as pdf:
@@ -80,8 +80,8 @@ def test_a_layer_switched_off_never_reaches_the_plate():
     assert (on, off) == ([], ["Stanzkontur"]), (on, off)
 
     out = _out("layered")
-    _result, dropped = _export_pdfx(src, out, fallback_cmyk_icc(), "Custom",
-                                    "Generic CMYK", 300, lambda _m: None)
+    _result, dropped, _capped = _export_pdfx(src, out, fallback_cmyk_icc(), "Custom",
+                                            "Generic CMYK", 300, lambda _m: None)
     assert dropped == ["Stanzkontur"], "the export did not report the dropped layer"
 
     with pikepdf.open(out) as pdf:
@@ -413,3 +413,152 @@ def test_image_resolution_is_measured_where_the_image_is_placed():
     assert 240 < found[1] < 260, found
     assert 45 < found[2] < 55, found
     return f"same image: page 1 {found[1]} dpi, page 2 {found[2]} dpi, page 3 fine"
+
+
+def _vector_fixture():
+    """A page of pure vector artwork — no images, no transparency."""
+    path = os.path.join(_TMP, "pdfx_vector.pdf")
+    if os.path.exists(path):
+        return path
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    import random
+    random.seed(11)
+    w, h = A4
+    c = canvas.Canvas(path, pagesize=A4)
+    for _ in range(1500):
+        x, y = random.uniform(0, w), random.uniform(0, h)
+        c.setStrokeColorRGB(random.random(), random.random(), random.random())
+        p = c.beginPath(); p.moveTo(x, y)
+        for _ in range(3):
+            p.lineTo(x + random.uniform(-40, 40), y + random.uniform(-40, 40))
+        c.drawPath(p)
+    c.showPage(); c.save()
+    return path
+
+
+def _count(path):
+    """(path operators, embedded images) in a PDF."""
+    paths = images = 0
+    with pikepdf.open(path) as pdf:
+        for page in pdf.pages:
+            xobjects = (page.obj.get("/Resources") or {}).get("/XObject")
+            for value in (xobjects or {}).values():
+                if value.get("/Subtype") == Name("/Image"):
+                    images += 1
+            for ins in pikepdf.parse_content_stream(page):
+                if str(ins.operator) in ("m", "l", "c", "re", "S", "f", "f*", "B"):
+                    paths += 1
+    return paths, images
+
+
+def test_vector_artwork_stays_vector():
+    """The export must not quietly turn a drawing into pixels.
+
+    The resolution setting is about *raster images already in the file* and
+    about flattening; it has no bearing on paths and text, which stay
+    resolution-independent and print sharp at any size — including A0. A
+    regression here would be invisible on screen and obvious on a plotter.
+    """
+    src = _vector_fixture()
+    before_paths, before_images = _count(src)
+    assert before_paths > 1000 and before_images == 0, (before_paths, before_images)
+
+    out = _out("vector")
+    _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
+                 600, lambda _m: None)
+    after_paths, after_images = _count(out)
+    assert after_images == 0, f"{after_images} image(s) appeared in vector artwork"
+    assert after_paths == before_paths, \
+        f"path count changed: {before_paths} -> {after_paths}"
+    return f"{after_paths} path operators in and out, still zero images"
+
+
+def test_transparency_is_flattened_and_said_so_beforehand():
+    """The one case where vectors *do* become pixels.
+
+    PDF/X-3 is PDF 1.3, which has no transparency, so those pages are
+    rasterised — and that is both the quality cost and the reason a big file
+    takes minutes. Preflight has to say so before the export, not after.
+    """
+    from tools.panels._prepress import transparent_pages
+    from tools.panels.preflight import _preflight
+
+    src = os.path.join(_TMP, "pdfx_trans.pdf")
+    if not os.path.exists(src):
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        w, h = A4
+        c = canvas.Canvas(src, pagesize=A4)
+        c.setFillAlpha(0.4)
+        for i in range(60):
+            c.setFillColorRGB(0.9, 0.2, 0.1)
+            c.circle(60 + (i % 10) * 50, 100 + (i // 10) * 90, 40, fill=1, stroke=0)
+        c.setFillAlpha(1)
+        c.showPage(); c.save()
+
+    assert transparent_pages(src) == [1], transparent_pages(src)
+    assert transparent_pages(_vector_fixture()) == [], "vector art reported as transparent"
+
+    checks = dict(size=False, orient=False, colour=False, enc=False, bleed=False,
+                  fonts=False, dpi=False, trans=True, layers=False)
+    lines, _v = _preflight(src, checks, None, 300, lambda _m: None)
+    report = "\n".join(lines)
+    assert "Transparenz auf 1" in report, report
+    assert "Vektoren gehen dort verloren" in report, report
+
+    # And it really is rasterised, which is what the warning is about.
+    out = _out("trans")
+    _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
+                 600, lambda _m: None)
+    _paths, images = _count(out)
+    assert images >= 1, "a transparent page came through without being flattened"
+    return "warned in preflight, and flattened to 1 image on export"
+
+
+def test_the_raster_resolution_is_capped_so_the_result_can_be_opened():
+    """A0 at 600 dpi is 558 megapixels, which pdfium will not open: it returns
+    a mostly blank page with the content displaced. Ghostscript renders the
+    same file correctly, so it is a valid PDF — but one this application can
+    neither display nor verify, which makes it a bad thing to hand over.
+
+    Capped by page area, so ordinary sheets are untouched."""
+    from tools.panels.pdfx import MAX_RASTER_PIXELS, _flatten_dpi
+
+    a4 = _vector_fixture()
+    dpi, capped = _flatten_dpi(a4, 600)
+    assert (dpi, capped) == (600, False), "an A4 page was capped"
+
+    big = os.path.join(_TMP, "pdfx_a0.pdf")
+    if not os.path.exists(big):
+        from reportlab.pdfgen import canvas
+        c = canvas.Canvas(big, pagesize=(2384, 3370))
+        c.setFillAlpha(0.4); c.setFillColorRGB(0.2, 0.4, 0.9)
+        c.circle(1200, 1700, 900, fill=1, stroke=0)
+        c.showPage(); c.save()
+
+    dpi, capped = _flatten_dpi(big, 600)
+    assert capped and 300 < dpi < 450, f"A0 capped to {dpi} dpi"
+    area_in2 = (2384 / 72.0) * (3370 / 72.0)
+    assert dpi * dpi * area_in2 <= MAX_RASTER_PIXELS, "the cap does not fit the budget"
+
+    # The whole point: the exported file opens and looks like the source.
+    out = _out("a0")
+    _r, _dropped, capped_to = _export_pdfx(big, out, fallback_cmyk_icc(), "Custom",
+                                           "Generic CMYK", 600, lambda _m: None)
+    assert capped_to == dpi, (capped_to, dpi)
+
+    import pypdfium2 as pdfium
+    def ink(path):
+        doc = pdfium.PdfDocument(path)
+        try:
+            image = doc[0].render(scale=0.05).to_pil().convert("L")
+        finally:
+            doc.close()
+        total = image.size[0] * image.size[1]
+        return sum(image.histogram()[:230]) / total
+
+    before, after = ink(big), ink(out)
+    assert abs(before - after) < 0.05, \
+        f"the exported A0 page does not render like the source ({before:.2f} vs {after:.2f})"
+    return f"A4 untouched, A0 capped to {dpi} dpi and still renders correctly"

@@ -689,14 +689,21 @@ def test_original_size_takes_a_percentage_that_reaches_the_file():
         finally:
             doc.close()
 
+    # Measured on the framed fixture — a drawn rectangle — and not on a page
+    # of text. The text fixture uses base-14 Helvetica, which is not embedded,
+    # so pdfium substitutes whatever the system offers: stable within one
+    # process and *not* stable between them. That made this test fail about
+    # one run in four, with the 100 % span coming back as 62 px instead of 79
+    # because a different substitute font is a different width. A rectangle
+    # has the width it has.
     full = os.path.join(_TMP, "pct_100.pdf")
     half = os.path.join(_TMP, "pct_50.pdf")
-    recenter_on_paper(FX["normal"], full, 595.276, 841.89, factor=1.0)
-    recenter_on_paper(FX["normal"], half, 595.276, 841.89, factor=0.5)
+    recenter_on_paper(FX["framed"], full, 595.276, 841.89, factor=1.0)
+    recenter_on_paper(FX["framed"], half, 595.276, 841.89, factor=0.5)
     fw, fh = ink_span(full)
     hw, hh = ink_span(half)
     assert fw > 0 and hw > 0, "nothing was drawn to measure"
-    assert abs(hw / fw - 0.5) < 0.12 and abs(hh / fh - 0.5) < 0.15, \
+    assert abs(hw / fw - 0.5) < 0.05 and abs(hh / fh - 0.5) < 0.05, \
         f"50 % produced ink of {hw}x{hh} against {fw}x{fh} at 100 %"
     return f"100 % -> {fw}x{fh} px of ink, 50 % -> {hw}x{hh}"
 

@@ -683,6 +683,18 @@ _EN: dict[str, str] = {
         'embedded files',
     'Die Ausgabe enthaelt {p0}.':
         'The output contains {p0}.',
+    'Transparenz wird reduziert — das dauert bei grossen Seiten …':
+        'Flattening transparency — this takes a while on large pages …',
+    'Rasterauflösung auf {p0} dpi begrenzt — bei dieser Seitengroesse waere ein hoeherer Wert fuer Betrachter nicht mehr lesbar.':
+        'Raster resolution capped at {p0} dpi — at this page size a higher value would be unreadable to viewers.',
+    'Transparenz (wird beim Export reduziert)':
+        'Transparency (flattened on export)',
+    'Transparenz …':
+        'Transparency …',
+    'Keine Transparenz — Vektoren bleiben Vektoren':
+        'No transparency — vectors stay vectors',
+    'Transparenz auf {p0} Seite(n) — beim PDF/X-Export werden diese Seiten in Pixel umgewandelt (Vektoren gehen dort verloren) und der Export dauert entsprechend laenger: {p1}':
+        'Transparency on {p0} page(s) — the PDF/X export converts those pages to pixels (vectors are lost there) and takes correspondingly longer: {p1}',
     "Keine PDF geladen.": "No PDF loaded.",
     "Keine Seiten ausgewaehlt.": "No pages selected.",
     "Keine Seiten ausgewaehlt": "No pages selected",

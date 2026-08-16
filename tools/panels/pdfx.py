@@ -53,7 +53,7 @@ from tools._base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels._icc import (ICC_DIR, fallback_cmyk_icc, profile_by_key,
                                resolve_icc)
-from tools.panels._prepress import layer_summary
+from tools.panels._prepress import layer_summary, transparent_pages
 from tools.panels._verify import _verify_pages_intact
 
 
@@ -69,10 +69,11 @@ class PdfxPanel(BasePanel):
     def build_ui(self, layout):
         layout.addWidget(make_label(tr(
             "Erzeugt {p0}: alle Farben in CMYK gegen das eingestellte "
-            "Ausgabeprofil, alle Schriften eingebettet, Transparenz reduziert, "
-            "Ebenen aufgeloest, Bilder auf Druckauflösung. Das Ergebnis wird "
-            "geprueft, bevor es gespeichert wird.").format(p0=PDFX_VERSION),
-            dim=True))
+            "Ausgabeprofil, alle Schriften eingebettet, Ebenen aufgeloest, "
+            "Bilder auf Druckauflösung. Vektoren und Schrift bleiben Vektoren "
+            "und damit in jeder Groesse scharf; nur Seiten mit Transparenz "
+            "werden in Pixel umgewandelt. Das Ergebnis wird geprueft, bevor es "
+            "gespeichert wird.").format(p0=PDFX_VERSION), dim=True))
         layout.addWidget(make_label(tr(
             "Was die Datei mitbringt — Anschnitt, Schriften, Bildauflösung — "
             "zeigt „Druckvorstufenpruefung“."), dim=True))
@@ -163,8 +164,13 @@ class PdfxPanel(BasePanel):
         return None
 
     def _done(self, result, note):
-        out, dropped = result
+        out, dropped, capped_to = result
         lines = [tr('PDF/X-Export abgeschlossen ({p0}).').format(p0=PDFX_VERSION), note]
+        if capped_to:
+            lines.append(tr(
+                'Rasterauflösung auf {p0} dpi begrenzt — bei dieser Seitengroesse '
+                'waere ein hoeherer Wert fuer Betrachter nicht mehr lesbar.')
+                .format(p0=capped_to))
         if dropped:
             lines.append(tr("Aufgeloeste Ebenen (nicht in der Ausgabe): {p0}")
                          .format(p0=", ".join(dropped)))
@@ -266,6 +272,41 @@ def _check_conformance(path):
             p0=", ".join(not_embedded[:6])))
 
 
+# pdfium refuses an image of 2**28 pixels or so — measured on an A0 page of
+# flattened artwork: 248 Mpx opened correctly, 314 Mpx came back mostly blank
+# with the content shifted. Ghostscript renders both files identically, so the
+# large one is a *valid* PDF that a RIP would print; it is our own viewer and
+# our own verification that cannot read it. Shipping a file this application
+# cannot display or check is not worth the extra detail, so the rasterising
+# resolution is capped to fit. The margin below the real limit is deliberate.
+MAX_RASTER_PIXELS = 240_000_000
+
+
+def _flatten_dpi(src, requested):
+    """(resolution to rasterise at, was it capped).
+
+    Only pages that actually get flattened produce a raster, but -r is set
+    once for the run, so the cap follows the largest page in the document. On
+    anything up to A2 at 600 dpi this changes nothing; an A0 page comes down
+    to about 390 dpi, which is still more resolution than a sheet that size is
+    ever looked at from close enough to need.
+    """
+    import pikepdf
+    allowed = requested
+    with pikepdf.open(src) as pdf:
+        for page in pdf.pages:
+            try:
+                box = [float(v) for v in page.obj["/MediaBox"]]
+            except (KeyError, TypeError, ValueError):
+                continue
+            area_in2 = (abs(box[2] - box[0]) / 72.0) * (abs(box[3] - box[1]) / 72.0)
+            if area_in2 <= 0:
+                continue
+            allowed = min(allowed, int((MAX_RASTER_PIXELS / area_in2) ** 0.5))
+    allowed = max(72, allowed)
+    return allowed, allowed < requested
+
+
 def _boxes_survived(src, dst):
     """Page numbers whose trim geometry changed, described. Empty is good.
 
@@ -322,6 +363,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, report):
     import pikepdf
 
     on, off = layer_summary(src)
+    dpi, capped = _flatten_dpi(src, dpi)
 
     fd, defs = tempfile.mkstemp(suffix=".ps"); os.close(fd)
     fd, tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
@@ -339,6 +381,21 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, report):
             "-sColorConversionStrategy=CMYK",
             "-dEmbedAllFonts=true",
             "-dSubsetFonts=true",
+            # The rasterising resolution, and the reason this is not slow.
+            #
+            # PDF/X-3 is PDF 1.3, which has no transparency, so any page that
+            # uses it gets flattened — and flattening means rendering that
+            # page to pixels. Ghostscript does that at 720 dpi by default and
+            # then downsamples to the target, i.e. it renders several times
+            # the detail it is about to throw away. Rendering at the target
+            # instead is the same output for a fraction of the work: an A0
+            # page of transparent artwork went from 116 s to 21 s at 300 dpi,
+            # measured, with a byte-comparable result.
+            #
+            # It also makes the setting mean what it says. Without it, asking
+            # for 600 dpi still produced 720 dpi flattening downsampled to
+            # 300, because the preset's own limit won.
+            f"-r{dpi}",
             # After /prepress, which keeps images at source resolution — these
             # override it (verified: a 600 dpi image comes back at 300 and the
             # file halves; a 200 dpi one is left alone rather than upsampled).
@@ -354,9 +411,15 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, report):
             f"-sOutputFile={tmp}",
             defs, src,
         ]
-        report(tr("Ghostscript: PDF/X-Konvertierung …"))
+        # Say which of the two jobs this is before it starts. Flattening
+        # renders whole pages to pixels and is minutes on a large sheet, and a
+        # progress line that only says "converting" makes that look like a
+        # hang rather than the one unavoidable cost of PDF/X.
+        report(tr("Transparenz wird reduziert — das dauert bei grossen Seiten …")
+               if transparent_pages(src) else
+               tr("Ghostscript: PDF/X-Konvertierung …"))
         r = subprocess.run(cmd, capture_output=True, text=True,
-                           errors="replace", timeout=600)
+                           errors="replace", timeout=1800)
         if r.returncode != 0:
             err = (r.stderr.strip() or r.stdout.strip() or f"exit {r.returncode}")[:500]
             raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=err))
@@ -395,4 +458,4 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, report):
                 os.remove(path)
             except OSError:
                 pass
-    return out, off
+    return out, off, (dpi if capped else None)

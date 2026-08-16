@@ -53,24 +53,44 @@ def _verify_pages_intact(src, cand, pages, report, label=""):
     silent, it is invisible until the job is printed, and it is not something a
     return code will ever tell us about, so every converted page is looked at.
 
-    Used by both colour conversions (greyscale and CMYK); `report` may be None.
+    Both documents are parsed once and held open for the walk. Going through
+    _page_luma instead reopened both files for every page — 2N parses for N
+    pages, and parsing is the expensive half on exactly the heavy documents
+    this runs on. The lock is taken per page rather than around the whole
+    loop, so a long verification does not lock the viewer out of rendering for
+    its whole duration.
+
+    Used by compress, greyscale, CMYK and PDF/X; `report` may be None.
     Returns {page_index: reason}."""
+    import pypdfium2 as pdfium
     bad = {}
-    for n, i in enumerate(sorted(pages), 1):
-        if report and n % 5 == 1:
-            report(tr('Prüfe Seite {p0} / {p1} …{p2}').format(
-                p0=n, p1=len(pages), p2=label))
-        try:
-            blacked, vanished = _conversion_damage(
-                _page_luma(src, i), _page_luma(cand, i))
-        except Exception:
-            # Could not check it — treat as damaged rather than assume it is
-            # fine. Silently shipping an unverified page is the whole problem.
-            logging.exception("grayscale: verification of page %d failed", i + 1)
-            bad[i] = "unverified"
-            continue
-        if blacked > _BLACKOUT_LIMIT:
-            bad[i] = f"{blacked * 100:.1f}% schwarz"
-        elif vanished > _BLACKOUT_LIMIT:
-            bad[i] = f"{vanished * 100:.1f}% verschwunden"
+    wanted = sorted(pages)
+    with _pdfium_lock:
+        src_doc = pdfium.PdfDocument(src)
+        cand_doc = pdfium.PdfDocument(cand)
+    try:
+        for n, i in enumerate(wanted, 1):
+            if report and n % 5 == 1:
+                report(tr('Prüfe Seite {p0} / {p1} …{p2}').format(
+                    p0=n, p1=len(wanted), p2=label))
+            try:
+                with _pdfium_lock:
+                    ref = src_doc[i].render(scale=_VERIFY_SCALE).to_pil().convert("L")
+                    got = cand_doc[i].render(scale=_VERIFY_SCALE).to_pil().convert("L")
+                blacked, vanished = _conversion_damage(ref, got)
+            except Exception:
+                # Could not check it — treat as damaged rather than assume it
+                # is fine. Silently shipping an unverified page is the whole
+                # problem.
+                logging.exception("verification of page %d failed", i + 1)
+                bad[i] = "unverified"
+                continue
+            if blacked > _BLACKOUT_LIMIT:
+                bad[i] = f"{blacked * 100:.1f}% schwarz"
+            elif vanished > _BLACKOUT_LIMIT:
+                bad[i] = f"{vanished * 100:.1f}% verschwunden"
+    finally:
+        with _pdfium_lock:
+            src_doc.close()
+            cand_doc.close()
     return bad

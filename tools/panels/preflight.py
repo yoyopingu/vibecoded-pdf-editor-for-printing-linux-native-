@@ -9,6 +9,7 @@ from tools._base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels._shared import PAPER_SIZES_PT, row
 from tools.panels._colour import _colour_histogram, _hist_stats
+from tools.panels._prepress import MIN_PRESS_DPI
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -39,6 +40,8 @@ class PreflightPanel(BasePanel):
         self.chk_fonts.setChecked(True); xl.addWidget(self.chk_fonts)
         self.chk_dpi = QCheckBox(tr("Bildauflösung ausreichend"))
         self.chk_dpi.setChecked(True); xl.addWidget(self.chk_dpi)
+        self.chk_trans = QCheckBox(tr("Transparenz (wird beim Export reduziert)"))
+        self.chk_trans.setChecked(True); xl.addWidget(self.chk_trans)
         self.chk_layers = QCheckBox(tr("Ebenen (OCG) auflisten"))
         self.chk_layers.setChecked(True); xl.addWidget(self.chk_layers)
         layout.addWidget(xb)
@@ -61,16 +64,13 @@ class PreflightPanel(BasePanel):
             "bleed":  self.chk_bleed.isChecked(),
             "fonts":  self.chk_fonts.isChecked(),
             "dpi":    self.chk_dpi.isChecked(),
+            "trans":  self.chk_trans.isChecked(),
             "layers": self.chk_layers.isChecked(),
         }
         target = PAPER_SIZES_PT.get(self.size_combo.currentText())
-        # The press resolution the shop set, so "genug Auflösung" means the
-        # same number here as the export will downsample to.
-        from tools.shell.settings import AppSettings
-        min_dpi = AppSettings.get().pdfx_image_dpi()
 
         self.run_async(
-            lambda report: _preflight(src, checks, target, min_dpi, report),
+            lambda report: _preflight(src, checks, target, MIN_PRESS_DPI, report),
             on_done=self._preflight_done,
             busy_label="Pruefung laeuft …",
         )
@@ -135,6 +135,23 @@ def _press_readiness(src, checks, min_dpi, report):
                              for page, dpi in low_res[:6])))
         else:
             oks.append(tr('Bildauflösung mindestens {p0} dpi').format(p0=min_dpi))
+
+    if checks.get("trans"):
+        report(tr("Transparenz …"))
+        pages = _prepress.transparent_pages(src)
+        if pages:
+            # Not a defect in the file — it is what the PDF/X export will have
+            # to do to it, and the only step that turns vector artwork into
+            # pixels. Said here so nobody is surprised by either the wait or a
+            # logo that is no longer sharp at any size.
+            issues.append(tr(
+                'Transparenz auf {p0} Seite(n) — beim PDF/X-Export werden '
+                'diese Seiten in Pixel umgewandelt (Vektoren gehen dort '
+                'verloren) und der Export dauert entsprechend laenger: {p1}')
+                .format(p0=len(pages),
+                        p1=", ".join(str(p) for p in pages[:10])))
+        else:
+            oks.append(tr("Keine Transparenz — Vektoren bleiben Vektoren"))
 
     if checks.get("layers"):
         on, off = _prepress.layer_summary(src)

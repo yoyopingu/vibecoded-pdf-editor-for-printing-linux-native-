@@ -29,6 +29,13 @@ from tools.panels._shared import MM_TO_PT, _inherited_rotate, _visible_box
 # the report is wanted while someone waits at a counter.
 MAX_PAGES = 200
 
+# Below this an image is visibly soft in print, and no later step can fix it.
+# Deliberately not the export's downsampling setting: that one is a *ceiling*
+# on detail worth keeping, this is the *floor* under which there is not enough.
+# They are different questions and conflating them made the report flag every
+# correctly prepared 300 dpi photograph.
+MIN_PRESS_DPI = 300
+
 
 def page_bleed(path):
     """(pages measured, bleed in mm per page, pages with no TrimBox).
@@ -171,6 +178,52 @@ def _worst_image_dpi(page, xobjects, rot):
                       int(obj.Height) / (drawn_h / 72.0))
             worst = dpi if worst is None else min(worst, dpi)
     return worst
+
+
+def transparent_pages(path):
+    """Pages that use live transparency.
+
+    Worth knowing before an export, because these are the pages that cost
+    something. PDF/X-3 is PDF 1.3, which has no transparency at all, so each
+    of them is *flattened*: rendered to pixels and embedded as an image. Two
+    consequences an operator should hear about beforehand rather than discover
+    afterwards —
+
+      * vector artwork on those pages stops being vector. Everywhere else it
+        survives the export untouched and stays sharp at any size; here it
+        becomes a raster at the configured resolution.
+      * it is slow. Flattening an A0 page means rendering roughly a
+        thousand megapixels, and that is where the minutes go.
+
+    Detected from the three ways a PDF says "transparency": a page group
+    marked /Transparency, a soft mask, or a graphics state with a constant
+    alpha below 1.
+    """
+    import pikepdf
+    found = []
+    with pikepdf.open(path) as pdf:
+        for i, page in enumerate(pdf.pages):
+            if i >= MAX_PAGES:
+                break
+            try:
+                group = page.obj.get("/Group")
+                if group is not None and str(group.get("/S", "")) == "/Transparency":
+                    found.append(i + 1)
+                    continue
+                states = (page.obj.get("/Resources") or {}).get("/ExtGState")
+                for state in (states or {}).values():
+                    soft = state.get("/SMask")
+                    if soft is not None and str(soft) != "/None":
+                        found.append(i + 1)
+                        break
+                    if (float(state.get("/ca", 1)) < 1.0
+                            or float(state.get("/CA", 1)) < 1.0):
+                        found.append(i + 1)
+                        break
+            except Exception:
+                logging.debug("could not read transparency on page %d of %s",
+                              i + 1, path, exc_info=True)
+    return found
 
 
 def layer_summary(path):
