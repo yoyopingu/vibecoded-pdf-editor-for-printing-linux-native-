@@ -231,7 +231,7 @@ def _pdfx_defs(icc_path, oci, condition, version=None):
 """
 
 
-def _check_conformance(path, standard=DEFAULT_STANDARD):
+def _check_conformance(path, standard=DEFAULT_STANDARD, exact_version=True):
     """Raise unless `path` really carries what PDF/X requires.
 
     pdfwrite exits 0 on plenty of files it did not fully convert, and the
@@ -252,7 +252,12 @@ def _check_conformance(path, standard=DEFAULT_STANDARD):
 
     with pikepdf.open(path) as pdf:
         _key, version, _label = standard_of(standard)
-        if str(pdf.docinfo.get("/GTS_PDFXVersion", "")) != version:
+        claimed = str(pdf.docinfo.get("/GTS_PDFXVersion", ""))
+        # Exact when checking our own output — it must say what we wrote.
+        # By family when reading someone else's file, because PDF/X-4p and
+        # PDF/X-3:2003 are the same profiles under different revisions, and
+        # insisting on our spelling made every foreign file look unconverted.
+        if (claimed != version) if exact_version else (_family(claimed) is None):
             raise RuntimeError(tr("Die Ausgabe traegt keine PDF/X-Kennung."))
         intents = pdf.Root.get("/OutputIntents")
         if not intents or len(intents) == 0:
@@ -325,38 +330,82 @@ def _flatten_dpi(src, requested):
     return allowed, allowed < requested
 
 
-def _already_conformant(src, standard, oci, dpi):
-    """Is `src` already exactly what this export would produce?
+def _family(version):
+    """"x4", "x3", "x1a" or None, from whatever revision a file claims.
 
-    Re-exporting a file that is already PDF/X is not merely slow, it is
-    lossy: every image is decoded and re-encoded, so a file that goes through
-    twice is a generation worse than one that went through once. And the
-    honest answer to "make this PDF/X" for a file that already is one is that
-    there is nothing to do.
+    Files in the wild carry PDF/X-4, PDF/X-4p, PDF/X-3:2002 and PDF/X-3:2003,
+    and matching the exact string we happen to write means every file made by
+    anything else is treated as needing conversion — which is how a file that
+    was already fine ended up being re-separated.
+    """
+    text = str(version or "")
+    for prefix, key in (("PDF/X-1a", "x1a"), ("PDF/X-3", "x3"), ("PDF/X-4", "x4")):
+        if text.startswith(prefix):
+            return key
+    return None
 
-    Everything is checked, not just the version marker. A file separated for a
-    different press carries a different output condition and does have to be
-    converted; so does one whose images are finer than the export is now told
-    to keep, since those still need downsampling.
+
+def _conversion_reason(src, standard, oci, dpi):
+    """Why `src` still has to be converted, or None if it already is what this
+    export would produce.
+
+    Re-exporting a file that is already PDF/X is not merely slow, it is lossy:
+    every image is decoded and re-encoded, so a file that goes through twice
+    is a generation worse than one that went through once. The honest answer
+    to "make this PDF/X" for a file that already is one is that there is
+    nothing to do.
+
+    A *reason* rather than a yes/no because the answer is often surprising —
+    a file can look like PDF/X in a viewer and still need work — and the
+    operator has no way to find out why except being told.
     """
     import pikepdf
-    try:
-        _check_conformance(src, standard)
-    except Exception:
-        return False
+    # The ordinary case first, and in its own words: _check_conformance speaks
+    # about "the output", which is right where it is used to vet what we just
+    # wrote and wrong as an explanation of the file someone opened.
     try:
         with pikepdf.open(src) as pdf:
+            if _family(pdf.docinfo.get("/GTS_PDFXVersion")) is None:
+                return tr("noch kein PDF/X")
+    except Exception:
+        logging.debug("could not read %s", src, exc_info=True)
+        return tr("nicht lesbar")
+
+    try:
+        _check_conformance(src, standard, exact_version=False)
+    except RuntimeError as exc:
+        return str(exc)
+    except Exception:
+        logging.debug("could not read %s as PDF/X", src, exc_info=True)
+        return tr("nicht lesbar")
+
+    try:
+        with pikepdf.open(src) as pdf:
+            claimed = _family(pdf.docinfo.get("/GTS_PDFXVersion"))
+            if claimed != standard:
+                return tr('Datei ist {p0}, gewuenscht ist {p1}').format(
+                    p0=str(pdf.docinfo.get("/GTS_PDFXVersion")),
+                    p1=PDFX_STANDARDS[standard][0])
             intent = pdf.Root["/OutputIntents"][0]
-            if str(intent.get("/OutputConditionIdentifier", "")) != oci:
-                return False
+            found = str(intent.get("/OutputConditionIdentifier", ""))
+        # A generic setting is not an opinion about the press, so it must not
+        # override one the file already carries: re-separating a file made for
+        # a real printing condition down to generic CMYK loses information.
+        # A *named* setting is an opinion, and a file made for another
+        # condition genuinely has to be separated again.
+        if oci != "Custom" and found != oci:
+            return tr('Datei ist fuer {p0} separiert, eingestellt ist {p1}').format(
+                p0=found or tr("unbenannt"), p1=oci)
+
         finest = highest_image_dpi(src)
         if finest is not None and finest > dpi * 1.01:
-            return False
+            return tr('Bilder mit bis zu {p0} dpi, Ziel sind {p1} dpi').format(
+                p0=int(round(finest)), p1=dpi)
     except Exception:
         logging.debug("could not decide whether %s is already PDF/X", src,
                       exc_info=True)
-        return False
-    return True
+        return tr("nicht lesbar")
+    return None
 
 
 def _boxes_survived(src, dst):
@@ -418,12 +467,15 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
     flattens = standard != "x4"
 
     # A file that is already this exact thing is left alone. Running it through
-    # again would re-encode every image for no gain — see _already_conformant.
-    if _already_conformant(src, standard, oci, dpi):
+    # again would re-encode every image for no gain — see _conversion_reason,
+    # which also says why a file that looks like PDF/X still needs work.
+    reason = _conversion_reason(src, standard, oci, dpi)
+    if reason is None:
         report(tr("Datei ist bereits {p0} — unveraendert uebernommen.")
                .format(p0=version))
         shutil.copyfile(src, out)
         return out, [], None, version
+    report(tr("Wird konvertiert: {p0}").format(p0=reason))
     # X-4 keeps optional content, so there is nothing dropped to report; only
     # the flattening profile resolves layers away.
     on, off = layer_summary(src) if flattens else ([], [])

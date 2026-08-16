@@ -781,19 +781,19 @@ def test_a_file_that_is_already_pdfx_is_left_alone():
     written to another profile, or carrying finer images than the export is
     now told to keep all still need converting."""
     import time
-    from tools.panels.pdfx import _already_conformant
+    from tools.panels.pdfx import _conversion_reason
 
     icc = fallback_cmyk_icc()
     plain = _out("idem_first")
     _export_pdfx(FX["color"], plain, icc, "Custom", "Generic CMYK", 600, "x4",
                  null_progress())
 
-    assert _already_conformant(plain, "x4", "Custom", 600)
-    assert not _already_conformant(plain, "x4", "FOGRA39L", 600), \
+    assert _conversion_reason(plain, "x4", "Custom", 600) is None
+    assert _conversion_reason(plain, "x4", "FOGRA39L", 600), \
         "a file separated for another condition was called done"
-    assert not _already_conformant(plain, "x3", "Custom", 600), \
+    assert _conversion_reason(plain, "x3", "Custom", 600), \
         "an X-4 file was accepted as an X-3 one"
-    assert not _already_conformant(FX["color"], "x4", "Custom", 600), \
+    assert _conversion_reason(FX["color"], "x4", "Custom", 600), \
         "an ordinary RGB file was called done"
 
     # The image-resolution part needs a file that actually has an image: one
@@ -801,8 +801,8 @@ def test_a_file_that_is_already_pdfx_is_left_alone():
     with_photo = _out("idem_photo")
     _export_pdfx(_photo_fixture(), with_photo, icc, "Custom", "Generic CMYK",
                  600, "x4", null_progress())
-    assert _already_conformant(with_photo, "x4", "Custom", 600)
-    assert not _already_conformant(with_photo, "x4", "Custom", 72), \
+    assert _conversion_reason(with_photo, "x4", "Custom", 600) is None
+    assert _conversion_reason(with_photo, "x4", "Custom", 72), \
         "images finer than the target were left undownsampled"
 
     again = _out("idem_second")

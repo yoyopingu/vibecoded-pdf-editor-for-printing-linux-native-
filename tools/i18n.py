@@ -727,6 +727,20 @@ _EN: dict[str, str] = {
         '  Compress',
     'Datei ist bereits {p0} — unveraendert uebernommen.':
         'The file is already {p0} — passed through unchanged.',
+    'nicht lesbar':
+        'not readable',
+    'Wird konvertiert: {p0}':
+        'Converting: {p0}',
+    'Datei ist fuer {p0} separiert, eingestellt ist {p1}':
+        'the file is separated for {p0}, the setting is {p1}',
+    'Bilder mit bis zu {p0} dpi, Ziel sind {p1} dpi':
+        'images up to {p0} dpi, the target is {p1} dpi',
+    'Datei ist {p0}, gewuenscht ist {p1}':
+        'the file is {p0}, the target is {p1}',
+    'unbenannt':
+        'unnamed',
+    'noch kein PDF/X':
+        'not PDF/X yet',
     "Keine PDF geladen.": "No PDF loaded.",
     "Keine Seiten ausgewaehlt.": "No pages selected.",
     "Keine Seiten ausgewaehlt": "No pages selected",
