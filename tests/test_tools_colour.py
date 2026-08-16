@@ -7,6 +7,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from PIL import Image
 import pypdfium2 as pdfium
+from tools.jobs import null_progress
 from tools.panels.colour_profile import ColourProfilePanel
 from tools.panels.grayscale import GrayscalePanel, _grey_vector
 from tools.panels.preflight import PreflightPanel
@@ -119,14 +120,19 @@ def test_preflight_sees_a_tiny_colour_mark():
 
 
 def _blackout_gs(inject_into_retry):
-    """Patch subprocess.run so Ghostscript "succeeds" but blacks out page 2.
+    """Make Ghostscript "succeed" while blacking out page 2.
 
     That is what the real failure looks like from the outside: exit 0, empty
-    stderr, right page count, ruined page."""
-    import subprocess, pikepdf
-    real = subprocess.run
-    def faked(cmd, *a, **k):
-        r = real(cmd, *a, **k)
+    stderr, right page count, ruined page.
+
+    Hooked on Progress.run rather than subprocess.run: the tools shell out
+    through the progress object now, so that a Stop reaches the child. This
+    stub has to sit where the call actually goes."""
+    import pikepdf
+    from tools.jobs import Progress
+    real = Progress.run
+    def faked(self, cmd, *a, **k):
+        r = real(self, cmd, *a, **k)
         if "-o" in cmd:
             outp = cmd[cmd.index("-o") + 1]
             try:
@@ -139,8 +145,8 @@ def _blackout_gs(inject_into_retry):
             except Exception:
                 pass
         return r
-    subprocess.run = faked
-    return lambda: setattr(subprocess, "run", real)
+    Progress.run = faked
+    return lambda: setattr(Progress, "run", real)
 
 
 def _grey_job():
@@ -177,7 +183,7 @@ def test_greyscale_never_ships_a_blacked_out_page():
     restore = _blackout_gs(inject_into_retry=False)
     try:
         out = os.path.join(_TMP, "grey_guard1.pdf")
-        res, msg = _grey_vector(gs, src, out, {0, 1, 2}, 3, lambda m: None)
+        res, msg = _grey_vector(gs, src, out, {0, 1, 2}, 3, null_progress())
     finally:
         restore()
     assert _mean_luma(res, 1) > 100, "a blacked-out page reached the output"
@@ -187,7 +193,7 @@ def test_greyscale_never_ships_a_blacked_out_page():
     restore = _blackout_gs(inject_into_retry=True)
     try:
         out = os.path.join(_TMP, "grey_guard2.pdf")
-        res, msg = _grey_vector(gs, src, out, {0, 1, 2}, 3, lambda m: None)
+        res, msg = _grey_vector(gs, src, out, {0, 1, 2}, 3, null_progress())
     finally:
         restore()
     assert _mean_luma(res, 1) > 100, "a blacked-out page reached the output"
@@ -238,7 +244,7 @@ def test_greyscale_verification_passes_normal_pages():
     c.showPage(); c.save()
 
     out = os.path.join(_TMP, "grey_real_out.pdf")
-    _, msg = _grey_vector(gs, src, out, set(range(6)), 6, lambda m: None)
+    _, msg = _grey_vector(gs, src, out, set(range(6)), 6, null_progress())
     assert "ACHTUNG" not in msg, f"legitimate pages were refused:\n{msg}"
     return "6 pages, no false positives"
 

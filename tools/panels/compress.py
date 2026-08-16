@@ -2,8 +2,8 @@
 Komprimieren — shrink a PDF through Ghostscript, and refuse a result that
 came back damaged.
 """
-import os, subprocess, shutil
-from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QCheckBox
+import os, shutil
+from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox
 from tools._base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels._shared import row
@@ -16,6 +16,7 @@ from tools.panels._verify import _verify_pages_intact
 class CompressPanel(BasePanel):
     TITLE         = "Komprimieren"
     SUBTITLE      = "PDF-Dateigroesse reduzieren. Ergebnis wird als neuer Tab geoeffnet."
+    RUN_LABEL     = "  Komprimieren"
     OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
@@ -33,13 +34,6 @@ class CompressPanel(BasePanel):
         if not shutil.which("gs"):
             gl.addWidget(make_label("Ghostscript fehlt — sudo pacman -S ghostscript", dim=True))
         layout.addWidget(gb)
-
-    def build_action_row(self, row_layout):
-        row_layout.addStretch()
-        self.run_btn = QPushButton(tr("  Komprimieren"))
-        self.run_btn.setObjectName("actionBtn")
-        self.run_btn.clicked.connect(self._safe_run)
-        row_layout.addWidget(self.run_btn)
 
     def _run_action(self):
         # Widget values are read here, on the GUI thread; everything after that
@@ -90,7 +84,7 @@ def _compress(src, out, gs_setting, use_gs, report):
                 "-dNOPAUSE", "-dBATCH", "-dQUIET",
                 src,
             ]
-            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
+            r = report.run(cmd, text=True, errors="replace", timeout=300)
             if r.returncode != 0:
                 raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(
                     p0=(r.stderr or r.stdout or f"exit {r.returncode}")[:400]))
@@ -108,7 +102,7 @@ def _compress(src, out, gs_setting, use_gs, report):
                     '({p0} → {p1}) — Datei nicht gespeichert.').format(
                         p0=n_src, p1=n_out))
             report(tr("Prüfe Seiten …"))
-            damaged = _verify_pages_intact(src, gs_tmp, range(n_src), None)
+            damaged = _verify_pages_intact(src, gs_tmp, range(n_src), report)
             if damaged:
                 raise RuntimeError(tr(
                     'Komprimierung hat Seite(n) beschaedigt: {p0} — Datei '

@@ -112,6 +112,7 @@ def _ocr_with_tesseract(src, out, lang, deskew, skip, report):
                     writer.add_page(reader.pages[i])
                     skipped += 1
                     continue
+            report.check()          # between pages: a half-OCR'd page is no page
             png  = os.path.join(tmp, f"p{i:04d}.png")
             base = os.path.join(tmp, f"o{i:04d}")
             img.save(png)
@@ -122,8 +123,7 @@ def _ocr_with_tesseract(src, out, lang, deskew, skip, report):
                 cmd += ["--psm", "1"]
             cmd.append("pdf")
             try:
-                r = subprocess.run(cmd, capture_output=True, text=True,
-                                   errors="replace", timeout=300)
+                r = report.run(cmd, text=True, errors="replace", timeout=300)
             except subprocess.TimeoutExpired:
                 raise RuntimeError(tr('Zeitueberschreitung bei Seite {p0}.').format(p0=i + 1))
             page_pdf = base + ".pdf"

@@ -57,12 +57,12 @@ turned off would be an ordinary PDF wearing a PDF/X label.
 """
 import os
 import shutil
-import subprocess
 
 from PyQt6.QtWidgets import QPushButton
 
 from tools._base import BasePanel, make_label
 from tools.i18n import tr
+from tools.panels import _images
 from tools.panels._icc import (ICC_DIR, fallback_cmyk_icc, profile_by_key,
                                resolve_icc)
 from tools.panels._prepress import (DEFAULT_STANDARD, PDFX_STANDARDS,
@@ -390,9 +390,20 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
 
     fd, defs = tempfile.mkstemp(suffix=".ps"); os.close(fd)
     fd, tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+    fd, staged = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
     try:
         with open(defs, "w") as f:
             f.write(_pdfx_defs(icc, oci, condition, version))
+
+        # Separate the images before Ghostscript sees them. Converting RGB to
+        # CMYK is the whole cost of this export, and Ghostscript is about ten
+        # times slower at it than littleCMS — see tools/panels/_images.py. What
+        # it skips is still converted by Ghostscript, whose own colour
+        # conversion stays switched on below, so this only ever changes how
+        # long it takes.
+        report(tr("Bilder werden separiert …"))
+        converted, _skipped = _images.to_cmyk(src, staged, icc, report)
+        gs_input = staged if converted else src
 
         # -dPDFX switches pdfwrite into PDF/X mode; the prologue has to be read
         # before the input, or the output intent lands in no document.
@@ -443,7 +454,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
             # scanned drawing come out ragged.
             "-dDownsampleMonoImages=false",
             f"-sOutputFile={tmp}",
-            defs, src,
+            defs, gs_input,
         ]
         # Say which of the two jobs this is before it starts. Flattening
         # renders whole pages to pixels and is minutes on a large sheet, and a
@@ -452,8 +463,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
         report(tr("Transparenz wird reduziert — das dauert bei grossen Seiten …")
                if flattens and transparent_pages(src) else
                tr("Ghostscript: PDF/X-Konvertierung …"))
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           errors="replace", timeout=1800)
+        r = report.run(cmd, text=True, errors="replace", timeout=1800)
         if r.returncode != 0:
             err = (r.stderr.strip() or r.stdout.strip() or f"exit {r.returncode}")[:500]
             raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=err))
@@ -479,7 +489,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
         report(tr("Prüfe Seiten …"))
         # Pages carrying only content from a switched-off layer legitimately
         # lose ink, so they are not evidence of damage.
-        damaged = _verify_pages_intact(src, tmp, range(n_src), None) if not off else {}
+        damaged = _verify_pages_intact(src, tmp, range(n_src), report) if not off else {}
         if damaged:
             raise RuntimeError(tr(
                 'PDF/X-Export hat Seite(n) beschaedigt: {p0} — die Datei wurde '
@@ -487,7 +497,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
                     p0=", ".join(f"{i + 1} ({why})" for i, why in sorted(damaged.items()))))
         shutil.copyfile(tmp, out)
     finally:
-        for path in (defs, tmp):
+        for path in (defs, tmp, staged):
             try:
                 os.remove(path)
             except OSError:

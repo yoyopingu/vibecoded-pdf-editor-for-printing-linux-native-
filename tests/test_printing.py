@@ -6,6 +6,7 @@ from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 import pypdfium2 as pdfium
+from tools.jobs import null_progress
 from tools.panels._colour import _colour_histogram, _hist_stats
 from tests.support import FX, _TMP, _app, _open, _page_labels, _spin
 
@@ -148,7 +149,7 @@ def test_print_never_destroys_colour_in_the_spooled_file():
         try:
             print_via_gs(dlg.pdf_path, dlg.model,
                          [0], 1, mode, False, False, "long", 0,
-                         "test-printer", 0, "A4", 0, 3.0, lambda m: None)
+                         "test-printer", 0, "A4", 0, 3.0, null_progress())
         finally:
             subprocess.run = real
         got = [o for o in captured["opts"]
@@ -183,7 +184,7 @@ def _lp_options(**kw):
     try:
         print_via_gs(src, PageModel(5), [0], 1, "auto", True,
                      kw.pop("duplex"), kw.pop("edge", "long"), 0,
-                     "test-printer", 0, "A4", 0, 3.0, lambda m: None, **kw)
+                     "test-printer", 0, "A4", 0, 3.0, null_progress(), **kw)
     finally:
         subprocess.run = real_run
     lp = [c for c in captured if c and c[0] == "lp"]

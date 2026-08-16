@@ -140,7 +140,6 @@ def _to_cmyk(src, out, icc, report):
     Returns (out, damaged, found_rgb, verified). Plain data only — the panel
     turns it into a report back on the GUI thread.
     """
-    import subprocess as sp
     import tempfile, contextlib, pikepdf
 
     # Bewährter GS-Befehl für RGB→CMYK ohne ICC-Profil-Problematik.
@@ -171,7 +170,7 @@ def _to_cmyk(src, out, icc, report):
         cmd.append(src)
 
         report(tr("Ghostscript: CMYK-Konvertierung …"))
-        r = sp.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
+        r = report.run(cmd, text=True, errors="replace", timeout=300)
 
         if r.returncode != 0:
             err = (r.stderr.strip() or r.stdout.strip() or f"exit {r.returncode}")[:500]
@@ -182,7 +181,7 @@ def _to_cmyk(src, out, icc, report):
         with pikepdf.open(src) as _s, pikepdf.open(cmyk_tmp) as _c:
             n_ok = min(len(_s.pages), len(_c.pages))
         report(tr("Prüfe Seiten …"))
-        damaged = _verify_pages_intact(src, cmyk_tmp, range(n_ok), None)
+        damaged = _verify_pages_intact(src, cmyk_tmp, range(n_ok), report)
         if damaged:
             # Keep the untouched original for those pages rather than hand
             # over a file with black rectangles in it.

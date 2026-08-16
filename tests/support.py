@@ -23,6 +23,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from PIL import Image
 
+from tools.jobs import null_progress
 from tools.app_state import AppState
 from tools.viewer.model import PageModel
 from tools.panels.nup import NUpPanel
@@ -152,7 +153,7 @@ def _sync_async(panel):
     """
     def run(work, on_done, *, on_error=None, on_progress=None, busy_label=None):
         try:
-            result = work(on_progress or (lambda m: None))
+            result = work(on_progress or (null_progress()))
         except Exception as exc:
             if on_error is None:
                 raise

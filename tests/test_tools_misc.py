@@ -7,6 +7,7 @@ from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from PIL import Image
+from tools.jobs import null_progress
 from tools.app_state import AppState
 from tools._base import BasePanel
 import pypdfium2 as pdfium
@@ -114,7 +115,7 @@ def test_ocr_produces_a_searchable_pdf():
     assert not _pdfium_page_text(scan)[0], "fixture already has a text layer"
 
     out = os.path.join(tmp, "ocr.pdf")
-    result, summary = _run_ocr(scan, out, lang, False, False, lambda m: None)
+    result, summary = _run_ocr(scan, out, lang, False, False, null_progress())
     assert result.endswith(".pdf"), f"OCR returned {result}, expected a PDF"
     assert os.path.isfile(result) and os.path.getsize(result) > 0
     assert len(PdfReader(result, strict=False).pages) == 1
@@ -126,7 +127,7 @@ def test_ocr_produces_a_searchable_pdf():
     if bogus:
         try:
             _run_ocr(scan, os.path.join(tmp, "x.pdf"), bogus[0], False, False,
-                     lambda m: None)
+                     null_progress())
             assert False, "a missing language pack was not reported"
         except RuntimeError as e:
             assert "Sprachpaket" in str(e) or "Language pack" in str(e), str(e)
@@ -239,11 +240,15 @@ def test_compress_refuses_a_damaged_result():
 
 
 def _damage_gs(patch):
-    """Let Ghostscript run, then corrupt its output — exit code stays 0."""
-    import subprocess, pikepdf
-    real = subprocess.run
-    def faked(cmd, *a, **k):
-        r = real(cmd, *a, **k)
+    """Let Ghostscript run, then corrupt its output — exit code stays 0.
+
+    Hooked on Progress.run, not subprocess.run: the tools shell out through
+    the progress object so that pressing Stop reaches the child process."""
+    import pikepdf
+    from tools.jobs import Progress
+    real = Progress.run
+    def faked(self, cmd, *a, **k):
+        r = real(self, cmd, *a, **k)
         if "-o" in cmd:
             outp = cmd[cmd.index("-o") + 1]
             try:
@@ -252,8 +257,8 @@ def _damage_gs(patch):
             except Exception:
                 pass
         return r
-    subprocess.run = faked
-    return lambda: setattr(subprocess, "run", real)
+    Progress.run = faked
+    return lambda: setattr(Progress, "run", real)
 
 
 def test_output_validity():

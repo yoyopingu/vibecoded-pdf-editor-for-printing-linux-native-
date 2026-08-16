@@ -32,13 +32,13 @@ def _grey_retry_page(gs_bin, src, index, report):
         with pikepdf.open(src) as pdf, pikepdf.Pdf.new() as single:
             single.pages.append(pdf.pages[index])
             single.save(one)
-        r = subprocess.run(
+        r = report.run(
             [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
              "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
              "-dCompatibilityLevel=1.5", "-dAutoRotatePages=/None",
              "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
              "-dDownsampleMonoImages=false", "-o", grey, one],
-            capture_output=True, text=True, errors="replace", timeout=300)
+            text=True, errors="replace", timeout=300)
         if r.returncode != 0 or not os.path.getsize(grey):
             return None
         blacked, vanished = _conversion_damage(
@@ -77,8 +77,7 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
             # errors="replace": Ghostscript writes its diagnostics in the system
             # locale, and a byte it could not decode used to raise UnicodeDecodeError
             # here — burying the actual failure under a decoding error.
-            r = subprocess.run(cmd, capture_output=True, text=True,
-                               errors="replace", timeout=900)
+            r = report.run(cmd, text=True, errors="replace", timeout=900)
         except subprocess.TimeoutExpired:
             raise RuntimeError(tr(
                 "Ghostscript hat nach 15 Minuten nicht geantwortet und wurde "
@@ -700,6 +699,7 @@ def _scan_pages(src, thr, report):
     try:
         n = len(doc)
         for i in range(n):
+            report.check()
             with _pdfium_lock:
                 pil = doc[i].render(scale=1).to_pil().convert("RGB")
             hist = _colour_histogram(pil)

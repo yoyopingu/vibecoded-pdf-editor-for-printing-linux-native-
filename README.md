@@ -238,7 +238,7 @@ And the rest of `tools/`:
 | Module | Responsibility |
 | --- | --- |
 | `_base.py` | `BasePanel`, the contract every tool panel follows — current-file bar, log box, the run button, and `run_async()` for off-thread work. Also `displayed_pdf()`, which flattens the page manager's in-memory edits into a temp PDF so tools operate on what the user sees rather than what is on disk. |
-| `jobs.py` | The one mechanism for fire-and-forget background work: owned, cancellable, and waited for at shutdown. |
+| `jobs.py` | The one mechanism for background work: owned, cancellable, and waited for at shutdown. `Progress` is what a worker body is handed — a progress reporter that also carries the Stop flag and can run a subprocess that dies with it. |
 | `app_state.py` | Small singleton holding the current document, page model and page, plus the signals other parts subscribe to (`pdf_changed`, `result_ready`, `status_message`). How a tool finds the open file without asking for one. |
 | `multi_open.py` | Which file formats can become a PDF, the file-dialog filter built from that list, and the conversion that runs img2pdf and LibreOffice. |
 | `theme.py` | The live palette every widget paints with, and the switch between light and dark. Shared by the viewer, the panels, the print dialog and the window, so it belongs to none of them. |

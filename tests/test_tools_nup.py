@@ -4,6 +4,7 @@ Tools Nup.
 import os, hashlib, time
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import A4
+from tools.jobs import null_progress
 from tools.app_state import AppState
 import pypdfium2 as pdfium
 from tools.panels.impose import ImposePanel, _booklet_sides
@@ -85,8 +86,8 @@ def test_nup_crop_marks():
     sw = (A4w-2*ml-gap)/2; sh = (A4h-2*mt-gap)/2
     params = (A4w, A4h, mt, mt, ml, ml, gap, gap, sw, sh, 2, 2)
     nomark = os.path.join(_TMP, "nm.pdf"); withm = os.path.join(_TMP, "wm.pdf")
-    _build_nup(FX["normal"], nomark, [0, 1, 2, 3], params, 4, lambda m: None, crop_marks=False)
-    _build_nup(FX["normal"], withm, [0, 1, 2, 3], params, 4, lambda m: None, crop_marks=True)
+    _build_nup(FX["normal"], nomark, [0, 1, 2, 3], params, 4, null_progress(), crop_marks=False)
+    _build_nup(FX["normal"], withm, [0, 1, 2, 3], params, 4, null_progress(), crop_marks=True)
     def left_margin_dark(path):
         d = pdfium.PdfDocument(path); im = d[0].render(scale=2).to_pil().convert("L"); d.close()
         return min(im.crop((0, 0, int(ml*2), im.size[1])).get_flattened_data())

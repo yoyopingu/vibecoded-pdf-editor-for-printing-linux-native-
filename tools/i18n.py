@@ -713,6 +713,18 @@ _EN: dict[str, str] = {
         'PDF/X-3 — older RIPs, transparency flattened',
     'Druckfertige PDF/X-Datei erzeugen.':
         'Produce a press-ready PDF/X file.',
+    'Stopp':
+        'Stop',
+    'Wird abgebrochen …':
+        'Stopping …',
+    'Abgebrochen — es wurde nichts geschrieben.':
+        'Stopped — nothing was written.',
+    'Bild {p0} / {p1} wird separiert …':
+        'Separating image {p0} / {p1} …',
+    'Bilder werden separiert …':
+        'Separating images …',
+    '  Komprimieren':
+        '  Compress',
     "Keine PDF geladen.": "No PDF loaded.",
     "Keine Seiten ausgewaehlt.": "No pages selected.",
     "Keine Seiten ausgewaehlt": "No pages selected",

@@ -424,8 +424,31 @@ class BasePanel(QWidget):
     def build_ui(self, layout: QVBoxLayout):
         pass
 
+    def add_stop_button(self, row: QHBoxLayout):
+        """Put the Stop button in `row`. Hidden until something is running.
+
+        Separate from build_action_row because two panels build their own
+        action row — one to rename the button, one because its actions live
+        inside its group boxes — and a tool that can start work it cannot stop
+        is the thing this exists to prevent. Overriding build_action_row
+        without calling this is caught by a test.
+        """
+        self.stop_btn = QPushButton(tr("Stopp"))
+        self.stop_btn.setObjectName("secondaryBtn")
+        self.stop_btn.setMinimumWidth(90)
+        self.stop_btn.setVisible(False)
+        self.stop_btn.clicked.connect(self.stop_running)
+        row.addWidget(self.stop_btn)
+        return self.stop_btn
+
     def build_action_row(self, row: QHBoxLayout):
         row.addStretch()
+        # A tool that has taken a wrong turn — the wrong file, the wrong
+        # settings, or simply longer than the person at the counter has — used
+        # to leave no way out but killing the window, which loses every other
+        # tab with it.
+        self.add_stop_button(row)
+
         self.run_btn = QPushButton(tr(self.RUN_LABEL))
         self.run_btn.setObjectName("actionBtn")
         self.run_btn.setMinimumWidth(120)
@@ -526,12 +549,15 @@ class BasePanel(QWidget):
                   on_progress=None, busy_label=None):
         """Run heavy work off the UI thread so the window stays responsive.
 
-        ``work_fn(report)`` executes on a worker thread (``report(msg)`` posts a
-        progress line); it must touch only plain data, never Qt widgets. When it
-        returns, ``on_done(result)`` runs back on the GUI thread; failures go to
+        ``work_fn(report)`` executes on a worker thread. ``report`` is a
+        :class:`tools.jobs.Progress`: call it to post a progress line, and use
+        ``report.check()`` / ``report.run(cmd)`` so the work can be stopped.
+        It must touch only plain data, never Qt widgets. When it returns,
+        ``on_done(result)`` runs back on the GUI thread; failures go to
         ``on_error(exc)`` (default: log the error). The run button is disabled
-        for the duration (optionally relabelled to ``busy_label``) and re-enabled
-        afterwards. Call this from _run_action and ``return None``.
+        for the duration (optionally relabelled to ``busy_label``), a Stop
+        button appears beside it, and both are restored afterwards. Call this
+        from _run_action and ``return None``.
         """
         job = getattr(self, "_async_job", None)
         if job is not None and not job.is_finished:
@@ -544,6 +570,9 @@ class BasePanel(QWidget):
             if busy_label:
                 prev_label = self.run_btn.text()
                 self.run_btn.setText(tr(busy_label))
+        if hasattr(self, "stop_btn"):
+            self.stop_btn.setEnabled(True)
+            self.stop_btn.setVisible(True)
 
         def _restore():
             self._async_running = False
@@ -551,6 +580,15 @@ class BasePanel(QWidget):
                 self.run_btn.setEnabled(True)
                 if prev_label is not None:
                     self.run_btn.setText(prev_label)
+            if hasattr(self, "stop_btn"):
+                self.stop_btn.setVisible(False)
+            # Confirmation belongs here, not on the error path: a cancelled job
+            # deliberately emits no error — stopping is not a failure — so the
+            # only place that reliably runs after a stop is `finished`. Without
+            # this the log ended on "Wird abgebrochen …" and never said it had.
+            job = getattr(self, "_async_job", None)
+            if job is not None and job.cancelled:
+                self.log.log(tr("Abgebrochen — es wurde nichts geschrieben."))
 
         def _progress(msg):
             (on_progress or self.log.log)(msg)
@@ -571,12 +609,27 @@ class BasePanel(QWidget):
         # longer depends on that reference: tools/jobs.py owns it until run()
         # has returned. _restore is also hung off `finished`, so a cancelled job
         # still gives the button back.
-        from tools.jobs import submit
+        from tools.jobs import Progress, submit
         self._async_job = submit(
-            lambda job: work_fn(job.report),
+            lambda job: work_fn(Progress(job)),
             owner=self, name=type(self).__name__,
             on_progress=_progress, on_done=_done, on_error=_error,
             on_finished=_restore)
+
+    def stop_running(self):
+        """Stop whatever this panel started. Safe to call when nothing is."""
+        job = getattr(self, "_async_job", None)
+        if job is None or job.is_finished:
+            return False
+        job.cancel()
+        if hasattr(self, "stop_btn"):
+            # Left visible but dead: the work stops at its next checkpoint,
+            # which on a Ghostscript run is immediate and on a page loop is
+            # the end of the current page. A button that vanished here would
+            # read as "already stopped" while the log was still moving.
+            self.stop_btn.setEnabled(False)
+        self.log.log(tr("Wird abgebrochen …"))
+        return True
 
     def save_pdf(self, caption="PDF speichern als") -> str:
         src = AppState.get().current_pdf

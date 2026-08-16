@@ -93,6 +93,106 @@ class Job(QRunnable):
                 pass       # receiver already gone
 
 
+class Cancelled(Exception):
+    """The user pressed Stop. Not an error — nothing failed, it was stopped.
+
+    Raised by Progress.check() and Progress.run(), and swallowed by the panel:
+    a stopped job leaves no error dialog and no half-written output, only a
+    line in the log saying it was stopped.
+    """
+
+
+class Progress:
+    """What a run_async body is handed.
+
+    It is callable, so every existing ``report("…")`` still works. It also
+    knows whether the user has asked to stop, which is the part that makes a
+    long tool interruptible:
+
+        report("Seite 3 …")     # as before
+        report.check()          # raises Cancelled if Stop was pressed
+        report.run(cmd)         # subprocess that dies when Stop is pressed
+
+    Checking is the body's job, and it has to be done between units of work
+    rather than inside them: a half-converted page is worse than a whole one.
+    """
+
+    def __init__(self, job):
+        self._job = job
+
+    def __call__(self, message):
+        self._job.report(message)
+
+    @property
+    def cancelled(self):
+        return self._job.cancelled
+
+    def check(self):
+        if self._job.cancelled:
+            raise Cancelled()
+
+    def run(self, cmd, timeout=None, **kwargs):
+        """subprocess.run, except that Stop kills the child.
+
+        The whole reason this exists: the heavy tools spend their time inside
+        Ghostscript or Tesseract, and a Stop button that cannot reach into
+        that is a Stop button that does nothing for minutes. Polling rather
+        than blocking in communicate() is what makes the flag visible.
+        """
+        import subprocess
+        import time as _time
+
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+        deadline = None if timeout is None else _time.monotonic() + timeout
+        proc = subprocess.Popen(cmd, **kwargs)
+        while True:
+            try:
+                out, err = proc.communicate(timeout=0.2)
+                return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+            except subprocess.TimeoutExpired:
+                pass
+            if self._job.cancelled:
+                _stop_process(proc)
+                raise Cancelled()
+            if deadline is not None and _time.monotonic() > deadline:
+                _stop_process(proc)
+                raise subprocess.TimeoutExpired(cmd, timeout)
+
+
+class _NoJob:
+    """Stands in for a Job when the work is not running as one."""
+    cancelled = False
+
+    def report(self, message):
+        pass
+
+
+def null_progress():
+    """A Progress that reports nowhere and is never cancelled.
+
+    For calling a worker body outside a job — tests, and any path that runs
+    the same function inline. It exists so the bodies can rely on `report`
+    being a Progress and call ``report.check()`` unguarded, instead of every
+    one of them testing whether it was handed a bare callable.
+    """
+    return Progress(_NoJob())
+
+
+def _stop_process(proc):
+    """Ask a child to stop, then insist. Ghostscript ignores nothing, but a
+    wedged one would otherwise keep a core busy after the panel says idle."""
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except Exception:
+            proc.kill()
+            proc.wait(timeout=3)
+    except Exception:
+        logging.debug("could not stop child process", exc_info=True)
+
+
 _jobs: "set" = set()
 _jobs_lock = threading.Lock()
 

@@ -38,7 +38,12 @@ class ImgPdfPanel(BasePanel):
         eb.clicked.connect(self._to_img); fl.addWidget(eb)
         layout.addWidget(fb)
 
-    def build_action_row(self, r): pass
+    def build_action_row(self, r):
+        # No general "run" here: this panel's two actions live in their own
+        # group boxes. The image export renders every page, though, which is
+        # minutes on a long document — so the way out still belongs on screen.
+        r.addStretch()
+        self.add_stop_button(r)
 
     def _add_imgs(self):
         paths = self.pick_images()
@@ -89,6 +94,7 @@ def _pdf_to_images(src, out_dir, fmt, dpi, report):
     # In batches of ten: convert_from_path holds every page it produced in
     # memory at once, and a long document at 300 dpi does not fit.
     for i in range(0, n_pages, 10):
+        report.check()          # between batches, before the next ten renders
         end = min(i + 10, n_pages)
         report(tr('Seite {i} / {total}…').format(i=end, total=n_pages))
         pages = convert_from_path(src, dpi=dpi, first_page=i + 1, last_page=end)

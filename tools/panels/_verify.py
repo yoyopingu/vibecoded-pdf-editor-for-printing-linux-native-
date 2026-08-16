@@ -70,6 +70,10 @@ def _verify_pages_intact(src, cand, pages, report, label=""):
         cand_doc = pdfium.PdfDocument(cand)
     try:
         for n, i in enumerate(wanted, 1):
+            # Between pages, never inside one: a page is the unit of work here
+            # and half a comparison tells nobody anything.
+            if report is not None and getattr(report, "cancelled", False):
+                report.check()
             if report and n % 5 == 1:
                 report(tr('Prüfe Seite {p0} / {p1} …{p2}').format(
                     p0=n, p1=len(wanted), p2=label))

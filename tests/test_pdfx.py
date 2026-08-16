@@ -6,6 +6,7 @@ import os
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
+from tools.jobs import null_progress
 from tools.panels._icc import CMYK_PROFILES, fallback_cmyk_icc, resolve_icc
 from tools.panels._prepress import layer_summary
 from tools.panels.pdfx import (PDFX_STANDARDS, _boxes_survived,
@@ -53,7 +54,7 @@ def test_the_export_carries_everything_pdfx_requires():
     assert icc, "no CMYK ICC profile on this system to embed"
     out = _out("conform")
     result, dropped, _capped, _v = _export_pdfx(FX["color"], out, icc, "Custom",
-                                           "Generic CMYK", 300, "x3", lambda _m: None)
+                                           "Generic CMYK", 300, "x3", null_progress())
     assert result == out and not dropped
 
     with pikepdf.open(out) as pdf:
@@ -85,7 +86,7 @@ def test_a_layer_switched_off_never_reaches_the_plate():
 
     out = _out("layered")
     _result, dropped, _capped, _v = _export_pdfx(src, out, fallback_cmyk_icc(), "Custom",
-                                            "Generic CMYK", 300, "x3", lambda _m: None)
+                                            "Generic CMYK", 300, "x3", null_progress())
     assert dropped == ["Stanzkontur"], "the export did not report the dropped layer"
 
     with pikepdf.open(out) as pdf:
@@ -189,7 +190,7 @@ def test_the_trim_the_source_declared_survives_the_export():
     src = _bleed_fixture()
     out = _out("bleed")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 300, "x3", lambda _m: None)
+                 300, "x3", null_progress())
     with pikepdf.open(src) as s_pdf, pikepdf.open(out) as o_pdf:
         for i, (s_page, o_page) in enumerate(zip(s_pdf.pages, o_pdf.pages)):
             for key in ("/TrimBox", "/BleedBox"):
@@ -206,7 +207,7 @@ def test_a_file_without_a_trim_box_is_not_given_a_guessed_one():
     off every job that is genuinely that size."""
     out = _out("notrim")
     _export_pdfx(FX["color"], out, fallback_cmyk_icc(), "Custom",
-                 "Generic CMYK", 300, "x3", lambda _m: None)
+                 "Generic CMYK", 300, "x3", null_progress())
     with pikepdf.open(out) as pdf:
         for i, page in enumerate(pdf.pages):
             media = [float(x) for x in page.obj["/MediaBox"]]
@@ -273,7 +274,7 @@ def test_images_come_down_to_press_resolution():
     before = widths(src)          # before, while it is still the source
     out = _out("imgs")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 300, "x3", lambda _m: None)
+                 300, "x3", null_progress())
     after = widths(out)
     assert len(before) == len(after) == 2, (before, after)
     assert 2200 < after[0] < 2700, f"the 600 dpi image came out at {after[0]} px"
@@ -284,7 +285,7 @@ def test_images_come_down_to_press_resolution():
     # legitimately be larger than what went in. This isolates the saving.
     big = _out("imgs_full")
     _export_pdfx(src, big, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 2400, "x3", lambda _m: None)
+                 2400, "x3", null_progress())
     small_kb, big_kb = os.path.getsize(out) // 1024, os.path.getsize(big) // 1024
     assert small_kb < big_kb, f"downsampling saved nothing ({small_kb} vs {big_kb} KB)"
     return (f"600 dpi -> {after[0] / (595.28 / 72):.0f} dpi, 200 dpi untouched, "
@@ -365,7 +366,7 @@ def test_preflight_reports_what_a_press_needs_to_know():
                   bleed=True, fonts=True, dpi=True, layers=True)
 
     def report_for(path):
-        lines, _verdict = _preflight(path, checks, None, 300, lambda _m: None)
+        lines, _verdict = _preflight(path, checks, None, 300, null_progress())
         return "\n".join(lines)
 
     # A file with 3 mm of bleed says so, in millimetres.
@@ -470,7 +471,7 @@ def test_vector_artwork_stays_vector():
 
     out = _out("vector")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 600, "x3", lambda _m: None)
+                 600, "x3", null_progress())
     after_paths, after_images = _count(out)
     assert after_images == 0, f"{after_images} image(s) appeared in vector artwork"
     assert after_paths == before_paths, \
@@ -519,7 +520,7 @@ def test_transparency_is_flattened_and_said_so_beforehand():
     try:
         for standard in ("x3", "x4"):
             settings.set_pdfx_standard(standard)
-            lines, _v = _preflight(src, checks, None, 300, lambda _m: None)
+            lines, _v = _preflight(src, checks, None, 300, null_progress())
             reports[standard] = "\n".join(lines)
     finally:
         settings.set_pdfx_standard(previous)
@@ -535,7 +536,7 @@ def test_transparency_is_flattened_and_said_so_beforehand():
     # And under X-3 it really is rasterised, which is what that warning is about.
     out = _out("trans")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 600, "x3", lambda _m: None)
+                 600, "x3", null_progress())
     _paths, images = _count(out)
     assert images >= 1, "a transparent page came through without being flattened"
     return "warned in preflight, and flattened to 1 image on export"
@@ -570,7 +571,7 @@ def test_the_raster_resolution_is_capped_so_the_result_can_be_opened():
     # The whole point: the exported file opens and looks like the source.
     out = _out("a0")
     _r, _dropped, capped_to, _v = _export_pdfx(big, out, fallback_cmyk_icc(), "Custom",
-                                           "Generic CMYK", 600, "x3", lambda _m: None)
+                                           "Generic CMYK", 600, "x3", null_progress())
     assert capped_to == dpi, (capped_to, dpi)
 
     import pypdfium2 as pdfium
@@ -620,7 +621,7 @@ def test_x4_keeps_transparent_artwork_as_artwork():
         started = time.time()
         _r, _dropped, _capped, version = _export_pdfx(
             src, out, icc, "Custom", "Generic CMYK", 600, standard,
-            lambda _m: None)
+            null_progress())
         results[standard] = (_count(out), time.time() - started,
                              os.path.getsize(out), version)
 
@@ -651,15 +652,112 @@ def test_x4_may_keep_layers_and_x3_may_not():
 
     out4 = _out("layers_x4")
     _r, dropped4, _c, _v = _export_pdfx(src, out4, icc, "Custom",
-                                        "Generic CMYK", 600, "x4", lambda _m: None)
+                                        "Generic CMYK", 600, "x4", null_progress())
     assert dropped4 == [], "X-4 reported dropping a layer it is allowed to keep"
     _check_conformance(out4, "x4")            # must not raise
 
     # The same file under the X-3 rules: layers gone, and reported.
     out3 = _out("layers_x3")
     _r, dropped3, _c, _v = _export_pdfx(src, out3, icc, "Custom",
-                                        "Generic CMYK", 600, "x3", lambda _m: None)
+                                        "Generic CMYK", 600, "x3", null_progress())
     assert dropped3 == ["Stanzkontur"], dropped3
     with pikepdf.open(out3) as pdf:
         assert "/OCProperties" not in pdf.Root
     return "X-4 keeps optional content, X-3 resolves it away"
+
+
+def test_images_are_separated_before_ghostscript_sees_them():
+    """Converting RGB to CMYK is the whole cost of an export — 20.7 s against
+    0.5 s for the same file's vectors — and Ghostscript is about ten times
+    slower at it than littleCMS. Doing it first is what turns a twenty-second
+    export into a five-second one, so this checks the images really do arrive
+    at Ghostscript already separated, and that the picture is unchanged."""
+    from tools.panels._images import to_cmyk
+    from tools.jobs import null_progress
+
+    src = os.path.join(_TMP, "pdfx_src_photo.pdf")
+    if not os.path.exists(src):
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        from PIL import Image
+        photo = os.path.join(_TMP, "pdfx_photo.png")
+        image = Image.new("RGB", (900, 1200))
+        pixels = image.load()
+        for y in range(1200):
+            for x in range(900):
+                pixels[x, y] = ((x * 7) % 256, (y * 5) % 256, (x + y) % 256)
+        image.save(photo)
+        w, h = A4
+        c = canvas.Canvas(src, pagesize=A4)
+        c.drawImage(photo, 0, 0, w, h); c.showPage(); c.save()
+
+    staged = os.path.join(_TMP, "pdfx_staged.pdf")
+    converted, skipped = to_cmyk(src, staged, fallback_cmyk_icc(), null_progress())
+    assert converted == 1 and skipped == 0, (converted, skipped)
+
+    with pikepdf.open(staged) as pdf:
+        spaces = [str(v.get("/ColorSpace"))
+                  for v in (pdf.pages[0].obj["/Resources"]["/XObject"]).values()
+                  if v.get("/Subtype") == Name("/Image")]
+        assert spaces == ["/DeviceCMYK"], spaces
+
+    # The picture must be the same one. Rendered side by side, the difference
+    # is only the RGB-to-CMYK gamut shift the export was going to apply
+    # anyway — the recipe was chosen (relative colorimetric, black point
+    # compensation) precisely because it lands where Ghostscript lands.
+    import pypdfium2 as pdfium
+    from PIL import ImageChops, ImageStat
+
+    def render(path):
+        doc = pdfium.PdfDocument(path)
+        try:
+            return doc[0].render(scale=0.25).to_pil().convert("RGB")
+        finally:
+            doc.close()
+
+    before, after = render(src), render(staged)
+    if before.size != after.size:
+        after = after.resize(before.size)
+    difference = sum(ImageStat.Stat(ImageChops.difference(before, after)).mean) / 3
+    assert difference < 25, f"the image changed too much: {difference:.1f}"
+    return f"1 image separated, mean shift {difference:.1f} of 255"
+
+
+def test_pre_conversion_leaves_alone_what_it_cannot_be_sure_of():
+    """It is an optimisation, and Ghostscript's own conversion stays switched
+    on behind it — so anything not certainly understood must be passed through
+    untouched rather than guessed at. A mis-converted image is a reprint."""
+    from tools.panels._images import to_cmyk
+    from tools.jobs import null_progress
+
+    src = os.path.join(_TMP, "pdfx_src_odd.pdf")
+    if not os.path.exists(src):
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        from PIL import Image
+        grey = os.path.join(_TMP, "pdfx_grey.png")
+        Image.new("L", (400, 500), 128).save(grey)
+        w, h = A4
+        c = canvas.Canvas(src, pagesize=A4)
+        c.drawImage(grey, 0, 0, w / 2, h / 2); c.showPage(); c.save()
+        # …and one image the module must refuse: 16 bits per component.
+        with pikepdf.open(src, allow_overwriting_input=True) as pdf:
+            for value in (pdf.pages[0].obj["/Resources"]["/XObject"]).values():
+                if value.get("/Subtype") == Name("/Image"):
+                    value["/BitsPerComponent"] = 16
+            pdf.save(src)
+
+    out = os.path.join(_TMP, "pdfx_odd_staged.pdf")
+    converted, _skipped = to_cmyk(src, out, fallback_cmyk_icc(), null_progress())
+    assert converted == 0, "a 16-bit image was converted anyway"
+
+    # A file it cannot even open must still produce something usable, because
+    # the export runs on whatever comes back.
+    broken = os.path.join(_TMP, "pdfx_broken.pdf")
+    with open(broken, "wb") as f:
+        f.write(b"not a pdf at all")
+    out2 = os.path.join(_TMP, "pdfx_broken_staged.pdf")
+    converted, skipped = to_cmyk(broken, out2, fallback_cmyk_icc(), null_progress())
+    assert (converted, skipped) == (0, 0) and os.path.exists(out2), \
+        "an unreadable file did not fall through to a copy"
+    return "16-bit refused, unreadable file copied through, nothing guessed"

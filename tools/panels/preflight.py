@@ -192,6 +192,7 @@ def _preflight(src, checks, target, min_dpi, report):
         for i in range(n):
             report(tr('Seite {i} / {total}…').format(i=i + 1, total=n))
             page = reader.pages[i]
+            report.check()
             pw = float(page.mediabox.width); ph = float(page.mediabox.height)
             orients.append("Q" if pw > ph else "H")
             if checks["size"] and target:
