@@ -46,7 +46,7 @@ Written in Python with PyQt6. The interface ships in German and English
 | Formulare / Reduzieren | fill and flatten AcroForms |
 | OCR — Texterkennung | make scanned PDFs searchable |
 | Druckvorstufenprüfung | preflight: bleed, fonts, image resolution, colour, layers |
-| PDF/X-Export | one button: press-ready PDF/X-3, CMYK against the shop's output intent |
+| PDF/X-Export | one button: press-ready PDF/X-4 (or X-3), CMYK against the shop's output intent |
 | Farbprofil / CMYK | colour profile conversion |
 | Plugin-Manager | install your own tool panels |
 

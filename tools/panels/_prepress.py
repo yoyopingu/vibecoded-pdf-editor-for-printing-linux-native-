@@ -29,6 +29,29 @@ from tools.panels._shared import MM_TO_PT, _inherited_rotate, _visible_box
 # the report is wanted while someone waits at a counter.
 MAX_PAGES = 200
 
+# The PDF/X profiles this application can write.
+#
+# Lives here rather than in the export panel because three places need it —
+# the export, the settings dialog that chooses it, and the report that says
+# what it will do to a file. Putting it in the panel meant the settings dialog
+# importing the panel while the panel imported the settings.
+#
+# The X-3 string is the PDF 1.3 revision, because that is the version
+# Ghostscript's -dPDFX actually writes; claiming the 1.4-based :2003 over a
+# 1.3 file would be a version string outrunning its own document.
+PDFX_STANDARDS = {
+    "x4": ("PDF/X-4", "PDF/X-4 — moderne Pressen, Transparenz bleibt erhalten"),
+    "x3": ("PDF/X-3:2002", "PDF/X-3 — aeltere RIPs, Transparenz wird reduziert"),
+}
+DEFAULT_STANDARD = "x4"
+
+
+def standard_of(key):
+    """(key, version string, label) for a stored setting, defaulting to X-4."""
+    key = key if key in PDFX_STANDARDS else DEFAULT_STANDARD
+    return (key,) + PDFX_STANDARDS[key]
+
+
 # Below this an image is visibly soft in print, and no later step can fix it.
 # Deliberately not the export's downsampling setting: that one is a *ceiling*
 # on detail worth keeping, this is the *floor* under which there is not enough.

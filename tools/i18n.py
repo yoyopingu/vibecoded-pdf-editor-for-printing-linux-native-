@@ -695,6 +695,24 @@ _EN: dict[str, str] = {
         'No transparency — vectors stay vectors',
     'Transparenz auf {p0} Seite(n) — beim PDF/X-Export werden diese Seiten in Pixel umgewandelt (Vektoren gehen dort verloren) und der Export dauert entsprechend laenger: {p1}':
         'Transparency on {p0} page(s) — the PDF/X export converts those pages to pixels (vectors are lost there) and takes correspondingly longer: {p1}',
+    'Alle Farben in CMYK gegen das eingestellte Ausgabeprofil, alle Schriften eingebettet, Bilder auf Druckauflösung. Vektoren und Schrift bleiben scharf in jeder Groesse. Das Ergebnis wird geprueft, bevor es gespeichert wird.':
+        'All colour in CMYK against the configured output profile, all fonts embedded, images at press resolution. Vectors and type stay sharp at any size. The result is checked before it is saved.',
+    '{p0}   ·   {p1}   ·   Bilder: {p2} dpi':
+        '{p0}   ·   {p1}   ·   Images: {p2} dpi',
+    'Transparenz auf {p0} Seite(n) — PDF/X-3 kann sie nicht darstellen, diese Seiten werden in Pixel umgewandelt (Vektoren gehen dort verloren) und der Export dauert entsprechend laenger: {p1}':
+        'Transparency on {p0} page(s) — PDF/X-3 cannot represent it, so those pages are converted to pixels (vectors are lost there) and the export takes correspondingly longer: {p1}',
+    'Transparenz auf {p0} Seite(n) — PDF/X-4 behaelt sie, nichts wird gerastert':
+        'Transparency on {p0} page(s) — PDF/X-4 keeps it, nothing is rasterised',
+    'Standard:':
+        'Standard:',
+    'Gilt für zwei Dinge: Bilder über diesem Wert werden reduziert\n(darunterliegende bleiben unverändert), und Seiten mit Transparenz\nwerden mit dieser Auflösung in Pixel umgewandelt. Vektoren und\nSchrift bleiben davon unberührt und bleiben in jeder Größe scharf.\nHöher heißt größere Dateien und längere Exportzeiten.':
+        'Applies to two things: images above this value are downsampled (those below\nare left alone), and — under PDF/X-3 only — pages with transparency are\nconverted to pixels at this resolution. Vectors and type are unaffected and\nstay sharp at any size. Higher means larger files and longer exports.',
+    'PDF/X-4 — moderne Pressen, Transparenz bleibt erhalten':
+        'PDF/X-4 — modern presses, transparency preserved',
+    'PDF/X-3 — aeltere RIPs, Transparenz wird reduziert':
+        'PDF/X-3 — older RIPs, transparency flattened',
+    'Druckfertige PDF/X-Datei erzeugen.':
+        'Produce a press-ready PDF/X file.',
     "Keine PDF geladen.": "No PDF loaded.",
     "Keine Seiten ausgewaehlt.": "No pages selected.",
     "Keine Seiten ausgewaehlt": "No pages selected",

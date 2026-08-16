@@ -1,14 +1,13 @@
 """
-PDF/X-Export — turn a PDF into a press-ready PDF/X-3 file.
+PDF/X-Export — turn a PDF into a press-ready PDF/X file.
 
 PDF/X is the ISO 15930 subset of PDF that a print shop can accept without
 opening it and checking: everything a RIP needs is in the file, and everything
-it cannot resolve is forbidden. Concretely, for the X-3 profile written here:
+it cannot resolve is forbidden. Whichever profile is written:
 
   * all colour is CMYK or greyscale, with one embedded ICC *output intent*
     naming the printing condition it was separated for;
   * every font is embedded, subset;
-  * no transparency (Ghostscript flattens it for us — see below);
   * every page carries a TrimBox, so the RIP knows where the finished sheet
     ends;
   * /GTS_PDFXVersion in the document info says which profile it claims.
@@ -19,25 +18,38 @@ the job, so they live in Einstellungen → Druckvorstufe and are set once. What
 a *file* brings with it — its bleed, its fonts, its image resolution — is
 reporting, and belongs to "Druckvorstufenpruefung"; this panel converts.
 
-It replaced the old "Ebenen (OCG)" tool. Optional-content groups are not part
-of PDF/X-3 at all, and Ghostscript resolves them on the way out using the
-file's own default configuration: a layer switched off in the source — a
-cutter contour, a varnish plate, a "nicht drucken" guide layer — stays off and
-is gone from the output. That is the behaviour the layers tool existed to
-guarantee, now applied automatically, and the export names the layers it
-dropped, because the one thing worse than a cutter line on the plate is not
-being told it was there.
+It replaced the old "Ebenen (OCG)" tool. X-4 keeps optional content, so a
+layered file comes through with its layers. X-3 has no optional content at
+all, and there Ghostscript resolves it using the file's own default
+configuration: a layer switched off in the source — a cutter contour, a
+varnish plate, a "nicht drucken" guide layer — stays off and is gone from the
+output. That is the behaviour the layers tool existed to guarantee, and the
+export names the layers it dropped, because the one thing worse than a cutter
+line on the plate is not being told it was there.
 
-Why X-3 and nothing else
-------------------------
-Ghostscript's ``-dPDFX`` genuinely produces X-3, and forces PDF 1.3 while
-doing it — which is also why transparency comes out flattened, and why the
-version string here is "PDF/X-3:2002" (the PDF 1.3 revision) rather than the
-1.4-based :2003. X-1a would be a one-word change to that string and a lie:
-Ghostscript does not guarantee the extra X-1a restrictions, and a file that
-claims a conformance it does not have is rejected at the RIP, which is worse
-than a file that claims nothing. X-4 needs live transparency and a different
-engine altogether.
+X-4 by default, X-3 for older equipment
+---------------------------------------
+The difference is transparency, and it decides both quality and speed.
+
+X-3 is a PDF 1.3 format, and PDF 1.3 has no transparency at all. Every page
+that uses any must therefore be *flattened*: rendered to pixels and embedded
+as an image. On a page of transparent vector artwork that is the whole page
+turned into a raster — on an A0 sheet, measured, 82 seconds and 17 MB, with
+every path gone.
+
+X-4 is PDF 1.6 and keeps transparency live, so nothing is rasterised. The same
+A0 page takes 0.3 seconds and 185 KB with all 3600 paths intact. It is also
+what modern presses ask for. So it is the default, and X-3 stays available for
+a RIP too old to take it.
+
+X-1a is offered by neither. It would be a one-word change to the version
+string and a lie: it additionally forbids things Ghostscript does not
+guarantee removing, and a file claiming a conformance it does not have is
+rejected at the RIP, which is worse than a file that claims nothing. The same
+scepticism applies to X-4 — the difference is that X-4's requirements are ones
+this can check: PDF 1.6, an embedded CMYK output intent, every font embedded,
+no encryption. Transparency, the thing gs cannot be trusted to *remove*, is
+allowed there rather than forbidden.
 
 There are deliberately no "embed fonts" or "convert to CMYK" switches. Both
 are requirements of the standard, not preferences; a PDF/X export with them
@@ -53,27 +65,24 @@ from tools._base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels._icc import (ICC_DIR, fallback_cmyk_icc, profile_by_key,
                                resolve_icc)
-from tools.panels._prepress import layer_summary, transparent_pages
+from tools.panels._prepress import (DEFAULT_STANDARD, PDFX_STANDARDS,
+                                    layer_summary, standard_of,
+                                    transparent_pages)
 from tools.panels._verify import _verify_pages_intact
-
-
-PDFX_VERSION = "PDF/X-3:2002"
 
 
 class PdfxPanel(BasePanel):
     TITLE         = "PDF/X-Export"
-    SUBTITLE      = "Druckfertige PDF/X-3 erzeugen."
+    SUBTITLE      = "Druckfertige PDF/X-Datei erzeugen."
     RUN_LABEL     = "  PDF/X exportieren"
     OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
         layout.addWidget(make_label(tr(
-            "Erzeugt {p0}: alle Farben in CMYK gegen das eingestellte "
-            "Ausgabeprofil, alle Schriften eingebettet, Ebenen aufgeloest, "
-            "Bilder auf Druckauflösung. Vektoren und Schrift bleiben Vektoren "
-            "und damit in jeder Groesse scharf; nur Seiten mit Transparenz "
-            "werden in Pixel umgewandelt. Das Ergebnis wird geprueft, bevor es "
-            "gespeichert wird.").format(p0=PDFX_VERSION), dim=True))
+            "Alle Farben in CMYK gegen das eingestellte Ausgabeprofil, alle "
+            "Schriften eingebettet, Bilder auf Druckauflösung. Vektoren und "
+            "Schrift bleiben scharf in jeder Groesse. Das Ergebnis wird "
+            "geprueft, bevor es gespeichert wird."), dim=True))
         layout.addWidget(make_label(tr(
             "Was die Datei mitbringt — Anschnitt, Schriften, Bildauflösung — "
             "zeigt „Druckvorstufenpruefung“."), dim=True))
@@ -105,9 +114,10 @@ class PdfxPanel(BasePanel):
         name = label.split(" — ")[0]
         if candidates and not resolve_icc(candidates):
             name = tr("{p0}  (Profil fehlt — generisches CMYK)").format(p0=name)
+        _key, version, _lbl = standard_of(AppSettings.get().pdfx_standard())
         self._cond_lbl.setText(
-            tr("Ausgabebedingung: {p0}   ·   Bilder: {p1} dpi").format(
-                p0=name, p1=dpi))
+            tr("{p0}   ·   {p1}   ·   Bilder: {p2} dpi").format(
+                p0=version, p1=name, p2=dpi))
 
     def _open_settings(self):
         from tools.shell.settings import PrepressDialog
@@ -130,6 +140,7 @@ class PdfxPanel(BasePanel):
             settings.pdfx_condition())
         label = full_label.split(" — ")[0]
         dpi = settings.pdfx_image_dpi()
+        standard = standard_of(settings.pdfx_standard())[0]
         icc = resolve_icc(candidates)
         if icc is None:
             icc = fallback_cmyk_icc()
@@ -157,15 +168,16 @@ class PdfxPanel(BasePanel):
             raise ValueError(tr("Kein Ausgabepfad angegeben."))
 
         self.run_async(
-            lambda report: _export_pdfx(src, out, icc, oci, condition, dpi, report),
+            lambda report: _export_pdfx(src, out, icc, oci, condition, dpi,
+                                        standard, report),
             on_done=lambda result: self._done(result, note),
             busy_label="PDF/X wird erzeugt …",
         )
         return None
 
     def _done(self, result, note):
-        out, dropped, capped_to = result
-        lines = [tr('PDF/X-Export abgeschlossen ({p0}).').format(p0=PDFX_VERSION), note]
+        out, dropped, capped_to, version = result
+        lines = [tr('PDF/X-Export abgeschlossen ({p0}).').format(p0=version), note]
         if capped_to:
             lines.append(tr(
                 'Rasterauflösung auf {p0} dpi begrenzt — bei dieser Seitengroesse '
@@ -180,7 +192,7 @@ class PdfxPanel(BasePanel):
 
 # ── the worker ───────────────────────────────────────────────────────────────
 
-def _pdfx_defs(icc_path, oci, condition):
+def _pdfx_defs(icc_path, oci, condition, version=None):
     """The PostScript prologue that makes pdfwrite write an output intent.
 
     Ghostscript ships a sample of this (lib/PDFX_def.ps) that guesses the
@@ -193,8 +205,9 @@ def _pdfx_defs(icc_path, oci, condition):
         # path or a condition name containing one would end the string early.
         return str(text).replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
 
+    version = version or PDFX_STANDARDS[DEFAULT_STANDARD][0]
     return f"""%!
-[ /GTS_PDFXVersion ({ps(PDFX_VERSION)})
+[ /GTS_PDFXVersion ({ps(version)})
   /Trapped /False
 /DOCINFO pdfmark
 
@@ -217,7 +230,7 @@ def _pdfx_defs(icc_path, oci, condition):
 """
 
 
-def _check_conformance(path):
+def _check_conformance(path, standard=DEFAULT_STANDARD):
     """Raise unless `path` really carries what PDF/X requires.
 
     pdfwrite exits 0 on plenty of files it did not fully convert, and the
@@ -237,7 +250,8 @@ def _check_conformance(path):
     from tools.panels._prepress import unembedded_fonts
 
     with pikepdf.open(path) as pdf:
-        if str(pdf.docinfo.get("/GTS_PDFXVersion", "")) != PDFX_VERSION:
+        _key, version, _label = standard_of(standard)
+        if str(pdf.docinfo.get("/GTS_PDFXVersion", "")) != version:
             raise RuntimeError(tr("Die Ausgabe traegt keine PDF/X-Kennung."))
         intents = pdf.Root.get("/OutputIntents")
         if not intents or len(intents) == 0:
@@ -256,7 +270,10 @@ def _check_conformance(path):
         # Things PDF/X forbids outright. Each of these would be resolved at
         # the RIP by guessing, which is the one thing the standard exists to
         # prevent.
-        if "/OCProperties" in pdf.Root:
+        # Optional content is forbidden in X-3 and permitted in X-4, which is
+        # one of the reasons X-4 is cheaper: the layers do not have to be
+        # resolved away.
+        if standard != "x4" and "/OCProperties" in pdf.Root:
             raise RuntimeError(tr("Die Ausgabe enthaelt noch Ebenen (OCG)."))
         if pdf.is_encrypted:
             raise RuntimeError(tr("Die Ausgabe ist verschluesselt."))
@@ -357,30 +374,44 @@ def _boxes_survived(src, dst):
     return problems
 
 
-def _export_pdfx(src, out, icc, oci, condition, dpi, report):
+def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
     """Write `src` to `out` as PDF/X. Plain data only — runs on a worker."""
     import tempfile
     import pikepdf
 
-    on, off = layer_summary(src)
-    dpi, capped = _flatten_dpi(src, dpi)
+    standard, version, _label = standard_of(standard)
+    flattens = standard != "x4"
+    # X-4 keeps optional content, so there is nothing dropped to report; only
+    # the flattening profile resolves layers away.
+    on, off = layer_summary(src) if flattens else ([], [])
+    capped = False
+    if flattens:
+        dpi, capped = _flatten_dpi(src, dpi)
 
     fd, defs = tempfile.mkstemp(suffix=".ps"); os.close(fd)
     fd, tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
     try:
         with open(defs, "w") as f:
-            f.write(_pdfx_defs(icc, oci, condition))
+            f.write(_pdfx_defs(icc, oci, condition, version))
 
-        # -dPDFX is what switches pdfwrite into PDF/X mode; the prologue has to
-        # be read before the input, or the output intent lands in no document.
+        # -dPDFX switches pdfwrite into PDF/X mode; the prologue has to be read
+        # before the input, or the output intent lands in no document.
+        #
+        # Bare -dPDFX means X-3 and forces PDF 1.3 — no transparency, so every
+        # page that uses any is rasterised. -dPDFX=4 with CompatibilityLevel
+        # 1.6 keeps it live instead, which is why the X-4 path needs no
+        # rasterising resolution at all and finishes in a fraction of the time.
         cmd = [
-            "gs", "-dPDFX", "-dBATCH", "-dNOPAUSE", "-dNOOUTERSAVE", "-dQUIET",
+            "gs",
+            "-dPDFX" if flattens else "-dPDFX=4",
+            "-dBATCH", "-dNOPAUSE", "-dNOOUTERSAVE", "-dQUIET",
             "-sDEVICE=pdfwrite",
             "-dPDFSETTINGS=/prepress",
             "-sProcessColorModel=DeviceCMYK",
             "-sColorConversionStrategy=CMYK",
             "-dEmbedAllFonts=true",
             "-dSubsetFonts=true",
+        ] + ([] if flattens else ["-dCompatibilityLevel=1.6"]) + [
             # The rasterising resolution, and the reason this is not slow.
             #
             # PDF/X-3 is PDF 1.3, which has no transparency, so any page that
@@ -395,7 +426,10 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, report):
             # It also makes the setting mean what it says. Without it, asking
             # for 600 dpi still produced 720 dpi flattening downsampled to
             # 300, because the preset's own limit won.
-            f"-r{dpi}",
+            #
+            # X-4 rasterises nothing, so it gets no -r: the flag would only
+            # slow down a run with no flattening in it.
+        ] + ([f"-r{dpi}"] if flattens else []) + [
             # After /prepress, which keeps images at source resolution — these
             # override it (verified: a 600 dpi image comes back at 300 and the
             # file halves; a 200 dpi one is left alone rather than upsampled).
@@ -416,7 +450,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, report):
         # progress line that only says "converting" makes that look like a
         # hang rather than the one unavoidable cost of PDF/X.
         report(tr("Transparenz wird reduziert — das dauert bei grossen Seiten …")
-               if transparent_pages(src) else
+               if flattens and transparent_pages(src) else
                tr("Ghostscript: PDF/X-Konvertierung …"))
         r = subprocess.run(cmd, capture_output=True, text=True,
                            errors="replace", timeout=1800)
@@ -426,7 +460,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, report):
         if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
             raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
 
-        _check_conformance(tmp)
+        _check_conformance(tmp, standard)
         moved = _boxes_survived(src, tmp)
         if moved:
             raise RuntimeError(tr(
@@ -458,4 +492,4 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, report):
                 os.remove(path)
             except OSError:
                 pass
-    return out, off, (dpi if capped else None)
+    return out, off, (dpi if capped else None), version

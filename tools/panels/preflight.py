@@ -90,6 +90,12 @@ def _press_readiness(src, checks, min_dpi, report):
     and so each of these can be read next to what it means for the job.
     """
     from tools.panels import _prepress
+    from tools.panels._prepress import standard_of
+    from tools.shell.settings import AppSettings
+    # Whether transparency is a problem depends on which profile the export
+    # will write, so the report reflects the setting in force rather than
+    # warning about something X-4 handles.
+    flattens = standard_of(AppSettings.get().pdfx_standard())[0] != "x4"
     issues, oks = [], []
 
     if checks.get("bleed"):
@@ -139,19 +145,23 @@ def _press_readiness(src, checks, min_dpi, report):
     if checks.get("trans"):
         report(tr("Transparenz …"))
         pages = _prepress.transparent_pages(src)
-        if pages:
-            # Not a defect in the file — it is what the PDF/X export will have
-            # to do to it, and the only step that turns vector artwork into
-            # pixels. Said here so nobody is surprised by either the wait or a
-            # logo that is no longer sharp at any size.
-            issues.append(tr(
-                'Transparenz auf {p0} Seite(n) — beim PDF/X-Export werden '
-                'diese Seiten in Pixel umgewandelt (Vektoren gehen dort '
-                'verloren) und der Export dauert entsprechend laenger: {p1}')
-                .format(p0=len(pages),
-                        p1=", ".join(str(p) for p in pages[:10])))
-        else:
+        if not pages:
             oks.append(tr("Keine Transparenz — Vektoren bleiben Vektoren"))
+        elif flattens:
+            # Only a problem under X-3, which is PDF 1.3 and has no
+            # transparency: those pages get rendered to pixels, which is both
+            # the quality cost and where the minutes go. Said before the
+            # export rather than discovered after it.
+            issues.append(tr(
+                'Transparenz auf {p0} Seite(n) — PDF/X-3 kann sie nicht '
+                'darstellen, diese Seiten werden in Pixel umgewandelt '
+                '(Vektoren gehen dort verloren) und der Export dauert '
+                'entsprechend laenger: {p1}').format(
+                    p0=len(pages), p1=", ".join(str(p) for p in pages[:10])))
+        else:
+            oks.append(tr(
+                'Transparenz auf {p0} Seite(n) — PDF/X-4 behaelt sie, '
+                'nichts wird gerastert').format(p0=len(pages)))
 
     if checks.get("layers"):
         on, off = _prepress.layer_summary(src)

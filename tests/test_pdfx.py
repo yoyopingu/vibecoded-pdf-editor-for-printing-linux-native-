@@ -8,12 +8,16 @@ from pikepdf import Array, Dictionary, Name, String
 
 from tools.panels._icc import CMYK_PROFILES, fallback_cmyk_icc, resolve_icc
 from tools.panels._prepress import layer_summary
-from tools.panels.pdfx import (PDFX_VERSION, _boxes_survived, _check_conformance,
-                               _export_pdfx, _pdfx_defs)
+from tools.panels.pdfx import (PDFX_STANDARDS, _boxes_survived,
+                               _check_conformance, _export_pdfx, _pdfx_defs)
 from tests.support import FX, _TMP
 
 
 def _out(name):
+    """Where an export writes. Never collides with a source fixture: those are
+    all named pdfx_src_*, and an export that overwrote its own input silently
+    made several of these tests check a file against itself."""
+    assert not name.startswith("src_"), name
     return os.path.join(_TMP, f"pdfx_{name}.pdf")
 
 
@@ -23,7 +27,7 @@ def _layered_fixture():
     A cutter contour or a varnish plate looks exactly like this, and it is the
     case the old layers tool existed to get right.
     """
-    path = os.path.join(_TMP, "pdfx_layered.pdf")
+    path = os.path.join(_TMP, "pdfx_src_layered.pdf")
     if os.path.exists(path):
         return path
     with pikepdf.open(FX["single"]) as pdf:
@@ -48,12 +52,12 @@ def test_the_export_carries_everything_pdfx_requires():
     icc = fallback_cmyk_icc()
     assert icc, "no CMYK ICC profile on this system to embed"
     out = _out("conform")
-    result, dropped, _capped = _export_pdfx(FX["color"], out, icc, "Custom",
-                                           "Generic CMYK", 300, lambda _m: None)
+    result, dropped, _capped, _v = _export_pdfx(FX["color"], out, icc, "Custom",
+                                           "Generic CMYK", 300, "x3", lambda _m: None)
     assert result == out and not dropped
 
     with pikepdf.open(out) as pdf:
-        assert str(pdf.docinfo["/GTS_PDFXVersion"]) == PDFX_VERSION
+        assert str(pdf.docinfo["/GTS_PDFXVersion"]) == PDFX_STANDARDS["x3"][0]
         # Ghostscript's PDF/X mode writes PDF 1.3, which is what the :2002
         # revision is based on — the version string must not outrun it.
         assert str(pdf.pdf_version) == "1.3", pdf.pdf_version
@@ -80,8 +84,8 @@ def test_a_layer_switched_off_never_reaches_the_plate():
     assert (on, off) == ([], ["Stanzkontur"]), (on, off)
 
     out = _out("layered")
-    _result, dropped, _capped = _export_pdfx(src, out, fallback_cmyk_icc(), "Custom",
-                                            "Generic CMYK", 300, lambda _m: None)
+    _result, dropped, _capped, _v = _export_pdfx(src, out, fallback_cmyk_icc(), "Custom",
+                                            "Generic CMYK", 300, "x3", lambda _m: None)
     assert dropped == ["Stanzkontur"], "the export did not report the dropped layer"
 
     with pikepdf.open(out) as pdf:
@@ -107,7 +111,7 @@ def test_a_file_that_is_not_pdfx_is_not_handed_over():
     against the file before it ships."""
     for name, path in (("plain", FX["normal"]), ("colour", FX["color"])):
         try:
-            _check_conformance(path)
+            _check_conformance(path, "x3")
         except RuntimeError:
             pass
         else:
@@ -115,7 +119,7 @@ def test_a_file_that_is_not_pdfx_is_not_handed_over():
 
     out = _out("conform")   # written by the first test, genuinely conformant
     if os.path.exists(out):
-        _check_conformance(out)     # must not raise
+        _check_conformance(out, "x3")   # must not raise
     return "ordinary PDFs are refused, a real one passes"
 
 
@@ -160,7 +164,7 @@ def _bleed_fixture():
     What an InDesign print export looks like, and the geometry the guillotine
     is set from.
     """
-    path = os.path.join(_TMP, "pdfx_bleed.pdf")
+    path = os.path.join(_TMP, "pdfx_src_bleed.pdf")
     if os.path.exists(path):
         return path
     with pikepdf.open(FX["color"]) as pdf:
@@ -185,7 +189,7 @@ def test_the_trim_the_source_declared_survives_the_export():
     src = _bleed_fixture()
     out = _out("bleed")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 300, lambda _m: None)
+                 300, "x3", lambda _m: None)
     with pikepdf.open(src) as s_pdf, pikepdf.open(out) as o_pdf:
         for i, (s_page, o_page) in enumerate(zip(s_pdf.pages, o_pdf.pages)):
             for key in ("/TrimBox", "/BleedBox"):
@@ -202,7 +206,7 @@ def test_a_file_without_a_trim_box_is_not_given_a_guessed_one():
     off every job that is genuinely that size."""
     out = _out("notrim")
     _export_pdfx(FX["color"], out, fallback_cmyk_icc(), "Custom",
-                 "Generic CMYK", 300, lambda _m: None)
+                 "Generic CMYK", 300, "x3", lambda _m: None)
     with pikepdf.open(out) as pdf:
         for i, page in enumerate(pdf.pages):
             media = [float(x) for x in page.obj["/MediaBox"]]
@@ -239,7 +243,7 @@ def test_images_come_down_to_press_resolution():
 
     # Not _out(...): that names the *output* files, and a source sharing a
     # name with one of them gets exported over itself.
-    src = os.path.join(_TMP, "pdfx_image_source.pdf")
+    src = os.path.join(_TMP, "pdfx_src_images.pdf")
     if not os.path.exists(src):
         w, h = A4
         base = Image.new("RGB", (620, 877))
@@ -269,7 +273,7 @@ def test_images_come_down_to_press_resolution():
     before = widths(src)          # before, while it is still the source
     out = _out("imgs")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 300, lambda _m: None)
+                 300, "x3", lambda _m: None)
     after = widths(out)
     assert len(before) == len(after) == 2, (before, after)
     assert 2200 < after[0] < 2700, f"the 600 dpi image came out at {after[0]} px"
@@ -280,7 +284,7 @@ def test_images_come_down_to_press_resolution():
     # legitimately be larger than what went in. This isolates the saving.
     big = _out("imgs_full")
     _export_pdfx(src, big, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 2400, lambda _m: None)
+                 2400, "x3", lambda _m: None)
     small_kb, big_kb = os.path.getsize(out) // 1024, os.path.getsize(big) // 1024
     assert small_kb < big_kb, f"downsampling saved nothing ({small_kb} vs {big_kb} KB)"
     return (f"600 dpi -> {after[0] / (595.28 / 72):.0f} dpi, 200 dpi untouched, "
@@ -379,7 +383,7 @@ def test_preflight_reports_what_a_press_needs_to_know():
     assert "Helvetica" in without, without
 
     # Bleed on only some pages is a real problem, unlike having none at all.
-    partial = os.path.join(_TMP, "pdfx_partial_bleed.pdf")
+    partial = os.path.join(_TMP, "pdfx_src_partial_bleed.pdf")
     with pikepdf.open(_bleed_fixture()) as pdf:
         del pdf.pages[1].obj["/TrimBox"]
         pdf.save(partial)
@@ -397,7 +401,7 @@ def test_image_resolution_is_measured_where_the_image_is_placed():
     from PIL import Image
     from tools.panels._prepress import low_resolution_images
 
-    src = os.path.join(_TMP, "pdfx_placement.pdf")
+    src = os.path.join(_TMP, "pdfx_src_placement.pdf")
     if not os.path.exists(src):
         w, h = A4
         small = os.path.join(_TMP, "pdfx_logo.png")
@@ -417,7 +421,7 @@ def test_image_resolution_is_measured_where_the_image_is_placed():
 
 def _vector_fixture():
     """A page of pure vector artwork — no images, no transparency."""
-    path = os.path.join(_TMP, "pdfx_vector.pdf")
+    path = os.path.join(_TMP, "pdfx_src_vector.pdf")
     if os.path.exists(path):
         return path
     from reportlab.lib.pagesizes import A4
@@ -466,7 +470,7 @@ def test_vector_artwork_stays_vector():
 
     out = _out("vector")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 600, lambda _m: None)
+                 600, "x3", lambda _m: None)
     after_paths, after_images = _count(out)
     assert after_images == 0, f"{after_images} image(s) appeared in vector artwork"
     assert after_paths == before_paths, \
@@ -475,16 +479,18 @@ def test_vector_artwork_stays_vector():
 
 
 def test_transparency_is_flattened_and_said_so_beforehand():
-    """The one case where vectors *do* become pixels.
+    """The one case where vectors *do* become pixels, and only under X-3.
 
     PDF/X-3 is PDF 1.3, which has no transparency, so those pages are
-    rasterised — and that is both the quality cost and the reason a big file
-    takes minutes. Preflight has to say so before the export, not after.
+    rasterised — both the quality cost and the reason a big file takes
+    minutes. Preflight has to say so before the export, not after — and must
+    *not* say it when the configured profile is X-4, which keeps transparency
+    live and pays none of that.
     """
     from tools.panels._prepress import transparent_pages
     from tools.panels.preflight import _preflight
 
-    src = os.path.join(_TMP, "pdfx_trans.pdf")
+    src = os.path.join(_TMP, "pdfx_src_trans.pdf")
     if not os.path.exists(src):
         from reportlab.lib.pagesizes import A4
         from reportlab.pdfgen import canvas
@@ -500,17 +506,36 @@ def test_transparency_is_flattened_and_said_so_beforehand():
     assert transparent_pages(src) == [1], transparent_pages(src)
     assert transparent_pages(_vector_fixture()) == [], "vector art reported as transparent"
 
+    # What the report says depends on which profile the export will write:
+    # under X-4 transparency costs nothing and warning about it would be noise,
+    # under X-3 it is the single most expensive thing in the file.
+    from tools.shell.settings import AppSettings
+
     checks = dict(size=False, orient=False, colour=False, enc=False, bleed=False,
                   fonts=False, dpi=False, trans=True, layers=False)
-    lines, _v = _preflight(src, checks, None, 300, lambda _m: None)
-    report = "\n".join(lines)
-    assert "Transparenz auf 1" in report, report
-    assert "Vektoren gehen dort verloren" in report, report
+    settings = AppSettings.get()
+    previous = settings.pdfx_standard()
+    reports = {}
+    try:
+        for standard in ("x3", "x4"):
+            settings.set_pdfx_standard(standard)
+            lines, _v = _preflight(src, checks, None, 300, lambda _m: None)
+            reports[standard] = "\n".join(lines)
+    finally:
+        settings.set_pdfx_standard(previous)
 
-    # And it really is rasterised, which is what the warning is about.
+    assert "Transparenz auf 1" in reports["x3"], reports["x3"]
+    assert "Vektoren gehen dort verloren" in reports["x3"], reports["x3"]
+    assert "PROBLEME" in reports["x3"], "X-3 flattening was not raised as an issue"
+
+    assert "PDF/X-4 behaelt sie" in reports["x4"], reports["x4"]
+    assert "PROBLEME" not in reports["x4"], \
+        "X-4 was warned about a cost it does not have"
+
+    # And under X-3 it really is rasterised, which is what that warning is about.
     out = _out("trans")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 600, lambda _m: None)
+                 600, "x3", lambda _m: None)
     _paths, images = _count(out)
     assert images >= 1, "a transparent page came through without being flattened"
     return "warned in preflight, and flattened to 1 image on export"
@@ -529,7 +554,7 @@ def test_the_raster_resolution_is_capped_so_the_result_can_be_opened():
     dpi, capped = _flatten_dpi(a4, 600)
     assert (dpi, capped) == (600, False), "an A4 page was capped"
 
-    big = os.path.join(_TMP, "pdfx_a0.pdf")
+    big = os.path.join(_TMP, "pdfx_src_a0.pdf")
     if not os.path.exists(big):
         from reportlab.pdfgen import canvas
         c = canvas.Canvas(big, pagesize=(2384, 3370))
@@ -544,8 +569,8 @@ def test_the_raster_resolution_is_capped_so_the_result_can_be_opened():
 
     # The whole point: the exported file opens and looks like the source.
     out = _out("a0")
-    _r, _dropped, capped_to = _export_pdfx(big, out, fallback_cmyk_icc(), "Custom",
-                                           "Generic CMYK", 600, lambda _m: None)
+    _r, _dropped, capped_to, _v = _export_pdfx(big, out, fallback_cmyk_icc(), "Custom",
+                                           "Generic CMYK", 600, "x3", lambda _m: None)
     assert capped_to == dpi, (capped_to, dpi)
 
     import pypdfium2 as pdfium
@@ -562,3 +587,79 @@ def test_the_raster_resolution_is_capped_so_the_result_can_be_opened():
     assert abs(before - after) < 0.05, \
         f"the exported A0 page does not render like the source ({before:.2f} vs {after:.2f})"
     return f"A4 untouched, A0 capped to {dpi} dpi and still renders correctly"
+
+
+def test_x4_keeps_transparent_artwork_as_artwork():
+    """The default profile, and the reason it is the default.
+
+    X-3 is PDF 1.3, which has no transparency, so a page using any is
+    flattened — rendered to pixels, vectors gone, and slow in proportion to
+    the page area. X-4 is PDF 1.6 and keeps it live: nothing is rasterised.
+    Measured on an A0 sheet of transparent artwork, that is 82 s and 17 MB
+    against 0.3 s and 185 KB, with every path still a path.
+    """
+    import time
+
+    src = os.path.join(_TMP, "pdfx_src_x4.pdf")
+    if not os.path.exists(src):
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        w, h = A4
+        c = canvas.Canvas(src, pagesize=A4)
+        c.setFillAlpha(0.45)
+        for i in range(300):
+            c.setFillColorRGB((i % 7) / 7, (i % 5) / 5, (i % 3) / 3)
+            c.circle(40 + (i % 20) * 28, 60 + (i // 20) * 52, 30, fill=1, stroke=0)
+        c.setFillAlpha(1)
+        c.showPage(); c.save()
+
+    icc = fallback_cmyk_icc()
+    results = {}
+    for standard in ("x4", "x3"):
+        out = _out(f"std_{standard}")
+        started = time.time()
+        _r, _dropped, _capped, version = _export_pdfx(
+            src, out, icc, "Custom", "Generic CMYK", 600, standard,
+            lambda _m: None)
+        results[standard] = (_count(out), time.time() - started,
+                             os.path.getsize(out), version)
+
+    (x4_paths, x4_images), x4_time, x4_size, x4_version = results["x4"]
+    (x3_paths, x3_images), x3_time, x3_size, _x3_version = results["x3"]
+
+    assert x4_version == "PDF/X-4", x4_version
+    assert x4_paths > 500, f"X-4 kept only {x4_paths} path operators"
+    assert x4_images == 0, f"X-4 rasterised something ({x4_images} images)"
+    assert x3_images >= 1 and x3_paths < x4_paths, \
+        "X-3 was expected to flatten the page and did not"
+    assert x4_size < x3_size, f"X-4 was not smaller ({x4_size} vs {x3_size})"
+
+    with pikepdf.open(_out("std_x4")) as pdf:
+        assert str(pdf.pdf_version) >= "1.6", pdf.pdf_version
+        assert pdf.Root.get("/OutputIntents"), "X-4 lost the output intent"
+        assert all("/TrimBox" in p.obj for p in pdf.pages)
+    return (f"X-4 {x4_paths} paths / {x4_size // 1024} KB / {x4_time:.1f}s  vs  "
+            f"X-3 {x3_paths} paths / {x3_size // 1024} KB / {x3_time:.1f}s")
+
+
+def test_x4_may_keep_layers_and_x3_may_not():
+    """Optional content is permitted in X-4 and forbidden in X-3, so the
+    conformance check cannot be one rule. Getting this backwards would either
+    reject good X-4 files or pass X-3 files a RIP will refuse."""
+    src = _layered_fixture()
+    icc = fallback_cmyk_icc()
+
+    out4 = _out("layers_x4")
+    _r, dropped4, _c, _v = _export_pdfx(src, out4, icc, "Custom",
+                                        "Generic CMYK", 600, "x4", lambda _m: None)
+    assert dropped4 == [], "X-4 reported dropping a layer it is allowed to keep"
+    _check_conformance(out4, "x4")            # must not raise
+
+    # The same file under the X-3 rules: layers gone, and reported.
+    out3 = _out("layers_x3")
+    _r, dropped3, _c, _v = _export_pdfx(src, out3, icc, "Custom",
+                                        "Generic CMYK", 600, "x3", lambda _m: None)
+    assert dropped3 == ["Stanzkontur"], dropped3
+    with pikepdf.open(out3) as pdf:
+        assert "/OCProperties" not in pdf.Root
+    return "X-4 keeps optional content, X-3 resolves it away"

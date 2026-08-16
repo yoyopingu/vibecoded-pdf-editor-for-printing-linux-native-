@@ -92,6 +92,18 @@ class AppSettings:
     def set_pdfx_condition(self, val: str):
         self._qs.setValue("prepress/pdfx_condition", val)
 
+    def pdfx_standard(self) -> str:
+        """Which PDF/X profile to write: "x4" or "x3".
+
+        X-4 by default. X-3 has to flatten transparency, which rasterises the
+        affected pages — slower, larger, and vector artwork stops being vector.
+        X-3 is here for a RIP too old to accept X-4, not as a preference.
+        """
+        return self._qs.value("prepress/pdfx_standard", "x4")
+
+    def set_pdfx_standard(self, val: str):
+        self._qs.setValue("prepress/pdfx_standard", val)
+
     def pdfx_image_dpi(self) -> int:
         """Images above this are downsampled on export, and any page that has
         to be flattened is rendered at it.
@@ -293,6 +305,16 @@ class PrepressDialog(QDialog):
         form.setHorizontalSpacing(20)
         form.setVerticalSpacing(10)
 
+        from tools.panels._prepress import PDFX_STANDARDS, standard_of
+        self._std_combo = QComboBox()
+        current_std = standard_of(self._s.pdfx_standard())[0]
+        for key in ("x4", "x3"):
+            self._std_combo.addItem(tr(PDFX_STANDARDS[key][1]), key)
+            if key == current_std:
+                self._std_combo.setCurrentIndex(self._std_combo.count() - 1)
+        self._std_combo.setMaximumWidth(400)
+        form.addRow(tr("Standard:"), self._std_combo)
+
         self._cond_combo = QComboBox()
         # Capped: the profile labels carry their paper and use-case, and an
         # uncapped combo takes the whole row width and clips the field label.
@@ -407,6 +429,7 @@ class PrepressDialog(QDialog):
             tr("Installiert nach {p0}").format(p0=dest))
 
     def _save(self):
+        self._s.set_pdfx_standard(self._std_combo.currentData())
         self._s.set_pdfx_condition(self._cond_combo.currentData())
         self._s.set_pdfx_image_dpi(self._dpi_spin.value())
         self.accept()
