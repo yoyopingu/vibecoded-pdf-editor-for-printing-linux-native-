@@ -741,6 +741,7 @@ class GrayscalePanel(BasePanel):
             logging.exception("grayscale: could not open the document")
             self.log.log(str(e), error=True); return
         self._build_preview(n)
+        self._load_preview_pixmaps_async(src)
 
         self._scanning = True
         thr = self.thr.value()
@@ -758,7 +759,6 @@ class GrayscalePanel(BasePanel):
         self._already_grey = already_grey
         self._reclassify()
         self._update_preview_borders()
-        self._load_preview_pixmaps_async(src)
         self._scanned_path = src
         if then is not None:
             # Next event-loop turn, not straight away: the job's `finished`
