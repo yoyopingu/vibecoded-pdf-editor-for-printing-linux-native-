@@ -2,10 +2,10 @@
 Graustufen — turn visually grey pages into real DeviceGray, one page at a
 time, and check each converted page against the original before shipping it.
 """
-import os, subprocess, shutil, logging
+import os, subprocess, shutil, logging, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.caches import _ThumbnailCache
-from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
+from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals, _thumb_render_width
 from tools.theme import STATUS, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox, QRadioButton, QScrollArea, QWidget, QSlider, QFrame, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt, QTimer, QEvent
@@ -16,6 +16,22 @@ from tools.colorspace import document_colorspaces, is_grey_only, page_colorspace
 from tools.i18n import tr
 from tools.panels._colour import _colour_histogram, _hist_stats
 from tools.panels._verify import _BLACKOUT_LIMIT, _page_luma, _conversion_damage, _verify_pages_intact
+
+
+# Default card size — kept in sync with tools/viewer/page_grid.py CARD_W/CARD_H.
+# Panels may not import from viewer (layering), so the constants are duplicated
+# here; change both together.
+_CARD_W = 187
+_CARD_H = 264
+
+# Scale for the colour-detection scan. Full size (1.0) used to be the only way
+# to catch a half-point colour mark — a 128-pixel squash averaged it away — but
+# pdfium's anti-aliased renderer catches it at 0.3 too (verified by
+# test_greyscale_detects_a_tiny_colour_mark). 0.4 gives margin while cutting
+# pixel count ~6x vs scale=1, which is the difference between seconds and
+# minutes on a 150-page book of heavy vector pages. The histogram itself is
+# size-independent (PIL ImageChops in C).
+_SCAN_SCALE = 0.4
 
 
 def _grey_retry_page(gs_bin, src, index, report):
@@ -61,18 +77,35 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
     text stays text, vectors stay vectors, every colour space (RGB/CMYK/ICC/
     spot) is mapped to DeviceGray, and images keep full resolution (no
     downsampling). Pages NOT selected are copied through unchanged. Runs on a
-    worker thread (only paths/ints cross the boundary). Returns (out, summary)."""
+    worker thread (only paths/ints cross the boundary). Returns (out, summary).
+
+    Only the *selected* pages are handed to Ghostscript, not the whole
+    document. A 145-page book where 92 pages need greying and 53 stay colour
+    used to spend 15 s in Ghostscript processing all 145; the subset takes
+    under 3 s. The unselected pages are copied through unchanged by pikepdf in
+    the assembly step — they never go near Ghostscript."""
     import tempfile, contextlib, pikepdf
     report(tr("Ghostscript: Graustufen-Konvertierung …"))
     fd, grey_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+    fd, sub_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
     repaired = {}          # bound before the try: the finally cleans it up
     try:
+        sel = sorted(selected)
+        # Extract only the pages that need conversion. On a heavy 150-page
+        # document where half the pages are colour (and stay colour), this
+        # alone cuts the Ghostscript run from 15 s to 3 s — and the colour
+        # pages never risk being altered by the colour conversion either.
+        with pikepdf.open(src) as pdf, pikepdf.Pdf.new() as sub:
+            for i in sel:
+                sub.pages.append(pdf.pages[i])
+            sub.save(sub_tmp)
+
         cmd = [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
                "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
                "-dCompatibilityLevel=1.5", "-dAutoRotatePages=/None",
                "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
                "-dDownsampleMonoImages=false",
-               "-o", grey_tmp, src]
+               "-o", grey_tmp, sub_tmp]
         try:
             # errors="replace": Ghostscript writes its diagnostics in the system
             # locale, and a byte it could not decode used to raise UnicodeDecodeError
@@ -85,6 +118,11 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
         if r.returncode != 0 or not os.path.exists(grey_tmp) or os.path.getsize(grey_tmp) == 0:
             raise RuntimeError((r.stderr or r.stdout or tr("Ghostscript-Fehler")).strip()[:400])
 
+        # orig_to_sub maps an original page index to its position in the
+        # subset, so verify and assembly can index the Ghostscript output
+        # (which only contains the converted pages) back to the original.
+        orig_to_sub = {orig: pos for pos, orig in enumerate(sel)}
+
         # ── Verify before anything is written ────────────────────────────────
         # Ghostscript exits 0 while blacking out a transparency group or a
         # soft-masked image. Nothing in the return code, the stderr or the page
@@ -95,19 +133,87 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
             n = min(n_pages, len(_s.pages))
         with pikepdf.open(grey_tmp) as _g:
             n_grey = len(_g.pages)
-        convertible = {i for i in selected if i < n and i < n_grey}
+        convertible = {orig for orig, pos in orig_to_sub.items()
+                       if orig < n and pos < n_grey}
         report(tr("Konvertierte Seiten prüfen …"))
-        damaged = _verify_pages_intact(src, grey_tmp, convertible, report)
+        damaged = {}
+        batch_repaired = {}   # orig_idx -> position in batch_grey
+        # Hold the lock for the entire verify + retry phase. The verify and
+        # retry functions each acquire the lock internally — RLock re-enters
+        # without deadlock — but the render worker is blocked for the whole
+        # phase, which is what eliminates the 10 s of contention that stretched
+        # this from 7 s to 18 s. The user is watching a progress bar during a
+        # conversion; a 5 s viewer freeze is fine there. gc.disable ensures
+        # pdfium finalizers never fire on the GC thread (see _scan_pages).
+        gc.disable()
+        with _pdfium_lock:
+            try:
+                # Verify needs to compare each converted page against the
+                # ORIGINAL of that same page. grey_tmp only contains the
+                # selected pages (positions 0..N-1), and so does sub_tmp —
+                # page pos in sub_tmp is the original of page pos in grey_tmp.
+                # Comparing against `src` directly would line up the WRONG
+                # original page whenever the selection isn't an identity map
+                # (e.g. sel={5,10,20} would compare original 0 vs converted 5),
+                # which can let a blacked-out page ship silently.
+                sub_to_orig = {pos: orig for orig, pos in orig_to_sub.items()}
+                sub_convertible = {orig_to_sub[i] for i in convertible}
+                sub_damaged = _verify_pages_intact(sub_tmp, grey_tmp, sub_convertible, report)
+                # Map damaged results back to original page indices
+                damaged = {sub_to_orig[pos]: reason for pos, reason in sub_damaged.items()}
 
-        # Give the damaged ones a second chance on their own — isolating a page
-        # drops the surrounding transparency groups that trip Ghostscript up.
-        for i in sorted(damaged):
-            report(tr('Seite {p0} erneut versuchen …').format(p0=i + 1))
-            fixed = _grey_retry_page(gs_bin, src, i, report)
-            if fixed:
-                repaired[i] = fixed
-        for i in repaired:
-            damaged.pop(i, None)
+                # Give the damaged ones a second chance. Isolating a page drops the
+                # surrounding transparency groups that trip Ghostscript up. Rather than
+                # spawning a separate Ghostscript process for every damaged page (23
+                # pages × 0.3 s each = 7 s of process overhead), all damaged pages are
+                # extracted into one temp PDF and converted in a single Ghostscript run.
+                # Pages that are STILL damaged after the batch get an individual retry.
+                if damaged:
+                    report(tr("Beschaedigte Seiten isoliert nachkonvertieren …"))
+                    fd, batch_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+                    fd, batch_grey = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+                    try:
+                        damaged_sorted = sorted(damaged)
+                        with pikepdf.open(src) as pdf, pikepdf.Pdf.new() as batch:
+                            for i in damaged_sorted:
+                                batch.pages.append(pdf.pages[i])
+                            batch.save(batch_tmp)
+                        r = report.run(
+                            [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
+                             "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
+                             "-dCompatibilityLevel=1.5", "-dAutoRotatePages=/None",
+                             "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
+                             "-dDownsampleMonoImages=false", "-o", batch_grey, batch_tmp],
+                            text=True, errors="replace", timeout=900)
+                        if r.returncode == 0 and os.path.exists(batch_grey) and os.path.getsize(batch_grey) > 0:
+                            # batch_tmp positions align 1:1 with batch_grey
+                            # positions (both built from damaged_sorted order) —
+                            # see the sub_tmp comment above for why we can't
+                            # compare against `src` directly here.
+                            batch_damaged = _verify_pages_intact(
+                                batch_tmp, batch_grey, set(range(len(damaged_sorted))), report)
+                            for pos in range(len(damaged_sorted)):
+                                if pos not in batch_damaged:
+                                    orig = damaged_sorted[pos]
+                                    batch_repaired[orig] = pos
+                            for i in batch_repaired:
+                                damaged.pop(i, None)
+                    except Exception:
+                        logging.exception("grayscale: batch retry failed")
+                    finally:
+                        try: os.remove(batch_tmp)
+                        except OSError: pass
+
+                # Still-damaged pages get an individual retry as a last resort.
+                for i in sorted(damaged):
+                    report(tr('Seite {p0} erneut versuchen …').format(p0=i + 1))
+                    fixed = _grey_retry_page(gs_bin, src, i, report)
+                    if fixed:
+                        repaired[i] = fixed
+                for i in repaired:
+                    damaged.pop(i, None)
+            finally:
+                gc.collect(); gc.enable()
 
         report(tr("Seiten zusammenstellen …"))
         # ExitStack closes whatever was opened even if the second open throws —
@@ -116,6 +222,8 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
         with contextlib.ExitStack() as stack:
             src_pdf  = stack.enter_context(pikepdf.open(src))
             grey_pdf = stack.enter_context(pikepdf.open(grey_tmp))
+            batch_grey_pdf = (stack.enter_context(pikepdf.open(batch_grey))
+                             if batch_repaired else None)
             out_pdf  = stack.enter_context(pikepdf.Pdf.new())
             fixed_pdfs = {i: stack.enter_context(pikepdf.open(p))
                           for i, p in repaired.items()}
@@ -127,8 +235,11 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
                     if i in fixed_pdfs:
                         out_pdf.pages.append(fixed_pdfs[i].pages[0]); n_conv += 1
                         continue
+                    if i in batch_repaired and batch_grey_pdf is not None:
+                        out_pdf.pages.append(batch_grey_pdf.pages[batch_repaired[i]]); n_conv += 1
+                        continue
                     if i in convertible and i not in damaged:
-                        out_pdf.pages.append(grey_pdf.pages[i]); n_conv += 1
+                        out_pdf.pages.append(grey_pdf.pages[orig_to_sub[i]]); n_conv += 1
                         continue
                     if i not in damaged:
                         missing += 1    # Ghostscript returned fewer pages
@@ -154,9 +265,10 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
             ).format(p0=missing)
         if n < n_pages:
             msg += "  — " + tr('Dokument hat nur {p0} Seiten.').format(p0=n)
-        if repaired:
+        if batch_repaired or repaired:
+            total_retry = len(batch_repaired) + len(repaired)
             msg += "  — " + tr(
-                '{p0} Seite(n) einzeln nachkonvertiert.').format(p0=len(repaired))
+                '{p0} Seite(n) einzeln nachkonvertiert.').format(p0=total_retry)
         if damaged:
             # Loud and specific: these pages are still in colour, on purpose,
             # and the operator has to know which ones before the job goes out.
@@ -172,6 +284,10 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
             except OSError: pass
         try: os.remove(grey_tmp)
         except OSError: pass
+        try: os.remove(sub_tmp)
+        except OSError: pass
+        try: os.remove(batch_grey)
+        except (OSError, NameError): pass
 
 
 class GrayscalePanel(BasePanel):
@@ -211,7 +327,7 @@ class GrayscalePanel(BasePanel):
             self._gs_legend_lbls.append(lbl)
             zbl.addWidget(dot); zbl.addWidget(lbl); zbl.addSpacing(6)
         zbl.addStretch()
-        self._card_w = 90
+        self._card_w = _CARD_W
         self._preview_cards = []
         self._gs_zoombtns = []
         for txt, fn in [("−", self._zoom_out), ("fit", self._zoom_reset), ("+", self._zoom_in)]:
@@ -309,11 +425,11 @@ class GrayscalePanel(BasePanel):
     def _zoom_out(self):
         self._card_w = max(50, self._card_w - 20); self._rezoom()
     def _zoom_reset(self):
-        self._card_w = 90; self._rezoom()
+        self._card_w = _CARD_W; self._rezoom()
 
     def _rezoom(self):
         if not self._preview_cards: return
-        card_h = int(self._card_w * (127 / 90))
+        card_h = int(self._card_w * (_CARD_H / _CARD_W))
         for frame, img_lbl, num_lbl in self._preview_cards:
             frame.setFixedSize(self._card_w + 12, card_h + 24)
             img_lbl.setFixedSize(self._card_w, card_h)
@@ -329,13 +445,21 @@ class GrayscalePanel(BasePanel):
         self._zoom_smooth_timer.start(180)
 
     def _rezoom_smooth(self):
-        card_h = int(self._card_w * (127 / 90))
+        card_h = int(self._card_w * (_CARD_H / _CARD_W))
         for frame, img_lbl, num_lbl in self._preview_cards:
             pm = img_lbl.property("src_pm")
             if pm:
                 img_lbl.setPixmap(pm.scaled(self._card_w, card_h,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation))
+        # Zoom settled: if the card is now wider than the cached render, the
+        # preview is an upscaled blur — re-load at a width that fits so it
+        # sharpens. _thumb_render_width snaps to 128 px steps, so this only
+        # re-renders when the zoom crossed a real ladder rung.
+        if self._preview_cards and self._scanned_path:
+            needed = _thumb_render_width(max(self._card_w * 2, 200))
+            if needed > self._grey_render_w:
+                self._load_preview_pixmaps_async(self._scanned_path)
 
     def _preview_wheel(self, e):
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -358,6 +482,11 @@ class GrayscalePanel(BasePanel):
         self._grey_thumb_gen  = 0
         self._grey_thumb_sigs = _ThumbSignals()
         self._grey_thumb_sigs.ready.connect(self._on_grey_thumb_ready)
+        # render width the current preview thumbs are at (zoom-aware; see
+        # _load_preview_pixmaps_async). Tracked so a zoom-in that outgrows the
+        # cached render re-submits at the wider width instead of staying blurry.
+        self._grey_render_w   = 0
+        self._grey_thumb_tasks = []
 
         mode_grp = QGroupBox(tr("Erkennungs-Modus"))
         mg = QVBoxLayout(mode_grp); mg.setSpacing(6); mg.setContentsMargins(8,10,8,8)
@@ -438,7 +567,7 @@ class GrayscalePanel(BasePanel):
             f"QWidget#greyPreviewBox{{background:{_TV['viewer_bg']};}}")
         self._preview_scroll.setWidget(container)
         self._preview_cards = []
-        CARD_W = self._card_w; CARD_H = int(CARD_W * (127/90)); GAP = 8; MARGIN = 10
+        CARD_W = self._card_w; CARD_H = int(CARD_W * (_CARD_H/_CARD_W)); GAP = 8; MARGIN = 10
         vp_w = self._preview_scroll.viewport().width() or 600
         cols = max(2, (vp_w - 2*MARGIN + GAP) // (CARD_W + 12 + GAP))
         grid = QGridLayout(container)
@@ -480,19 +609,33 @@ class GrayscalePanel(BasePanel):
         Reuses any thumbnails already rendered by the page grid (same cache,
         same render width) so opening Manage Pages first makes Grayscale
         thumbnails appear instantly — and vice versa.
+
+        The render width tracks the current zoom: a thumbnail wide enough to
+        fill the card at 2x is asked for, snapped onto the queue's 128 px
+        ladder via _thumb_render_width. Zooming in past the cached width
+        re-runs this (from _rezoom) so the preview sharpens instead of staying
+        a blurry upscaled 220 px render forever.
         """
         self._grey_thumb_gen += 1
         gen = self._grey_thumb_gen
-        # Use 220 px — matches PageGrid's default render_w (card_w 110 × 2)
-        # so both tools share the exact same cache entries.
-        RENDER_W = 220
+        # Drop any still-queued tasks from the previous width and cancel the
+        # in-flight ones so a fast zoom scroll does not stack 145 renders.
+        _render_queue.cancel_queued(1)
+        for t in self._grey_thumb_tasks:
+            t.cancel()
+        self._grey_thumb_tasks = []
+        RENDER_W = _thumb_render_width(max(self._card_w * 2, 200))
+        self._grey_render_w = RENDER_W
         for i in range(len(self._preview_cards)):
-            cached = _ThumbnailCache.get_any(pdf_path, i, 0)
+            cached = _ThumbnailCache.get((pdf_path, i, 0, RENDER_W))
+            if cached is None:
+                cached = _ThumbnailCache.get_at_least(pdf_path, i, 0, RENDER_W)
             if cached is not None:
                 self._on_grey_thumb_ready(gen, i, cached)
             else:
                 task = _ThumbTask(gen, i, pdf_path, i, 0,
                                   RENDER_W, self._grey_thumb_sigs)
+                self._grey_thumb_tasks.append(task)
                 _render_queue.submit(task, 1)
 
     def _on_grey_thumb_ready(self, gen, cidx, image):
@@ -502,7 +645,7 @@ class GrayscalePanel(BasePanel):
         if cidx >= len(self._preview_cards):
             return
         frame, img_lbl, num_lbl = self._preview_cards[cidx]
-        CARD_W = self._card_w; CARD_H = int(CARD_W * (127 / 90))
+        CARD_W = self._card_w; CARD_H = int(CARD_W * (_CARD_H / _CARD_W))
         pm = QPixmap.fromImage(image)
         img_lbl.setProperty("src_pm", pm)
         img_lbl.setPixmap(pm.scaled(CARD_W, CARD_H,
@@ -667,6 +810,21 @@ class GrayscalePanel(BasePanel):
         out = self.save_pdf(tr("Graustufen-PDF speichern als"))
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
 
+        # Drop the viewer's pending thumbnail/pre-render tasks so the render
+        # worker is not competing for the pdfium lock during the conversion.
+        # Each verify render and retry render releases the lock between pages,
+        # and the render worker seizes those gaps to render a 500 ms thumbnail
+        # — stretching a 7 s conversion into 18 s. Cancelling P1/P2 tasks
+        # leaves P0 (the visible page) intact but clears the thumbnail flood.
+        _render_queue.cancel_queued(1)
+        _render_queue.cancel_queued(2)
+        # Also cancel the render worker's currently-running thumbnail, if any —
+        # cancel_queued only drops the heap, not the in-flight task. The worker
+        # checks _active between render steps and bails out when it flips.
+        with _render_queue._cond:
+            if _render_queue._running is not None:
+                _render_queue._running.cancel()
+
         gs = shutil.which("gs") or shutil.which("gswin64c") or shutil.which("gswin32c")
         if not gs:
             raise RuntimeError(tr(
@@ -695,22 +853,44 @@ def _scan_pages(src, thr, report):
     """
     import pypdfium2 as pdfium
     hists = []
-    doc = pdfium.PdfDocument(src)
+    # PIL images from to_pil() can end up in reference cycles; Python's cyclic
+    # GC runs at allocation thresholds on whatever thread happens to allocate —
+    # including the render worker, which is NOT under our lock. If it collects a
+    # cycled PIL image whose ImagingCore still holds the pdfium bitmap buffer,
+    # the buffer's weakref finalizer fires FPDFBitmap_Destroy on the GC thread
+    # without the lock, racing the render worker's own pdfium call → heap
+    # corruption → SIGSEGV/SIGABRT. Disabling cyclic GC for the scan forces
+    # every pdfium object to be freed by refcounting at statement end (always
+    # inside the `with _pdfium_lock`), never by a surprise GC pass.
+    gc.disable()
     try:
-        n = len(doc)
-        for i in range(n):
-            report.check()
+        # PdfDocument(src) is FPDF_LoadDocument and close() is FPDF_CloseDocument —
+        # pdfium calls like any other, so both need the process-wide lock. This
+        # document has a broken xref (the file that exposed it did), which makes
+        # loading slow and widens the race against the render worker: constructing
+        # it unlocked corrupted the heap and took the whole app down with a
+        # malloc abort, with no Python traceback to show for it.
+        with _pdfium_lock:
+            doc = pdfium.PdfDocument(src)
+        try:
+            n = len(doc)
+            for i in range(n):
+                report.check()
+                with _pdfium_lock:
+                    pil = doc[i].render(scale=_SCAN_SCALE).to_pil().convert("RGB")
+                hist = _colour_histogram(pil)
+                hists.append(hist)
+                max_diff, ratio = _hist_stats(hist, thr)
+                report(tr('Seite {p0}: max={p1}, farbig={p2:.2f}%').format(
+                    p0=i + 1, p1=max_diff, p2=ratio * 100))
+        finally:
+            # Always: a failed render used to leave the document (and its file
+            # handle) open for the life of the app.
             with _pdfium_lock:
-                pil = doc[i].render(scale=1).to_pil().convert("RGB")
-            hist = _colour_histogram(pil)
-            hists.append(hist)
-            max_diff, ratio = _hist_stats(hist, thr)
-            report(tr('Seite {p0}: max={p1}, farbig={p2:.2f}%').format(
-                p0=i + 1, p1=max_diff, p2=ratio * 100))
+                doc.close()
     finally:
-        # Always: a failed render used to leave the document (and its file
-        # handle) open for the life of the app.
-        doc.close()
+        gc.collect()   # under no lock — safe: all pdfium objects are already closed
+        gc.enable()
 
     already_grey = set()
     try:

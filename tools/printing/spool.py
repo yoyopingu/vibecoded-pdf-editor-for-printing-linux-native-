@@ -351,9 +351,10 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
                 logging.exception("Qt render: page %d", pos + 1)
                 skipped.append(pos + 1)
     finally:
-        for doc in pdfium_docs.values():
-            try: doc.close()
-            except Exception: pass   # closing what we can; a failure here cannot change the job's outcome
+        with _pdfium_lock:
+            for doc in pdfium_docs.values():
+                try: doc.close()
+                except Exception: pass   # closing what we can; a failure here cannot change the job's outcome
 
     if not rendered:
         raise RuntimeError(tr("Keine Seiten konnten gerendert werden."))

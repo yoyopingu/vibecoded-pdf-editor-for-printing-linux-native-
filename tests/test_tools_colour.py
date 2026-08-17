@@ -203,6 +203,67 @@ def test_greyscale_never_ships_a_blacked_out_page():
     return "rescued, then refused"
 
 
+def test_greyscale_subset_verify_compares_the_right_pages():
+    """The subset optimization extracts only selected pages for Ghostscript.
+    The verify step must compare each converted page against the ORIGINAL of
+    that same page, not against original page [subset_position]. With a sparse
+    selection (e.g. page 1 of a 4-page doc), the buggy code compared the
+    blacked-out conversion of page 1 against original page 0 — and when page 0
+    was dark, the damage was invisible and the broken page shipped silently."""
+    if not (shutil.which("gs") or shutil.which("gswin64c")):
+        return "SKIP (no ghostscript)"
+    gs = shutil.which("gs") or shutil.which("gswin64c")
+
+    # Page 0: full black (so the buggy compare-against-src[0] would see
+    # dark→dark and miss the blackout).  Page 1: light content (the page
+    # whose conversion we black out).  Pages 2-3: light, unselected.
+    from reportlab.lib import colors
+    src = os.path.join(_TMP, "grey_sparse.pdf")
+    c = canvas.Canvas(src, pagesize=A4)
+    c.setFillColor(colors.black); c.rect(0, 0, A4[0], A4[1], fill=1, stroke=0); c.showPage()
+    c.setFillColor(colors.HexColor("#2277cc")); c.rect(40, 500, 500, 250, fill=1, stroke=0)
+    c.setFillGray(0); c.setFont("Helvetica", 30); c.drawString(50, 430, "TARGET"); c.showPage()
+    for _ in range(2):
+        c.setFillGray(0); c.setFont("Helvetica", 20); c.drawString(50, 700, "filler"); c.showPage()
+    c.save()
+
+    # Black out page 0 of whatever GS produces (the subset has 1 page =
+    # original page 1; the batch retry also has 1 page).  This stub is
+    # subset-aware: it always blacks out position 0 of the output.
+    from tools.jobs import Progress
+    real = Progress.run
+    def faked(self, cmd, *a, **k):
+        r = real(self, cmd, *a, **k)
+        import pikepdf
+        if "-o" in cmd:
+            outp = cmd[cmd.index("-o") + 1]
+            try:
+                with pikepdf.open(outp, allow_overwriting_input=True) as pdf:
+                    if len(pdf.pages) >= 1:
+                        pdf.pages[0].contents_add(
+                            pikepdf.Stream(pdf, b"0 g 0 0 3000 3000 re f"))
+                        pdf.save(outp)
+            except Exception:
+                pass
+        return r
+    Progress.run = faked
+    try:
+        out = os.path.join(_TMP, "grey_sparse_out.pdf")
+        res, msg = _grey_vector(gs, src, out, {1}, 4, null_progress())
+    finally:
+        Progress.run = real
+
+    # The conversion of page 1 was blacked out.  The verify MUST have caught
+    # it: page 1 keeps its original (light, blue) content, not a black page.
+    assert _mean_luma(res, 1) > 100, \
+        "a blacked-out page shipped — verify compared against the wrong original"
+    assert "ACHTUNG" in msg or "1 (" in msg, \
+        f"damage not reported for the sparse selection: {msg}"
+    # Page 0 (unselected, dark) must be untouched.
+    assert _mean_luma(res, 0) < 50, "unselected dark page was altered"
+    return "sparse selection verified correctly"
+
+
 def test_greyscale_verification_passes_normal_pages():
     """The guard must not cost colour clicks by refusing pages that converted
     perfectly well — dense text, saturated blocks, a photo, transparency, a dark

@@ -102,7 +102,12 @@ MAX_PAGES = 4
 
 # Every pdfium call in the process goes through this. See "Locking" above for
 # the measurements behind it; do not narrow it without repeating them.
-PDFIUM_LOCK = threading.Lock()
+# Reentrant (RLock) so a worker thread can hold it for a whole multi-step
+# operation (e.g. grayscale convert: verify + batch retry + individual retry)
+# and the internal _verify_pages_intact / _page_luma calls re-enter without
+# deadlock — while the render worker is blocked for the duration, eliminating
+# lock contention that stretched a 7 s conversion into 18 s.
+PDFIUM_LOCK = threading.RLock()
 
 
 class DocumentHandle:
