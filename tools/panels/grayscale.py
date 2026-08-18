@@ -2,7 +2,7 @@
 Graustufen — turn visually grey pages into real DeviceGray, one page at a
 time, and check each converted page against the original before shipping it.
 """
-import os, subprocess, shutil, logging, gc
+import os, subprocess, logging, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals, _thumb_render_width
@@ -13,9 +13,12 @@ from PyQt6.QtGui import QPixmap
 from tools.app_state import AppState
 from tools._base import BasePanel, make_label
 from tools.colorspace import document_colorspaces, is_grey_only, page_colorspaces
+from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,
+                               run_chunked, unlink)
 from tools.i18n import tr
 from tools.panels._colour import _colour_histogram, _hist_stats
-from tools.panels._verify import _BLACKOUT_LIMIT, _page_luma, _conversion_damage, _verify_pages_intact
+from tools.pageverify import BLACKOUT_LIMIT, conversion_damage
+from tools.panels._verify import _page_luma, _verify_pages_intact
 
 
 # Default card size — kept in sync with tools/viewer/page_grid.py CARD_W/CARD_H.
@@ -34,6 +37,23 @@ _CARD_H = 264
 _SCAN_SCALE = 0.4
 
 
+def _grey_cmd(gs_bin, src, dest, first=None, last=None):
+    """The lossless vector greyscale conversion, as a command.
+
+    Three call sites ran these same eleven flags — the subset conversion, the
+    batch retry and the single-page retry — each with its own copy. A flag
+    corrected in one of them was a flag still wrong in the other two, and the
+    three are meant to differ only in which pages they are given.
+    """
+    return [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
+            "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
+            "-dCompatibilityLevel=1.5", "-dAutoRotatePages=/None",
+            "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
+            "-dDownsampleMonoImages=false",
+            *page_range_flags(first, last),
+            "-o", dest, src]
+
+
 def _grey_retry_page(gs_bin, src, index, report):
     """Convert a single page on its own, for pages the full-document run damaged.
 
@@ -48,27 +68,20 @@ def _grey_retry_page(gs_bin, src, index, report):
         with pikepdf.open(src) as pdf, pikepdf.Pdf.new() as single:
             single.pages.append(pdf.pages[index])
             single.save(one)
-        r = report.run(
-            [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
-             "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
-             "-dCompatibilityLevel=1.5", "-dAutoRotatePages=/None",
-             "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
-             "-dDownsampleMonoImages=false", "-o", grey, one],
-            text=True, errors="replace", timeout=300)
+        r = report.run(_grey_cmd(gs_bin, one, grey),
+                       text=True, errors="replace", timeout=300)
         if r.returncode != 0 or not os.path.getsize(grey):
             return None
-        blacked, vanished = _conversion_damage(
+        blacked, vanished = conversion_damage(
             _page_luma(src, index), _page_luma(grey, 0))
-        if blacked > _BLACKOUT_LIMIT or vanished > _BLACKOUT_LIMIT:
+        if blacked > BLACKOUT_LIMIT or vanished > BLACKOUT_LIMIT:
             return None
         return grey
     except Exception:
         logging.exception("grayscale: single-page retry for page %d failed", index + 1)
         return None
     finally:
-        if one:
-            try: os.remove(one)
-            except OSError: pass
+        unlink(one)
 
 
 def _grey_vector(gs_bin, src, out, selected, n_pages, report):
@@ -88,7 +101,11 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
     report(tr("Ghostscript: Graustufen-Konvertierung …"))
     fd, grey_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
     fd, sub_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
-    repaired = {}          # bound before the try: the finally cleans it up
+    # Bound before the try: the finally cleans all of them up, and batch_grey
+    # used to be left unbound on the paths that never reached the batch retry
+    # — which the cleanup covered by catching NameError.
+    repaired = {}
+    batch_tmp = batch_grey = None
     try:
         sel = sorted(selected)
         # Extract only the pages that need conversion. On a heavy 150-page
@@ -100,23 +117,27 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
                 sub.pages.append(pdf.pages[i])
             sub.save(sub_tmp)
 
-        cmd = [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
-               "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
-               "-dCompatibilityLevel=1.5", "-dAutoRotatePages=/None",
-               "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
-               "-dDownsampleMonoImages=false",
-               "-o", grey_tmp, sub_tmp]
+        # The subset goes through in several concurrent runs where it is long
+        # enough to be worth it. Ghostscript is single-threaded per document,
+        # so the pages of one book were converted one core at a time no matter
+        # how many the machine had; the ranges here are of sub_tmp, which is
+        # already only the pages that need converting.
         try:
             # errors="replace": Ghostscript writes its diagnostics in the system
             # locale, and a byte it could not decode used to raise UnicodeDecodeError
             # here — burying the actual failure under a decoding error.
-            r = report.run(cmd, text=True, errors="replace", timeout=900)
+            r = failed(run_chunked(
+                report,
+                lambda dest, first, last: _grey_cmd(gs_bin, sub_tmp, dest, first, last),
+                grey_tmp, len(sel), timeout=900))
         except subprocess.TimeoutExpired:
             raise RuntimeError(tr(
                 "Ghostscript hat nach 15 Minuten nicht geantwortet und wurde "
                 "abgebrochen. Die PDF ist vermutlich beschädigt oder sehr groß."))
-        if r.returncode != 0 or not os.path.exists(grey_tmp) or os.path.getsize(grey_tmp) == 0:
+        if r is not None:
             raise RuntimeError((r.stderr or r.stdout or tr("Ghostscript-Fehler")).strip()[:400])
+        if not os.path.exists(grey_tmp) or os.path.getsize(grey_tmp) == 0:
+            raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
 
         # orig_to_sub maps an original page index to its position in the
         # subset, so verify and assembly can index the Ghostscript output
@@ -178,13 +199,8 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
                             for i in damaged_sorted:
                                 batch.pages.append(pdf.pages[i])
                             batch.save(batch_tmp)
-                        r = report.run(
-                            [gs_bin, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
-                             "-sColorConversionStrategy=Gray", "-dProcessColorModel=/DeviceGray",
-                             "-dCompatibilityLevel=1.5", "-dAutoRotatePages=/None",
-                             "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false",
-                             "-dDownsampleMonoImages=false", "-o", batch_grey, batch_tmp],
-                            text=True, errors="replace", timeout=900)
+                        r = report.run(_grey_cmd(gs_bin, batch_tmp, batch_grey),
+                                       text=True, errors="replace", timeout=900)
                         if r.returncode == 0 and os.path.exists(batch_grey) and os.path.getsize(batch_grey) > 0:
                             # batch_tmp positions align 1:1 with batch_grey
                             # positions (both built from damaged_sorted order) —
@@ -201,8 +217,7 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
                     except Exception:
                         logging.exception("grayscale: batch retry failed")
                     finally:
-                        try: os.remove(batch_tmp)
-                        except OSError: pass
+                        unlink(batch_tmp)
 
                 # Still-damaged pages get an individual retry as a last resort.
                 for i in sorted(damaged):
@@ -279,15 +294,7 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
                     p0=len(damaged), p1=detail))
         return out, msg
     finally:
-        for _p in repaired.values():
-            try: os.remove(_p)
-            except OSError: pass
-        try: os.remove(grey_tmp)
-        except OSError: pass
-        try: os.remove(sub_tmp)
-        except OSError: pass
-        try: os.remove(batch_grey)
-        except (OSError, NameError): pass
+        unlink(*repaired.values(), grey_tmp, sub_tmp, batch_grey)
 
 
 class GrayscalePanel(BasePanel):
@@ -825,7 +832,7 @@ class GrayscalePanel(BasePanel):
             if _render_queue._running is not None:
                 _render_queue._running.cancel()
 
-        gs = shutil.which("gs") or shutil.which("gswin64c") or shutil.which("gswin32c")
+        gs = ghostscript_binary()
         if not gs:
             raise RuntimeError(tr(
                 "Ghostscript (gs) nicht gefunden — für verlustfreie, vektorbasierte "

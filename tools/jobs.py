@@ -140,24 +140,89 @@ class Progress:
         than blocking in communicate() is what makes the flag visible.
         """
         import subprocess
-        import time as _time
 
         kwargs.setdefault("stdout", subprocess.PIPE)
         kwargs.setdefault("stderr", subprocess.PIPE)
-        deadline = None if timeout is None else _time.monotonic() + timeout
         proc = subprocess.Popen(cmd, **kwargs)
-        while True:
+        return _watch(proc, cmd, timeout, lambda: self._job.cancelled)
+
+    def run_many(self, cmds, timeout=None, max_workers=None, **kwargs):
+        """run(), fanned out: several commands at once, and Stop kills all of
+        them rather than one.
+
+        Returns a CompletedProcess for every command, in the order the commands
+        were given, whatever order they finished in. `timeout` is per command,
+        the same meaning it has on run(). `max_workers` bounds how many are
+        live at once; None runs them all, which is what the callers want —
+        ghostscript.plan_chunks has already sized the list to the machine.
+
+        One command falling over stops the others. The results of a chunked
+        conversion are only useful all together, so leaving the rest to finish
+        work that is about to be thrown away only makes the failure slower to
+        report.
+
+        Plain threads rather than concurrent.futures: a thread here does
+        nothing but the poll loop run() already does, and the module is built
+        on threading.Event throughout.
+        """
+        import subprocess
+
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+        results = [None] * len(cmds)
+        failures = [None] * len(cmds)
+        procs = {}
+        procs_lock = threading.Lock()
+        # Set by whichever command fails first; the rest read it and give up.
+        abort = threading.Event()
+        gate = threading.Semaphore(max_workers) if max_workers else None
+
+        def stop_now():
+            return self._job.cancelled or abort.is_set()
+
+        def one(i, cmd):
             try:
-                out, err = proc.communicate(timeout=0.2)
-                return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
-            except subprocess.TimeoutExpired:
-                pass
-            if self._job.cancelled:
+                if gate is not None:
+                    gate.acquire()
+                try:
+                    if stop_now():
+                        return
+                    proc = subprocess.Popen(cmd, **kwargs)
+                    with procs_lock:
+                        procs[i] = proc
+                    results[i] = _watch(proc, cmd, timeout, stop_now)
+                finally:
+                    if gate is not None:
+                        gate.release()
+            except Cancelled:
+                pass                    # cancelled or abandoned; nothing to report
+            except Exception as exc:    # noqa: BLE001 — reraised in the caller's thread
+                failures[i] = exc
+                abort.set()
+
+        threads = [threading.Thread(target=one, args=(i, c), daemon=True,
+                                    name=f"run_many-{i}")
+                   for i, c in enumerate(cmds)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # A child that started between its thread's last check and Popen
+        # returning would otherwise outlive the job that spawned it.
+        if stop_now():
+            with procs_lock:
+                live = [p for p in procs.values() if p.poll() is None]
+            for proc in live:
                 _stop_process(proc)
-                raise Cancelled()
-            if deadline is not None and _time.monotonic() > deadline:
-                _stop_process(proc)
-                raise subprocess.TimeoutExpired(cmd, timeout)
+
+        # Stop wins over a failure: the user asked, so nothing failed.
+        if self._job.cancelled:
+            raise Cancelled()
+        for exc in failures:
+            if exc is not None:
+                raise exc
+        return results
 
 
 class _NoJob:
@@ -177,6 +242,32 @@ def null_progress():
     one of them testing whether it was handed a bare callable.
     """
     return Progress(_NoJob())
+
+
+def _watch(proc, cmd, timeout, should_stop):
+    """Wait for `proc`, polling so that stopping stays possible.
+
+    Blocking in communicate() until the child is done is the one thing that
+    must not happen here: the flag Stop sets would not be read until the work
+    it is meant to interrupt had finished on its own. Shared by run() and
+    run_many() so that one child and twelve are stopped by the same code.
+    """
+    import subprocess
+    import time as _time
+
+    deadline = None if timeout is None else _time.monotonic() + timeout
+    while True:
+        try:
+            out, err = proc.communicate(timeout=0.2)
+            return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+        except subprocess.TimeoutExpired:
+            pass
+        if should_stop():
+            _stop_process(proc)
+            raise Cancelled()
+        if deadline is not None and _time.monotonic() > deadline:
+            _stop_process(proc)
+            raise subprocess.TimeoutExpired(cmd, timeout)
 
 
 def _stop_process(proc):

@@ -64,6 +64,8 @@ from PyQt6.QtWidgets import QPushButton
 from tools._base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels import _images
+from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,
+                               require_ghostscript, run_chunked, unlink)
 from tools.panels._icc import (ICC_DIR, fallback_cmyk_icc, profile_by_key,
                                resolve_icc)
 from tools.panels._prepress import (DEFAULT_STANDARD, PDFX_STANDARDS,
@@ -100,7 +102,7 @@ class PdfxPanel(BasePanel):
         change.clicked.connect(self._open_settings)
         layout.addWidget(change)
 
-        gs_ok = bool(shutil.which("gs"))
+        gs_ok = bool(ghostscript_binary())
         layout.addWidget(make_label(
             tr("✓  Ghostscript verfuegbar") if gs_ok else
             tr("✗  Ghostscript fehlt  →  sudo pacman -S ghostscript"), dim=True))
@@ -131,9 +133,7 @@ class PdfxPanel(BasePanel):
         # Widgets are read here; Ghostscript and the verification go to a
         # worker — a prepress file is minutes of pdfwrite.
         src = self.require_pdf()
-        if not shutil.which("gs"):
-            raise RuntimeError(tr("Ghostscript nicht gefunden.\n"
-                                  "Installation:  sudo pacman -S ghostscript"))
+        require_ghostscript()
 
         from tools.shell.settings import AppSettings
         settings = AppSettings.get()
@@ -465,6 +465,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
 
     standard, version, _label = standard_of(standard)
     flattens = standard != "x4"
+    gs_bin = require_ghostscript()
 
     # A file that is already this exact thing is left alone. Running it through
     # again would re-encode every image for no gain — see _conversion_reason,
@@ -500,65 +501,76 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
         converted, _skipped = _images.to_cmyk(src, staged, icc, report)
         gs_input = staged if converted else src
 
-        # -dPDFX switches pdfwrite into PDF/X mode; the prologue has to be read
-        # before the input, or the output intent lands in no document.
-        #
-        # Bare -dPDFX means X-3 and forces PDF 1.3 — no transparency, so every
-        # page that uses any is rasterised. -dPDFX=4 with CompatibilityLevel
-        # 1.6 keeps it live instead, which is why the X-4 path needs no
-        # rasterising resolution at all and finishes in a fraction of the time.
-        cmd = [
-            "gs",
-            "-dPDFX" if flattens else "-dPDFX=4",
-            "-dBATCH", "-dNOPAUSE", "-dNOOUTERSAVE", "-dQUIET",
-            "-sDEVICE=pdfwrite",
-            "-dPDFSETTINGS=/prepress",
-            "-sProcessColorModel=DeviceCMYK",
-            "-sColorConversionStrategy=CMYK",
-            "-dEmbedAllFonts=true",
-            "-dSubsetFonts=true",
-        ] + ([] if flattens else ["-dCompatibilityLevel=1.6"]) + [
-            # The rasterising resolution, and the reason this is not slow.
+        def build(dest, first, last):
+            # -dPDFX switches pdfwrite into PDF/X mode; the prologue has to be
+            # read before the input, or the output intent lands in no document.
             #
-            # PDF/X-3 is PDF 1.3, which has no transparency, so any page that
-            # uses it gets flattened — and flattening means rendering that
-            # page to pixels. Ghostscript does that at 720 dpi by default and
-            # then downsamples to the target, i.e. it renders several times
-            # the detail it is about to throw away. Rendering at the target
-            # instead is the same output for a fraction of the work: an A0
-            # page of transparent artwork went from 116 s to 21 s at 300 dpi,
-            # measured, with a byte-comparable result.
-            #
-            # It also makes the setting mean what it says. Without it, asking
-            # for 600 dpi still produced 720 dpi flattening downsampled to
-            # 300, because the preset's own limit won.
-            #
-            # X-4 rasterises nothing, so it gets no -r: the flag would only
-            # slow down a run with no flattening in it.
-        ] + ([f"-r{dpi}"] if flattens else []) + [
-            # After /prepress, which keeps images at source resolution — these
-            # override it (verified: a 600 dpi image comes back at 300 and the
-            # file halves; a 200 dpi one is left alone rather than upsampled).
-            # Resolution above what the press can image is RIP time nobody sees
-            # on paper, and it is the main reason a job is slow to print.
-            "-dDownsampleColorImages=true", f"-dColorImageResolution={dpi}",
-            "-dColorImageDownsampleType=/Bicubic",
-            "-dDownsampleGrayImages=true", f"-dGrayImageResolution={dpi}",
-            "-dGrayImageDownsampleType=/Bicubic",
-            # Downsample anything above the target, not only what is half again
-            # above it. Ghostscript's default threshold is 1.5, so a 600 dpi
-            # setting actually left everything up to 900 dpi alone — the
-            # setting did not mean what it says, and the export could not
-            # reproduce its own output: re-running it found 840 dpi images
-            # still above target and converted the whole file again.
-            "-dColorImageDownsampleThreshold=1.0",
-            "-dGrayImageDownsampleThreshold=1.0",
-            # Bilevel line art is left alone: downsampling it is what makes a
-            # scanned drawing come out ragged.
-            "-dDownsampleMonoImages=false",
-            f"-sOutputFile={tmp}",
-            defs, gs_input,
-        ]
+            # Bare -dPDFX means X-3 and forces PDF 1.3 — no transparency, so
+            # every page that uses any is rasterised. -dPDFX=4 with
+            # CompatibilityLevel 1.6 keeps it live instead, which is why the
+            # X-4 path needs no rasterising resolution at all and finishes in a
+            # fraction of the time.
+            cmd = [
+                gs_bin,
+                "-dPDFX" if flattens else "-dPDFX=4",
+                "-dBATCH", "-dNOPAUSE", "-dNOOUTERSAVE", "-dQUIET",
+                "-sDEVICE=pdfwrite",
+                "-dPDFSETTINGS=/prepress",
+                "-sProcessColorModel=DeviceCMYK",
+                "-sColorConversionStrategy=CMYK",
+                "-dEmbedAllFonts=true",
+                "-dSubsetFonts=true",
+            ]
+            if not flattens:
+                cmd.append("-dCompatibilityLevel=1.6")
+            if flattens:
+                # The rasterising resolution, and the reason this is not slow.
+                #
+                # PDF/X-3 is PDF 1.3, which has no transparency, so any page
+                # that uses it gets flattened — and flattening means rendering
+                # that page to pixels. Ghostscript does that at 720 dpi by
+                # default and then downsamples to the target, i.e. it renders
+                # several times the detail it is about to throw away.
+                # Rendering at the target instead is the same output for a
+                # fraction of the work: an A0 page of transparent artwork went
+                # from 116 s to 21 s at 300 dpi, measured, with a
+                # byte-comparable result.
+                #
+                # It also makes the setting mean what it says. Without it,
+                # asking for 600 dpi still produced 720 dpi flattening
+                # downsampled to 300, because the preset's own limit won.
+                #
+                # X-4 rasterises nothing, so it gets no -r: the flag would only
+                # slow down a run with no flattening in it.
+                cmd.append(f"-r{dpi}")
+            cmd += [
+                # After /prepress, which keeps images at source resolution —
+                # these override it (verified: a 600 dpi image comes back at
+                # 300 and the file halves; a 200 dpi one is left alone rather
+                # than upsampled). Resolution above what the press can image is
+                # RIP time nobody sees on paper, and it is the main reason a
+                # job is slow to print.
+                "-dDownsampleColorImages=true", f"-dColorImageResolution={dpi}",
+                "-dColorImageDownsampleType=/Bicubic",
+                "-dDownsampleGrayImages=true", f"-dGrayImageResolution={dpi}",
+                "-dGrayImageDownsampleType=/Bicubic",
+                # Downsample anything above the target, not only what is half
+                # again above it. Ghostscript's default threshold is 1.5, so a
+                # 600 dpi setting actually left everything up to 900 dpi alone
+                # — the setting did not mean what it says, and the export could
+                # not reproduce its own output: re-running it found 840 dpi
+                # images still above target and converted the whole file again.
+                "-dColorImageDownsampleThreshold=1.0",
+                "-dGrayImageDownsampleThreshold=1.0",
+                # Bilevel line art is left alone: downsampling it is what makes
+                # a scanned drawing come out ragged.
+                "-dDownsampleMonoImages=false",
+                f"-sOutputFile={dest}",
+            ]
+            # The page range applies to the next document Ghostscript opens;
+            # the pdfmark prologue in between does not consume it.
+            return cmd + page_range_flags(first, last) + [defs, gs_input]
+
         # Say which of the two jobs this is before it starts. Flattening
         # renders whole pages to pixels and is minutes on a large sheet, and a
         # progress line that only says "converting" makes that look like a
@@ -566,8 +578,19 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
         report(tr("Transparenz wird reduziert — das dauert bei grossen Seiten …")
                if flattens and transparent_pages(src) else
                tr("Ghostscript: PDF/X-Konvertierung …"))
-        r = report.run(cmd, text=True, errors="replace", timeout=1800)
-        if r.returncode != 0:
+        with pikepdf.open(gs_input) as _i:
+            n_input = len(_i.pages)
+        # Only X-3 is split across processes. Its cost is rasterising whole
+        # pages, which is per-page work and scales with the cores thrown at it.
+        # X-4 rasterises nothing and is already a fraction of the time, so
+        # there is little to win — and it is the profile that *keeps* optional
+        # content, which lives in the catalog rather than on a page. Merging
+        # chunks reassembles pages, so a chunked X-4 export would come back
+        # with its layers silently dropped, which is the one thing this export
+        # replaced the layers tool to avoid.
+        r = failed(run_chunked(report, build, tmp, n_input if flattens else 1,
+                               timeout=1800, carry_document_state=True))
+        if r is not None:
             err = (r.stderr.strip() or r.stdout.strip() or f"exit {r.returncode}")[:500]
             raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=err))
         if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
@@ -600,9 +623,5 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
                     p0=", ".join(f"{i + 1} ({why})" for i, why in sorted(damaged.items()))))
         shutil.copyfile(tmp, out)
     finally:
-        for path in (defs, tmp, staged):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        unlink(defs, tmp, staged)
     return out, off, (dpi if capped else None), version

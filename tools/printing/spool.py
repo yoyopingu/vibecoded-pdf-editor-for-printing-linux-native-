@@ -13,6 +13,7 @@ what went in before any of it reaches a printer.
 import logging
 from PyQt6.QtGui import QPageLayout
 from tools.app_state import AppState
+from tools.ghostscript import ghostscript_binary
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 
@@ -376,7 +377,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
     on-screen preview exactly, then re-centred on a full-size sheet so the
     printer never clips content or rescales.
     """
-    import subprocess, shutil, tempfile, os
+    import subprocess, tempfile, os
 
     pw_pt, ph_pt = _PAPER_PTS.get(paper_key, (595.28, 841.89))
 
@@ -415,7 +416,8 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         print_src = sub_tmp
         cups_fit  = (scale_idx == 0)   # used by both the GS + lp branches
 
-        if shutil.which("gs"):
+        gs_bin = ghostscript_binary()
+        if gs_bin:
             norm_fd, norm_tmp = tempfile.mkstemp(suffix="_norm.pdf")
             os.close(norm_fd)
             report(tr("Ghostscript: Normalisierung und Skalierung…"))
@@ -441,7 +443,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                 media_w, media_h = pw_pt, ph_pt
 
             gs_cmd = [
-                "gs", "-dBATCH", "-dNOPAUSE", "-dQUIET",
+                gs_bin, "-dBATCH", "-dNOPAUSE", "-dQUIET",
                 "-sDEVICE=pdfwrite",
                 "-dCompatibilityLevel=1.5",
                 "-dPDFSETTINGS=/printer",
