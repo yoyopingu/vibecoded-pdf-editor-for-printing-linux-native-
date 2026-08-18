@@ -393,9 +393,23 @@ def has_gray(names):
 
 
 def is_grey_only(names):
-    """Grey and nothing else. False for an empty set: nothing found means the
-    page could not be read, and treating that as grey would skip converting it."""
-    return bool(names) and has_gray(names) and not (has_rgb(names) or has_cmyk(names))
+    """Grey and nothing else.
+
+    Everything that is not a known grey space counts against it, rather than
+    only RGB and CMYK counting against it. Asking "is there RGB or CMYK here"
+    answered *no* for a page whose colour came from anywhere else — a
+    /Separation spot plate, an /Indexed palette of RGB entries, /Lab — so a
+    Pantone-red page reported itself as already grey. The greyscale tool then
+    left it out of the conversion and drew no status border on it at all,
+    which is the badge for "already grey, nothing to do".
+
+    False for an empty set: nothing found means the page could not be read,
+    and treating that as grey would skip converting it. False for anything
+    unrecognised, for the same reason — the cost of being wrong here is a
+    colour page silently going out unconverted and unmarked, and the cost of
+    being wrong the other way is converting a grey page to grey.
+    """
+    return bool(names) and set(names) <= GRAY_NAMES
 
 
 def describe(names):

@@ -777,3 +777,112 @@ def test_a_document_with_nothing_to_convert_says_so():
     assert any("Keine Seiten" in m for m in logged), \
         f"the refusal never reached the log:\n{logged}"
     return "reported, not swallowed"
+
+
+def test_each_detection_mode_keeps_its_own_threshold():
+    """The two modes used to share one threshold slider, and it means a
+    different thing in each: "the page is colour if any pixel is this far from
+    grey" against "a pixel this far from grey counts towards the percentage".
+    Tuning it for one mode silently retuned the other — on a page tinted over a
+    fifth of its area, moving it alone flipped the page between colour and grey
+    with the percentage untouched."""
+    _open(FX["normal"])
+    p = GrayscalePanel(); p.show(); _app.processEvents()
+    try:
+        assert p.mode_ratio.isChecked(), "the tool no longer opens in ratio mode"
+        p.thr.setValue(55)
+        p.mode_single.setChecked(True); _app.processEvents()
+        assert p.thr.value() != 55, \
+            "switching mode carried the other mode's threshold across"
+        p.thr.setValue(7)
+        p.mode_ratio.setChecked(True); _app.processEvents()
+        assert p.thr.value() == 55, f"the ratio threshold was lost: {p.thr.value()}"
+        p.mode_single.setChecked(True); _app.processEvents()
+        assert p.thr.value() == 7, f"the single threshold was lost: {p.thr.value()}"
+    finally:
+        p.deleteLater(); _app.processEvents()
+    return "55 for ratio, 7 for single, neither disturbs the other"
+
+
+def test_a_spot_colour_page_is_not_mistaken_for_a_grey_one():
+    """Colour that is not DeviceRGB or DeviceCMYK is still colour.
+
+    is_grey_only asked "is there RGB or CMYK here", so a page whose colour came
+    from a /Separation spot plate, an /Indexed palette or /Lab answered *no* and
+    was filed as already grey. In the preview that is the one state drawn with
+    no border at all, and the tool leaves those pages out of the conversion — so
+    a Pantone-red page looked like a plain grey one and said nothing about it.
+    """
+    import pikepdf
+    from tools.colorspace import is_grey_only, page_colorspaces
+
+    src = os.path.join(_TMP, "spot_colour.pdf")
+    base = os.path.join(_TMP, "spot_base.pdf")
+    c = canvas.Canvas(base, pagesize=A4)
+    for _ in range(4):
+        c.setFillGray(0); c.setFont("Helvetica", 30)
+        c.drawString(60, 700, "grey text"); c.showPage()
+    c.save()
+    with pikepdf.open(base) as pdf:
+        spot = pikepdf.Array([
+            pikepdf.Name("/Separation"), pikepdf.Name("/PANTONE-185"),
+            pikepdf.Name("/DeviceRGB"),
+            pdf.make_indirect(pikepdf.Dictionary(
+                FunctionType=2, Domain=[0, 1], C0=[1, 1, 1],
+                C1=[0.85, 0.1, 0.2], N=1))])
+        pdf.pages[0].obj["/Resources"]["/ColorSpace"] = pikepdf.Dictionary(CS0=spot)
+        pdf.pages[0].contents_add(
+            pikepdf.Stream(pdf, b"/CS0 cs 1 scn 60 300 400 250 re f"))
+        indexed = pikepdf.Array([
+            pikepdf.Name("/Indexed"), pikepdf.Name("/DeviceRGB"), 1,
+            pikepdf.String(b"\xff\x00\x00\x00\x00\xff")])
+        pdf.pages[1].obj["/Resources"]["/ColorSpace"] = pikepdf.Dictionary(CS1=indexed)
+        pdf.pages[1].contents_add(
+            pikepdf.Stream(pdf, b"/CS1 cs 0 scn 60 300 400 250 re f"))
+        lab = pikepdf.Array([pikepdf.Name("/Lab"), pikepdf.Dictionary(
+            WhitePoint=[0.9505, 1.0, 1.089], Range=[-100, 100, -100, 100])])
+        pdf.pages[2].obj["/Resources"]["/ColorSpace"] = pikepdf.Dictionary(CS2=lab)
+        pdf.pages[2].contents_add(
+            pikepdf.Stream(pdf, b"/CS2 cs 55 70 60 scn 60 300 400 250 re f"))
+        pdf.save(src)
+
+    for i, what in enumerate(("Separation spot", "Indexed palette", "Lab")):
+        names = page_colorspaces(src, i)
+        assert not is_grey_only(names), \
+            f"{what} page reported itself as already grey: {sorted(names)}"
+    # Page 3 was left alone and really is grey.
+    assert is_grey_only(page_colorspaces(src, 3)), \
+        "a genuinely grey page stopped being recognised as grey"
+    return "spot, indexed and Lab all count as colour; plain grey still does not"
+
+
+def test_the_greyscale_sidebar_opens_the_width_it_asks_for():
+    """The sidebar is the shared one — its width and its minimum are
+    build_tool_sidebar's business, not this tool's. What was this tool's fault
+    is that it never set the splitter's stretch factors, so the splitter shared
+    the spare width out and handed the sidebar 465 px of the window when 400
+    was asked for, then gave it more each time the window grew. Crop and N-Up
+    both open at 400; this one was the odd one out, and the preview grid paid
+    for it."""
+    from tools.panels.grayscale import _SIDEBAR_W
+    from tools.panels.nup import NUpPanel
+    _open(FX["normal"])
+    p = GrayscalePanel(); p.resize(1400, 800); p.show(); _app.processEvents()
+    nup = NUpPanel(); nup.resize(1400, 800); nup.show(); _app.processEvents()
+    try:
+        sidebar = p._tool_splitter.sizes()[0]
+        assert sidebar == _SIDEBAR_W, f"sidebar opened at {sidebar}, not {_SIDEBAR_W}"
+        assert sidebar == nup._tool_splitter.sizes()[0], \
+            "greyscale no longer opens at the same width as the tools beside it"
+        scroll = p._tool_splitter.widget(0)
+        assert scroll.minimumWidth() == nup._tool_splitter.widget(0).minimumWidth(), \
+            "greyscale has taken a sidebar minimum of its own"
+        assert not scroll.horizontalScrollBar().isVisible(), \
+            "the controls are clipped at this width"
+        # Widening the window must feed the preview, not the sidebar.
+        p.resize(1800, 800); _app.processEvents()
+        assert p._tool_splitter.sizes()[0] == _SIDEBAR_W, \
+            "the sidebar grew with the window instead of the preview"
+    finally:
+        p.deleteLater(); nup.deleteLater(); _app.processEvents()
+    return f"opens at {_SIDEBAR_W} px like its siblings, and stays there"

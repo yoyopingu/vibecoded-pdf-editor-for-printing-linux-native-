@@ -36,6 +36,19 @@ _CARD_H = 264
 # size-independent (PIL ImageChops in C).
 _SCAN_SCALE = 0.4
 
+# Where both detection modes start. 20 is what the whole tool used to share,
+# and it is the value test_greyscale_detects_a_tiny_colour_mark is calibrated
+# against — a half-point red mark on A4 has to survive it.
+_DEFAULT_THR = 20
+
+# What the sidebar opens at, matching crop_resize.py and nup.py. The width and
+# the minimum are build_tool_sidebar's to decide, not this tool's — sharing the
+# sidebar is the point of it. This only stops the splitter from drifting: with
+# no stretch factors it handed the sidebar 465 px of the window rather than the
+# 400 it was asked for, so the preview grid — the half of the window this tool
+# exists to show — opened 65 px narrower than in the tools beside it.
+_SIDEBAR_W = 400
+
 
 def _grey_cmd(gs_bin, src, dest, first=None, last=None):
     """The lossless vector greyscale conversion, as a command.
@@ -367,7 +380,13 @@ class GrayscalePanel(BasePanel):
         right_layout.addWidget(status_bar)
 
         splitter.addWidget(right_w)
-        splitter.setSizes([400, 800])
+        # Same two lines nup.py has, and for the same reason: without them the
+        # splitter shares out the extra width instead of giving it to the
+        # preview, so the sidebar opened wider than it asked for and grew
+        # further every time the window did.
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([_SIDEBAR_W, 10_000])
         outer.addWidget(splitter)
 
         # Follow light/dark theme switches (see NUpPanel._apply_theme).
@@ -504,13 +523,24 @@ class GrayscalePanel(BasePanel):
         mg.addWidget(self.mode_single); mg.addWidget(self.mode_ratio)
         layout.addWidget(mode_grp)
 
+        # One slider, but a value per mode. The number does a different job in
+        # each — "the page is colour if any pixel is this far from grey" versus
+        # "a pixel this far from grey counts towards the percentage" — so a
+        # position tuned for one mode was quietly re-deciding the other. On a
+        # page tinted over a fifth of its area, moving this alone flipped it
+        # between colour and grey with the percentage untouched.
+        self._thr_by_mode = {"single": _DEFAULT_THR, "ratio": _DEFAULT_THR}
+        self._thr_mode = "ratio"          # the mode checked below
+
         thr_grp = QGroupBox(tr("Farb-Schwellwert"))
         tg = QVBoxLayout(thr_grp); tg.setSpacing(4); tg.setContentsMargins(8,10,8,8)
-        tg.addWidget(make_label(tr("Abstand vom Grau pro Pixel:"), dim=True))
+        self._thr_hint = make_label("", dim=True)
+        self._thr_hint.setWordWrap(True)
+        tg.addWidget(self._thr_hint)
         thr_row = QHBoxLayout()
         thr_row.addWidget(QLabel(tr("Streng")))
         self.thr = QSlider(Qt.Orientation.Horizontal)
-        self.thr.setRange(1, 80); self.thr.setValue(20)
+        self.thr.setRange(1, 80); self.thr.setValue(_DEFAULT_THR)
         self.thr.setTickInterval(10); self.thr.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.thr_lbl = QLabel("20"); self.thr_lbl.setFixedWidth(28)
         self.thr.valueChanged.connect(self._on_setting_changed)
@@ -522,7 +552,10 @@ class GrayscalePanel(BasePanel):
         rg = QVBoxLayout(ratio_grp); rg.setSpacing(4); rg.setContentsMargins(8,10,8,8)
         rg.addWidget(make_label(tr("Ab wieviel % gilt die Seite als Farbseite?"), dim=True))
         ratio_row = QHBoxLayout()
-        ratio_row.addWidget(QLabel("0.05%"))
+        # The end captions are what the slider actually means: value/20000, so
+        # 1 is 0.005 % and 5000 is 25 %. The left one used to read 0.05 %, ten
+        # times what the slider does there.
+        ratio_row.addWidget(QLabel("0.005%"))
         self.ratio = QSlider(Qt.Orientation.Horizontal)
         self.ratio.setRange(1, 5000); self.ratio.setValue(300)
         self.ratio.setTickInterval(500); self.ratio.setTickPosition(QSlider.TickPosition.TicksBelow)
@@ -533,15 +566,39 @@ class GrayscalePanel(BasePanel):
         self._ratio_grp = ratio_grp; ratio_grp.setEnabled(True)
         layout.addWidget(ratio_grp)
 
+        self._sync_threshold_hint()
         AppState.get().pdf_changed.connect(self._on_pdf_changed)
 
+    def _sync_threshold_hint(self):
+        """Say what the threshold does in the mode that is switched on.
+
+        The two readings are genuinely different questions, and naming the one
+        in force is what makes it obvious that the slider is per-mode rather
+        than a single setting that mysteriously moves on its own.
+        """
+        self._thr_hint.setText(
+            tr("Ab welchem Abstand ein Pixel als farbig zaehlt:")
+            if self.mode_ratio.isChecked() else
+            tr("Abstand vom Grau pro Pixel:"))
+
     def _on_mode_changed(self):
+        # Park the slider under the mode that was using it, then bring in the
+        # incoming mode's own value. Without this the two modes shared one
+        # number and each retuned the other behind the user's back.
+        self._thr_by_mode[self._thr_mode] = self.thr.value()
+        self._thr_mode = "ratio" if self.mode_ratio.isChecked() else "single"
         self._ratio_grp.setEnabled(self.mode_ratio.isChecked())
+        blocked = self.thr.blockSignals(True)
+        self.thr.setValue(self._thr_by_mode[self._thr_mode])
+        self.thr.blockSignals(blocked)
+        self.thr_lbl.setText(str(self.thr.value()))
+        self._sync_threshold_hint()
         if self._page_data: self._reclassify()
 
     def _on_setting_changed(self, val=None):
         self.thr_lbl.setText(str(self.thr.value()))
         self.ratio_lbl.setText(f"{self.ratio.value() / 200.0:.2f}%")
+        self._thr_by_mode[self._thr_mode] = self.thr.value()
         if self._page_data: self._reclassify()
 
     def _on_pdf_changed(self, path):
