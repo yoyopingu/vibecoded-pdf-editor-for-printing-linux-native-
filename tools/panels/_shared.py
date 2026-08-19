@@ -132,6 +132,7 @@ class PreviewPane(QWidget):
         super().__init__(parent)
         self._render_fn = render_fn
         self.zoom = 1.0
+        self._rendering = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6); outer.setSpacing(3)
@@ -156,6 +157,20 @@ class PreviewPane(QWidget):
         self.label = QLabel()
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # A QLabel showing a pixmap reports that pixmap as its minimum size, and
+        # that closed a loop that ate the preview: a render wider than the pane
+        # grew the label, which grew the pane, whose resizeEvent refreshed the
+        # preview with more room, which produced a wider render again. Typing one
+        # margin into Crop was enough to start it — the pixmap covers the ghost
+        # of the original page, which is by definition larger than the cropped
+        # one — and it ran until the preview was thousands of pixels across and
+        # nothing of it was on screen. Measured from an 889x761 label and a
+        # 526x745 render: 2638x3729 and 3958x5597 within thirty event loops.
+        #
+        # The pixmap must not get a say in how big the label is. It is clipped
+        # to the space there is, which is also what zooming past the pane should
+        # do.
+        self.label.setMinimumSize(1, 1)
         self.label.setMouseTracking(True)
         self.label.installEventFilter(self)
         outer.addWidget(self.label, 1)
@@ -175,7 +190,7 @@ class PreviewPane(QWidget):
         self.refresh()
 
     def refresh(self):
-        if not self._render_fn:
+        if not self._render_fn or self._rendering:
             return
         # Only render when this tool is actually on screen. The pane subscribes
         # to current_page_changed, which fires on every page turn in the viewer —
@@ -192,11 +207,16 @@ class PreviewPane(QWidget):
             # Underlying C++ widget already destroyed (window closing while a
             # queued refresh or an AppState signal is still in flight).
             return
+        # Not re-entrant: setting the pixmap can lay the pane out again, and a
+        # layout pass that comes back round here would render on top of itself.
+        self._rendering = True
         try:
             pm, info = self._render_fn(avail_w, avail_h, self.zoom)
         except Exception as ex:
             self.label.setText(tr('Vorschau: {p0}').format(p0=ex))
             return
+        finally:
+            self._rendering = False
         if pm is None:
             self.label.setText(info or "")
             self.info.setText("")

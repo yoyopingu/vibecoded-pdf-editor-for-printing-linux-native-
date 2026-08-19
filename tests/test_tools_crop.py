@@ -205,3 +205,132 @@ def test_querformat_is_off_for_entries_that_are_not_a_sheet():
     assert not n.out_fmt.landscape.isEnabled()
     n.out_fmt.set_format("A4  (210x297mm)")
     assert n.out_fmt.landscape.isEnabled()
+
+
+def test_a_scale_percentage_actually_scales():
+    """There was no way to say "make this 80%".
+
+    The tool could only scale as a side effect of changing the page size — pick
+    a Format, or type millimetres into the four margin boxes — so the one
+    control with "skalieren" in its name did nothing whatever on its own: the
+    page came out the size it went in, the preview did not move, and the run
+    wrote a copy of the original into a new tab.
+    """
+    from pypdf import PdfReader
+    _open(FX["normal"])
+    src_w = float(PdfReader(FX["normal"]).pages[0].mediabox.width)
+    src_h = float(PdfReader(FX["normal"]).pages[0].mediabox.height)
+
+    for pct in (50.0, 80.0, 200.0):
+        p = CropResizePanel(); p.apply_all.setChecked(True)
+        p.log.log = lambda *a, **k: None
+        p.scale_pct.setValue(pct)
+        out = os.path.join(_TMP, f"scale_{int(pct)}.pdf")
+        p.save_pdf = lambda *a, **k: out
+        p.open_result = lambda *a, **k: None
+        p._run_action()
+        page = PdfReader(out).pages[0]
+        got_w = float(page.mediabox.width); got_h = float(page.mediabox.height)
+        assert abs(got_w - src_w * pct / 100) < 0.5, f"{pct}%: width {got_w}"
+        assert abs(got_h - src_h * pct / 100) < 0.5, f"{pct}%: height {got_h}"
+        # The content has to come with it, and stay text rather than be
+        # rasterised into place.
+        assert "PAGE 1" in (page.extract_text() or ""), f"{pct}%: text lost"
+        assert _ink_box(out, 0) is not None, f"{pct}%: the page came out blank"
+    return "50%, 80% and 200% all land on the page size they name"
+
+
+def _ink_box(path, i):
+    import pypdfium2 as pdfium
+    from PIL import ImageOps
+    d = pdfium.PdfDocument(path)
+    im = d[i].render(scale=1, fill_color=(255, 255, 255, 255)).to_pil().convert("L")
+    d.close()
+    return ImageOps.invert(im).getbbox()
+
+
+def test_scaling_moves_the_ink_by_the_same_factor():
+    """The page size alone proves nothing — a page half the size with the
+    content left where it was is a crop, not a scale."""
+    _open(FX["normal"])
+    boxes = {}
+    for pct in (100.0, 50.0):
+        p = CropResizePanel(); p.apply_all.setChecked(True)
+        p.log.log = lambda *a, **k: None
+        p.scale_pct.setValue(pct)
+        out = os.path.join(_TMP, f"scale_ink_{int(pct)}.pdf")
+        p.save_pdf = lambda *a, **k: out
+        p.open_result = lambda *a, **k: None
+        p._run_action()
+        boxes[pct] = _ink_box(out, 0)
+    full, half = boxes[100.0], boxes[50.0]
+    assert full and half, boxes
+    wide_full = full[2] - full[0]; wide_half = half[2] - half[0]
+    assert abs(wide_half / wide_full - 0.5) < 0.06, \
+        f"ink is {wide_half}px wide at 50%, {wide_full}px at 100%"
+    return f"ink {wide_full}px -> {wide_half}px"
+
+
+def test_the_preview_fits_the_pane_it_is_drawn_for():
+    """The preview drew the ghost of the original page beside the new one but
+    scaled only the new one to fit, so anything cropped away produced a pixmap
+    larger than the pane.
+
+    That was not merely clipped. A QLabel showing a pixmap reports it as the
+    label's minimum size, so the oversized render dragged the label — and the
+    pane — out with it, and the pane's resize brought the render straight back
+    round with more room to overflow into. One margin typed into Crop took an
+    889x761 label and a 526x745 render to 2638x3729 and 3958x5597 within thirty
+    turns of the event loop, by which point nothing of the preview was on
+    screen. Which is what "it doesn't show a preview" looked like.
+    """
+    _open(FX["normal"])
+    p = CropResizePanel()
+    avail_w, avail_h = 500, 650
+    cases = {
+        "unchanged":  lambda: None,
+        "cropped":    lambda: (p.ct.setValue(40.0), p.cl2.setValue(30.0)),
+        "extended":   lambda: [w.setValue(-20.0) for w in (p.ct, p.cb2, p.cl2, p.cr)],
+        "scaled 50%": lambda: p.scale_pct.setValue(50.0),
+        "scaled 200%": lambda: p.scale_pct.setValue(200.0),
+    }
+    for name, setup in cases.items():
+        for w in (p.ct, p.cb2, p.cl2, p.cr): w.setValue(0.0)
+        p.scale_pct.setValue(100.0)
+        setup()
+        pm, _info = p._render_preview(avail_w, avail_h, 1.0)
+        assert pm is not None, f"{name}: no preview at all"
+        assert pm.width() <= avail_w and pm.height() <= avail_h, \
+            f"{name}: {pm.width()}x{pm.height()} does not fit {avail_w}x{avail_h}"
+    return f"{len(cases)} states, all inside the pane"
+
+
+def test_an_oversized_preview_does_not_drag_the_pane_out_with_it():
+    """The other half of the same fault, and the half that made it runaway.
+
+    A QLabel showing a pixmap reports that pixmap as its minimum size. So a
+    render wider than the pane grew the label, which grew the pane, whose
+    resizeEvent refreshed the preview with more room, which produced a wider
+    render again — and around. The pixmap must not get a say in how big the
+    label is; it is clipped to the space there is, which is also what zooming
+    past the pane should do.
+    """
+    from tests.support import _app, _spin
+    _open(FX["normal"])
+    p = CropResizePanel(); p.resize(1200, 800); p.show()
+    _spin(20)
+    label = p._pane.label
+    started = (label.width(), label.height())
+    assert started[0] > 100 and started[1] > 100, f"the pane never opened: {started}"
+
+    # Zoom well past the pane — the deliberate way to get a pixmap bigger than
+    # the label — and then let the event loop settle.
+    p._pane._set_zoom(6.0)
+    _spin(40)
+    _app.processEvents()
+    grew = (label.width(), label.height())
+    assert grew == started, \
+        f"the label followed its pixmap out: {started} -> {grew}"
+    assert label.pixmap().width() > label.width(), \
+        "the test never produced an oversized render"
+    return f"6x zoom, label still {started[0]}x{started[1]}"

@@ -1110,6 +1110,11 @@ _EN: dict[str, str] = {
     "Abstand vom Rand (pt):": "Distance from edge (pt):",
     "Alle gleich": "All equal",
     "Auf Null setzen": "Reset to zero",
+    "Skalieren": "Scale",
+    "Skalierung": "Scale",
+    "Seite und Inhalt zusammen. 100 % laesst die Groesse, wie sie ist.":
+        "Page and content together. 100 % leaves the size as it is.",
+    "Inhalt in das neue Format einpassen": "Fit content into the new size",
     "Inhalt skalieren": "Scale content",
     "Proportionen beibehalten": "Keep proportions",
     "Alle PDF-Seiten": "All PDF pages",

@@ -117,15 +117,42 @@ class CropResizePanel(BasePanel):
         layout.addWidget(crop_grp)
 
         # ── Skalieroptionen ──────────────────────────────────────────
-        self.scale_check = QCheckBox(tr("Inhalt skalieren"))
+        # There was no way to say "make this 80%". The tool could only scale as
+        # a side effect of changing the page size — pick a Format, or type
+        # millimetres into the four margin boxes — so the one control with
+        # "skalieren" in its name did nothing at all on its own: the page came
+        # out the size it went in, the preview did not move, and the run wrote
+        # a copy of the original.
+        scale_grp = QGroupBox(tr("Skalieren"))
+        sg = QVBoxLayout(scale_grp); sg.setSpacing(4); sg.setContentsMargins(6, 8, 6, 6)
+
+        pct_row = QHBoxLayout(); pct_row.setSpacing(4)
+        pct_row.addWidget(QLabel(tr("Skalierung")))
+        self.scale_pct = QDoubleSpinBox()
+        self.scale_pct.setRange(5.0, 400.0); self.scale_pct.setDecimals(1)
+        self.scale_pct.setSuffix(" %"); self.scale_pct.setValue(100.0)
+        self.scale_pct.setSingleStep(5.0); self.scale_pct.setFixedWidth(100)
+        self.scale_pct.valueChanged.connect(self._update_preview)
+        pct_row.addWidget(self.scale_pct); pct_row.addStretch()
+        sg.addLayout(pct_row)
+        self._pct_hint = QLabel(tr("Seite und Inhalt zusammen. 100 % laesst die Groesse, wie sie ist."))
+        self._pct_hint.setObjectName("dimLabel"); self._pct_hint.setWordWrap(True)
+        sg.addWidget(self._pct_hint)
+
+        # Renamed from "Inhalt skalieren", which is what the percentage above
+        # does. This one decides what happens to the content when the page size
+        # changes for another reason: fit it into the new size, or leave it
+        # where it is and let the new edges cut.
+        self.scale_check = QCheckBox(tr("Inhalt in das neue Format einpassen"))
         self.scale_check.setChecked(False)
         self.scale_check.toggled.connect(self._update_preview)
-        layout.addWidget(self.scale_check)
+        sg.addWidget(self.scale_check)
 
         self.keep_ratio = QCheckBox(tr("Proportionen beibehalten"))
         self.keep_ratio.setChecked(True)
         self.keep_ratio.toggled.connect(self._update_preview)
-        layout.addWidget(self.keep_ratio)
+        sg.addWidget(self.keep_ratio)
+        layout.addWidget(scale_grp)
 
         self.apply_all = QCheckBox(tr("Alle PDF-Seiten"))
         self.apply_all.setChecked(False)
@@ -190,6 +217,10 @@ class CropResizePanel(BasePanel):
 
     def _apply_format(self):
         """React to Format / custom-size / action changes."""
+        # Nothing to scale when the run is only stamping cut marks, so the
+        # control says so rather than being quietly ignored.
+        self.scale_pct.setEnabled(not self._marks_only())
+        self._pct_hint.setEnabled(not self._marks_only())
         size = self._target_size_pt()
         if size is None or self._marks_only():
             # 'Kein', or marks-only: leave the page uncropped. In marks-only mode
@@ -234,6 +265,25 @@ class CropResizePanel(BasePanel):
         except Exception as ex:
             self.log.log(str(ex), error=True)
 
+    def _scale_factor(self):
+        """The Skalierung box as a factor, or 1.0 when it does not apply.
+
+        Marks-only mode is "do not resize the page", so the percentage has
+        nothing to act on there and is switched off with the rest of it.
+        """
+        if self._marks_only():
+            return 1.0
+        return self.scale_pct.value() / 100.0
+
+    def _scales_content(self):
+        """Will the content be scaled into the new page size?
+
+        A percentage other than 100 says so by itself: a page at 80% whose
+        content stayed its old size is not what anyone means by 80%, it is a
+        crop. Shared by the preview and the run so the two cannot disagree.
+        """
+        return self.scale_check.isChecked() or self._scale_factor() != 1.0
+
     def _margins_mm(self):
         return (self.ct.value(), self.cb2.value(), self.cl2.value(), self.cr.value())
 
@@ -252,13 +302,25 @@ class CropResizePanel(BasePanel):
     def _effective_margins_pt(self, pw, ph):
         """(top, bottom, left, right) in points for a page of size (pw, ph) —
         derived from the chosen Format when one is active, else the four spin
-        boxes. Shared by the preview and the run so they can never disagree."""
+        boxes, and then taken down by the Skalierung percentage. Shared by the
+        preview and the run so they can never disagree."""
         size = self._format_margins()
         if size is not None:
             dw = (pw - size[0]) / 2; dh = (ph - size[1]) / 2
-            return dh, dh, dw, dw
-        return (self.ct.value()  * MM_TO_PT, self.cb2.value() * MM_TO_PT,
-                self.cl2.value() * MM_TO_PT, self.cr.value()  * MM_TO_PT)
+            t = b = dh; l = r = dw
+        else:
+            t, b = self.ct.value()  * MM_TO_PT, self.cb2.value() * MM_TO_PT
+            l, r = self.cl2.value() * MM_TO_PT, self.cr.value()  * MM_TO_PT
+        factor = self._scale_factor()
+        if factor != 1.0:
+            # The percentage is the last word on the size: whatever the Format
+            # and the margin boxes have made of this page, the result is that
+            # page at `factor`. Taken off all four edges equally, so it stays
+            # centred on what it came from.
+            dw = (pw - l - r) * (1.0 - factor) / 2
+            dh = (ph - t - b) * (1.0 - factor) / 2
+            t += dh; b += dh; l += dw; r += dw
+        return t, b, l, r
 
     def _get_target_pages(self):
         state = AppState.get(); model = state.page_model
@@ -321,17 +383,25 @@ class CropResizePanel(BasePanel):
         if new_w < 1. or new_h < 1.:
             # Same refusal the run makes — better than drawing a 1pt sliver.
             return None, tr("Ränder zu groß — von der Seite bleibt nichts übrig.")
-        do_scale = self.scale_check.isChecked()
+        do_scale = self._scales_content()
 
-        cs = min(avail_w / new_w, avail_h / new_h) * zoom
+        # Fit everything that gets drawn, not only the page that comes out.
+        # Alongside the new page this draws a ghost of the one it came from,
+        # and that ghost is larger than the result whenever anything is being
+        # cropped away — so scaling to the result alone produced a pixmap
+        # bigger than the pane, of which the user saw the middle. (It was worse
+        # than that: an oversized pixmap used to drag the label, and therefore
+        # the pane, out with it, and the resize brought the render straight
+        # back round with more room to overflow. See PreviewPane.)
+        ext_w = max(1.0, max(new_w, pw - l_pt) - min(0.0, -l_pt))
+        ext_h = max(1.0, max(new_h, ph - t_pt) - min(0.0, -t_pt))
+        cs = min(avail_w / ext_w, avail_h / ext_h) * zoom
         cw_px = max(1, int(new_w * cs))
         ch_px = max(1, int(new_h * cs))
 
         target_w = max(1, int(pw * cs)); target_h = max(1, int(ph * cs))
         pil = (base_pil if base_pil.size == (target_w, target_h)
                else base_pil.resize((target_w, target_h), PILImage.LANCZOS))
-
-        changed = any([t_pt, b_pt, l_pt, r_pt])
 
         gw = max(1, int(pw * cs));  gh = max(1, int(ph * cs))
         g_page_x = int(-l_pt * cs); g_page_y = int(-t_pt * cs)
@@ -348,23 +418,34 @@ class CropResizePanel(BasePanel):
         result.fill(QColor(_TV['card_bg']))
         painter = QPainter(result)
 
-        # Paint the resulting page as paper first. With negative margins
+        def ghost_fill():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(100, 140, 220, 45)))
+            painter.drawRect(gx, gy, gw - 1, gh - 1)
+
+        def ghost_outline():
+            ghost_pen = QPen(QColor(120, 160, 255, 200), 1)
+            ghost_pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(ghost_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(gx, gy, gw - 1, gh - 1)
+
+        changed = any([t_pt, b_pt, l_pt, r_pt])
+
+        # The ghost of the page this came from goes underneath, so that only the
+        # part of it that is being cut away is tinted. Painted over the top — as
+        # it was — it laid a blue film across the result as well, and the whole
+        # point of the preview is to show what will come out.
+        if changed:
+            ghost_fill()
+
+        # Then the resulting page as paper. With negative margins
         # ("- erweitern", i.e. adding white space) the added strips belong to the
         # new page but carried no content, so they stayed the dark canvas colour
         # — the white space you were adding was invisible in the preview.
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(PAPER)))
         painter.drawRect(rx, ry, cw_px, ch_px)
-
-        def draw_ghost():
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(QColor(100, 140, 220, 45)))
-            painter.drawRect(gx, gy, gw - 1, gh - 1)
-            ghost_pen = QPen(QColor(120, 160, 255, 200), 1)
-            ghost_pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(ghost_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(gx, gy, gw - 1, gh - 1)
 
         if do_scale:
             keep = self.keep_ratio.isChecked()
@@ -380,7 +461,7 @@ class CropResizePanel(BasePanel):
             painter.setPen(QPen(QColor(_TV['acc']), 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
-            if changed: draw_ghost()
+            if changed: ghost_outline()
         else:
             src_x = max(0, int(l_pt * cs)); src_y = max(0, int(t_pt * cs))
             src_w = min(max(1, int(new_w * cs)), pil.width  - src_x)
@@ -392,7 +473,7 @@ class CropResizePanel(BasePanel):
             painter.setPen(QPen(QColor(_TV['acc']), 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(rx, ry, max(1, cw_px - 1), max(1, ch_px - 1))
-            if changed: draw_ghost()
+            if changed: ghost_outline()
 
         # Cut-marks-only mode: leave the page as-is and draw crop marks at the
         # chosen size, centred on the page (same marks as the N-Up tool).
@@ -450,7 +531,7 @@ class CropResizePanel(BasePanel):
             self.open_result(out, os.path.basename(out))
             return tr('Schnittmarken auf {p0} Seite(n) gesetzt ({p1:.0f}×{p2:.0f} mm).').format(p0=n_changed, p1=tw / MM_TO_PT, p2=th / MM_TO_PT)
 
-        do_scale = self.scale_check.isChecked()
+        do_scale = self._scales_content()
         pdf = pikepdf.open(src_path)
         n_changed = 0
 
