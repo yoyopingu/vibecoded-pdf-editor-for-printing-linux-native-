@@ -74,6 +74,17 @@ from tools.panels._prepress import (DEFAULT_STANDARD, PDFX_STANDARDS,
 from tools.panels._verify import _verify_pages_intact
 
 
+def _describe_os_error(e: OSError) -> str:
+    """Return a user-friendly description of an OSError."""
+    if e.errno == 28:
+        return tr("Kein Speicherplatz mehr auf dem Geraet.")
+    if e.errno == 13:
+        return tr("Keine Schreibberechtigung.")
+    if e.errno == 2:
+        return tr("Zielverzeichnis nicht gefunden.")
+    return f"{e.strerror} (errno {e.errno})"
+
+
 class PdfxPanel(BasePanel):
     TITLE         = "PDF/X-Export"
     SUBTITLE      = "Druckfertige PDF/X-Datei erzeugen."
@@ -250,6 +261,9 @@ def _check_conformance(path, standard=DEFAULT_STANDARD, exact_version=True):
     from tools.panels._prepress import unembedded_fonts
 
     with pikepdf.open(path) as pdf:
+        # Check encryption first: a locked file cannot be verified for PDF/X.
+        if pdf.is_encrypted:
+            raise RuntimeError(tr("Die Ausgabe ist verschluesselt."))
         _key, version, _label = standard_of(standard)
         claimed = str(pdf.docinfo.get("/GTS_PDFXVersion", ""))
         # Exact when checking our own output — it must say what we wrote.
@@ -280,8 +294,6 @@ def _check_conformance(path, standard=DEFAULT_STANDARD, exact_version=True):
         # resolved away.
         if standard != "x4" and "/OCProperties" in pdf.Root:
             raise RuntimeError(tr("Die Ausgabe enthaelt noch Ebenen (OCG)."))
-        if pdf.is_encrypted:
-            raise RuntimeError(tr("Die Ausgabe ist verschluesselt."))
         names = pdf.Root.get("/Names") or {}
         for key, why in (("/JavaScript", "JavaScript"),
                          ("/EmbeddedFiles", tr("eingebettete Dateien"))):
@@ -473,7 +485,10 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
     if reason is None:
         report(tr("Datei ist bereits {p0} — unveraendert uebernommen.")
                .format(p0=version))
-        shutil.copyfile(src, out)
+        try:
+            shutil.copyfile(src, out)
+        except OSError as e:
+            raise RuntimeError(tr("Datei konnte nicht kopiert werden: {p0}").format(p0=_describe_os_error(e)))
         return out, [], None, version
     report(tr("Wird konvertiert: {p0}").format(p0=reason))
     # X-4 keeps optional content, so there is nothing dropped to report; only

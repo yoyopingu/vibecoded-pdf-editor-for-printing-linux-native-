@@ -182,15 +182,21 @@ def _preflight(src, checks, target, min_dpi, report):
     """
     from pypdf import PdfReader
     import pypdfium2 as pdfium
-    reader = PdfReader(src, strict=False)
+    try:
+        reader = PdfReader(src, strict=False)
+    except Exception as e:
+        raise RuntimeError(tr("PDF konnte nicht geoeffnet werden: {p0}").format(p0=e))
     # See grayscale._scan_pages: PIL from to_pil() can be collected by cyclic GC
     # on the render worker's thread, firing pdfium finalizers without the lock.
     gc.disable()
     try:
         # PdfDocument/close are pdfium calls and need the process-wide lock — see
         # grayscale._scan_pages for the heap corruption an unlocked load caused.
-        with _pdfium_lock:
-            doc = pdfium.PdfDocument(src)
+        try:
+            with _pdfium_lock:
+                doc = pdfium.PdfDocument(src)
+        except Exception as e:
+            raise RuntimeError(tr("PDFium-Fehler beim Öffnen: {p0}").format(p0=e))
         try:
             n = len(reader.pages); issues = []; oks = []
             if checks["enc"]:

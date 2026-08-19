@@ -65,9 +65,14 @@ def convert_to_pdf(path, out_dir):
         soffice = shutil.which("soffice") or shutil.which("libreoffice")
         if not soffice:
             raise RuntimeError(tr("LibreOffice nicht gefunden.\nsudo pacman -S libreoffice-still"))
-        r = subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", out_dir, path],
-            capture_output=True, text=True, errors="replace", timeout=120)
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        timeout = max(120, int(size_mb * 30))
+        try:
+            r = subprocess.run(
+                [soffice, "--headless", "--convert-to", "pdf", "--outdir", out_dir, path],
+                capture_output=True, text=True, errors="replace", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(tr("LibreOffice-Timeout nach {p0}s ({p1} MB)").format(p0=timeout, p1=round(size_mb, 1)))
         expected = os.path.join(out_dir, stem + ".pdf")
         if os.path.isfile(expected):
             return expected

@@ -567,10 +567,11 @@ class PageViewerPanel(QWidget):
             _ThumbnailCache.evict_tab(w.pdf_path)
             _FullPageCache.evict_tab(w.pdf_path)
             # …and the parsed document behind them. A loaded page of a
-            # poster-sized PDF is hundreds of megabytes; holding one for a tab
+            # large PDF is hundreds of megabytes; holding one for a tab
             # that is gone is the largest single thing this app can leak.
             try:
-                release(w.pdf_path)
+                if w.pdf_path and os.path.isfile(w.pdf_path):
+                    release(w.pdf_path)
             except Exception:
                 logging.exception("close: releasing the cached document failed")
         elif isinstance(w, MergeOrderWidget):
@@ -817,6 +818,11 @@ class PageViewerPanel(QWidget):
             AppState.get().open_pdf(path)
             AppState.get().status_message.emit(tr('Gespeichert als: {p0}').format(p0=name))
         except Exception as e:
+            try:
+                if os.path.isfile(path):
+                    os.unlink(path)
+            except Exception:
+                pass
             AppState.get().status_message.emit(f"Speicherfehler: {e}")
 
     def _retarget_tab(self, tab, path):

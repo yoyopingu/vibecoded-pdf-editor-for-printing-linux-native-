@@ -223,8 +223,8 @@ def _to_cmyk(src, out, icc, report):
                             logging.debug("colour profile: could not read an image's "
                                           "colour space", exc_info=True)
         verified = True
-    except Exception:
-        logging.debug("colour profile: verification failed", exc_info=True)
-        verified = False
+    except (OSError, pikepdf.PdfError) as e:
+        logging.warning("colour profile: verification failed: %s", e)
+        raise RuntimeError(tr("Verifikation fehlgeschlagen: {p0}").format(p0=e))
 
     return out, damaged, found_rgb, verified
