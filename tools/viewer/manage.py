@@ -6,6 +6,7 @@ verwalten", and the shortcut filter that makes them reachable from the keyboard
 whatever has focus. The edits themselves go to the PageModel; this is the
 control surface over it.
 """
+import logging
 import os
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QFileDialog, QApplication, QScrollArea, QLineEdit
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -370,6 +371,7 @@ class ManagePanel(QWidget):
             AppState.get().open_result(path, "Extrahiert")
             self.status.setText(tr('{p0} Seite(n) extrahiert.').format(p0=len(self.model.selected)))
         except Exception as e:
+            logging.exception("manage: _extract failed")
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _open_as_tab(self):
@@ -427,6 +429,7 @@ class ManagePanel(QWidget):
                  if box.clickedButton() is move
                  else tr('{p0} Seite(n) als neuer Tab geoeffnet.')).format(p0=n))
         except Exception as e:
+            logging.exception("manage: _open_as_tab failed")
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _swap_source(self, new_path):
@@ -498,6 +501,7 @@ class ManagePanel(QWidget):
             self.grid._rebuild(); self.grid.order_changed.emit()
             self.status.setText(tr("Leere Seite eingefuegt."))
         except Exception as e:
+            logging.exception("manage: _insert_blank failed")
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _insert_from_file(self):
@@ -554,6 +558,7 @@ class ManagePanel(QWidget):
             self.grid._rebuild(); self.grid.order_changed.emit()
             self.status.setText(tr('{p0} Seite(n) eingefuegt.').format(p0=n_ins))
         except Exception as e:
+            logging.exception("manage: _insert_from_file failed")
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     # ── Trennen ──────────────────────────────────────────────────────────────
@@ -583,6 +588,7 @@ class ManagePanel(QWidget):
             self.status.setText(f"OK: {n} {tr('Seite(n) gespeichert.')}")
             AppState.get().open_result(path, os.path.basename(path))
         except Exception as e:
+            logging.exception("manage: _split_selection failed")
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _split_each(self):
@@ -608,6 +614,7 @@ class ManagePanel(QWidget):
                 with open(p, "wb") as f: w.write(f)
             self.status.setText(f"OK: {len(uids)} {tr('Dateien erstellt')}")
         except Exception as e:
+            logging.exception("manage: _split_each failed")
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _split_n(self):
@@ -639,4 +646,5 @@ class ManagePanel(QWidget):
                 with open(p, "wb") as f: w.write(f)
             self.status.setText(f"OK: {chunk} {tr('Dateien erstellt')}")
         except Exception as e:
+            logging.exception("manage: _split_n failed")
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
