@@ -19,7 +19,6 @@ class CompressPanel(BasePanel):
     TITLE         = "Komprimieren"
     SUBTITLE      = "PDF-Dateigroesse reduzieren. Ergebnis wird als neuer Tab geoeffnet."
     RUN_LABEL     = "  Komprimieren"
-    OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
         gb = QGroupBox(tr("EINSTELLUNGEN")); gl = QVBoxLayout(gb)

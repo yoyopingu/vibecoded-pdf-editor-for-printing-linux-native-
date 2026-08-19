@@ -14,7 +14,6 @@ from tools.panels._shared import row
 class PageNumbersPanel(BasePanel):
     TITLE         = "Seitenzahlen"
     SUBTITLE      = "Seitenzahlen auf jede Seite stempeln."
-    OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
         ob = QGroupBox(tr("EINSTELLUNGEN")); ol = QVBoxLayout(ob)

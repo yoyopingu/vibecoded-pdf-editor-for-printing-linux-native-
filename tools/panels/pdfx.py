@@ -78,7 +78,6 @@ class PdfxPanel(BasePanel):
     TITLE         = "PDF/X-Export"
     SUBTITLE      = "Druckfertige PDF/X-Datei erzeugen."
     RUN_LABEL     = "  PDF/X exportieren"
-    OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
         layout.addWidget(make_label(tr(
