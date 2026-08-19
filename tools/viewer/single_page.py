@@ -7,7 +7,16 @@ at the exact scale, so the view has to track which window it is holding, whether
 that window still covers the viewport after a scroll, and what to put on screen
 in the meantime. A gesture shows a cheap stand-in per step and renders once,
 exactly, when it stops.
+
+A few `except Exception` blocks here fall back to a harmless default (100%
+zoom, no ruler guides for a page it cannot identify, the zoom-percentage
+label read from `self._zoom` instead of computed from the screen) rather than
+surface anything — the fallback is the correct behaviour, not a bug being
+hidden. They are logged at debug level anyway, the same convention
+tools/render/ uses, so a real recurring failure still shows up for anyone who
+goes looking.
 """
+import logging
 import math
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QPushButton, QLabel, QFrame, QApplication,
@@ -400,6 +409,8 @@ class SinglePageView(QWidget):
             else:
                 self._zoom = 1.0
         except Exception:
+            logging.debug("single_page: could not read the screen's physical "
+                          "DPI", exc_info=True)
             self._zoom = 1.0
         self._scroll_x = 0.0
         self._scroll_y = 0.0
@@ -530,6 +541,8 @@ class SinglePageView(QWidget):
             src_path, orig = self.model.page_source(uid, self.pdf_path)
             return (src_path, orig, self.model.get_rotation(uid))
         except Exception:
+            logging.debug("single_page: could not resolve the current page's "
+                          "key", exc_info=True)
             return None
 
     def _stand_in_is_current(self):
@@ -1209,6 +1222,8 @@ class SinglePageView(QWidget):
                 self._phys_pct  = phys_pct
                 self._phys_base = phys_pct
             except Exception:
+                logging.debug("single_page: could not compute the physical "
+                              "zoom percentage", exc_info=True)
                 self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
         else:
             self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
