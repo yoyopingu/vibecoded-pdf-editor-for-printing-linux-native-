@@ -13,15 +13,20 @@ from tools.i18n import tr
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.viewer.model import _parse_positions, _positions_to_str
-from tools.viewer.page_grid import CARD_H, CARD_W, GAP, MARGIN
+from tools.viewer.page_grid import (CARD_H, CARD_W, GAP, MARGIN,
+                                    card_size, paint_card)
 from tools.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
 
 
 class FileCard(QFrame):
-    """Thumbnail card for one file. Deliberately a near-copy of PageCard: the
-    merge view is the page-manager view for files, so cards must have the same
-    size, the same selected/unselected look, the same Ctrl-click handling and
-    the same multi-drag pixmap."""
+    """Thumbnail card for one file.
+
+    The merge view is the page-manager view for files, so a file card must be
+    the same card: same size, same selected look, same Ctrl-click handling and
+    the same multi-drag pixmap. It used to be a near-copy of PageCard kept in
+    step by hand and by one test; the drawing is now literally the same code
+    (page_grid.paint_card), and only what goes on the card differs — a file
+    name and an icon rather than a page number."""
     clicked = pyqtSignal(int)
 
     FILE_ICONS = {
@@ -40,59 +45,51 @@ class FileCard(QFrame):
         self.path        = path
         self._card_w     = card_w
         self._card_h     = card_h
-        self.setFixedSize(card_w+16, card_h+28)
+        self.setFixedSize(*card_size(card_w, card_h))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._selected           = False
         self._drag_pos           = None
         self._pending_ctrl_click = False
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 2)
-        layout.setSpacing(2)
-
-        self.img = QLabel()
-        self.img.setFixedSize(card_w, card_h)
-        self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.img.setStyleSheet(
-            f"border:1px solid {_TV['border']};background:{_TV['card_bg']};border-radius:2px;")
+        self._pixmap = None
+        self._icon = None
+        self._caption = self._label_text()
+        self.setToolTip(path)
         if pixmap is not None:
             self.set_pixmap(pixmap)
-        layout.addWidget(self.img)
-
-        num_size = max(9, min(13, card_w // 10))
-        self.num = QLabel()
-        self.num.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.num.setStyleSheet(
-            f"color:{_TV['dim']};font-size:{num_size}px;"
-            "background:transparent;border:none;")
-        layout.addWidget(self.num)
-        self._set_label(num_size)
-        self.setToolTip(path)
-
-        if pixmap is None:
+        else:
             self._load_local_preview()
-        self._update_style()
 
-    def _set_label(self, num_size):
+    def _label_text(self):
         """"<n>  <name>", elided to the card width — the position matters for the
         merge order, the name for telling the files apart."""
         from PyQt6.QtGui import QFontMetrics
-        f = self.num.font(); f.setPixelSize(num_size); self.num.setFont(f)
-        text = f"{self.pos + 1}  {os.path.basename(self.path)}"
-        self.num.setText(QFontMetrics(f).elidedText(
-            text, Qt.TextElideMode.ElideMiddle, self._card_w))
+        f = QFont()
+        f.setPixelSize(max(9, min(13, self._card_w // 10)))
+        return QFontMetrics(f).elidedText(
+            f"{self.pos + 1}  {os.path.basename(self.path)}",
+            Qt.TextElideMode.ElideMiddle, self._card_w)
+
+    def pixmap(self):
+        return self._pixmap
 
     def set_pixmap(self, pm):
         if pm is None or pm.isNull(): return
-        self.img.setPixmap(pm.scaled(
+        self._pixmap = pm.scaled(
             self._card_w, self._card_h,
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation))
+            Qt.TransformationMode.SmoothTransformation)
+        self.update()
 
     def set_image(self, image: QImage):
         """Called from the GUI thread with a freshly rendered QImage (same entry
         point as PageCard, so the shared render queue can drive both)."""
         self.set_pixmap(QPixmap.fromImage(image))
+
+    def paintEvent(self, _e):
+        paint_card(self, self._pixmap, self._caption,
+                   self._card_w, self._card_h, self._selected,
+                   placeholder=self._icon)
 
     def _load_local_preview(self):
         """Non-PDF files: images render from disk, everything else gets its icon.
@@ -109,24 +106,14 @@ class FileCard(QFrame):
             self._set_preview_icon(ext)
 
     def _set_preview_icon(self, ext):
-        icon = self.FILE_ICONS.get(ext, "📄")
-        self.img.setText(icon)
-        self.img.setStyleSheet(
-            f"border:1px solid {_TV['border']};background:{_TV['card_bg']};"
-            f"border-radius:2px;font-size:{max(18, self._card_w // 3)}px;")
+        self._icon = self.FILE_ICONS.get(ext, "📄")
+        self.update()
 
     def set_selected(self, sel):
-        self._selected = sel
-        self._update_style()
-
-    def _update_style(self):
-        if self._selected:
-            self.setStyleSheet(
-                f"QFrame{{background:{_TV['sel_bg']};border:2px solid {_TV['acc']};border-radius:5px;}}")
-        else:
-            self.setStyleSheet(
-                "QFrame{background:transparent;border:2px solid transparent;"
-                "border-radius:5px;}")
+        sel = bool(sel)
+        if sel != self._selected:
+            self._selected = sel
+            self.update()
 
     def mousePressEvent(self, e):
         if e.button() != Qt.MouseButton.LeftButton:
@@ -243,8 +230,8 @@ class FileGrid(QWidget):
             self._thumb_tasks.clear()
             self._thumb_gen += 1
             old_cards = self._cards[:]
-            old_pm = {c.path: c.img.pixmap() for c in old_cards
-                      if c.img.pixmap() and not c.img.pixmap().isNull()}
+            old_pm = {c.path: c.pixmap() for c in old_cards
+                      if c.pixmap() and not c.pixmap().isNull()}
             self._cards = []
             render_w = self._render_w()
             for i, path in enumerate(self._paths):

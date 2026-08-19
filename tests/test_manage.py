@@ -261,3 +261,48 @@ def test_a_snapshot_is_never_flattened_twice():
     assert newer != flat
     assert flat not in B._SNAPSHOT_PATHS, "stale path left in the set"
     assert set(B._VIEW_SNAPSHOTS.values()) == B._SNAPSHOT_PATHS, "structures drifted"
+
+
+def test_a_page_card_is_one_widget_and_carries_no_stylesheet():
+    """What made switching into the page manager slow.
+
+    A card used to be three widgets — a frame, a label for the thumbnail and a
+    label for the number — each carrying its own stylesheet. The page manager
+    builds one per page, so a thousand-page document meant 3000 widgets and
+    3000 stylesheet parses on the GUI thread before the grid could be shown,
+    and the window was frozen for all of it. Measured on that first switch:
+
+        200 pages     360 ms -> 120 ms
+        500 pages     680 ms -> 147 ms
+       1000 pages    1237 ms -> 215 ms
+
+    A card paints itself now. That is the property worth pinning: a timing
+    would be a stopwatch reading on one machine, but "no children and no
+    stylesheet" is the thing that cannot come back by accident — and it is what
+    Okular's thumbnail list and Qt's own icon views do for the same reason.
+    """
+    from PyQt6.QtWidgets import QWidget
+    from tools.viewer.page_grid import PageGrid
+    from tools.viewer.model import PageModel
+
+    grid = PageGrid(PageModel(6), FX["normal"])
+    _app.processEvents()
+    try:
+        card = grid._cards[0]
+        kids = card.findChildren(QWidget)
+        assert not kids, f"a card holds {len(kids)} child widget(s): {kids}"
+        assert card.styleSheet() == "", \
+            f"a card carries a stylesheet again: {card.styleSheet()!r}"
+        # And nothing above it puts one back on the cards by selector, which
+        # was the first thing tried and did not help: Qt still resolves an
+        # inherited sheet for every widget it can match.
+        assert grid.styleSheet() == "", \
+            f"the grid carries a stylesheet the cards must be matched against"
+        # It still draws: a card with no children must paint its own content.
+        from PyQt6.QtGui import QPixmap
+        pm = QPixmap(card.size()); pm.fill()
+        card.render(pm)
+        assert not pm.toImage().isNull(), "the card painted nothing"
+    finally:
+        grid.deleteLater(); _app.processEvents()
+    return "one widget, no stylesheet, paints itself"

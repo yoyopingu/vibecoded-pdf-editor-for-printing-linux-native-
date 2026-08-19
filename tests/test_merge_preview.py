@@ -44,11 +44,27 @@ def test_merge_view_matches_manage_view():
     pgrid.deselect_all(); fgrid.deselect_all()
     assert not fgrid._selected, "deselect all"
 
+    # The two cards have to *look* the same, which used to be checked by
+    # comparing their stylesheets. They have none now — both are painted by
+    # page_grid.paint_card — so compare what the user actually sees: the card
+    # rendered, with its caption blanked so only the frame and the well are
+    # left. A stylesheet comparison would now pass on two empty strings.
     pc, fc = pgrid._cards[0], fgrid._cards[0]
     assert pc.size() == fc.size(), f"card size {pc.size()} vs {fc.size()}"
-    assert pc.styleSheet() == fc.styleSheet(), "unselected card styling differs"
-    pc.set_selected(True); fc.set_selected(True)
-    assert pc.styleSheet() == fc.styleSheet(), "selected card styling differs"
+
+    def frame_of(card):
+        from PyQt6.QtGui import QPixmap
+        was, card._caption = card._caption, ""
+        pm = QPixmap(card.size()); pm.fill(_Qt.GlobalColor.black)
+        card.render(pm)
+        card._caption = was
+        return pm.toImage()
+
+    for state in (False, True):
+        pc.set_selected(state); fc.set_selected(state)
+        _app.processEvents()
+        assert frame_of(pc) == frame_of(fc), \
+            f"the two cards are drawn differently when selected={state}"
 
     # zoom, like the page grid
     w0 = fgrid._card_w; fgrid.zoom_in()
