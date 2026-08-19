@@ -15,7 +15,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QPixmap
 from tools.colorspace import (cached_page_colorspaces, describe,
-                              page_colorspaces)
+                              document_revision, page_colorspaces,
+                              scan_document)
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
@@ -85,6 +86,13 @@ class SinglePageView(QWidget):
         self._region_task    = None
         self._region_signals = _RegionSignals()
         self._region_signals.ready.connect(self._on_region_ready)
+        # Colour-space label: the page the label is out for (None when it
+        # already says the right thing), the job carrying that answer, and the
+        # file revisions whose pages have all been read.
+        self._cs_pending  = None
+        self._cs_job      = None
+        self._cs_scan_job = None
+        self._cs_scanned: set = set()
         # Which page and rotation _page_w_pt/_page_h_pt currently describe
         self._dims_key = None
         self._dims_rot = None
@@ -1263,8 +1271,15 @@ class SinglePageView(QWidget):
             self._color_lbl.setText(tr("Farbprofil: —"))
             return
 
+        # Read the whole file once, in the background, rather than a page at a
+        # time as the user turns them. Cheap to ask for again — it is a stat
+        # and two comparisons once the scan has been started.
+        self._scan_colour_spaces(src_path)
+
         known = cached_page_colorspaces(src_path, orig)
         if known is not None:
+            # Nothing is outstanding, and the label now describes this page.
+            self._cs_pending = None
             self._color_lbl.setText(
                 tr('Farbprofil: {p0}').format(p0=describe(known)))
             return
@@ -1273,24 +1288,89 @@ class SinglePageView(QWidget):
         # user may have turned to another one, and a label from the page before
         # is worse than no label.
         want = (src_path, orig)
-        if getattr(self, "_cs_pending", None) == want:
-            return          # already asked for this page; the answer is coming
+        if self._cs_pending == want:
+            # Already asked for this page. Either the answer is still coming or
+            # it came back unreadable — which page_colorspaces does not cache,
+            # since "could not be read" is not an answer to remember — and
+            # either way this runs after every render, so asking again would
+            # mean re-reading an unreadable page for as long as it is on screen.
+            return
+        # Whatever was asked for the page before this one, nobody wants any
+        # more. Left running, a turn through a long document queued one full
+        # read of the file per page onto a pool with as many slots as there are
+        # cores — so the answer for the page actually on screen waited behind
+        # every page passed on the way to it, and the renders waited with it.
+        self._cancel_colour_job()
         self._cs_pending = want
         self._color_lbl.setText(tr("Farbprofil: …"))
         from tools.jobs import submit
-        submit(lambda job: page_colorspaces(src_path, orig),
-               owner=self, name="colorspace",
-               on_done=lambda names, want=(src_path, orig):
-                   self._apply_color_label(want, names))
+        job = submit(lambda job: page_colorspaces(src_path, orig),
+                     owner=self, name="colorspace",
+                     on_done=lambda names: self._apply_color_label(want, names))
+        # Cleared on `finished` rather than on `done`, so a job that fails or is
+        # cancelled releases the slot too — otherwise one such job would leave
+        # the label convinced an answer was still coming and stop asking.
+        job.signals.finished.connect(lambda j=job: self._colour_job_finished(j))
+        self._cs_job = job
+
+    def _cancel_colour_job(self):
+        if self._cs_job is not None:
+            self._cs_job.cancel()
+            self._cs_job = None
+
+    def _colour_job_finished(self, job):
+        if self._cs_job is job:         # not one already replaced by a newer ask
+            self._cs_job = None
 
     def _apply_color_label(self, want, names):
-        if getattr(self, "_cs_pending", None) != want:
+        if self._cs_pending != want:
             return                      # the user has moved on
         try:
             self._color_lbl.setText(
                 tr('Farbprofil: {p0}').format(p0=describe(names)))
         except RuntimeError:
             pass                        # the view is being torn down
+
+    def _scan_colour_spaces(self, src_path):
+        """Read every page's colour spaces once, so page turns are free.
+
+        The label used to read one page per turn, and reading a page means
+        opening the file: 83 ms of cross-reference parsing against 0.36 ms to
+        answer, on a 500-page document — and the 83 ms is the part that grows
+        with the page count. So a long file was slow to browse precisely
+        because it was long, and the whole document costs less than three of
+        those turns (see tools.colorspace.scan_document).
+
+        Once per file revision, and abandoned rather than finished if the user
+        closes the tab: the pages read before that are kept, since they cost
+        nothing to have.
+        """
+        revision = document_revision(src_path)
+        if revision in self._cs_scanned or self._cs_scan_job is not None:
+            return
+        from tools.jobs import submit
+
+        def scan(job):
+            return scan_document(src_path, should_stop=lambda: job.cancelled)
+
+        # Behind the page renders and behind the label's own page: this is work
+        # for the turns to come, and nothing on screen is waiting for it.
+        job = submit(scan, owner=self, name="colorspace-document", priority=-1,
+                     on_done=lambda result: self._colour_scan_done(revision, result))
+        job.signals.finished.connect(lambda j=job: self._colour_scan_finished(j))
+        self._cs_scan_job = job
+
+    def _colour_scan_finished(self, job):
+        if self._cs_scan_job is job:
+            self._cs_scan_job = None
+
+    def _colour_scan_done(self, revision, result):
+        _names, complete = result
+        if complete:
+            # A set, not one revision: a merged tab draws its pages from
+            # several files, and remembering only the last would have the two
+            # re-scanning each other away every time the user crossed the join.
+            self._cs_scanned.add(revision)
 
 
     def next_page(self):

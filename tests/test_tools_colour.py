@@ -716,3 +716,260 @@ def test_a_document_with_nothing_to_convert_says_so():
     assert any("Keine Seiten" in m for m in logged), \
         f"the refusal never reached the log:\n{logged}"
     return "reported, not swallowed"
+
+
+def test_the_viewer_reads_a_long_document_s_colour_spaces_once():
+    """Turning pages must not re-open the file for every page.
+
+    The status bar's Farbprofil label read one page per turn, and reading a
+    page means opening the file — 83 ms of cross-reference parsing against
+    0.36 ms to answer, on a 500-page document, and the 83 ms is the half that
+    grows with the page count. So the label was slowest on exactly the files it
+    was asked about most, and the reads queued up behind each other: turning
+    through twenty pages left twenty full reads of the file on the pool, with
+    the answer for the page actually on screen last in the queue.
+
+    It reads the document once now, in the background, and every page after
+    that is answered out of the cache.
+    """
+    import pikepdf
+    from tests.support import _open_single_view, _settle
+    from tools.colorspace import _cache, cached_page_colorspaces
+
+    src = _many_page_pdf(40, "cs_viewer_many.pdf")
+    _cache.clear()
+    opens = []
+    real_open = pikepdf.open
+    pikepdf.open = lambda *a, **k: (opens.append(a[0] if a else None),
+                                    real_open(*a, **k))[1]
+    try:
+        vp, sv = _open_single_view(src)
+        # The whole-document pass is the point: wait for it, not for a number.
+        _settle(vp, lambda: cached_page_colorspaces(src, 39) is not None, tries=300)
+        after_open = len(opens)
+        for _ in range(20):
+            sv.next_page()
+            _app.processEvents()
+        _spin(20)
+        assert sv._current == 20, f"the viewer is on page {sv._current + 1}"
+        assert "Farbprofil" in sv._color_lbl.text()
+        assert "…" not in sv._color_lbl.text(), \
+            f"still waiting on page 21: {sv._color_lbl.text()!r}"
+        turning = len(opens) - after_open
+    finally:
+        pikepdf.open = real_open
+        vp.close()
+    assert turning == 0, f"turning 20 pages opened the file {turning}x"
+    return f"40 pages, {after_open} open(s), 0 more for 20 page turns"
+
+
+def test_greyscale_does_not_render_pages_it_has_already_read_as_grey():
+    """A page that declares nothing but DeviceGray cannot put a coloured pixel
+    on paper, so rendering it to count its coloured pixels can only confirm
+    what reading it already said.
+
+    Rendering is the expensive half of the scan — seconds a page on heavy
+    vector work — and reading is a fraction of a millisecond once the file is
+    open, so the scan reads first and renders only what is left. On a document
+    that is mostly grey already, which is most of what this tool is pointed at,
+    that is the whole difference in how long it takes.
+    """
+    import tools.panels.grayscale as G
+    from tools.colorspace import _cache
+
+    src = _grey_fixture()
+    _cache.clear()
+    rendered = []
+    real = G._colour_histogram
+    G._colour_histogram = lambda pil: (rendered.append(1), real(pil))[1]
+    try:
+        hists, already_grey = G._scan_pages(src, 20, null_progress())
+    finally:
+        G._colour_histogram = real
+
+    assert 0 in already_grey, "the black-only page was not recognised as grey"
+    assert len(hists) == 4, "every page must still have an entry"
+    assert len(rendered) == 4 - len(already_grey), \
+        f"{len(rendered)} pages rendered, {len(already_grey)} were already grey"
+    # And the stand-in histogram has to classify as grey, or the page it stands
+    # for would be reported as colour.
+    assert _hist_stats(hists[0], 20) == (0, 0.0), hists[0][:4]
+    return f"4 pages, {len(already_grey)} read as grey, {len(rendered)} rendered"
+
+
+def test_the_ratio_slider_prints_the_value_it_is_actually_using():
+    """The scale ends used to be written out beside the slider by hand, and the
+    low one said 0.05% where the slider bottoms out at 0.005% — ten times
+    apart, on the control that decides how much colour a page may carry before
+    it costs a colour click. They are read off the slider now, so they cannot
+    drift from it again.
+    """
+    from tools.panels.grayscale import _ratio_percent
+
+    _open(FX["normal"])
+    p = GrayscalePanel(); _sync_async(p); p.log.log = lambda *a, **k: None
+    for value in (p.ratio.minimum(), 300, p.ratio.maximum()):
+        p.ratio.setValue(value)
+        p._on_setting_changed()
+        shown = p.ratio_lbl.text()
+        # What _reclassify will compare against, as a percentage.
+        used = (p.ratio.value() / 20000.0) * 100
+        assert shown == _ratio_percent(value), f"{shown} for slider {value}"
+        assert abs(float(shown.rstrip("%")) - used) < 1e-9, \
+            f"the label says {shown}, the classification uses {used}%"
+    assert _ratio_percent(1) == "0.005%", _ratio_percent(1)
+    assert _ratio_percent(5000) == "25%", _ratio_percent(5000)
+    return "0.005% – 25%, as printed"
+
+
+def test_dragging_a_slider_classifies_once_and_not_forty_times():
+    """A slider emits one valueChanged per pixel the handle travels, and each
+    one used to re-classify every page and re-set the stylesheet on every
+    preview card: 132 ms of GUI thread per step on a 300-page document, so
+    dragging a slider across the sidebar froze the window for five seconds and
+    threw away thirty-nine of the forty answers it computed on the way.
+
+    The number beside the handle still follows it exactly. The work waits for
+    the handle to stop.
+    """
+    src = _grey_fixture()
+    _open(src)
+    p = GrayscalePanel(); _sync_async(p); p.log.log = lambda *a, **k: None
+    p._scan()
+    runs = []
+    real = p._reclassify
+    p._reclassify = lambda: (runs.append(1), real())[1]
+
+    for v in range(20, 60):
+        p.thr.setValue(v)
+    assert not runs, f"a drag re-classified {len(runs)}x before the handle stopped"
+    assert p.thr_lbl.text() == "59", \
+        f"the label lagged the handle: {p.thr_lbl.text()}"
+
+    _spin(30)                      # let the settle timer fire
+    assert len(runs) == 1, f"the settle ran {len(runs)}x"
+    return "40 steps of the handle, 1 classification"
+
+
+def test_a_card_is_only_repainted_when_its_colour_changes():
+    """setStyleSheet re-parses the sheet for the widget it is set on. Setting
+    every card blindly was 108 ms of the 132 ms a slider step cost on a long
+    document, to move two or three cards from red to green."""
+    src = _grey_fixture()
+    _open(src)
+    p = GrayscalePanel(); _sync_async(p); p.log.log = lambda *a, **k: None
+    p._scan()
+    painted = []
+    for frame, _, _ in p._preview_cards:
+        real = frame.setStyleSheet
+        frame.setStyleSheet = lambda css, r=real, f=frame: (painted.append(f), r(css))[1]
+
+    p._reclassify()
+    assert not painted, f"{len(painted)} cards repainted for no change"
+    # A real change must still get through, and so must a theme switch, where
+    # the statuses are the same but the palette under them is not.
+    p._manual_skip.add(1); p._update_preview_borders()
+    assert len(painted) == 1, f"{len(painted)} cards repainted for one change"
+    painted.clear()
+    p._update_preview_borders(force=True)
+    assert len(painted) == len(p._preview_cards), "the theme switch missed cards"
+    return "1 change -> 1 card"
+
+
+def test_an_already_grey_page_cannot_be_forced_into_the_conversion():
+    """_convert drops already-grey pages from the selection whatever the card
+    says, so clicking one only ever wrote a number into the log that the
+    conversion then disagreed with."""
+    src = _grey_fixture()
+    _open(src)
+    p = GrayscalePanel(); _sync_async(p); p.log.log = lambda *a, **k: None
+    p._scan()
+    assert p._already_grey, "the fixture is meant to have a grey page"
+    grey = min(p._already_grey)
+    colour = next(i for i in range(len(p._page_data)) if i not in p._already_grey)
+
+    p._toggle_manual(grey)
+    assert grey not in p._manual_sel, "an already-grey page was selected anyway"
+    # And a shift-range across it takes the rest and leaves it alone.
+    p._toggle_manual(colour)
+    p._last_click = colour
+    p._toggle_manual(len(p._page_data) - 1, _ShiftClick())
+    assert grey not in p._manual_sel, "a range selection swept the grey page in"
+    assert len(p._manual_sel) > 1, "the range selected nothing"
+    return "left alone by both a click and a range"
+
+
+class _ShiftClick:
+    """The one thing _toggle_manual reads off a mouse event."""
+    def modifiers(self):
+        from PyQt6.QtCore import Qt
+        return Qt.KeyboardModifier.ShiftModifier
+
+
+def _mixed_pages_pdf():
+    """Three pages that do not agree: grey, RGB, then grey again."""
+    from reportlab.lib import colors
+    out = os.path.join(_TMP, "cs_mixed_pages.pdf")
+    if not os.path.exists(out):
+        c = canvas.Canvas(out, pagesize=A4)
+        c.setFont("Helvetica", 30)
+        c.setFillGray(0); c.drawString(60, 700, "GREY ONE"); c.showPage()
+        c.setFillColor(colors.HexColor("#ff0000"))
+        c.rect(60, 300, 400, 300, fill=1, stroke=0); c.showPage()
+        c.setFillGray(0); c.drawString(60, 700, "GREY TWO"); c.showPage()
+        c.save()
+    return out
+
+
+def test_a_page_turn_stops_the_read_started_for_the_page_before_it():
+    """Turning away from a page must call off the read started for it.
+
+    Nothing cancelled them, so turning through a document queued one full read
+    of the file per page onto a pool with as many slots as there are cores —
+    and the answer for the page actually on screen came back last, behind every
+    page passed on the way to it. The renders queued behind them too.
+    """
+    import threading
+    import tools.viewer.single_page as SP
+    from tests.support import _open_single_view, _settle
+    from tools.colorspace import _cache
+    from tools.jobs import active_jobs
+
+    src = _mixed_pages_pdf()
+    _cache.clear()
+    # Hold every per-page read open until the test lets go, so the jobs are
+    # still there to be counted, and record which ones were called off.
+    release = threading.Event()
+    started = []
+    real = SP.page_colorspaces
+
+    def slow(path, index):
+        started.append(index)
+        release.wait(10)
+        return real(path, index)
+
+    SP.page_colorspaces = slow
+    # …and keep the whole-document pass out of it: this is about the per-page
+    # reads, and that pass would answer from the cache before they ran.
+    real_scan = SP.scan_document
+    SP.scan_document = lambda *a, **k: (frozenset(), False)
+    try:
+        vp, sv = _open_single_view(src)
+        for _ in range(2):
+            sv.next_page()
+            _spin(10)
+        _spin(20)
+        live = [j for j in active_jobs() if j.name == "colorspace"]
+        cancelled = [j for j in live if j.cancelled]
+        assert len(started) >= 2, f"the reads never ran: {started}"
+        assert len(live) - len(cancelled) <= 1, (
+            f"{len(live) - len(cancelled)} reads still wanted, "
+            f"for one page on screen")
+    finally:
+        release.set()
+        SP.page_colorspaces = real
+        SP.scan_document = real_scan
+        _settle(vp, lambda: not [j for j in active_jobs() if j.name == "colorspace"],
+                tries=100)
+        vp.close()
+    return f"{len(started)} reads started, {len(cancelled)} called off"

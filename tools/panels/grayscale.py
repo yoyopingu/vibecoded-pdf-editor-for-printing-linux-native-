@@ -11,11 +11,68 @@ from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGrou
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap
 from tools.app_state import AppState
-from tools._base import BasePanel, make_label
-from tools.colorspace import document_colorspaces, is_grey_only, page_colorspaces
+from tools._base import BasePanel, make_label, make_separator
+from tools.colorspace import is_grey_only, page_colorspaces, scan_document
 from tools.i18n import tr
 from tools.panels._colour import _colour_histogram, _hist_stats
 from tools.panels._verify import _BLACKOUT_LIMIT, _page_luma, _conversion_damage, _verify_pages_intact
+
+
+# How long the sliders wait after the handle stops before the document is
+# re-classified. Long enough that a drag is one pass rather than forty, short
+# enough that letting go and looking at the result feels immediate.
+_SETTLE_MS = 120
+
+# The histogram of a page that declares nothing but grey. Such a page cannot
+# put a coloured pixel on paper, so it is not rendered at all — see _scan_pages
+# — and this stands in its place so that _page_data still has one entry per
+# page. _hist_stats reads it as "no pixel is any distance from grey", which is
+# what it is.
+_NEUTRAL_HIST = [0] * 256
+
+# The preview grid. A card is a thumbnail with its page number under it, on a
+# frame that carries the status border; _CARD_PAD is what that frame adds
+# around the thumbnail and _CARD_CAPTION what the number takes below it. These
+# were written out separately in the three places that lay the grid out, and
+# had to agree for the columns to come out right.
+_CARD_ASPECT  = 127 / 90        # a page, near enough, at any zoom
+_CARD_PAD     = 12
+_CARD_CAPTION = 24
+_GRID_GAP     = 8
+_GRID_MARGIN  = 10
+
+
+def _card_height(card_w):
+    return int(card_w * _CARD_ASPECT)
+
+
+def _ratio_percent(value):
+    """The ratio slider's value as a percentage, written out truthfully.
+
+    The scale runs from 0.005% to 25%, so two decimal places rounded its bottom
+    end away to 0.01%. Trailing zeros are dropped instead, which keeps 1.5% and
+    25% short and still lets 0.005% say what it is.
+    """
+    return f"{value / 200.0:.3f}".rstrip("0").rstrip(".") + "%"
+
+
+def _slider_row(low, slider, high, value_lbl):
+    """A slider between the two ends of its scale, with its value on the right.
+
+    One shape for both sliders in this panel; they used to be spelled out
+    separately and had drifted apart in spacing and in label width.
+    """
+    def end(text):
+        lbl = QLabel(text)
+        lbl.setObjectName("dimLabel")
+        return lbl
+
+    h = QHBoxLayout(); h.setSpacing(6)
+    h.addWidget(end(low))
+    h.addWidget(slider, 1)
+    h.addWidget(end(high))
+    h.addWidget(value_lbl)
+    return h
 
 
 def _grey_retry_page(gs_bin, src, index, report):
@@ -213,6 +270,17 @@ class GrayscalePanel(BasePanel):
         zbl.addStretch()
         self._card_w = 90
         self._preview_cards = []
+        self._preview_cols = 0
+        # Re-flowing the grid moves every card, and a splitter drag is a stream
+        # of resize events, so the width is allowed to settle first.
+        self._relayout_timer = QTimer(self)
+        self._relayout_timer.setSingleShot(True)
+        self._relayout_timer.timeout.connect(self._relayout_preview)
+        # The zoom scales every card twice: once with a fast transform so the
+        # grid follows the wheel, and once smoothly when the wheel stops.
+        self._zoom_smooth_timer = QTimer(self)
+        self._zoom_smooth_timer.setSingleShot(True)
+        self._zoom_smooth_timer.timeout.connect(self._rezoom_smooth)
         self._gs_zoombtns = []
         for txt, fn in [("−", self._zoom_out), ("fit", self._zoom_reset), ("+", self._zoom_in)]:
             zb = QPushButton(txt); zb.setFixedSize(32, 22)
@@ -270,6 +338,7 @@ class GrayscalePanel(BasePanel):
                 f"QPushButton{{background:{t['panel_bg']};color:{t['text']};"
                 f"border:1px solid {t['border']};border-radius:3px;font-size:11px;padding:0;}}"
                 f"QPushButton:hover{{background:{t['hover']};}}")
+        self._style_ratio_box()
         for lbl in (self._gs_legend_lbls +
                     [self._status_sw, self._status_color, self._status_total]):
             lbl.setStyleSheet(
@@ -293,15 +362,23 @@ class GrayscalePanel(BasePanel):
                     img_lbl.setStyleSheet(f"background:{t['card_bg']};border:none;")
                     num_lbl.setStyleSheet(
                         f"color:{t['dim']};font-size:10px;background:transparent;border:none;")
-                self._update_preview_borders()   # restores the status colours
+                # force: the statuses have not changed, the palette has, so
+                # every card needs redrawing even though each says the same.
+                self._update_preview_borders(force=True)
             except RuntimeError:
                 self._preview_box = None; self._preview_cards = []
 
     def eventFilter(self, obj, e):
         if (hasattr(self, '_preview_scroll') and
-                obj is self._preview_scroll.viewport() and
-                e.type() == QEvent.Type.Wheel):
-            self._preview_wheel(e); return True
+                obj is self._preview_scroll.viewport()):
+            if e.type() == QEvent.Type.Wheel:
+                self._preview_wheel(e); return True
+            if e.type() == QEvent.Type.Resize:
+                # Widening the pane used to fit more cards across and nothing
+                # noticed: the grid kept the column count it was built with
+                # until a zoom happened to rebuild it, so the preview sat in a
+                # narrow strip with the rest of the pane empty beside it.
+                self._relayout_timer.start(60)
         return super().eventFilter(obj, e)
 
     def _zoom_in(self):
@@ -313,9 +390,9 @@ class GrayscalePanel(BasePanel):
 
     def _rezoom(self):
         if not self._preview_cards: return
-        card_h = int(self._card_w * (127 / 90))
+        card_h = _card_height(self._card_w)
         for frame, img_lbl, num_lbl in self._preview_cards:
-            frame.setFixedSize(self._card_w + 12, card_h + 24)
+            frame.setFixedSize(self._card_w + _CARD_PAD, card_h + _CARD_CAPTION)
             img_lbl.setFixedSize(self._card_w, card_h)
             pm = img_lbl.property("src_pm")
             if pm:
@@ -323,13 +400,12 @@ class GrayscalePanel(BasePanel):
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.FastTransformation))
         self._relayout_preview()
-        if not hasattr(self, '_zoom_smooth_timer'):
-            self._zoom_smooth_timer = QTimer(); self._zoom_smooth_timer.setSingleShot(True)
-            self._zoom_smooth_timer.timeout.connect(self._rezoom_smooth)
         self._zoom_smooth_timer.start(180)
 
     def _rezoom_smooth(self):
-        card_h = int(self._card_w * (127 / 90))
+        if not self._preview_cards:
+            return
+        card_h = _card_height(self._card_w)
         for frame, img_lbl, num_lbl in self._preview_cards:
             pm = img_lbl.property("src_pm")
             if pm:
@@ -354,68 +430,151 @@ class GrayscalePanel(BasePanel):
         self._already_grey = set()
         self._scanned_path = ""
         self._scanning     = False
+        # The colour each card's border is painted in right now, so that a
+        # re-classification can repaint the ones that changed and leave the
+        # rest alone. See _update_preview_borders.
+        self._card_colours = []
         # Shared thumbnail pipeline — same cache as PageGrid, same render queue
         self._grey_thumb_gen  = 0
         self._grey_thumb_sigs = _ThumbSignals()
         self._grey_thumb_sigs.ready.connect(self._on_grey_thumb_ready)
 
-        mode_grp = QGroupBox(tr("Erkennungs-Modus"))
-        mg = QVBoxLayout(mode_grp); mg.setSpacing(6); mg.setContentsMargins(8,10,8,8)
-        self.mode_single = QRadioButton(tr("1 farbiger Pixel = Farbseite"))
-        self.mode_ratio  = QRadioButton(tr("Nach Anteil farbiger Pixel"))
-        self.mode_ratio.setChecked(True)
-        self.mode_single.toggled.connect(self._on_mode_changed)
-        mg.addWidget(self.mode_single); mg.addWidget(self.mode_ratio)
-        layout.addWidget(mode_grp)
+        # Dragging a slider re-classifies every page and repaints every card.
+        # Measured on a 300-page document that is 132 ms of GUI thread per step
+        # of the handle, and a handle emits one step per pixel of travel — so
+        # dragging one slider across the sidebar froze the window for five
+        # seconds and did the whole job forty times to arrive at one answer.
+        # The number beside the handle still follows it exactly; only the work
+        # waits for the handle to come to rest.
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.timeout.connect(self._on_setting_changed)
+        # One timer for "scan the document again", shared by the two things
+        # that ask for it, so a newly opened file cannot start two scans.
+        self._rescan_timer = QTimer(self)
+        self._rescan_timer.setSingleShot(True)
+        self._rescan_timer.timeout.connect(self._rescan)
 
-        thr_grp = QGroupBox(tr("Farb-Schwellwert"))
-        tg = QVBoxLayout(thr_grp); tg.setSpacing(4); tg.setContentsMargins(8,10,8,8)
-        tg.addWidget(make_label(tr("Abstand vom Grau pro Pixel:"), dim=True))
-        thr_row = QHBoxLayout()
-        thr_row.addWidget(QLabel(tr("Streng")))
+        # One group, because it is one decision. These controls used to sit in
+        # three separate boxes — the two modes in one, and the slider that only
+        # exists for the second mode two boxes further down — which read as
+        # three unrelated settings. The threshold defines what counts as a
+        # coloured pixel and feeds both modes, so it comes first; the ratio
+        # hangs off the mode that uses it, indented and tied to it by a rule,
+        # and greys out with it.
+        grp = QGroupBox(tr("Farb-Erkennung"))
+        gl = QVBoxLayout(grp); gl.setSpacing(6); gl.setContentsMargins(8, 10, 8, 8)
+
+        gl.addWidget(make_label(tr("Abstand vom Grau pro Pixel:"), dim=True))
         self.thr = QSlider(Qt.Orientation.Horizontal)
         self.thr.setRange(1, 80); self.thr.setValue(20)
         self.thr.setTickInterval(10); self.thr.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.thr_lbl = QLabel("20"); self.thr_lbl.setFixedWidth(28)
-        self.thr.valueChanged.connect(self._on_setting_changed)
-        thr_row.addWidget(self.thr, 1); thr_row.addWidget(QLabel(tr("Tolerant"))); thr_row.addWidget(self.thr_lbl)
-        tg.addLayout(thr_row)
-        layout.addWidget(thr_grp)
+        self.thr.valueChanged.connect(self._on_slider_moved)
+        gl.addLayout(_slider_row(tr("Streng"), self.thr, tr("Tolerant"), self.thr_lbl))
 
-        ratio_grp = QGroupBox(tr("Mindest-Anteil farbiger Pixel"))
-        rg = QVBoxLayout(ratio_grp); rg.setSpacing(4); rg.setContentsMargins(8,10,8,8)
-        rg.addWidget(make_label(tr("Ab wieviel % gilt die Seite als Farbseite?"), dim=True))
-        ratio_row = QHBoxLayout()
-        ratio_row.addWidget(QLabel("0.05%"))
+        gl.addSpacing(2)
+        gl.addWidget(make_separator())
+        gl.addSpacing(2)
+        gl.addWidget(make_label(tr("Wann gilt eine Seite als Farbseite?"), dim=True))
+        self.mode_single = QRadioButton(tr("1 farbiger Pixel = Farbseite"))
+        self.mode_ratio  = QRadioButton(tr("Nach Anteil farbiger Pixel"))
+        self.mode_ratio.setChecked(True)
+        self.mode_single.toggled.connect(self._on_mode_changed)
+        gl.addWidget(self.mode_single)
+        gl.addWidget(self.mode_ratio)
+
+        self._ratio_box = QFrame(); self._ratio_box.setObjectName("subOption")
+        rl = QVBoxLayout(self._ratio_box)
+        rl.setContentsMargins(14, 2, 0, 4); rl.setSpacing(4)
+        rl.addWidget(make_label(tr("Ab wieviel % gilt die Seite als Farbseite?"), dim=True))
         self.ratio = QSlider(Qt.Orientation.Horizontal)
         self.ratio.setRange(1, 5000); self.ratio.setValue(300)
         self.ratio.setTickInterval(500); self.ratio.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.ratio_lbl = QLabel("1.50%"); self.ratio_lbl.setFixedWidth(44)
-        self.ratio.valueChanged.connect(self._on_setting_changed)
-        ratio_row.addWidget(self.ratio, 1); ratio_row.addWidget(QLabel("25%")); ratio_row.addWidget(self.ratio_lbl)
-        rg.addLayout(ratio_row)
-        self._ratio_grp = ratio_grp; ratio_grp.setEnabled(True)
-        layout.addWidget(ratio_grp)
+        self.ratio_lbl = QLabel(_ratio_percent(self.ratio.value()))
+        self.ratio_lbl.setFixedWidth(48)
+        self.ratio.valueChanged.connect(self._on_slider_moved)
+        # The ends of the scale are read off the slider rather than written out
+        # again beside it. Written out, the low end said 0.05% while the slider
+        # could only be set as low as 0.005% — ten times apart, on the control
+        # that decides how much colour a page is allowed before it costs a
+        # colour click.
+        rl.addLayout(_slider_row(_ratio_percent(self.ratio.minimum()), self.ratio,
+                                 _ratio_percent(self.ratio.maximum()), self.ratio_lbl))
+        gl.addWidget(self._ratio_box)
+        self._ratio_box.setEnabled(self.mode_ratio.isChecked())
+        layout.addWidget(grp)
+        self._style_ratio_box()
 
         AppState.get().pdf_changed.connect(self._on_pdf_changed)
 
     def _on_mode_changed(self):
-        self._ratio_grp.setEnabled(self.mode_ratio.isChecked())
-        if self._page_data: self._reclassify()
+        """A radio was clicked — one click, so apply it straight away."""
+        self._ratio_box.setEnabled(self.mode_ratio.isChecked())
+        self._style_ratio_box()
+        self._on_setting_changed()
 
-    def _on_setting_changed(self, val=None):
+    def _style_ratio_box(self):
+        """Draw the ratio slider as belonging to the radio above it.
+
+        A rule down its left edge, in the accent colour while that mode is
+        chosen and grey when it is not. Written out for both states rather than
+        left to a `:disabled` rule, because the application stylesheet gives
+        these labels and this slider explicit colours, and an explicit colour
+        is not something Qt's disabled palette can take back — setEnabled(False)
+        alone left the whole block looking exactly as live as the mode above it.
+        """
+        t = _TV
+        on = self.mode_ratio.isChecked()
+        edge = t['acc'] if on else t['vdim']
+        text = t['dim'] if on else t['vdim']
+        value = t['text'] if on else t['vdim']
+        self._ratio_box.setStyleSheet(
+            f"QFrame#subOption{{border:none;border-left:2px solid {edge};"
+            f"background:transparent;}}"
+            f"QFrame#subOption QLabel{{color:{text};background:transparent;}}"
+            f"QFrame#subOption QSlider::sub-page:horizontal{{background:{edge};}}"
+            f"QFrame#subOption QSlider::handle:horizontal{{background:{edge};}}")
+        self.ratio_lbl.setStyleSheet(f"color:{value};background:transparent;")
+
+    def _on_slider_moved(self, _value=None):
+        """The handle moved: show the number now, do the work when it stops."""
+        self._update_slider_labels()
+        self._settle_timer.start(_SETTLE_MS)
+
+    def _update_slider_labels(self):
         self.thr_lbl.setText(str(self.thr.value()))
-        self.ratio_lbl.setText(f"{self.ratio.value() / 200.0:.2f}%")
-        if self._page_data: self._reclassify()
+        self.ratio_lbl.setText(_ratio_percent(self.ratio.value()))
+
+    def _on_setting_changed(self, _value=None):
+        """Apply what the controls now say, whatever put them there."""
+        self._settle_timer.stop()
+        self._update_slider_labels()
+        if self._page_data:
+            self._reclassify()
 
     def _on_pdf_changed(self, path):
         if path and self.isVisible():
-            QTimer.singleShot(300, self._scan)
+            self._rescan_timer.start(300)
 
     def showEvent(self, e):
         super().showEvent(e)
         if self._scanned_path != self.current_pdf() or not self._page_data:
-            QTimer.singleShot(200, self._scan)
+            self._rescan_timer.start(200)
+
+    def _rescan(self):
+        """Scan the current document, or come back to it once the tool is free.
+
+        A conversion still running when another document was opened used to end
+        up in run_async's "Vorgang laeuft bereits", raised inside a QTimer
+        callback where nothing turns it into a log line — so it surfaced as a
+        traceback on the unhandled-exception hook, and the new document was
+        never scanned at all.
+        """
+        if self._scanning or getattr(self, "_async_running", False):
+            self._rescan_timer.start(1000)
+            return
+        self._scan()
 
     def _reclassify(self):
         thr = self.thr.value(); use_ratio = self.mode_ratio.isChecked()
@@ -425,7 +584,7 @@ class GrayscalePanel(BasePanel):
             max_diff, colour_ratio = _hist_stats(hist, thr)
             is_colour = (colour_ratio >= min_ratio) if use_ratio else (max_diff > thr)
             if not is_colour: self._grey_pages.add(i)
-        self._update_preview_borders(); self._update_status_bar()
+        self._update_preview_borders()
         self.log.clear_log()
         self.log.log(f"{len(self._grey_pages)} {tr('Seite(n) werden konvertiert')}, "
                      f"{len(self._page_data)-len(self._grey_pages)} {tr('bleiben unveraendert')}")
@@ -438,13 +597,19 @@ class GrayscalePanel(BasePanel):
             f"QWidget#greyPreviewBox{{background:{_TV['viewer_bg']};}}")
         self._preview_scroll.setWidget(container)
         self._preview_cards = []
-        CARD_W = self._card_w; CARD_H = int(CARD_W * (127/90)); GAP = 8; MARGIN = 10
-        vp_w = self._preview_scroll.viewport().width() or 600
-        cols = max(2, (vp_w - 2*MARGIN + GAP) // (CARD_W + 12 + GAP))
+        CARD_W = self._card_w; CARD_H = _card_height(CARD_W)
+        cols = self._preview_cols = self._preview_columns()
         grid = QGridLayout(container)
-        grid.setContentsMargins(MARGIN, MARGIN, MARGIN, MARGIN); grid.setSpacing(GAP)
+        grid.setContentsMargins(_GRID_MARGIN, _GRID_MARGIN, _GRID_MARGIN, _GRID_MARGIN)
+        grid.setSpacing(_GRID_GAP)
+        # Packed into the top-left corner at the spacing asked for. Without
+        # this the grid shares the leftover width and height out among its rows
+        # and columns, so twelve cards in a large pane drifted apart into a
+        # sparse field with a hand's width of nothing between two rows.
+        grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         for i in range(n_pages):
-            frame = QFrame(); frame.setFixedSize(CARD_W + 12, CARD_H + 24)
+            frame = QFrame()
+            frame.setFixedSize(CARD_W + _CARD_PAD, CARD_H + _CARD_CAPTION)
             frame.setStyleSheet(
                 f"QFrame{{background:transparent;border:2px solid {_TV['border']};border-radius:5px;}}")
             fl = QVBoxLayout(frame); fl.setContentsMargins(3,3,3,2); fl.setSpacing(2)
@@ -458,17 +623,41 @@ class GrayscalePanel(BasePanel):
             fl.addWidget(num_lbl)
             grid.addWidget(frame, i // cols, i % cols)
             self._preview_cards.append((frame, img_lbl, num_lbl))
-            idx = i
-            if i not in self._already_grey:
-                frame.setCursor(Qt.CursorShape.PointingHandCursor)
-                frame.mousePressEvent = lambda e, n=idx: self._toggle_manual(n, e)
+            # Every card takes clicks; which of them may actually be chosen is
+            # not known until the scan has run, and _toggle_manual is where
+            # that is decided. The cards are built before the scan starts so
+            # there is something to look at while it works, so a test here
+            # against _already_grey — which is empty at this point, always —
+            # was a guard that could never fire.
+            frame.mousePressEvent = lambda e, n=i: self._toggle_manual(n, e)
+        self._card_colours = [None] * n_pages
+        self._set_card_cursors()
+
+    def _set_card_cursors(self):
+        """A pointing hand on the cards a click can do something to."""
+        for i, (frame, _, _) in enumerate(self._preview_cards):
+            frame.setCursor(Qt.CursorShape.ArrowCursor if i in self._already_grey
+                            else Qt.CursorShape.PointingHandCursor)
+
+    def _preview_columns(self):
+        """How many cards fit across the pane as it is now."""
+        vp_w = self._preview_scroll.viewport().width() or 600
+        per_card = self._card_w + _CARD_PAD + _GRID_GAP
+        return max(2, (vp_w - 2 * _GRID_MARGIN + _GRID_GAP) // per_card)
 
     def _relayout_preview(self):
+        """Re-flow the cards across the width there is now.
+
+        Only when the column count actually changes: re-flowing moves every
+        card in the layout, and both the things that ask for it — a zoom step
+        and a drag of the splitter — arrive as a stream of events.
+        """
         container = self._preview_scroll.widget()
         if not container or not self._preview_cards: return
-        CARD_W = self._card_w; GAP = 8; MARGIN = 10
-        vp_w = self._preview_scroll.viewport().width() or 600
-        cols = max(2, (vp_w - 2*MARGIN + GAP) // (CARD_W + 12 + GAP))
+        cols = self._preview_columns()
+        if cols == self._preview_cols:
+            return
+        self._preview_cols = cols
         layout = container.layout()
         if layout:
             for i, (frame, _, _) in enumerate(self._preview_cards):
@@ -502,7 +691,7 @@ class GrayscalePanel(BasePanel):
         if cidx >= len(self._preview_cards):
             return
         frame, img_lbl, num_lbl = self._preview_cards[cidx]
-        CARD_W = self._card_w; CARD_H = int(CARD_W * (127 / 90))
+        CARD_W = self._card_w; CARD_H = _card_height(CARD_W)
         pm = QPixmap.fromImage(image)
         img_lbl.setProperty("src_pm", pm)
         img_lbl.setPixmap(pm.scaled(CARD_W, CARD_H,
@@ -510,19 +699,25 @@ class GrayscalePanel(BasePanel):
             Qt.TransformationMode.SmoothTransformation))
 
     def _toggle_manual(self, idx, event=None):
+        # A page that is already DeviceGray is dropped from the selection by
+        # _convert whatever the card says, so choosing it did nothing except
+        # write a number into the log that the conversion then disagreed with.
+        if idx in self._already_grey:
+            return
         ctrl  = event is not None and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
         shift = event is not None and bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         if shift and self._last_click is not None:
             lo = min(self._last_click, idx); hi = max(self._last_click, idx)
+            span = [i for i in range(lo, hi + 1) if i not in self._already_grey]
             if ctrl:
                 target_add = self._last_click in self._manual_skip
-                for i in range(lo, hi+1):
+                for i in span:
                     self._manual_sel.discard(i)
                     if target_add: self._manual_skip.add(i)
                     else:          self._manual_skip.discard(i)
             else:
                 target_add = self._last_click in self._manual_sel
-                for i in range(lo, hi+1):
+                for i in span:
                     self._manual_skip.discard(i)
                     if target_add: self._manual_sel.add(i)
                     else:          self._manual_sel.discard(i)
@@ -542,19 +737,36 @@ class GrayscalePanel(BasePanel):
         self.log.log(f"{len(effective)} {tr('Seite(n) werden konvertiert')}  "
                      f"(+{len(self._manual_sel)} {tr('erzwungen')}, -{len(self._manual_skip)} {tr('uebersprungen')})")
 
-    def _update_preview_borders(self):
+    def _card_colour(self, i):
+        """What page `i`'s border says will happen to it. The order is the
+        precedence: an already-grey page is left alone whatever else is set,
+        and an explicit choice beats the scan's."""
+        if i in self._already_grey: return "transparent"
+        if i in self._manual_skip:  return STATUS["skipped"]
+        if i in self._manual_sel:   return STATUS["forced"]
+        if i in self._grey_pages:   return STATUS["converted"]
+        return STATUS["colour"]
+
+    def _update_preview_borders(self, force=False):
+        """Repaint the card borders whose colour changed, and only those.
+
+        setStyleSheet re-parses the sheet for the widget it is set on, and at
+        ~0.35 ms a card, setting all of them regardless was 108 ms of the
+        132 ms a slider step cost on a 300-page document — for a change that
+        typically moves two or three cards from red to green. Pass `force` when
+        the colours themselves have changed under the cards rather than the
+        classification: that is the theme switch, where every card has to be
+        redrawn to say the same thing in a different palette.
+        """
+        if len(self._card_colours) != len(self._preview_cards):
+            self._card_colours = [None] * len(self._preview_cards)
         for i, (frame, _, _) in enumerate(self._preview_cards):
-            if i in self._already_grey:
-                color = "transparent"
-            elif i in self._manual_skip:
-                color = STATUS["skipped"]
-            elif i in self._manual_sel:
-                color = STATUS["forced"]
-            elif i in self._grey_pages:
-                color = STATUS["converted"]
-            else:
-                color = STATUS["colour"]
-            frame.setStyleSheet(f"QFrame{{background:transparent;border:2px solid {color};border-radius:5px;}}")
+            colour = self._card_colour(i)
+            if not force and self._card_colours[i] == colour:
+                continue
+            self._card_colours[i] = colour
+            frame.setStyleSheet(
+                f"QFrame{{background:transparent;border:2px solid {colour};border-radius:5px;}}")
         self._update_status_bar()
 
     def _update_status_bar(self):
@@ -613,8 +825,8 @@ class GrayscalePanel(BasePanel):
         hists, already_grey = result
         self._page_data[:] = hists
         self._already_grey = already_grey
-        self._reclassify()
-        self._update_preview_borders()
+        self._set_card_cursors()        # now that it is known which are fixed
+        self._reclassify()              # which paints the borders itself
         self._load_preview_pixmaps_async(src)
         self._scanned_path = src
         if then is not None:
@@ -688,20 +900,63 @@ class GrayscalePanel(BasePanel):
         self.open_result(out_path, "Graustufen")
 
 
+def _already_grey_pages(src, n, report):
+    """Which of the first `n` pages declare nothing but grey.
+
+    The scan is tools/colorspace.py — this used not to look inside Form
+    XObjects, so a page produced by N-Up, imposition or merge showed no colour
+    spaces at all and was never recognised.
+
+    scan_document reads the whole file through one open; asking page by page
+    opened it once per page. A failure here is not fatal: an unrecognised page
+    is simply converted along with the rest, which is the safe direction.
+    """
+    try:
+        scan_document(src, should_stop=lambda: report.cancelled)
+        return {i for i in range(n) if is_grey_only(page_colorspaces(src, i))}
+    except Exception:
+        logging.exception("grayscale: colour-space probe failed")
+        return set()
+
+
 def _scan_pages(src, thr, report):
     """Colour histogram of every page, and which pages are already grey.
+
+    The colour-space pass runs first, and the pages it finds are never
+    rendered. Rendering a page to measure its pixels is the expensive half of
+    this — seconds each on a heavy vector page — while reading what the page
+    declares costs a fraction of a millisecond once the file is open. A page
+    that declares nothing but DeviceGray cannot put a coloured pixel on paper,
+    so rendering it could only confirm what reading it already said. On a
+    document that is mostly grey already, which is most of what this tool is
+    pointed at, that is the difference between minutes and seconds.
 
     Plain data only; the panel classifies and draws back on the GUI thread.
     """
     import pypdfium2 as pdfium
     hists = []
-    doc = pdfium.PdfDocument(src)
+    with _pdfium_lock:
+        doc = pdfium.PdfDocument(src)
     try:
-        n = len(doc)
+        with _pdfium_lock:
+            n = len(doc)
+        already_grey = _already_grey_pages(src, n, report)
         for i in range(n):
             report.check()
+            if i in already_grey:
+                hists.append(_NEUTRAL_HIST)
+                report(tr('Seite {p0}: bereits Graustufen').format(p0=i + 1))
+                continue
             with _pdfium_lock:
-                pil = doc[i].render(scale=1).to_pil().convert("RGB")
+                page = doc[i]
+                try:
+                    pil = page.render(scale=1).to_pil().convert("RGB")
+                finally:
+                    # A loaded pdfium page is not small — hundreds of megabytes
+                    # on a poster — and these used to be left to the garbage
+                    # collector, so a long document held every page it had
+                    # scanned until the scan was over.
+                    page.close()
             hist = _colour_histogram(pil)
             hists.append(hist)
             max_diff, ratio = _hist_stats(hist, thr)
@@ -709,27 +964,8 @@ def _scan_pages(src, thr, report):
                 p0=i + 1, p1=max_diff, p2=ratio * 100))
     finally:
         # Always: a failed render used to leave the document (and its file
-        # handle) open for the life of the app.
-        doc.close()
-
-    already_grey = set()
-    try:
-        # Which pages are grey already, so they are left alone. The scan is
-        # tools/colorspace.py — this used not to look inside Form XObjects, so a
-        # page produced by N-Up, imposition or merge showed no colour spaces at
-        # all and was never recognised.
-        #
-        # document_colorspaces first: it opens the file once and caches every
-        # page on the way past, so the page_colorspaces calls below are all
-        # cache hits. Asking page by page opened the document once per page.
-        document_colorspaces(src)
-        for i in range(n):
-            if is_grey_only(page_colorspaces(src, i)):
-                already_grey.add(i)
-    except Exception:
-        # Only an optimisation — it marks pages that are already DeviceGray so
-        # they are left alone. If it fails they simply get converted like any
-        # other page, so carry on, but say so rather than swallowing it.
-        already_grey.clear()
-        logging.exception("grayscale: colour-space probe failed")
+        # handle) open for the life of the app. Under the lock like every other
+        # pdfium call — see tools/render/document_cache.py.
+        with _pdfium_lock:
+            doc.close()
     return hists, already_grey
