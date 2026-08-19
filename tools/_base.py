@@ -505,7 +505,13 @@ class BasePanel(QWidget):
     def current_pdf(self) -> str:
         """Pfad der PDF, die das Tool verarbeiten soll — die Seiten so, wie der
         Viewer sie zeigt (Reihenfolge, Drehung, eingefügte Seiten). Für den
-        Original-Dateinamen (Titelzeile, Ausgabename) AppState.current_pdf."""
+        Original-Dateinamen (Titelzeile, Ausgabename) AppState.current_pdf.
+
+        Call this, not AppState.get().current_pdf, from anywhere that measures
+        or previews a page — the page manager's rotations and reordering are
+        only reflected here. Reading AppState's path directly measures and
+        previews the file as it is on disk, so a rotated page came out in its
+        original orientation."""
         return ensure_view_snapshot(AppState.get().current_pdf)
 
     def require_pdf(self) -> str:

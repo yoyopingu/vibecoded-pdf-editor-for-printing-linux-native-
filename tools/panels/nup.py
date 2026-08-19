@@ -347,9 +347,8 @@ class NUpPanel(BasePanel):
         return _ThumbnailCache.get_any(pdf_path, page_idx, 0)
 
     def _render_preview(self, avail_w, avail_h, zoom):
-        # self.current_pdf() — not AppState.current_pdf — so the page manager's
-        # rotations and reordering are reflected. Reading the file on disk meant
-        # a rotated page was measured and previewed in its original orientation.
+        # See BasePanel.current_pdf()'s docstring for why this, not
+        # AppState.get().current_pdf, is what a preview measures against.
         pdf_path = self.current_pdf()
         if not pdf_path or not os.path.isfile(pdf_path):
             return None, tr("Keine PDF geöffnet")
