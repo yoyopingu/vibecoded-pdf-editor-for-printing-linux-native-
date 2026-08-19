@@ -15,10 +15,9 @@ nothing to choose a mode between.
 from PyQt6.QtWidgets import QVBoxLayout, QGroupBox, QCheckBox
 from tools._base import BasePanel, make_label
 from tools.i18n import tr
-from tools.panels._shared import (PaperFormatSelector, _inherited_rotate,
-                                  _visible_box, _visible_size)
-from tools.panels._imposition import (_ROT_MATRIX, _slot_placement, _flatten_annots,
-                                      full_scale_problem)
+from tools.panels._shared import PaperFormatSelector, _visible_size
+from tools.panels._imposition import (_slot_placement, _flatten_annots,
+                                      form_factory, full_scale_problem)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -27,7 +26,6 @@ from tools.panels._imposition import (_ROT_MATRIX, _slot_placement, _flatten_ann
 class ImposePanel(BasePanel):
     TITLE         = "Broschüre / Ausschießen"
     SUBTITLE      = "Seiten in Falzreihenfolge auf größere Bögen ausschießen."
-    OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
         # The same widget Crop/Scale and N-Up use, so all three offer the same
@@ -150,26 +148,14 @@ def _build_impose(src, out, sheets, sheet_w, sheet_h, fit, report, summary):
         content sat off-centre,
       * re-encoded every content stream on the GUI thread, freezing the window.
     """
-    from pikepdf import Pdf, Page, Stream, Array, Name
+    from pikepdf import Pdf, Page, Stream, Name
     src_doc = Pdf.open(src)
     _flatten_annots(src_doc)
     out_doc = Pdf.new()
 
-    _forms = {}
-    def _form_for(page_i):
-        if page_i not in _forms:
-            page = src_doc.pages[page_i]
-            box  = _visible_box(page)
-            arr  = Array([float(v) for v in box])
-            page.obj["/CropBox"] = arr
-            page.obj["/TrimBox"] = arr
-            for key in ("/BleedBox", "/ArtBox"):
-                if key in page.obj: del page.obj[key]
-            rot = _inherited_rotate(page)
-            fx  = page.as_form_xobject(handle_transformations=False)
-            fx["/Matrix"] = Array(list(_ROT_MATRIX[rot if rot % 90 == 0 else 0]) + [0.0, 0.0])
-            _forms[page_i] = (fx, box, rot)
-        return _forms[page_i]
+    # See form_factory's docstring for what it pins down about the Form
+    # XObject it builds (visible box vs. TrimBox, our own rotation matrix).
+    _form_for = form_factory(src_doc)
 
     placed = 0
     for sheet_i, slots in enumerate(sheets):

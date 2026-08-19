@@ -45,6 +45,50 @@ _ROT_MATRIX = {0: (1.0, 0.0, 0.0, 1.0), 90:  (0.0, -1.0, 1.0, 0.0),
                180: (-1.0, 0.0, 0.0, -1.0), 270: (0.0, 1.0, -1.0, 0.0)}
 
 
+def form_factory(src_doc):
+    """A memoized page -> Form XObject converter for one open document.
+
+    N-Up and Broschüre both turn each source page into a Form XObject once
+    and reuse it across every slot and sheet it is placed in, and both did
+    so with the same fourteen-line inner function — this is that function,
+    factored out once instead of kept in step by hand in two files.
+
+    Two things are pinned deliberately, in the Form XObject this builds:
+      * the BBox is the page's *visible* box (CropBox clipped to MediaBox).
+        as_form_xobject would otherwise take TrimBox → CropBox → MediaBox
+        verbatim, so a print PDF's bleed TrimBox — or a stale CropBox left
+        behind by an earlier crop — decided the layout and pushed the
+        content off-centre, showing something different from the preview.
+      * /Rotate is applied through our own exact matrix instead of qpdf's,
+        which truncates the rotation offset to whole points.
+
+    Returns a `form_for(page_i) -> (form_xobject, visible_box, rotate)`
+    function, closed over a cache private to this call — forms from one
+    document are never reused for another.
+    """
+    from pikepdf import Array
+    from tools.panels._shared import _inherited_rotate, _visible_box
+
+    forms = {}
+
+    def form_for(page_i):
+        if page_i not in forms:
+            page = src_doc.pages[page_i]
+            box  = _visible_box(page)
+            arr  = Array([float(v) for v in box])
+            page.obj["/CropBox"] = arr
+            page.obj["/TrimBox"] = arr
+            for key in ("/BleedBox", "/ArtBox"):
+                if key in page.obj: del page.obj[key]
+            rot = _inherited_rotate(page)
+            fx  = page.as_form_xobject(handle_transformations=False)
+            fx["/Matrix"] = Array(list(_ROT_MATRIX[rot if rot % 90 == 0 else 0]) + [0.0, 0.0])
+            forms[page_i] = (fx, box, rot)
+        return forms[page_i]
+
+    return form_for
+
+
 def _slot_placement(box, rot, rect, fixed_scale=None):
     """Matrix that fits a page into a slot: scale it to fit `rect` keeping its
     aspect ratio, and centre it there. `box` is the page's visible rectangle,

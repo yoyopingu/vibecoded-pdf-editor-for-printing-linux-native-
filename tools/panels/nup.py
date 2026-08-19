@@ -13,10 +13,10 @@ from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from tools.app_state import AppState
 from tools._base import BasePanel
 from tools.i18n import tr
-from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, row, PreviewPane
+from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _visible_size, row, PreviewPane
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
-from tools.panels._imposition import (_ROT_MATRIX, _slot_placement, _flatten_annots,
-                                      full_scale_problem)
+from tools.panels._imposition import (_slot_placement, _flatten_annots,
+                                      form_factory, full_scale_problem)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -63,37 +63,16 @@ def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False,
     decompresses every content stream — ~30s and a 10× larger output for a dense
     4-page file vs ~0.5s here) and keeps the source content compressed. Only
     plain data crosses the thread boundary."""
-    from pikepdf import Pdf, Page, Stream, Array, Name
+    from pikepdf import Pdf, Page, Stream, Name
     (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
     src_doc = Pdf.open(src)
     _flatten_annots(src_doc)
     out_doc = Pdf.new()
     rects = _nup_slot_rects(params, n_slot)
 
-    # One Form XObject per used source page, built once and reused across slots
-    # and sheets. Two things are pinned deliberately:
-    #  * the BBox is the page's *visible* box (CropBox clipped to MediaBox).
-    #    as_form_xobject would otherwise take TrimBox → CropBox → MediaBox
-    #    verbatim, so a print PDF's bleed TrimBox — or a stale CropBox left
-    #    behind by an earlier crop — decided the layout and pushed the content
-    #    off-centre, showing something different from the preview.
-    #  * /Rotate is applied through our own exact matrix instead of qpdf's, which
-    #    truncates the rotation offset to whole points.
-    _forms = {}
-    def _form_for(page_i):
-        if page_i not in _forms:
-            page = src_doc.pages[page_i]
-            box  = _visible_box(page)
-            arr  = Array([float(v) for v in box])
-            page.obj["/CropBox"] = arr
-            page.obj["/TrimBox"] = arr
-            for key in ("/BleedBox", "/ArtBox"):
-                if key in page.obj: del page.obj[key]
-            rot = _inherited_rotate(page)
-            fx  = page.as_form_xobject(handle_transformations=False)
-            fx["/Matrix"] = Array(list(_ROT_MATRIX[rot if rot % 90 == 0 else 0]) + [0.0, 0.0])
-            _forms[page_i] = (fx, box, rot)
-        return _forms[page_i]
+    # One Form XObject per used source page, built once and reused across
+    # slots and sheets — see form_factory's docstring for what it pins down.
+    _form_for = form_factory(src_doc)
 
     # Pre-build the crop-marks content stream once (same grid on every sheet).
     mark_ops = _crop_marks_content_stream(rects) if crop_marks else None
