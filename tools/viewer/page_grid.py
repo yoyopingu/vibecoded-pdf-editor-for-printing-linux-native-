@@ -17,8 +17,8 @@ from tools.theme import (STATUS, _DROP_THICKNESS, _TV, _paint_drop_marker,
                          _register_themed)
 
 
-CARD_W = 110
-CARD_H = 155
+CARD_W = 187
+CARD_H = 264
 GAP    = 10
 MARGIN = 12
 

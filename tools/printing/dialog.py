@@ -1197,7 +1197,7 @@ class PrintDialog(QDialog):
                     skipped = print_via_gs(self.pdf_path, self.model,
                         pages_to_print, copies, color_mode, collate, duplex,
                         duplex_edge, colorconv, printer_name, scale_idx,
-                        paper_key, orient_idx, hw_margin_mm, _report,
+                        paper_key, orient_idx, _report,
                         paper_source=paper_source, scale_pct=scale_pct)
                     obj = self_ref()
                     if obj is not None:

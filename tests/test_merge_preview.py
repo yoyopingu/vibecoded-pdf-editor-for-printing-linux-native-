@@ -465,7 +465,7 @@ def test_merge_preview_thumbnails_behave_like_the_page_manager():
     from tools.viewer.merge import MergeOrderWidget
     from tools.viewer.page_grid import MARGIN, GAP
     paths = [FX["normal"], FX["single"], FX["framed"], FX["mixed"]]
-    w = MergeOrderWidget(paths); w.resize(950, 650); w.show()
+    w = MergeOrderWidget(paths); w.resize(1250, 650); w.show()
     _spin(40, 0.02)
     g = w._grid
 

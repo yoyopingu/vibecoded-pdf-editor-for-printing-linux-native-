@@ -149,7 +149,7 @@ def test_print_never_destroys_colour_in_the_spooled_file():
         try:
             print_via_gs(dlg.pdf_path, dlg.model,
                          [0], 1, mode, False, False, "long", 0,
-                         "test-printer", 0, "A4", 0, 3.0, null_progress())
+                         "test-printer", 0, "A4", 0, null_progress())
         finally:
             subprocess.run = real
         got = [o for o in captured["opts"]
@@ -178,13 +178,18 @@ def _lp_options(**kw):
         captured.append(cmd)
         return _Ok() if cmd and cmd[0] == "lp" else real_run(cmd, *a, **k)
 
-    src = FX["normal"]
+    src = kw.pop("src", FX["normal"])
+    scale_idx = kw.pop("scale_idx", 0)
+    orient_idx = kw.pop("orient_idx", 0)
+    from pypdf import PdfReader
+    n_pages = len(PdfReader(src).pages)
     _open(src)
     subprocess.run = spy
     try:
-        print_via_gs(src, PageModel(5), [0], 1, "auto", True,
+        print_via_gs(src, PageModel(n_pages), [0], 1, "auto", True,
                      kw.pop("duplex"), kw.pop("edge", "long"), 0,
-                     "test-printer", 0, "A4", 0, 3.0, null_progress(), **kw)
+                     "test-printer", scale_idx, "A4", orient_idx,
+                     null_progress(), **kw)
     finally:
         subprocess.run = real_run
     lp = [c for c in captured if c and c[0] == "lp"]
@@ -214,6 +219,117 @@ def test_unticking_two_sided_says_one_sided():
     short_edge = _lp_options(duplex=True, edge="short")
     assert "sides=two-sided-short-edge" in short_edge, short_edge
     assert "Duplex=DuplexTumble" in short_edge, short_edge
+
+
+def _scaling_sent(**kw):
+    """Just the options that decide whether the printer may resize the page."""
+    return [o for o in _lp_options(duplex=False, **kw)
+            if "scaling" in o or "fit" in o]
+
+
+def test_fit_to_page_actually_asks_for_a_fit():
+    """The bug this test exists for: "An Seite anpassen" did nothing.
+
+    The job carried `fit-to-page` and, from an unrelated branch further down,
+    `print-scaling=none` as well. CUPS settles that pair by not scaling —
+    measured against pdftopdf, an A6 page on A4 media came back at 1.000
+    instead of the 1.835 the fit called for — so the page printed at its own
+    size and the option looked broken because it was.
+
+    Nothing that cancels a fit may be sent alongside one.
+    """
+    sent = _scaling_sent(scale_idx=0)
+    assert "print-scaling=none" not in sent, \
+        f"the fit is cancelled by a no-scaling option: {sent}"
+    assert any(o in sent for o in ("print-scaling=fit", "fit-to-page")), sent
+    return f"fit asks for a fit: {sent}"
+
+
+def test_shrink_never_asks_for_something_that_enlarges():
+    """"Auf bedruckbaren Bereich verkleinern" promises it never enlarges.
+
+    `fit-to-page` scales up as readily as down (measured: an A6 page came back
+    at 1.835), so it is the wrong request for this mode however convenient it
+    looks. `print-scaling=auto-fit` is the one that shrinks an oversized page
+    and leaves a small one alone (measured: A3 -> 0.647, A6 -> 1.000).
+    """
+    sent = _scaling_sent(scale_idx=2)
+    assert "fit-to-page" not in sent, f"shrink asked for an enlarging fit: {sent}"
+    assert "print-scaling=auto-fit" in sent, sent
+    return f"shrink asks only for a shrink: {sent}"
+
+
+def test_a_fixed_size_forbids_the_printer_from_rescaling():
+    """Feste Groesse means the size in the box, at every percentage.
+
+    At anything but 100 % the content is scaled here and centred on the sheet,
+    and the job used to carry no scaling option at all after that — leaving
+    CUPS's own default (print-scaling=auto) to decide whether to size it
+    again. Saying none is what makes the percentage mean what it says.
+    """
+    for pct in (100, 70, 150):
+        sent = _scaling_sent(scale_idx=1, scale_pct=pct)
+        assert sent == ["print-scaling=none"], f"{pct}%: {sent}"
+    return "100 %, 70 % and 150 % all say print-scaling=none"
+
+
+def test_every_scaling_mode_sends_exactly_one_instruction():
+    """Structural, because the bug was two instructions that disagreed.
+
+    Whatever the mode, and whether or not Ghostscript is installed, the job
+    must carry one coherent answer to "may the printer resize this" — and the
+    same answer either way, since Ghostscript's absence changes who does the
+    work, not what the user asked for.
+    """
+    from tools.printing import spool
+    real = spool.ghostscript_binary
+    seen = {}
+    try:
+        for gs, tag in ((real, "gs"), (lambda: None, "no gs")):
+            spool.ghostscript_binary = gs
+            for idx in (0, 1, 2):
+                sent = _scaling_sent(scale_idx=idx)
+                assert sent, f"{tag}, mode {idx}: no scaling instruction at all"
+                assert not ("print-scaling=none" in sent and len(sent) > 1), \
+                    f"{tag}, mode {idx}: contradictory pair {sent}"
+                assert len(sent) == len(set(sent)), f"{tag}, mode {idx}: {sent}"
+                seen.setdefault(idx, sent)
+                assert seen[idx] == sent, \
+                    f"mode {idx} differs with and without Ghostscript: {seen[idx]} vs {sent}"
+    finally:
+        spool.ghostscript_binary = real
+    return "one instruction per mode, the same with or without Ghostscript"
+
+
+def test_a_landscape_page_tells_the_printer_it_is_landscape():
+    """On "Automatisch", the media was turned to landscape for the job and CUPS
+    was told nothing about it.
+
+    Ghostscript duly produced a landscape sheet while lp still asked for plain
+    `media=A4`, so the page landed unrotated on portrait media and lost its
+    right-hand edge (measured against pdftopdf: MediaBox came back 595x842 with
+    an identity matrix). Whatever orientation the media ended up in has to be
+    named.
+    """
+    import os
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    land = os.path.join(_TMP, "print_landscape.pdf")
+    if not os.path.exists(land):
+        c = canvas.Canvas(land, pagesize=(A4[1], A4[0]))
+        c.drawString(40, 100, "LANDSCAPE"); c.showPage(); c.save()
+
+    def orient_for(src, orient_idx):
+        opts = _lp_options(duplex=False, src=src, orient_idx=orient_idx)
+        return [o for o in opts if o.startswith("orientation-requested")]
+
+    assert orient_for(land, 0) == ["orientation-requested=4"], \
+        "an auto-detected landscape page was not reported as landscape"
+    assert orient_for(land, 2) == ["orientation-requested=4"]
+    assert orient_for(land, 1) == ["orientation-requested=3"]
+    assert orient_for(FX["normal"], 0) == ["orientation-requested=3"], \
+        "a portrait document was reported as landscape"
+    return "auto, portrait and landscape all name the orientation they used"
 
 
 def test_the_chosen_paper_tray_reaches_lp():

@@ -203,6 +203,67 @@ def test_greyscale_never_ships_a_blacked_out_page():
     return "rescued, then refused"
 
 
+def test_greyscale_subset_verify_compares_the_right_pages():
+    """The subset optimization extracts only selected pages for Ghostscript.
+    The verify step must compare each converted page against the ORIGINAL of
+    that same page, not against original page [subset_position]. With a sparse
+    selection (e.g. page 1 of a 4-page doc), the buggy code compared the
+    blacked-out conversion of page 1 against original page 0 — and when page 0
+    was dark, the damage was invisible and the broken page shipped silently."""
+    if not (shutil.which("gs") or shutil.which("gswin64c")):
+        return "SKIP (no ghostscript)"
+    gs = shutil.which("gs") or shutil.which("gswin64c")
+
+    # Page 0: full black (so the buggy compare-against-src[0] would see
+    # dark→dark and miss the blackout).  Page 1: light content (the page
+    # whose conversion we black out).  Pages 2-3: light, unselected.
+    from reportlab.lib import colors
+    src = os.path.join(_TMP, "grey_sparse.pdf")
+    c = canvas.Canvas(src, pagesize=A4)
+    c.setFillColor(colors.black); c.rect(0, 0, A4[0], A4[1], fill=1, stroke=0); c.showPage()
+    c.setFillColor(colors.HexColor("#2277cc")); c.rect(40, 500, 500, 250, fill=1, stroke=0)
+    c.setFillGray(0); c.setFont("Helvetica", 30); c.drawString(50, 430, "TARGET"); c.showPage()
+    for _ in range(2):
+        c.setFillGray(0); c.setFont("Helvetica", 20); c.drawString(50, 700, "filler"); c.showPage()
+    c.save()
+
+    # Black out page 0 of whatever GS produces (the subset has 1 page =
+    # original page 1; the batch retry also has 1 page).  This stub is
+    # subset-aware: it always blacks out position 0 of the output.
+    from tools.jobs import Progress
+    real = Progress.run
+    def faked(self, cmd, *a, **k):
+        r = real(self, cmd, *a, **k)
+        import pikepdf
+        if "-o" in cmd:
+            outp = cmd[cmd.index("-o") + 1]
+            try:
+                with pikepdf.open(outp, allow_overwriting_input=True) as pdf:
+                    if len(pdf.pages) >= 1:
+                        pdf.pages[0].contents_add(
+                            pikepdf.Stream(pdf, b"0 g 0 0 3000 3000 re f"))
+                        pdf.save(outp)
+            except Exception:
+                pass
+        return r
+    Progress.run = faked
+    try:
+        out = os.path.join(_TMP, "grey_sparse_out.pdf")
+        res, msg = _grey_vector(gs, src, out, {1}, 4, null_progress())
+    finally:
+        Progress.run = real
+
+    # The conversion of page 1 was blacked out.  The verify MUST have caught
+    # it: page 1 keeps its original (light, blue) content, not a black page.
+    assert _mean_luma(res, 1) > 100, \
+        "a blacked-out page shipped — verify compared against the wrong original"
+    assert "ACHTUNG" in msg or "1 (" in msg, \
+        f"damage not reported for the sparse selection: {msg}"
+    # Page 0 (unselected, dark) must be untouched.
+    assert _mean_luma(res, 0) < 50, "unselected dark page was altered"
+    return "sparse selection verified correctly"
+
+
 def test_greyscale_verification_passes_normal_pages():
     """The guard must not cost colour clicks by refusing pages that converted
     perfectly well — dense text, saturated blocks, a photo, transparency, a dark
@@ -973,3 +1034,110 @@ def test_a_page_turn_stops_the_read_started_for_the_page_before_it():
                 tries=100)
         vp.close()
     return f"{len(started)} reads started, {len(cancelled)} called off"
+def test_each_detection_mode_keeps_its_own_threshold():
+    """The two modes used to share one threshold slider, and it means a
+    different thing in each: "the page is colour if any pixel is this far from
+    grey" against "a pixel this far from grey counts towards the percentage".
+    Tuning it for one mode silently retuned the other — on a page tinted over a
+    fifth of its area, moving it alone flipped the page between colour and grey
+    with the percentage untouched."""
+    _open(FX["normal"])
+    p = GrayscalePanel(); p.show(); _app.processEvents()
+    try:
+        assert p.mode_ratio.isChecked(), "the tool no longer opens in ratio mode"
+        p.thr.setValue(55)
+        p.mode_single.setChecked(True); _app.processEvents()
+        assert p.thr.value() != 55, \
+            "switching mode carried the other mode's threshold across"
+        p.thr.setValue(7)
+        p.mode_ratio.setChecked(True); _app.processEvents()
+        assert p.thr.value() == 55, f"the ratio threshold was lost: {p.thr.value()}"
+        p.mode_single.setChecked(True); _app.processEvents()
+        assert p.thr.value() == 7, f"the single threshold was lost: {p.thr.value()}"
+    finally:
+        p.deleteLater(); _app.processEvents()
+    return "55 for ratio, 7 for single, neither disturbs the other"
+
+
+def test_a_spot_colour_page_is_not_mistaken_for_a_grey_one():
+    """Colour that is not DeviceRGB or DeviceCMYK is still colour.
+
+    is_grey_only asked "is there RGB or CMYK here", so a page whose colour came
+    from a /Separation spot plate, an /Indexed palette or /Lab answered *no* and
+    was filed as already grey. In the preview that is the one state drawn with
+    no border at all, and the tool leaves those pages out of the conversion — so
+    a Pantone-red page looked like a plain grey one and said nothing about it.
+    """
+    import pikepdf
+    from tools.colorspace import is_grey_only, page_colorspaces
+
+    src = os.path.join(_TMP, "spot_colour.pdf")
+    base = os.path.join(_TMP, "spot_base.pdf")
+    c = canvas.Canvas(base, pagesize=A4)
+    for _ in range(4):
+        c.setFillGray(0); c.setFont("Helvetica", 30)
+        c.drawString(60, 700, "grey text"); c.showPage()
+    c.save()
+    with pikepdf.open(base) as pdf:
+        spot = pikepdf.Array([
+            pikepdf.Name("/Separation"), pikepdf.Name("/PANTONE-185"),
+            pikepdf.Name("/DeviceRGB"),
+            pdf.make_indirect(pikepdf.Dictionary(
+                FunctionType=2, Domain=[0, 1], C0=[1, 1, 1],
+                C1=[0.85, 0.1, 0.2], N=1))])
+        pdf.pages[0].obj["/Resources"]["/ColorSpace"] = pikepdf.Dictionary(CS0=spot)
+        pdf.pages[0].contents_add(
+            pikepdf.Stream(pdf, b"/CS0 cs 1 scn 60 300 400 250 re f"))
+        indexed = pikepdf.Array([
+            pikepdf.Name("/Indexed"), pikepdf.Name("/DeviceRGB"), 1,
+            pikepdf.String(b"\xff\x00\x00\x00\x00\xff")])
+        pdf.pages[1].obj["/Resources"]["/ColorSpace"] = pikepdf.Dictionary(CS1=indexed)
+        pdf.pages[1].contents_add(
+            pikepdf.Stream(pdf, b"/CS1 cs 0 scn 60 300 400 250 re f"))
+        lab = pikepdf.Array([pikepdf.Name("/Lab"), pikepdf.Dictionary(
+            WhitePoint=[0.9505, 1.0, 1.089], Range=[-100, 100, -100, 100])])
+        pdf.pages[2].obj["/Resources"]["/ColorSpace"] = pikepdf.Dictionary(CS2=lab)
+        pdf.pages[2].contents_add(
+            pikepdf.Stream(pdf, b"/CS2 cs 55 70 60 scn 60 300 400 250 re f"))
+        pdf.save(src)
+
+    for i, what in enumerate(("Separation spot", "Indexed palette", "Lab")):
+        names = page_colorspaces(src, i)
+        assert not is_grey_only(names), \
+            f"{what} page reported itself as already grey: {sorted(names)}"
+    # Page 3 was left alone and really is grey.
+    assert is_grey_only(page_colorspaces(src, 3)), \
+        "a genuinely grey page stopped being recognised as grey"
+    return "spot, indexed and Lab all count as colour; plain grey still does not"
+
+
+def test_the_greyscale_sidebar_opens_the_width_it_asks_for():
+    """The sidebar is the shared one — its width and its minimum are
+    build_tool_sidebar's business, not this tool's. What was this tool's fault
+    is that it never set the splitter's stretch factors, so the splitter shared
+    the spare width out and handed the sidebar 465 px of the window when 400
+    was asked for, then gave it more each time the window grew. Crop and N-Up
+    both open at 400; this one was the odd one out, and the preview grid paid
+    for it."""
+    from tools.panels.grayscale import _SIDEBAR_W
+    from tools.panels.nup import NUpPanel
+    _open(FX["normal"])
+    p = GrayscalePanel(); p.resize(1400, 800); p.show(); _app.processEvents()
+    nup = NUpPanel(); nup.resize(1400, 800); nup.show(); _app.processEvents()
+    try:
+        sidebar = p._tool_splitter.sizes()[0]
+        assert sidebar == _SIDEBAR_W, f"sidebar opened at {sidebar}, not {_SIDEBAR_W}"
+        assert sidebar == nup._tool_splitter.sizes()[0], \
+            "greyscale no longer opens at the same width as the tools beside it"
+        scroll = p._tool_splitter.widget(0)
+        assert scroll.minimumWidth() == nup._tool_splitter.widget(0).minimumWidth(), \
+            "greyscale has taken a sidebar minimum of its own"
+        assert not scroll.horizontalScrollBar().isVisible(), \
+            "the controls are clipped at this width"
+        # Widening the window must feed the preview, not the sidebar.
+        p.resize(1800, 800); _app.processEvents()
+        assert p._tool_splitter.sizes()[0] == _SIDEBAR_W, \
+            "the sidebar grew with the window instead of the preview"
+    finally:
+        p.deleteLater(); nup.deleteLater(); _app.processEvents()
+    return f"opens at {_SIDEBAR_W} px like its siblings, and stays there"

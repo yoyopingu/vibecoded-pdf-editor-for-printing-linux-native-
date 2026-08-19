@@ -2,7 +2,7 @@
 Druckvorstufenprüfung — check a PDF for what tends to go wrong at the
 press, and report it rather than changing anything.
 """
-import os
+import os, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox, QTextEdit
 from tools._base import BasePanel, make_label
@@ -182,51 +182,66 @@ def _preflight(src, checks, target, min_dpi, report):
     """
     from pypdf import PdfReader
     import pypdfium2 as pdfium
-    reader = PdfReader(src, strict=False); doc = pdfium.PdfDocument(src)
+    reader = PdfReader(src, strict=False)
+    # See grayscale._scan_pages: PIL from to_pil() can be collected by cyclic GC
+    # on the render worker's thread, firing pdfium finalizers without the lock.
+    gc.disable()
     try:
-        n = len(reader.pages); issues = []; oks = []
-        if checks["enc"]:
-            if reader.is_encrypted: issues.append(tr("PDF ist passwortgeschuetzt"))
-            else: oks.append(tr("Nicht verschluesselt"))
-        orients = []; colour_pages = []
-        for i in range(n):
-            report(tr('Seite {i} / {total}…').format(i=i + 1, total=n))
-            page = reader.pages[i]
-            report.check()
-            pw = float(page.mediabox.width); ph = float(page.mediabox.height)
-            orients.append("Q" if pw > ph else "H")
-            if checks["size"] and target:
-                tw, th = target
-                if not ((abs(pw-tw) < 5 and abs(ph-th) < 5)
-                        or (abs(pw-th) < 5 and abs(ph-tw) < 5)):
-                    issues.append(tr('Seite {p0}: {p1:.0f}x{p2:.0f}pt != {p3:.0f}x{p4:.0f}pt').format(
-                        p0=i + 1, p1=pw, p2=ph, p3=tw, p4=th))
+        # PdfDocument/close are pdfium calls and need the process-wide lock — see
+        # grayscale._scan_pages for the heap corruption an unlocked load caused.
+        with _pdfium_lock:
+            doc = pdfium.PdfDocument(src)
+        try:
+            n = len(reader.pages); issues = []; oks = []
+            if checks["enc"]:
+                if reader.is_encrypted: issues.append(tr("PDF ist passwortgeschuetzt"))
+                else: oks.append(tr("Nicht verschluesselt"))
+            orients = []; colour_pages = []
+            for i in range(n):
+                report(tr('Seite {i} / {total}…').format(i=i + 1, total=n))
+                page = reader.pages[i]
+                report.check()
+                pw = float(page.mediabox.width); ph = float(page.mediabox.height)
+                orients.append("Q" if pw > ph else "H")
+                if checks["size"] and target:
+                    tw, th = target
+                    if not ((abs(pw-tw) < 5 and abs(ph-th) < 5)
+                            or (abs(pw-th) < 5 and abs(ph-tw) < 5)):
+                        issues.append(tr('Seite {p0}: {p1:.0f}x{p2:.0f}pt != {p3:.0f}x{p4:.0f}pt').format(
+                            p0=i + 1, p1=pw, p2=ph, p3=tw, p4=th))
+                if checks["colour"]:
+                    with _pdfium_lock:
+                        pil = doc[i].render(scale=0.4).to_pil().convert("RGB")
+                    # Every pixel of a ~240px render, not a 64x64 squash of the
+                    # page: averaging the render first hid small colour marks
+                    # completely, and this check reporting "Keine Farbseiten
+                    # erkannt" for a page that has them is a preflight that
+                    # passes a job it should stop. scale=0.4 catches a
+                    # half-point mark (verified by
+                    # test_preflight_sees_a_tiny_colour_mark) while rendering
+                    # ~6x faster than scale=1 on heavy vector pages.
+                    if _hist_stats(_colour_histogram(pil), 20)[0] > 20:
+                        colour_pages.append(i + 1)
+            if checks["orient"] and orients:
+                if len(set(orients)) > 1: issues.append(tr("Gemischte Ausrichtungen"))
+                else: oks.append(tr("Einheitlich: {p0}").format(
+                    p0=tr('Hochformat') if orients[0] == 'H' else tr('Querformat')))
             if checks["colour"]:
-                with _pdfium_lock:
-                    pil = doc[i].render(scale=1).to_pil().convert("RGB")
-                # Every pixel, not a 64x64 squash of the page: averaging the
-                # render first hid small colour marks completely, and this
-                # check reporting "Keine Farbseiten erkannt" for a page that
-                # has them is a preflight that passes a job it should stop.
-                if _hist_stats(_colour_histogram(pil), 20)[0] > 20:
-                    colour_pages.append(i + 1)
-        if checks["orient"] and orients:
-            if len(set(orients)) > 1: issues.append(tr("Gemischte Ausrichtungen"))
-            else: oks.append(tr("Einheitlich: {p0}").format(
-                p0=tr('Hochformat') if orients[0] == 'H' else tr('Querformat')))
-        if checks["colour"]:
-            if colour_pages: issues.append(f"Farbseiten: {colour_pages[:10]}")
-            else: oks.append(tr("Keine Farbseiten erkannt"))
-        press_issues, press_oks = _press_readiness(src, checks, min_dpi, report)
-        issues += press_issues
-        oks += press_oks
-        lines = [f"BERICHT -- {os.path.basename(src)}",
-                 tr('Seiten: {p0}  |  {p1} KB').format(
-                     p0=n, p1=os.path.getsize(src) // 1024), ""]
-        if issues: lines += [f"PROBLEME ({len(issues)}):"] + [f"  x  {x}" for x in issues] + [""]
-        else: lines.append(tr("BESTANDEN -- Datei scheint druckfertig."))
-        if oks: lines += ["BESTANDEN:"] + [f"  v  {x}" for x in oks]
+                if colour_pages: issues.append(f"Farbseiten: {colour_pages[:10]}")
+                else: oks.append(tr("Keine Farbseiten erkannt"))
+            press_issues, press_oks = _press_readiness(src, checks, min_dpi, report)
+            issues += press_issues
+            oks += press_oks
+            lines = [f"BERICHT -- {os.path.basename(src)}",
+                     tr('Seiten: {p0}  |  {p1} KB').format(
+                         p0=n, p1=os.path.getsize(src) // 1024), ""]
+            if issues: lines += [f"PROBLEME ({len(issues)}):"] + [f"  x  {x}" for x in issues] + [""]
+            else: lines.append(tr("BESTANDEN -- Datei scheint druckfertig."))
+            if oks: lines += ["BESTANDEN:"] + [f"  v  {x}" for x in oks]
+        finally:
+            with _pdfium_lock:
+                doc.close()
     finally:
-        doc.close()
+        gc.collect(); gc.enable()
     return lines, ("BESTANDEN" if not issues
                    else f"FEHLER ({len(issues)} Problem(e))")

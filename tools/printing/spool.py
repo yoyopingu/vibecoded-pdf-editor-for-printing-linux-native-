@@ -13,6 +13,7 @@ what went in before any of it reaches a printer.
 import logging
 from PyQt6.QtGui import QPageLayout
 from tools.app_state import AppState
+from tools.ghostscript import ghostscript_binary, unlink
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 
@@ -351,31 +352,69 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
                 logging.exception("Qt render: page %d", pos + 1)
                 skipped.append(pos + 1)
     finally:
-        for doc in pdfium_docs.values():
-            try: doc.close()
-            except Exception: pass   # closing what we can; a failure here cannot change the job's outcome
+        with _pdfium_lock:
+            for doc in pdfium_docs.values():
+                try: doc.close()
+                except Exception: pass   # closing what we can; a failure here cannot change the job's outcome
 
     if not rendered:
         raise RuntimeError(tr("Keine Seiten konnten gerendert werden."))
     return rendered, skipped
 
 
+# The three scaling modes, in the order the dialog's radio buttons sit in
+# (tools/printing/dialog.py: An Seite anpassen / Feste Groesse / Auf
+# bedruckbaren Bereich verkleinern).
+FIT, FIXED, SHRINK = 0, 1, 2
+
+
+def _scaling_options(scale_idx):
+    """The lp options that say whether the printer may resize the page.
+
+    One place, because this decision used to be made in two that could
+    disagree — and did. "An Seite anpassen" asked CUPS to fit the page with
+    `fit-to-page`, and then an unrelated if/elif chain further down also sent
+    `print-scaling=none`. CUPS settles that pair by not scaling at all:
+    measured against pdftopdf, an A6 page on A4 came back at 1.000 instead of
+    the 1.835 the fit asked for. The option silently did nothing, which is
+    exactly what it looked like from the paper tray.
+
+    Fitting sends both spellings, the way the duplex keywords above do: the
+    IPP attribute for queues that speak it, the older boolean for those that
+    do not. Those two agree — both measured at 1.835 — so whichever the queue
+    picks is the same answer, unlike the pair that caused the bug.
+    """
+    if scale_idx == FIT:
+        return ["print-scaling=fit", "fit-to-page"]
+    if scale_idx == SHRINK:
+        # Shrink-only. auto-fit scales a page down into the imageable area and
+        # leaves a smaller one at its own size (measured: A3 -> 0.647, A6 ->
+        # 1.000). fit-to-page is deliberately NOT sent alongside it here: it
+        # enlarges, which is the one thing this mode promises never to do.
+        return ["print-scaling=auto-fit"]
+    # Feste Groesse: print it at the size asked for, whatever that is.
+    return ["print-scaling=none"]
+
+
 def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                   duplex_edge, colorconv, printer_name, scale_idx,
-                  paper_key, orient_idx, hw_margin_mm, report,
+                  paper_key, orient_idx, report,
                   paper_source=None, scale_pct=100):
     """Full-quality print via Ghostscript + CUPS/lp.
 
-    GS normalises, embeds fonts, applies colour conversion AND pre-scales the
-    output to exactly the target paper dimensions.  lp then receives a
-    correctly-sized PDF and is told print-scaling=none — no double-scaling.
+    Ghostscript normalises, embeds fonts and applies the colour conversion.
+    Who resizes the page depends on the mode, and only ever one of them does:
 
-    For "Fit" and "Shrink" the content is fitted to the *printable area*
-    (paper minus the printer's unprintable hardware margin), matching the
-    on-screen preview exactly, then re-centred on a full-size sheet so the
-    printer never clips content or rescales.
+    * "An Seite anpassen" and "Auf bedruckbaren Bereich verkleinern" are left
+      to CUPS, which fits to the driver's *real* imageable area rather than to
+      an estimate of it, and adapts to whichever printer the job goes to.
+      Ghostscript passes the pages through at their own size.
+    * "Feste Groesse" is done here: Ghostscript fixes the media so the page
+      prints at 1:1 on the sheet, recenter_on_paper applies the percentage if
+      it is not 100, and CUPS is told print-scaling=none so it does not scale
+      the result a second time.
     """
-    import subprocess, shutil, tempfile, os
+    import subprocess, tempfile, os
 
     pw_pt, ph_pt = _PAPER_PTS.get(paper_key, (595.28, 841.89))
 
@@ -405,42 +444,20 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
     sub_fd, sub_tmp = tempfile.mkstemp(suffix="_sub.pdf")
     os.close(sub_fd)
     norm_tmp = None
-    recenter_tmp = None
     scaled_tmps = []
-    printable_unrecentered = False
     try:
         report(tr("Seiten zusammenstellen… ({count})").format(count=len(pages)))
         skipped = write_subset_pdf(pdf_path, model, pages, sub_tmp)
         print_src = sub_tmp
-        cups_fit  = (scale_idx == 0)   # used by both the GS + lp branches
 
-        if shutil.which("gs"):
+        gs_bin = ghostscript_binary()
+        if gs_bin:
             norm_fd, norm_tmp = tempfile.mkstemp(suffix="_norm.pdf")
             os.close(norm_fd)
             report(tr("Ghostscript: Normalisierung und Skalierung…"))
 
-            # ── Scaling strategy ──────────────────────────────────────────
-            # "Fit" (scale_idx 0) is delegated to CUPS/pdftopdf, which scales
-            # each page to the driver's REAL imageable area — the printer's
-            # actual margins, exactly like Acrobat's "Fit to Printable Area"
-            # (and it adapts per printer). GS just normalises at natural size.
-            # "Shrink" (scale_idx 2) pre-fits to our printable-area estimate
-            # and re-centres it; "Originalgrösse" (scale_idx 1) prints at the
-            # percentage asked for on full media — 100 % being 1:1, and
-            # anything else applied by recenter_on_paper afterwards, because
-            # Ghostscript can fit a page or leave it alone and neither of those
-            # is "make it 70 % of what it is".
-            margin_pt = (0.0 if hw_margin_mm < 0.5
-                         else hw_margin_mm * 72.0 / 25.4)
-            fit_to_printable = (scale_idx == 2) and margin_pt > 0.0
-            if fit_to_printable:
-                media_w = max(1.0, pw_pt - 2.0 * margin_pt)
-                media_h = max(1.0, ph_pt - 2.0 * margin_pt)
-            else:
-                media_w, media_h = pw_pt, ph_pt
-
             gs_cmd = [
-                "gs", "-dBATCH", "-dNOPAUSE", "-dQUIET",
+                gs_bin, "-dBATCH", "-dNOPAUSE", "-dQUIET",
                 "-sDEVICE=pdfwrite",
                 "-dCompatibilityLevel=1.5",
                 "-dPDFSETTINGS=/printer",
@@ -449,37 +466,23 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                 "-dCompressFonts=true",
                 "-dDetectDuplicateImages=true",
             ]
-            if not cups_fit:
-                # Fix output media to the fit target (printable area or sheet).
+            if scale_idx == FIXED:
+                # The only mode Ghostscript resizes for: fix the media so the
+                # page lands on the sheet at its own size. The other two are
+                # CUPS's job, and pages are passed through untouched — see the
+                # docstring.
+                #
+                # -dPDFFitPage is not used for the shrink mode any more. It
+                # applies to every page once it is switched on, so a document
+                # of mixed page sizes had its small pages *enlarged* to the
+                # sheet as soon as one big page turned it on (measured: an A6
+                # page in an A3/A6 document came out full A4). "Verkleinern"
+                # must never enlarge, and CUPS's auto-fit decides per page.
                 gs_cmd += [
-                    f"-dDEVICEWIDTHPOINTS={media_w}",
-                    f"-dDEVICEHEIGHTPOINTS={media_h}",
+                    f"-dDEVICEWIDTHPOINTS={pw_pt}",
+                    f"-dDEVICEHEIGHTPOINTS={ph_pt}",
                     "-dFIXEDMEDIA",
                 ]
-
-            # Scaling policy
-            if cups_fit:
-                pass                # CUPS fits to the imageable area (see lp -o)
-            elif scale_idx == 2:    # Shrink only — fit if ANY page exceeds target
-                try:
-                    import pypdfium2 as pdfium
-                    needs_fit = False
-                    with _pdfium_lock:
-                        doc = pdfium.PdfDocument(sub_tmp)
-                        try:
-                            for pi in range(len(doc)):
-                                pg = doc[pi]
-                                if pg.get_width() > media_w + 1 or pg.get_height() > media_h + 1:
-                                    needs_fit = True
-                                    break
-                        finally:
-                            doc.close()
-                    if needs_fit:
-                        gs_cmd.append("-dPDFFitPage")
-                    # else: all pages fit — FIXEDMEDIA centres at natural size
-                except Exception:
-                    gs_cmd.append("-dPDFFitPage")   # safe fallback
-            # scale_idx == 1 (100 %): FIXEDMEDIA without -dPDFFitPage → 1:1
 
             # Colour handling.
             # "Graustufen" deliberately does NOT convert the PDF here. It
@@ -521,25 +524,25 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                         p0=", ".join(str(i + 1) for i in blackout)))
             elif r.returncode == 0 and os.path.getsize(norm_tmp) > 100:
                 print_src = norm_tmp
-                # Re-centre the printable-area page on a full-size sheet so
-                # CUPS receives correctly-sized media and never rescales.
-                if fit_to_printable:
-                    try:
-                        rec_fd, recenter_tmp = tempfile.mkstemp(suffix="_ctr.pdf")
-                        os.close(rec_fd)
-                        recenter_on_paper(norm_tmp, recenter_tmp,
-                                                pw_pt, ph_pt)
-                        if os.path.getsize(recenter_tmp) > 100:
-                            print_src = recenter_tmp
-                        else:
-                            printable_unrecentered = True
-                    except Exception:
-                        logging.warning("Re-centre step failed; letting CUPS "
-                                        "fit to printable area", exc_info=True)
-                        printable_unrecentered = True
             else:
                 logging.warning("GS normalization failed (rc=%d): %s",
                                 r.returncode, r.stderr[:300])
+
+        # Feste Groesse at anything but 100 %: scale the content and centre it
+        # on the sheet here, because Ghostscript can fit a page or leave it
+        # alone and neither of those is "make it 70 % of what it is".
+        if scale_idx == FIXED and scale_pct != 100:
+            try:
+                pct_fd, pct_tmp = tempfile.mkstemp(suffix="_pct.pdf")
+                os.close(pct_fd)
+                scaled_tmps.append(pct_tmp)
+                recenter_on_paper(print_src, pct_tmp, pw_pt, ph_pt,
+                                  factor=scale_pct / 100.0)
+                if os.path.getsize(pct_tmp) > 100:
+                    print_src = pct_tmp
+            except Exception:
+                logging.warning("print: could not apply %d%% scaling; printing "
+                                "at original size", scale_pct, exc_info=True)
 
         # Spool via lp/CUPS
         report(tr("Sende an Drucker…"))
@@ -548,47 +551,17 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             cmd += ["-d", printer_name]
         cmd += ["-n", str(copies)]
 
-        # Scaling: "Fit" → let CUPS fit to the driver's imageable area;
-        # everything else was already sized exactly by GS (+ re-centre).
-        if cups_fit:
-            cmd += ["-o", "fit-to-page"]
-        # Originalgrösse at anything but 100 %: scale the content and centre it
-        # on the full sheet. Same step the printable-area fit uses, with the
-        # percentage as its factor.
-        if (scale_idx == 1 and abs(scale_pct - 100) > 0
-                and print_src in (norm_tmp, sub_tmp)):
-            try:
-                pct_fd, pct_tmp = tempfile.mkstemp(suffix="_pct.pdf")
-                os.close(pct_fd)
-                recenter_on_paper(print_src, pct_tmp, pw_pt, ph_pt,
-                                  factor=scale_pct / 100.0)
-                if os.path.getsize(pct_tmp) > 100:
-                    print_src = pct_tmp
-                    recenter_tmp = recenter_tmp or pct_tmp
-                    scaled_tmps.append(pct_tmp)
-            except Exception:
-                logging.warning("print: could not apply %d%% scaling; printing "
-                                "at original size", scale_pct, exc_info=True)
+        for opt in _scaling_options(scale_idx):
+            cmd += ["-o", opt]
 
-        elif print_src in (norm_tmp, recenter_tmp) and not printable_unrecentered:
-            cmd += ["-o", "print-scaling=none"]
-        elif printable_unrecentered:
-            # Re-centre failed: page is printable-area sized — let CUPS fit it
-            # to the imageable area (single scaling, centred, no clipping).
-            cmd += ["-o", "print-scaling=fit"]
-        else:
-            # GS unavailable — let CUPS handle scaling
-            if scale_idx == 0:
-                cmd += ["-o", "fit-to-page"]
-            elif scale_idx == 1:
-                cmd += ["-o", "print-scaling=none"]
-            else:
-                cmd += ["-o", "fit-to-page"]
-
-        if orient_idx == 1:
-            cmd += ["-o", "orientation-requested=3"]
-        elif orient_idx == 2:
-            cmd += ["-o", "orientation-requested=4"]
+        # The orientation the media was actually set to above, which for
+        # "Automatisch" is the one detected from the first page. Saying nothing
+        # there was the bug: Ghostscript had already produced a landscape sheet
+        # while CUPS was still told plain `media=A4`, so the landscape page
+        # landed unrotated on portrait media and lost its right-hand edge.
+        # Naming it is a no-op when the two already agree (measured).
+        cmd += ["-o", "orientation-requested=4" if pw_pt > ph_pt
+                else "orientation-requested=3"]
 
         if duplex:
             # Emit BOTH the IPP attribute AND the PPD driver keyword.
@@ -651,7 +624,4 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         return skipped
 
     finally:
-        for f in [sub_tmp, norm_tmp, recenter_tmp] + scaled_tmps:
-            if f:
-                try: os.unlink(f)
-                except OSError: pass   # temp file already gone
+        unlink(sub_tmp, norm_tmp, *scaled_tmps)

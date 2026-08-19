@@ -2,7 +2,7 @@
 Zuschneiden / Skalieren — trim or extend the page, fit it to a paper size,
 and set cut marks. Shows the sheet it is about to produce.
 """
-import os
+import os, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.images import pil_to_qpixmap
 from tools.theme import INK, PAPER, _TV, _register_themed
@@ -242,12 +242,16 @@ class CropResizePanel(BasePanel):
             import pypdfium2 as pdfium
             pages    = self._get_target_pages()
             page_idx = pages[0][0] if pages else 0
-            doc  = pdfium.PdfDocument(pdf_path)
-            try:
-                page = doc[page_idx]
-                pw   = page.get_width(); ph = page.get_height()
-            finally:
-                doc.close()
+            # Runs on the GUI thread while the render worker may be inside
+            # pdfium: constructing/closing the document needs the process-wide
+            # lock, exactly like the page access in _render_base_page below.
+            with _pdfium_lock:
+                doc  = pdfium.PdfDocument(pdf_path)
+                try:
+                    page = doc[page_idx]
+                    pw   = page.get_width(); ph = page.get_height()
+                finally:
+                    doc.close()
             # Exakte Differenz — kein Runden damit Zielformat stimmt
             diff_w_mm = (pw - tw) / MM_TO_PT / 2
             diff_h_mm = (ph - th) / MM_TO_PT / 2
@@ -341,15 +345,19 @@ class CropResizePanel(BasePanel):
         if cache is not None and cache[0] == key:
             return cache[1], cache[2], cache[3]
         import pypdfium2 as pdfium
-        with _pdfium_lock:
-            doc = pdfium.PdfDocument(pdf_path)
-            try:
-                page = doc[page_idx]
-                pw = page.get_width(); ph = page.get_height()
-                base_scale = 1400.0 / max(pw, ph, 1.0)   # fixed preview resolution
-                base_pil = page.render(scale=base_scale).to_pil()
-            finally:
-                doc.close()
+        gc.disable()
+        try:
+            with _pdfium_lock:
+                doc = pdfium.PdfDocument(pdf_path)
+                try:
+                    page = doc[page_idx]
+                    pw = page.get_width(); ph = page.get_height()
+                    base_scale = 1400.0 / max(pw, ph, 1.0)   # fixed preview resolution
+                    base_pil = page.render(scale=base_scale).to_pil()
+                finally:
+                    doc.close()
+        finally:
+            gc.collect(); gc.enable()
         self._base_cache = (key, base_pil, pw, ph)
         return base_pil, pw, ph
 

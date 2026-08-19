@@ -5,6 +5,8 @@ came back damaged.
 import os, shutil
 from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox
 from tools._base import BasePanel, make_label
+from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,
+                               require_ghostscript, run_chunked, unlink)
 from tools.i18n import tr
 from tools.panels._shared import row
 from tools.panels._verify import _verify_pages_intact
@@ -29,9 +31,9 @@ class CompressPanel(BasePanel):
         self.preset.setCurrentIndex(2)
         gl.addLayout(row(tr("Qualitaetsstufe:"), self.preset))
         self.gs_check = QCheckBox(tr("Ghostscript verwenden (empfohlen)"))
-        self.gs_check.setChecked(shutil.which("gs") is not None)
+        self.gs_check.setChecked(ghostscript_binary() is not None)
         gl.addWidget(self.gs_check)
-        if not shutil.which("gs"):
+        if not ghostscript_binary():
             gl.addWidget(make_label("Ghostscript fehlt — sudo pacman -S ghostscript", dim=True))
         layout.addWidget(gb)
 
@@ -47,7 +49,7 @@ class CompressPanel(BasePanel):
 
         preset_map = ["/screen", "/ebook", "/printer", "/prepress"]
         gs_setting = preset_map[self.preset.currentIndex()]
-        use_gs = self.gs_check.isChecked() and shutil.which("gs")
+        use_gs = self.gs_check.isChecked() and ghostscript_binary()
 
         self.run_async(
             lambda report: _compress(src, out, gs_setting, bool(use_gs), report),
@@ -74,18 +76,25 @@ def _compress(src, out, gs_setting, use_gs, report):
         # over: a smaller file is the whole point here, which makes "lost
         # content" indistinguishable from "worked well" by size alone.
         import tempfile
+        gs_bin = require_ghostscript()
+        with pikepdf.open(src) as _a:
+            n_src = len(_a.pages)
         fd, gs_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
         try:
             report(tr("Ghostscript: komprimiere …"))
-            cmd = [
-                "gs", "-o", gs_tmp,
-                "-sDEVICE=pdfwrite",
-                f"-dPDFSETTINGS={gs_setting}",
-                "-dNOPAUSE", "-dBATCH", "-dQUIET",
-                src,
-            ]
-            r = report.run(cmd, text=True, errors="replace", timeout=300)
-            if r.returncode != 0:
+
+            def build(dest, first, last):
+                return [
+                    gs_bin, "-o", dest,
+                    "-sDEVICE=pdfwrite",
+                    f"-dPDFSETTINGS={gs_setting}",
+                    "-dNOPAUSE", "-dBATCH", "-dQUIET",
+                    *page_range_flags(first, last),
+                    src,
+                ]
+
+            r = failed(run_chunked(report, build, gs_tmp, n_src, timeout=300))
+            if r is not None:
                 raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(
                     p0=(r.stderr or r.stdout or f"exit {r.returncode}")[:400]))
             # -dQUIET means a Ghostscript that fails softly says nothing at
@@ -94,8 +103,8 @@ def _compress(src, out, gs_setting, use_gs, report):
             if not os.path.exists(gs_tmp) or os.path.getsize(gs_tmp) == 0:
                 raise RuntimeError(tr(
                     "Ghostscript hat keine Ausgabedatei erzeugt."))
-            with pikepdf.open(src) as _a, pikepdf.open(gs_tmp) as _b:
-                n_src, n_out = len(_a.pages), len(_b.pages)
+            with pikepdf.open(gs_tmp) as _b:
+                n_out = len(_b.pages)
             if n_out != n_src:
                 raise RuntimeError(tr(
                     'Komprimierung hat die Seitenzahl veraendert '
@@ -111,8 +120,7 @@ def _compress(src, out, gs_setting, use_gs, report):
                                      for i, why in sorted(damaged.items()))))
             shutil.copyfile(gs_tmp, out)
         finally:
-            try: os.remove(gs_tmp)
-            except OSError: pass
+            unlink(gs_tmp)
     else:
         report(tr("Komprimiere Streams …"))
         pdf = pikepdf.open(src)

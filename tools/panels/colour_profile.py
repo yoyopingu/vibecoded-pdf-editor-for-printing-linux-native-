@@ -7,6 +7,8 @@ import os, shutil
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QTextEdit
 from tools._base import BasePanel, make_label
 from tools.colorspace import document_colorspaces, has_cmyk, has_rgb
+from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,
+                               require_ghostscript, run_chunked, unlink)
 from tools.i18n import tr
 from tools.panels._icc import CMYK_PROFILES, ICC_DIR, resolve_icc
 from tools.panels._shared import row
@@ -39,7 +41,7 @@ class ColourProfilePanel(BasePanel):
             "Benannte Profile nutzen die passende .icc-Datei aus "
             "~/.local/share/copyshop_pdf_suite/icc/ — fehlt sie, wird generisch "
             "konvertiert."), dim=True))
-        gs_ok = bool(shutil.which("gs"))
+        gs_ok = bool(ghostscript_binary())
         status = tr("✓  Ghostscript verfuegbar") if gs_ok else tr("✗  Ghostscript fehlt  →  sudo pacman -S ghostscript")
         cl.addWidget(make_label(status, dim=True))
         layout.addWidget(cb)
@@ -88,11 +90,7 @@ class ColourProfilePanel(BasePanel):
         # the page-by-page verification go to a worker. On a heavy file that is
         # minutes during which the window used to be unable to repaint.
         src = self.require_pdf()
-
-        if not shutil.which("gs"):
-            raise RuntimeError(tr(
-                "Ghostscript nicht gefunden.\n"
-                "Installation:  sudo pacman -S ghostscript"))
+        require_ghostscript()
 
         out = self.save_pdf("CMYK-PDF speichern als")
         if not out: raise ValueError(tr("Kein Ausgabepfad angegeben."))
@@ -151,35 +149,38 @@ def _to_cmyk(src, out, icc, report):
     # is checked page by page first, exactly as the greyscale conversion is.
     # pdfwrite can black out a transparency group while exiting 0, and for a
     # prepress file nobody notices until it is on press.
+    gs_bin = require_ghostscript()
+    with pikepdf.open(src) as _s:
+        n_src = len(_s.pages)
     fd, cmyk_tmp = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
     try:
-        cmd = [
-            "gs",
-            "-o", cmyk_tmp,
-            "-sDEVICE=pdfwrite",
-            "-dPDFSETTINGS=/prepress",
-            "-dEncodeColorImages=false",
-            "-dEncodeGrayImages=false",
-            "-dEncodeMonoImages=false",
-            "-sProcessColorModel=DeviceCMYK",
-            "-sColorConversionStrategy=CMYK",
-            "-sColorConversionStrategyForImages=CMYK",
-        ]
-        if icc:
-            cmd.append(f"-sOutputICCProfile={icc}")   # convert to this named CMYK space
-        cmd.append(src)
+        def build(dest, first, last):
+            cmd = [
+                gs_bin,
+                "-o", dest,
+                "-sDEVICE=pdfwrite",
+                "-dPDFSETTINGS=/prepress",
+                "-dEncodeColorImages=false",
+                "-dEncodeGrayImages=false",
+                "-dEncodeMonoImages=false",
+                "-sProcessColorModel=DeviceCMYK",
+                "-sColorConversionStrategy=CMYK",
+                "-sColorConversionStrategyForImages=CMYK",
+            ]
+            if icc:
+                cmd.append(f"-sOutputICCProfile={icc}")   # this named CMYK space
+            return cmd + page_range_flags(first, last) + [src]
 
         report(tr("Ghostscript: CMYK-Konvertierung …"))
-        r = report.run(cmd, text=True, errors="replace", timeout=300)
-
-        if r.returncode != 0:
+        r = failed(run_chunked(report, build, cmyk_tmp, n_src, timeout=300))
+        if r is not None:
             err = (r.stderr.strip() or r.stdout.strip() or f"exit {r.returncode}")[:500]
             raise RuntimeError(tr('Ghostscript-Fehler:\n{p0}').format(p0=err))
         if not os.path.exists(cmyk_tmp) or os.path.getsize(cmyk_tmp) == 0:
             raise RuntimeError(tr("Ghostscript hat keine Ausgabedatei erzeugt."))
 
-        with pikepdf.open(src) as _s, pikepdf.open(cmyk_tmp) as _c:
-            n_ok = min(len(_s.pages), len(_c.pages))
+        with pikepdf.open(cmyk_tmp) as _c:
+            n_ok = min(n_src, len(_c.pages))
         report(tr("Prüfe Seiten …"))
         damaged = _verify_pages_intact(src, cmyk_tmp, range(n_ok), report)
         if damaged:
@@ -196,31 +197,31 @@ def _to_cmyk(src, out, icc, report):
         else:
             shutil.copyfile(cmyk_tmp, out)
     finally:
-        try: os.remove(cmyk_tmp)
-        except OSError: pass
+        unlink(cmyk_tmp)
 
-    # Ergebnis verifizieren
+    # Ergebnis verifizieren. `with`, not open/close: anything raising inside
+    # the walk used to skip the close() below it and leave the output file's
+    # handle open for the life of the app — the except right here made that
+    # invisible.
     found_rgb = False
     try:
-        import pikepdf
-        pdf_out = pikepdf.open(out)
-        for page in pdf_out.pages:
-            res = page.get("/Resources")
-            if not res: continue
-            xobj = res.get("/XObject")
-            if xobj and isinstance(xobj, pikepdf.Dictionary):
-                for v in xobj.values():
-                    try:
-                        if v.get("/Subtype") == pikepdf.Name("/Image"):
-                            cs = v.get("/ColorSpace")
-                            if cs:
-                                name = str(cs[0]) if isinstance(cs, pikepdf.Array) else str(cs)
-                                if name in ("/DeviceRGB", "/CalRGB"):
-                                    found_rgb = True
-                    except Exception:
-                        logging.debug("colour profile: could not read an image's "
-                                      "colour space", exc_info=True)
-        pdf_out.close()
+        with pikepdf.open(out) as pdf_out:
+            for page in pdf_out.pages:
+                res = page.get("/Resources")
+                if not res: continue
+                xobj = res.get("/XObject")
+                if xobj and isinstance(xobj, pikepdf.Dictionary):
+                    for v in xobj.values():
+                        try:
+                            if v.get("/Subtype") == pikepdf.Name("/Image"):
+                                cs = v.get("/ColorSpace")
+                                if cs:
+                                    name = str(cs[0]) if isinstance(cs, pikepdf.Array) else str(cs)
+                                    if name in ("/DeviceRGB", "/CalRGB"):
+                                        found_rgb = True
+                        except Exception:
+                            logging.debug("colour profile: could not read an image's "
+                                          "colour space", exc_info=True)
         verified = True
     except Exception:
         logging.debug("colour profile: verification failed", exc_info=True)

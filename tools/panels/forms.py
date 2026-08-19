@@ -2,7 +2,7 @@
 Formulare / Reduzieren — fill form fields and flatten them, and the
 annotations with them, into the page content.
 """
-import os, shutil
+import os, shutil, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QLineEdit, QGroupBox, QCheckBox, QScrollArea, QWidget, QFrame
 from tools._base import BasePanel
@@ -17,16 +17,20 @@ def _plain_ink(path):
     """Dark pixels per page when the file is rendered *without* form support —
     i.e. what a printer, a RIP or any non-interactive viewer puts on paper."""
     import pypdfium2 as pdfium
-    with _pdfium_lock:
-        doc = pdfium.PdfDocument(path)
-        try:
-            out = []
-            for i in range(len(doc)):
-                im = doc[i].render(scale=0.5).to_pil().convert("L")
-                out.append(sum(1 for v in im.get_flattened_data() if v < 128))
-            return out
-        finally:
-            doc.close()
+    gc.disable()
+    try:
+        with _pdfium_lock:
+            doc = pdfium.PdfDocument(path)
+            try:
+                out = []
+                for i in range(len(doc)):
+                    im = doc[i].render(scale=0.5).to_pil().convert("L")
+                    out.append(sum(1 for v in im.get_flattened_data() if v < 128))
+                return out
+            finally:
+                doc.close()
+    finally:
+        gc.collect(); gc.enable()
 
 
 def _flatten_form(filled, out, has_values):
