@@ -2,7 +2,7 @@
 Bild zu/von PDF — images into a PDF, and PDF pages back out as images.
 """
 import os
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QGroupBox, QApplication
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QGroupBox
 from tools._base import BasePanel, FileDropList, make_label
 from tools.i18n import tr
 from tools.panels._shared import row
@@ -50,17 +50,28 @@ class ImgPdfPanel(BasePanel):
         if paths: self.img_list.add_files(paths)
 
     def _to_pdf(self):
-        import img2pdf
+        # img2pdf.convert() re-encodes every image, which used to run right
+        # here on the GUI thread — a window that could not repaint for as long
+        # as the largest batch of scans took. run_async moves that off the GUI
+        # thread and gives it the same busy state (button disabled, Stop shown)
+        # every other tool's action has; img2pdf itself has no checkpoint to
+        # respond mid-convert, so Stop can only catch it before or after, not
+        # during — no worse than before, where there was no Stop at all.
         paths = self.img_list.get_paths()
         if not paths: self.log.log(tr("Bilder hinzufuegen."), error=True); return
         out = self.save_pdf("Als PDF speichern")
         if not out: return
-        self.log.clear_log(); QApplication.processEvents()
-        try:
-            with open(out, "wb") as f: f.write(img2pdf.convert(paths))
-            self.log.log(tr('PDF aus {p0} Bildern erstellt').format(p0=len(paths)))
-            self.open_result(out, tr("Aus Bildern"))
-        except Exception as e: self.log.log(str(e), error=True)
+        self.log.clear_log()
+        self.run_async(
+            lambda report: _images_to_pdf(paths, out, report),
+            on_done=self._to_pdf_done,
+            busy_label="PDF wird erstellt …",
+        )
+
+    def _to_pdf_done(self, result):
+        out, n = result
+        self.log.log(tr('PDF aus {p0} Bildern erstellt').format(p0=n))
+        self.open_result(out, tr("Aus Bildern"))
 
     def _to_img(self):
         # Rasterising every page at the chosen dpi is the slowest thing this
@@ -82,6 +93,16 @@ class ImgPdfPanel(BasePanel):
         )
 
     def _run_action(self): pass
+
+
+def _images_to_pdf(paths, out, report):
+    """Encode `paths` into one PDF at `out`, on a worker thread. Returns
+    (out, n_images)."""
+    import img2pdf
+    report(tr("Bilder werden zusammengefuehrt …"))
+    with open(out, "wb") as f:
+        f.write(img2pdf.convert(paths))
+    return out, len(paths)
 
 
 def _pdf_to_images(src, out_dir, fmt, dpi, report):

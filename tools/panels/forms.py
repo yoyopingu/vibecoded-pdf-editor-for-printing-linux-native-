@@ -72,7 +72,6 @@ def _flatten_form(filled, out, has_values):
 class FormsPanel(BasePanel):
     TITLE         = "Formulare / Reduzieren"
     SUBTITLE      = "Formularfelder ausfuellen und einbetten."
-    OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
         self._fields = {}
@@ -89,8 +88,21 @@ class FormsPanel(BasePanel):
         self.flatten.setChecked(True); layout.addWidget(self.flatten)
 
     def _load(self):
-        try: src=self.require_pdf()
-        except ValueError as e: self.log.log(str(e),error=True); return
+        # Reading the fields is I/O and pypdf parsing, which used to run right
+        # here on the GUI thread — unnoticeable on a small form, a freeze on a
+        # heavy one. Only the read goes to the worker: building QCheckBox/
+        # QLineEdit widgets from the result has to stay on the GUI thread, so
+        # that part happens in _load_done once the read comes back.
+        try: src = self.require_pdf()
+        except ValueError as e: self.log.log(str(e), error=True); return
+        self.log.clear_log()
+        self.run_async(
+            lambda report: _read_fields(src, report),
+            on_done=self._load_done,
+            busy_label="Felder werden geladen …",
+        )
+
+    def _load_done(self, fields):
         self._fields.clear()
         while self.form_vbox.count():
             item = self.form_vbox.takeAt(0)
@@ -101,20 +113,16 @@ class FormsPanel(BasePanel):
                 item.layout().deleteLater()
             elif item.widget():
                 item.widget().deleteLater()
-        try:
-            from pypdf import PdfReader
-            fields=PdfReader(src, strict=False).get_fields()
-            if not fields: self.log.log(tr("Keine Formularfelder gefunden.")); return
-            for name,field in fields.items():
-                ft=field.get("/FT",""); val=field.get("/V","")
-                if ft=="/Btn":
-                    w=QCheckBox(); w.setChecked(str(val) in ("/Yes","/On","Yes","On"))
-                else:
-                    w=QLineEdit(); w.setText(str(val) if val else "")
-                self._fields[name]=w
-                self.form_vbox.addLayout(row(name, w))
-            self.log.log(tr('{p0} Feld(er) geladen.').format(p0=len(fields)))
-        except Exception as e: self.log.log(str(e),error=True)
+        if not fields:
+            self.log.log(tr("Keine Formularfelder gefunden.")); return
+        for name, ft, val in fields:
+            if ft == "/Btn":
+                w = QCheckBox(); w.setChecked(str(val) in ("/Yes", "/On", "Yes", "On"))
+            else:
+                w = QLineEdit(); w.setText(str(val) if val else "")
+            self._fields[name] = w
+            self.form_vbox.addLayout(row(name, w))
+        self.log.log(tr('{p0} Feld(er) geladen.').format(p0=len(fields)))
 
     def _run_action(self):
         # The field values are read here; writing and the optional flatten —
@@ -138,6 +146,19 @@ class FormsPanel(BasePanel):
         out, n_fields = result
         self.log.log(tr('Formular ausgefuellt ({p0} Felder)').format(p0=n_fields))
         self.open_result(out, tr("Formular ausgefuellt"))
+
+
+def _read_fields(src, report):
+    """The form field names, types and current values in `src`, on a worker
+    thread. Plain data only — the panel builds widgets from it on the GUI
+    thread, in _load_done."""
+    from pypdf import PdfReader
+    report(tr("Lese Formularfelder …"))
+    fields = PdfReader(src, strict=False).get_fields()
+    if not fields:
+        return []
+    return [(name, field.get("/FT", ""), field.get("/V", ""))
+            for name, field in fields.items()]
 
 
 def _fill_form(src, out, data, flatten, report):
