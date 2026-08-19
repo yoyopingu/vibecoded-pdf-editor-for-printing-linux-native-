@@ -7,12 +7,13 @@ opens this instead of guessing which one was meant.
 """
 import os, logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QScrollArea, QSizePolicy, QSplitter, QLineEdit
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QObject, QEvent, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QColor, QDrag, QPainter, QFont
 from tools.i18n import tr
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.viewer.model import _parse_positions, _positions_to_str
+from tools.viewer.shortcuts import ThumbGridShortcutFilter
 from tools.viewer.page_grid import (CARD_H, CARD_W, GAP, MARGIN,
                                     card_size, paint_card)
 from tools.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
@@ -526,60 +527,6 @@ class FileGrid(QWidget):
         return tr('{p0} Dateien ausgewaehlt').format(p0=len(sel))
 
 
-class MergeShortcutFilter(QObject):
-    """App-level keys for the merge preview.
-
-    Deliberately the same set, and the same mechanics, as ManageShortcutFilter:
-    the two views show thumbnails and are meant to answer to the same keys.
-    Like that one it stands down for modal dialogs and for text fields, so
-    Ctrl+A in the selection box still selects the text."""
-    def __init__(self, widget, parent=None):
-        super().__init__(parent)
-        self.w = widget
-
-    def _live(self):
-        return self.w.isVisible() and not self.w._busy
-
-    def eventFilter(self, obj, event):
-        if QApplication.activeModalWidget() is not None:
-            return False
-        t = event.type()
-        if t == QEvent.Type.ShortcutOverride:
-            if not self._live():
-                return False
-            if isinstance(QApplication.focusWidget(), QLineEdit):
-                return False
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier and \
-               event.key() in (Qt.Key.Key_A, Qt.Key.Key_C, Qt.Key.Key_V,
-                               Qt.Key.Key_X, Qt.Key.Key_Z, Qt.Key.Key_Y,
-                               Qt.Key.Key_D):
-                event.accept()
-            return False
-
-        if t != QEvent.Type.KeyPress or not self._live():
-            return False
-        if isinstance(QApplication.focusWidget(), QLineEdit):
-            return False
-
-        k     = event.key()
-        mods  = event.modifiers()
-        ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
-        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
-
-        if k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and not ctrl:
-            self.w._remove(); return True
-        if ctrl:
-            if k == Qt.Key.Key_A: self.w._grid.select_all();   return True
-            if k == Qt.Key.Key_D: self.w._grid.deselect_all(); return True
-            if k == Qt.Key.Key_C: self.w._copy();  return True
-            if k == Qt.Key.Key_X: self.w._cut();   return True
-            if k == Qt.Key.Key_V: self.w._paste(); return True
-            if k == Qt.Key.Key_Z and not shift: self.w._undo(); return True
-            if (k == Qt.Key.Key_Z and shift) or k == Qt.Key.Key_Y:
-                self.w._redo(); return True
-        return False
-
-
 class MergeOrderWidget(QWidget):
     merge_confirmed = pyqtSignal(list)
     open_separately = pyqtSignal(list)
@@ -603,7 +550,10 @@ class MergeOrderWidget(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         if self._key_filter is None:
-            self._key_filter = MergeShortcutFilter(self)
+            self._key_filter = ThumbGridShortcutFilter(
+                lambda: self.isVisible() and not self._busy, self._grid,
+                self._remove, self._copy, self._cut, self._paste,
+                self._undo, self._redo)
             QApplication.instance().installEventFilter(self._key_filter)
 
     def hideEvent(self, e):
@@ -832,9 +782,10 @@ class MergeOrderWidget(QWidget):
         splitter.setStretchFactor(0,0); splitter.setStretchFactor(1,1)
         root.addWidget(splitter, 1)
 
-        # Keys go through the same app-level filter the page manager uses (see
-        # MergeShortcutFilter, installed in showEvent), so this view answers to
-        # the same set. It used to register three lone QShortcuts, which is why
+        # Keys go through the same app-level filter class the page manager uses
+        # (ThumbGridShortcutFilter, installed in showEvent), so this view
+        # answers to the same set. It used to register three lone QShortcuts,
+        # which is why
         # Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+Z did nothing here while working one
         # view over.
         self._on_order_changed()

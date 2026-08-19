@@ -8,74 +8,13 @@ control surface over it.
 """
 import os
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QFileDialog, QApplication, QScrollArea, QLineEdit
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal
 from tools.app_state import AppState
 from tools.i18n import tr
 from tools.viewer.model import _parse_positions, _positions_to_str
+from tools.viewer.shortcuts import ThumbGridShortcutFilter
 from tools.viewer.tab_base import PdfTabBase, owning_tab
 from tools.theme import _TV, _register_themed
-
-
-class ManageShortcutFilter(QObject):
-    """
-    Fängt Tastendruecke auf App-Ebene ab.
-    Nur aktiv wenn manage_panel sichtbar ist.
-    """
-    def __init__(self, manage_panel, parent=None):
-        super().__init__(parent)
-        self.panel = manage_panel
-
-    def eventFilter(self, obj, event):
-        # Never intercept while a modal dialog is open — its widgets own the keys.
-        if QApplication.activeModalWidget() is not None:
-            return False
-        t = event.type()
-        # Claim ShortcutOverride so widgets don't eat our Ctrl combos.
-        # MUST use accept()+return False (not return True) so Qt still dispatches
-        # the subsequent KeyPress — return True eats the event entirely.
-        if t == QEvent.Type.ShortcutOverride:
-            if not self.panel.isVisible():
-                return False
-            focused = QApplication.focusWidget()
-            if isinstance(focused, QLineEdit):
-                return False
-            k    = event.key()
-            ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-            if ctrl and k in (Qt.Key.Key_A, Qt.Key.Key_C, Qt.Key.Key_V,
-                              Qt.Key.Key_X, Qt.Key.Key_Z, Qt.Key.Key_Y,
-                              Qt.Key.Key_D):
-                event.accept()
-            # Key_P is handled by the global QShortcut at PdfViewerWidget level;
-            # don't claim it here so the global shortcut can fire.
-            return False
-
-        if t != QEvent.Type.KeyPress:
-            return False
-        if not self.panel.isVisible():
-            return False
-
-        # Shortcuts nicht abfangen wenn ein Textfeld fokussiert ist
-        focused = QApplication.focusWidget()
-        if isinstance(focused, QLineEdit):
-            return False
-
-        k     = event.key()
-        mods  = event.modifiers()
-        ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
-        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
-
-        if k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and not ctrl:
-            self.panel._delete(); return True
-        if ctrl:
-            if k == Qt.Key.Key_A: self.panel.grid.select_all();   return True
-            if k == Qt.Key.Key_D: self.panel.grid.deselect_all(); return True
-            if k == Qt.Key.Key_C: self.panel._copy();              return True
-            if k == Qt.Key.Key_X: self.panel._cut();               return True
-            if k == Qt.Key.Key_V: self.panel._paste();             return True
-            if k == Qt.Key.Key_Z and not shift: self.panel._undo(); return True
-            if (k == Qt.Key.Key_Z and shift) or k == Qt.Key.Key_Y:
-                self.panel._redo(); return True
-        return False
 
 
 class ManagePanel(QWidget):
@@ -215,7 +154,9 @@ class ManagePanel(QWidget):
         """Installiere Event-Filter wenn Panel sichtbar wird."""
         super().showEvent(e)
         if self._filter is None:
-            self._filter = ManageShortcutFilter(self)
+            self._filter = ThumbGridShortcutFilter(
+                self.isVisible, self.grid, self._delete, self._copy,
+                self._cut, self._paste, self._undo, self._redo)
             QApplication.instance().installEventFilter(self._filter)
 
     def hideEvent(self, e):
