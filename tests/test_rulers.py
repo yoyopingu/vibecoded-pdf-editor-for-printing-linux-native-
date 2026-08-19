@@ -191,3 +191,42 @@ def test_opening_a_file_gives_the_preview_the_keyboard():
     finally:
         vp.deleteLater(); _app.processEvents()
     return "the preview claims the keyboard, and Down turns the page"
+
+
+def test_the_rulers_measure_the_page_that_is_actually_on_screen():
+    """Switching the bars on takes 22 px of width and of height away from the
+    page, and the page has to be laid out again for the room it has left.
+
+    It was not, so the sheet stayed the size it had been rendered at while the
+    rulers measured the size it should have been — 477 px drawn against 461 px
+    assumed on a 1100 px window, which is every reading on them 3.4 % out. The
+    numbers came right the moment anything else caused a render, so zooming
+    once "fixed" the rulers and hid the fault.
+    """
+    vp, sv = _open_single_view(FX["normal"], 1100, 800)
+
+    def mismatch():
+        """How far the ruler's idea of the page is from the page on screen."""
+        sheet = sv._sheet_on_screen()
+        pm = sv._last_pm
+        assert sheet is not None and pm is not None, "nothing measured yet"
+        drawn = pm.width()
+        assumed = sheet[2] * sv._page_w_pt
+        return abs(drawn - assumed) / max(1, drawn)
+
+    _settle(vp, lambda: sv._render_task is None, tries=100)
+    assert mismatch() < 0.01, "the fixture is wrong before the rulers are on"
+
+    sv.toggle_rulers()
+    _app.processEvents()
+    _settle(vp, lambda: sv._render_task is None, tries=200)
+    on = mismatch()
+    assert on < 0.01, f"rulers on: the page and the scale differ by {on*100:.1f}%"
+
+    # And back off again: the page gets the room returned, same requirement.
+    sv.toggle_rulers()
+    _app.processEvents()
+    _settle(vp, lambda: sv._render_task is None, tries=200)
+    off = mismatch()
+    assert off < 0.01, f"rulers off: the page and the scale differ by {off*100:.1f}%"
+    return "scale matches the sheet with the bars on and off"

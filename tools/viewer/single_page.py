@@ -579,6 +579,17 @@ class SinglePageView(QWidget):
             self._ruler_btn.setChecked(self._rulers_on)
         if self._rulers_on:
             self._sync_rulers()
+        # The bars take 22 px of width and of height away from the page, or
+        # give them back, so the page has to be laid out again for the room it
+        # now has. Queued rather than called: Qt applies the new layout after
+        # this returns, and _render measures the view.
+        #
+        # Without this the sheet stayed the size it had been rendered at while
+        # the rulers measured the size it should have been — 477 px drawn
+        # against 461 px assumed, on a 1100 px window — so every reading on
+        # them was 3.4 % out. It came right the moment anything else caused a
+        # render, which is why zooming once appeared to fix the rulers.
+        QTimer.singleShot(0, self._render)
 
     def toggle_rulers(self):
         """Strg+R, as in Acrobat."""
