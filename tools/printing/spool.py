@@ -17,6 +17,23 @@ from tools.ghostscript import ghostscript_binary, unlink
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 
+def _run_capturing(cmd, timeout):
+    """subprocess.run with the shape every call to lp/lpstat/lpoptions/
+    Ghostscript here wants: stdout and stderr captured as text, with whatever
+    the child wrote in the system locale decoded leniently rather than
+    raising on a byte Python cannot place.
+
+    `timeout` has no default on purpose — the five call sites that share this
+    disagree by more than an order of magnitude (an `lpstat` query answers in
+    well under a second and gets ~10-15s; Ghostscript re-converting a whole
+    print job gets 240s), and a shared default would read as a considered
+    number when none was chosen for the caller doing the choosing.
+    """
+    import subprocess
+    return subprocess.run(cmd, capture_output=True, text=True,
+                          errors="replace", timeout=timeout)
+
+
 # Paper in points. Here rather than on the dialog: it is what a sheet
 # measures, which the spooler needs as much as the widget that offers it.
 _PAPER_PTS = {
@@ -78,14 +95,11 @@ def printer_options(printer_name, timeout=10):
     one (media-source, media-type), so callers ask for both spellings rather
     than assuming which kind of queue this is.
     """
-    import subprocess
     options = {}
     if not printer_name or printer_name in ("lp", "none"):
         return options
     try:
-        r = subprocess.run(["lpoptions", "-p", printer_name, "-l"],
-                           capture_output=True, text=True, errors="replace",
-                           timeout=timeout)
+        r = _run_capturing(["lpoptions", "-p", printer_name, "-l"], timeout)
     except Exception:
         logging.debug("printer_options: lpoptions failed for %s", printer_name,
                       exc_info=True)
@@ -414,7 +428,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
       it is not 100, and CUPS is told print-scaling=none so it does not scale
       the result a second time.
     """
-    import subprocess, tempfile, os
+    import tempfile, os
 
     pw_pt, ph_pt = _PAPER_PTS.get(paper_key, (595.28, 841.89))
 
@@ -504,7 +518,9 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                 gs_cmd += ["-sColorConversionStrategy=LeaveColorUnchanged"]
 
             gs_cmd += [f"-sOutputFile={norm_tmp}", sub_tmp]
-            r = subprocess.run(gs_cmd, capture_output=True, text=True, errors="replace", timeout=240)
+            # 240s: a whole-document colour re-conversion, not a query — the
+            # slowest thing this file waits on.
+            r = _run_capturing(gs_cmd, timeout=240)
             # Only when a colour conversion was actually asked for, and only
             # once Ghostscript reported success — otherwise there is nothing
             # meaningful to compare against.
@@ -616,7 +632,9 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             cmd += ["-o", f"{keyword}={choice}"]
         cmd.append(print_src)
 
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=60)
+        # 60s: handing the finished file to the spooler, not doing the work —
+        # `lp` returns as soon as CUPS has accepted the job.
+        result = _run_capturing(cmd, timeout=60)
         if result.returncode != 0:
             raise RuntimeError(
                 result.stderr.strip() or result.stdout.strip()

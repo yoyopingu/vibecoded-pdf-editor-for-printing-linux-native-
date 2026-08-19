@@ -16,8 +16,8 @@ from tools.i18n import tr
 from tools.printing.preview import _PrintPreview
 from tools.render.images import pil_to_qpixmap
 from tools.printing import prefs
-from tools.printing.spool import (_PAPER_PTS, print_via_gs, prerender_for_qt,
-                                  paper_sources, queue_defaults)
+from tools.printing.spool import (_PAPER_PTS, _run_capturing, print_via_gs,
+                                  prerender_for_qt, paper_sources, queue_defaults)
 from tools.viewer.model import _positions_to_str
 from tools.viewer.tab_base import owning_tab
 from tools.theme import _TV
@@ -569,9 +569,9 @@ class PrintDialog(QDialog):
         def _bg(job):
             names, default = [], ""
             try:
-                import subprocess
-                r = subprocess.run(["lpstat", "-e"],
-                                   capture_output=True, text=True, errors="replace", timeout=15)
+                # 15s: enumerating queues, which is local and near-instant —
+                # generous headroom for a CUPS server having a slow moment.
+                r = _run_capturing(["lpstat", "-e"], timeout=15)
                 names = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
             except Exception:
                 logging.debug("lpstat -e failed; trying Qt", exc_info=True)
@@ -583,9 +583,8 @@ class PrintDialog(QDialog):
                 except Exception:
                     logging.debug("Qt found no printers either", exc_info=True)
             try:
-                import subprocess
-                r = subprocess.run(["lpstat", "-d"],
-                                   capture_output=True, text=True, errors="replace", timeout=10)
+                # 10s: the same query as above, one line instead of a list.
+                r = _run_capturing(["lpstat", "-d"], timeout=10)
                 out = r.stdout.strip()
                 if ":" in out:
                     cand = out.split(":", 1)[1].strip()
