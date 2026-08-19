@@ -227,21 +227,22 @@ def _preflight(src, checks, target, min_dpi, report):
                 else: oks.append(tr("Einheitlich: {p0}").format(
                     p0=tr('Hochformat') if orients[0] == 'H' else tr('Querformat')))
             if checks["colour"]:
-                if colour_pages: issues.append(f"Farbseiten: {colour_pages[:10]}")
+                if colour_pages: issues.append(
+                    tr('Farbseiten: {p0}').format(p0=colour_pages[:10]))
                 else: oks.append(tr("Keine Farbseiten erkannt"))
             press_issues, press_oks = _press_readiness(src, checks, min_dpi, report)
             issues += press_issues
             oks += press_oks
-            lines = [f"BERICHT -- {os.path.basename(src)}",
+            lines = [tr('BERICHT -- {p0}').format(p0=os.path.basename(src)),
                      tr('Seiten: {p0}  |  {p1} KB').format(
                          p0=n, p1=os.path.getsize(src) // 1024), ""]
-            if issues: lines += [f"PROBLEME ({len(issues)}):"] + [f"  x  {x}" for x in issues] + [""]
+            if issues: lines += [tr('PROBLEME ({p0}):').format(p0=len(issues))] + [f"  x  {x}" for x in issues] + [""]
             else: lines.append(tr("BESTANDEN -- Datei scheint druckfertig."))
-            if oks: lines += ["BESTANDEN:"] + [f"  v  {x}" for x in oks]
+            if oks: lines += [tr("BESTANDEN:")] + [f"  v  {x}" for x in oks]
         finally:
             with _pdfium_lock:
                 doc.close()
     finally:
         gc.collect(); gc.enable()
-    return lines, ("BESTANDEN" if not issues
-                   else f"FEHLER ({len(issues)} Problem(e))")
+    return lines, (tr("BESTANDEN") if not issues
+                   else tr('FEHLER ({p0} Problem(e))').format(p0=len(issues)))

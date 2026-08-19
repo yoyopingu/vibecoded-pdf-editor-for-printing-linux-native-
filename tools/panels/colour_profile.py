@@ -21,7 +21,6 @@ from tools.panels._verify import _verify_pages_intact
 class ColourProfilePanel(BasePanel):
     TITLE         = "Farbprofil / CMYK"
     SUBTITLE      = "ICC-Profile pruefen und in CMYK umwandeln."
-    OPENS_NEW_TAB = True
 
     def build_ui(self, layout):
         ib=QPushButton(tr("  Farbprofil pruefen")); ib.setObjectName("secondaryBtn")
@@ -73,7 +72,7 @@ class ColourProfilePanel(BasePanel):
                 "",
             ]
             if is_cmyk and not is_rgb:
-                lines.append("✓  CMYK — druckfertig.")
+                lines.append(tr("✓  CMYK — druckfertig."))
             elif is_rgb and is_cmyk:
                 lines.append(tr("⚠  Gemischt (RGB + CMYK) — vor Profidruck vollständig in CMYK umwandeln."))
             elif is_rgb:
@@ -100,11 +99,12 @@ class ColourProfilePanel(BasePanel):
         icc = resolve_icc(candidates)
         prof_label = self.profile_combo.currentText().split(" — ")[0]
         if icc:
-            prof_note = f"Profil: {prof_label}  ({os.path.basename(icc)})"
+            prof_note = tr('Profil: {p0}  ({p1})').format(
+                p0=prof_label, p1=os.path.basename(icc))
         elif candidates:
             prof_note = (tr("⚠  Profil '{p0}' nicht installiert — generische CMYK-Konvertierung verwendet.\n   .icc-Datei nach {p1} legen.").format(p0=prof_label, p1=ICC_DIR))
         else:
-            prof_note = "Profil: Standard (generisch)"
+            prof_note = tr("Profil: Standard (generisch)")
 
         self.run_async(
             lambda report: _to_cmyk(src, out, icc, report),

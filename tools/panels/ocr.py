@@ -6,7 +6,7 @@ import os, subprocess, shutil
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox
 from tools._base import BasePanel, make_label
-from tools.i18n import tr
+from tools.i18n import get_language, tr
 from tools.panels._shared import row
 
 
@@ -153,13 +153,28 @@ def _ocr_with_tesseract(src, out, lang, deskew, skip, report):
 class OcrPanel(BasePanel):
     TITLE         = "OCR -- Texterkennung"
     SUBTITLE      = "Gescannte PDFs durchsuchbar machen."
-    OPENS_NEW_TAB = True
 
     # Pretty names for the codes tesseract reports; anything else is shown raw.
-    _LANG_NAMES = {"deu": "Deutsch", "eng": "Englisch", "fra": "Französisch",
-                   "spa": "Spanisch", "ita": "Italienisch", "nld": "Niederländisch",
-                   "por": "Portugiesisch", "afr": "Afrikaans", "tur": "Türkisch",
-                   "pol": "Polnisch", "rus": "Russisch"}
+    #
+    # Not run through tr(): these are a closed set of language names, not
+    # sentences, and looking them up through tr()'s one flat namespace used
+    # to mean "Deutsch" (a language name here) and "Deutsch" (the "switch to
+    # German" menu item, in tools/i18n.py) were the same dict key. The second
+    # definition silently won, so the menu item read "German" instead of
+    # "Deutsch" in English mode. A (German, English) pair per code sidesteps
+    # the shared namespace instead of relying on the key staying unique.
+    _LANG_NAMES = {
+        "deu": ("Deutsch", "German"), "eng": ("Englisch", "English"),
+        "fra": ("Französisch", "French"), "spa": ("Spanisch", "Spanish"),
+        "ita": ("Italienisch", "Italian"), "nld": ("Niederländisch", "Dutch"),
+        "por": ("Portugiesisch", "Portuguese"), "afr": ("Afrikaans", "Afrikaans"),
+        "tur": ("Türkisch", "Turkish"), "pol": ("Polnisch", "Polish"),
+        "rus": ("Russisch", "Russian"),
+    }
+
+    def _lang_name(self, code):
+        de, en = self._LANG_NAMES.get(code, (code, code))
+        return en if get_language() == "en" else de
 
     def build_ui(self, layout):
         has_ocr  = shutil.which("ocrmypdf") is not None
@@ -184,7 +199,7 @@ class OcrPanel(BasePanel):
         # Only offer languages that are installed. The list was hard-coded and
         # included "fra", so picking it on a machine without that pack failed.
         for code in langs:
-            name = tr(self._LANG_NAMES.get(code, code))
+            name = self._lang_name(code)
             self.lang.addItem(f"{name} ({code})", code)
         if "deu" in langs and "eng" in langs:
             self.lang.addItem(tr("Deutsch + Englisch"), "deu+eng")
