@@ -6,7 +6,7 @@ import os, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.images import pil_to_qpixmap
 from tools.theme import INK, PAPER, _TV, _register_themed
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QWidget, QSplitter
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QSplitter
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from tools.app_state import AppState
@@ -23,7 +23,6 @@ class CropResizePanel(BasePanel):
     TITLE         = "Zuschneiden / Skalieren"
     SUBTITLE      = ""
     RUN_LABEL     = "Ausfuehren"
-    OPENS_NEW_TAB = True
 
     def _setup(self):
         outer = QVBoxLayout(self)
@@ -33,11 +32,8 @@ class CropResizePanel(BasePanel):
 
         splitter.addWidget(self.build_tool_sidebar())
 
-        self._tool_right_w = QWidget()
-        self._tool_right_w.setObjectName("toolRightPanel")
-        right_w = self._tool_right_w
-        right_l = QVBoxLayout(right_w)
-        right_l.setContentsMargins(0, 0, 0, 0); right_l.setSpacing(0)
+        right_w = self.build_tool_right_panel()
+        right_l = right_w.layout()
 
         # Shared preview pane — owns zoom controls, Ctrl+wheel, and the refresh
         # wiring (page change / new PDF / on show / on resize). This panel only
@@ -165,10 +161,7 @@ class CropResizePanel(BasePanel):
 
     def _apply_theme(self):
         t = _TV
-        self._tool_left_w.setStyleSheet(
-            f"QWidget#toolLeftPanel{{background:{t['panel_bg']};}}")
-        self._tool_right_w.setStyleSheet(
-            f"QWidget#toolRightPanel{{background:{t['viewer_bg']};}}")
+        self.apply_split_view_theme()
         self._preview.setStyleSheet(f"background:{t['card_bg']};")
         self._tool_splitter.setStyleSheet(
             f"QSplitter::handle{{background:{t['splitter']};width:2px;}}")

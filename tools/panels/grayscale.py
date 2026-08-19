@@ -367,7 +367,6 @@ def _grey_vector(gs_bin, src, out, selected, n_pages, report):
 class GrayscalePanel(BasePanel):
     TITLE         = "Graustufen-Konvertierung"
     SUBTITLE      = "Visuell graue Seiten in echtes DeviceGray umwandeln."
-    OPENS_NEW_TAB = True
 
     def _setup(self):
         outer = QVBoxLayout(self)
@@ -382,10 +381,8 @@ class GrayscalePanel(BasePanel):
         splitter.addWidget(self.build_tool_sidebar())
 
         # ── Right: preview grid ───────────────────────────────────────────
-        right_w = QWidget(); right_w.setObjectName("toolRightPanel")
-        self._tool_right_w = right_w
-        right_layout = QVBoxLayout(right_w)
-        right_layout.setContentsMargins(0, 0, 0, 0); right_layout.setSpacing(0)
+        right_w = self.build_tool_right_panel()
+        right_layout = right_w.layout()
 
         zoom_bar = QWidget(); zoom_bar.setFixedHeight(32)
         self._gs_zoombar = zoom_bar
@@ -460,10 +457,7 @@ class GrayscalePanel(BasePanel):
 
     def _apply_theme(self):
         t = _TV
-        self._tool_left_w.setStyleSheet(
-            f"QWidget#toolLeftPanel{{background:{t['panel_bg']};}}")
-        self._tool_right_w.setStyleSheet(
-            f"QWidget#toolRightPanel{{background:{t['viewer_bg']};}}")
+        self.apply_split_view_theme()
         self._tool_splitter.setStyleSheet(
             f"QSplitter::handle{{background:{t['splitter']};}}")
         self._gs_zoombar.setStyleSheet(

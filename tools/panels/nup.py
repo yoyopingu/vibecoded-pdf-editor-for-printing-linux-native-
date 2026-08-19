@@ -7,7 +7,7 @@ from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
 from tools.theme import INK, PAPER, _TV, _register_themed
-from PyQt6.QtWidgets import QVBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QWidget, QSplitter, QGridLayout
+from PyQt6.QtWidgets import QVBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from tools.app_state import AppState
@@ -129,7 +129,6 @@ class NUpPanel(BasePanel):
     TITLE         = "N-Up Layout"
     SUBTITLE      = "Mehrere Seiten auf einem Blatt — mit Rand- und Abstandssteuerung."
     RUN_LABEL     = "N-Up erstellen"
-    OPENS_NEW_TAB = True
 
     def __init__(self, parent=None):
         # Shared-render state: the preview pulls page images from the same
@@ -158,10 +157,8 @@ class NUpPanel(BasePanel):
 
         splitter.addWidget(self.build_tool_sidebar())
 
-        right_w = QWidget(); right_w.setObjectName("toolRightPanel")
-        self._tool_right_w = right_w
-        right_l = QVBoxLayout(right_w)
-        right_l.setContentsMargins(0, 0, 0, 0); right_l.setSpacing(0)
+        right_w = self.build_tool_right_panel()
+        right_l = right_w.layout()
 
         # Shared preview pane (zoom, Ctrl+wheel, page/pdf/show/resize refresh).
         self._pane = PreviewPane(self._render_preview, header="Vorschau (erstes Blatt)")
@@ -181,10 +178,7 @@ class NUpPanel(BasePanel):
 
     def _apply_theme(self):
         t = _TV
-        self._tool_left_w.setStyleSheet(
-            f"QWidget#toolLeftPanel{{background:{t['panel_bg']};}}")
-        self._tool_right_w.setStyleSheet(
-            f"QWidget#toolRightPanel{{background:{t['viewer_bg']};}}")
+        self.apply_split_view_theme()
         self._preview.setStyleSheet(f"background:{t['card_bg']};")
         self._tool_splitter.setStyleSheet(
             f"QSplitter::handle{{background:{t['splitter']};width:2px;}}")

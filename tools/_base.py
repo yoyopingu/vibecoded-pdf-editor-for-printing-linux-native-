@@ -21,6 +21,7 @@ from PyQt6.QtCore import Qt, QEvent
 from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
 from tools.pdf_access import is_locked
+from tools.theme      import _TV
 
 
 _VIEW_SNAPSHOTS: dict = {}     # model signature -> flattened temp PDF
@@ -299,8 +300,6 @@ class BasePanel(QWidget):
     SUBTITLE = ""
     # Beschriftung des Ausführen-Buttons (pro Tool überschreibbar)
     RUN_LABEL = "  Ausführen"
-    # Ob dieses Tool ein Ergebnis als neuen Tab öffnen soll
-    OPENS_NEW_TAB = False
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -418,6 +417,38 @@ class BasePanel(QWidget):
         scroll.setWidget(panel)
         scroll.setMinimumWidth(340); scroll.setMaximumWidth(480)
         return scroll
+
+    def build_tool_right_panel(self) -> QWidget:
+        """The right half of a split-view tool (Crop, N-Up, Grayscale): a
+        themed, empty container to build the preview into. Companion to
+        build_tool_sidebar() above for the left half — three panels used to
+        build this by hand, six identical lines each, and because those lines
+        set the object name apply_split_view_theme() below styles, the two had
+        drifted out of step in one of them before this was factored out.
+
+        Returns the empty widget; add the tool's own preview into its layout
+        (already a zero-margin QVBoxLayout). Sets self._tool_right_w, which
+        apply_split_view_theme() reads.
+        """
+        right_w = QWidget()
+        right_w.setObjectName("toolRightPanel")
+        self._tool_right_w = right_w
+        right_l = QVBoxLayout(right_w)
+        right_l.setContentsMargins(0, 0, 0, 0)
+        right_l.setSpacing(0)
+        return right_w
+
+    def apply_split_view_theme(self):
+        """The two stylesheet lines every split-view tool's _apply_theme()
+        needs for build_tool_sidebar()'s and build_tool_right_panel()'s
+        widgets. Call this first and add whatever else the tool's own
+        right-pane content needs (a preview's background, a splitter handle,
+        a status bar) after it — this only knows about the two containers."""
+        t = _TV
+        self._tool_left_w.setStyleSheet(
+            f"QWidget#toolLeftPanel{{background:{t['panel_bg']};}}")
+        self._tool_right_w.setStyleSheet(
+            f"QWidget#toolRightPanel{{background:{t['viewer_bg']};}}")
 
     # ── Override ──────────────────────────────────────────────────────────────
 
