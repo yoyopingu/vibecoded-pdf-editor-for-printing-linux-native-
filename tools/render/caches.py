@@ -80,7 +80,65 @@ def _priority_evict(store: "OrderedDict", key_path_fn, key_page_fn, active_path,
     return None
 
 
-class _ThumbnailCache:
+class _ByteBoundedCache:
+    """A cache bounded by bytes and evicted by priority, not by age.
+
+    Shared by _ThumbnailCache and _FullPageCache below, which were the same
+    class written out twice: same locking, same "keep at least one entry",
+    same priority-eviction call, same per-path invalidate/evict_tab. They
+    differ only in what a key looks like beyond its first two elements and
+    in how a stored entry's size and freshness are read out of it — both of
+    which stay in the subclass, in get()/put().
+
+    Every key used here has the pdf path as element 0 and the page index as
+    element 1, in both caches, so invalidation, per-tab eviction and priority
+    eviction can all key off (k[0], k[1]) without knowing anything else about
+    the rest of the key.
+
+    Not instantiated: each subclass keeps its own _lock/_store/_bytes/
+    MAX_BYTES as class attributes — a module-level singleton per cache, the
+    same shape both classes already had before this was factored out, so
+    subclassing changes nothing about how callers use _ThumbnailCache.get()
+    or _FullPageCache.put().
+    """
+    _lock: threading.Lock
+    _store: "OrderedDict"
+    MAX_BYTES: int
+    _bytes = 0
+
+    @classmethod
+    def invalidate(cls, pdf_path=None):
+        with cls._lock:
+            if pdf_path is None:
+                cls._store.clear()
+                cls._bytes = 0
+            else:
+                for k in [k for k in cls._store if k[0] == pdf_path]:
+                    cls._bytes -= cls._store.pop(k)[1]
+
+    @classmethod
+    def evict_tab(cls, pdf_path, keep_page=None):
+        """Evict every entry for pdf_path, optionally keeping one page index."""
+        with cls._lock:
+            drop = [k for k in cls._store
+                    if k[0] == pdf_path and (keep_page is None or k[1] != keep_page)]
+            for k in drop:
+                cls._bytes -= cls._store.pop(k)[1]
+
+    @classmethod
+    def _trim_locked(cls):
+        """Evict until inside the budget. Never below one entry: the page on
+        screen has to stay cached however small the budget is set. Caller
+        must already hold cls._lock."""
+        while cls._bytes > cls.MAX_BYTES and len(cls._store) > 1:
+            dropped = _priority_evict(cls._store, lambda k: k[0], lambda k: k[1],
+                                      _active_path, _active_page)
+            if dropped is None:
+                break
+            cls._bytes -= dropped[1][1]
+
+
+class _ThumbnailCache(_ByteBoundedCache):
     """LRU cache for rendered thumbnail QImages.
     Keyed by (pdf_path, page_idx, rotation, render_width).
     Stores QImage (thread-safe); caller converts to QPixmap on GUI thread.
@@ -114,36 +172,6 @@ class _ThumbnailCache:
             cls._store[key] = (_revision(key[0]), nbytes, image)
             cls._bytes += nbytes
             cls._trim_locked()
-
-    @classmethod
-    def invalidate(cls, pdf_path=None):
-        with cls._lock:
-            if pdf_path is None:
-                cls._store.clear()
-                cls._bytes = 0
-            else:
-                for k in [k for k in cls._store if k[0] == pdf_path]:
-                    cls._bytes -= cls._store.pop(k)[1]
-
-    @classmethod
-    def evict_tab(cls, pdf_path, keep_page=None):
-        """Evict all thumbnails for pdf_path, optionally keeping one page index."""
-        with cls._lock:
-            drop = [k for k in cls._store
-                    if k[0] == pdf_path and (keep_page is None or k[1] != keep_page)]
-            for k in drop:
-                cls._bytes -= cls._store.pop(k)[1]
-
-    @classmethod
-    def _trim_locked(cls):
-        """Evict until inside the budget. Never below one entry: the page on
-        screen has to stay cached however small the budget is set."""
-        while cls._bytes > cls.MAX_BYTES and len(cls._store) > 1:
-            dropped = _priority_evict(cls._store, lambda k: k[0], lambda k: k[1],
-                                      _active_path, _active_page)
-            if dropped is None:
-                break
-            cls._bytes -= dropped[1][1]
 
     @classmethod
     def get_any(cls, path, pidx, rot):
@@ -181,7 +209,7 @@ class _ThumbnailCache:
         return best[1] if best else None
 
 
-class _FullPageCache:
+class _FullPageCache(_ByteBoundedCache):
     """LRU cache for full-page render results. Zoom is NOT part of the key: the
     entry holds one render, at whatever scale it was made, and a request at a
     different zoom Qt-scales it as a *stand-in* only — see _PageRenderTask.run,
@@ -265,36 +293,6 @@ class _FullPageCache:
                 return default
             average = max(1, cls._bytes // len(cls._store))
         return max(2, min(64, cls.MAX_BYTES // average))
-
-    @classmethod
-    def _trim_locked(cls):
-        """Evict until inside the budget, keeping at least one entry — the page
-        on screen has to stay cached however small the budget is set."""
-        while cls._bytes > cls.MAX_BYTES and len(cls._store) > 1:
-            dropped = _priority_evict(cls._store, lambda k: k[0], lambda k: k[1],
-                                      _active_path, _active_page)
-            if dropped is None:
-                break
-            cls._bytes -= dropped[1][1]
-
-    @classmethod
-    def invalidate(cls, pdf_path=None):
-        with cls._lock:
-            if pdf_path is None:
-                cls._store.clear()
-                cls._bytes = 0
-            else:
-                for k in [k for k in cls._store if k[0] == pdf_path]:
-                    cls._bytes -= cls._store.pop(k)[1]
-
-    @classmethod
-    def evict_tab(cls, pdf_path, keep_page=None):
-        """Evict all full-page renders for pdf_path, optionally keeping one page index."""
-        with cls._lock:
-            drop = [k for k in cls._store
-                    if k[0] == pdf_path and (keep_page is None or k[1] != keep_page)]
-            for k in drop:
-                cls._bytes -= cls._store.pop(k)[1]
 
     @classmethod
     def get_at_least(cls, path, pidx, rot, width):
