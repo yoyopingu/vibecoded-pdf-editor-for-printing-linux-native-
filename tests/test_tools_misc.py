@@ -18,7 +18,6 @@ from tools.panels.forms import FormsPanel
 from tools.panels.img_pdf import ImgPdfPanel
 from tools.panels.impose import ImposePanel
 from tools.panels.pdfx import PdfxPanel
-from tools.panels.merge_split import MergeSplitPanel
 from tools.panels.nup import NUpPanel
 from tools.panels.page_numbers import PageNumbersPanel
 from tests.support import FX, _TMP, _app, _open, _pdfium_page_text, _sync_async
@@ -262,20 +261,19 @@ def _damage_gs(patch):
 
 
 def test_output_validity():
-    """Every tool (incl. the multi-button Merge / Image→PDF and the transformers)
-    must produce a valid, openable PDF — guards against silent corruption."""
+    """Every tool (incl. the multi-button Image→PDF and the transformers) must
+    produce a valid, openable PDF — guards against silent corruption. Merging
+    is covered on tools.viewer.merge instead: tools.panels.merge_split was a
+    second, unregistered implementation of the same feature, never reachable
+    from the sidebar, and was removed rather than kept in step by hand."""
     def out(tag): return os.path.join(_TMP, f"out_{tag}.pdf")
     def pages(path):
         return len(PdfReader(path).pages)
 
-    # Merge 5 + 1 -> 6 pages
-    m = MergeSplitPanel(); m.merge_list.add_files([FX["normal"], FX["single"]])
-    o = out("merge"); m.save_pdf = lambda *a, **k: o; m.open_result = lambda *a, **k: None
-    m._do_merge_impl()
-    assert pages(o) == 6, f"merge expected 6, got {pages(o)}"
-
-    # Image -> PDF (1 page)
-    ip = ImgPdfPanel(); ip.img_list.add_files([FX["image"]])
+    # Image -> PDF (1 page). Runs on a worker now, like every other tool here —
+    # _sync_async runs it inline instead so the file exists by the time this
+    # function reads it back.
+    ip = ImgPdfPanel(); _sync_async(ip); ip.img_list.add_files([FX["image"]])
     o = out("img"); ip.save_pdf = lambda *a, **k: o; ip.open_result = lambda *a, **k: None
     ip._to_pdf()
     assert pages(o) == 1, f"img2pdf expected 1, got {pages(o)}"
