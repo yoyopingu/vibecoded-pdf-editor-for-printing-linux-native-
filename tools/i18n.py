@@ -336,6 +336,9 @@ _EN: dict[str, str] = {
     "Abstände zu groß — kein Platz für Inhalt.": "Gaps too large — no room for content.",
     "Ränder zu groß — von der Seite bleibt nichts übrig.":
         "Margins too large — nothing left of the page.",
+    "Bitte zuerst ein Format waehlen.": "Please choose a format first.",
+    "Bitte zuerst ein Format waehlen, um Schnittmarken zu setzen.":
+        "Please choose a format first, to set crop marks.",
 
     # ── Static UI strings: menus, buttons, dialogs, merge/plugin panels ─────────
     "CopyShop PDF Suite": "CopyShop PDF Suite",

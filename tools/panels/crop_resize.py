@@ -369,6 +369,15 @@ class CropResizePanel(BasePanel):
         elif n_pages > 1:             self._sel_info.setText(f"{n_pages} {tr('Seiten')}")
         else:                         self._sel_info.setText(f"{tr('Seite')} {page_idx+1}")
 
+        if self._marks_only() and self._target_size_pt() is None:
+            # "Nur Schnittmarken setzen" needs a size to centre the marks on —
+            # picking the mode is not enough on its own. Silently falling
+            # through to "— Kein —" (no format, zero margins) used to run the
+            # ordinary crop branch instead, at zero margins, and report
+            # success on a file that was really just copied unchanged: no
+            # marks, no error, nothing to say something was still needed.
+            return None, tr("Bitte zuerst ein Format waehlen.")
+
         # Render the page ONCE at a fixed base resolution (cached per page). Every
         # resize / zoom / margin / format change then only re-scales this cached
         # image (cheap) instead of re-rendering via pdfium — that re-render is what
@@ -498,6 +507,14 @@ class CropResizePanel(BasePanel):
     def _run_action(self):
         import pikepdf
         src_path = self.require_pdf()
+        if self._marks_only() and self._target_size_pt() is None:
+            # Same guard as the preview, checked before the save dialog rather
+            # than after: asking where to save an operation that is about to
+            # refuse is a wasted round trip, and reporting "1 Seite(n)
+            # bearbeitet." on a file that was really just copied unchanged —
+            # no marks, no error — is what this looked like before the guard.
+            raise ValueError(tr(
+                "Bitte zuerst ein Format waehlen, um Schnittmarken zu setzen."))
         out = self.save_pdf("PDF speichern als")
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
 

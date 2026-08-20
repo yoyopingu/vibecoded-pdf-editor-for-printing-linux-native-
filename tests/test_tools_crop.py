@@ -42,6 +42,42 @@ def test_crop_mark_geometry():
     assert d_corner < d_each, "centre marks must be closer to corners than to each other"
 
 
+def test_marks_only_without_a_format_refuses_instead_of_silently_copying():
+    """"Nur Schnittmarken setzen" needs a target size to centre the marks on,
+    and picking the mode is not enough by itself — the Format dropdown still
+    has to be moved off "— Kein —" separately. It used to fall through to the
+    ordinary crop branch at zero margins instead: no marks, no error, and
+    "1 Seite(n) bearbeitet." in the log, which reads as success on a file that
+    was really just copied unchanged. Selecting the mode is the one thing
+    anyone reaching for crop marks does first, so this was the whole feature
+    looking broken."""
+    from tools.i18n import tr
+    _open(FX["normal"])
+    p = CropResizePanel()
+    p.fmt_action.setCurrentIndex(1)          # "Nur Schnittmarken setzen"
+    assert p.fmt.current_text() == tr("— Kein —"), "fixture assumes no format picked yet"
+
+    pm, info = p._render_preview(500, 650, 1.0)
+    assert pm is None, "the preview drew a page with no target size to mark"
+    assert "Format" in info, f"the preview did not say a format was needed: {info!r}"
+
+    out = os.path.join(_TMP, "marks_no_format.pdf")
+    p.save_pdf = lambda *a, **k: out
+    p.open_result = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("a result was opened for an operation that refused"))
+    try:
+        p._run_action()
+        raise AssertionError("no format, no size — this should have refused")
+    except ValueError as e:
+        assert "Format" in str(e)
+    assert not os.path.exists(out), "a file was written despite refusing"
+
+    # The moment a real format is picked, the same mode works.
+    p.fmt.set_format("A5  (148x210mm)")
+    pm, info = p._render_preview(500, 650, 1.0)
+    assert pm is not None and "✂" in info, f"marks mode did not recover: {info!r}"
+
+
 def _qpix_to_pil(pm):
     from PyQt6.QtGui import QImage
     img = pm.toImage().convertToFormat(QImage.Format.Format_RGB32)
