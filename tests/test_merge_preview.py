@@ -672,3 +672,57 @@ def test_closing_a_merge_tab_deletes_its_conversion_directory():
             f"the conversion directory survived the tab: {w.tmp_dir}"
     finally:
         vp.deleteLater(); _app.processEvents()
+
+
+def test_enter_merges():
+    """Enter runs the tool in every panel, and this view's whole purpose is the
+    one button it did not reach. A QDialog would have lent Enter to its default
+    button; this is a plain widget in a tab, so it takes the same two
+    QShortcuts BasePanel registers — Return and the keypad's separate Enter."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from tools.viewer.merge import MergeOrderWidget
+
+    for key, label in ((Qt.Key.Key_Return, "Return"),
+                       (Qt.Key.Key_Enter, "the keypad's Enter")):
+        w = MergeOrderWidget([FX["normal"], FX["single"]])
+        try:
+            w.show(); w.activateWindow(); w.raise_(); _app.processEvents()
+            assert w.isActiveWindow(), "fixture never got window focus"
+            merged = []
+            w.merge_confirmed.connect(lambda paths: merged.append(paths))
+            QTest.keyClick(w, key); _app.processEvents()
+            assert merged, f"{label} did not merge"
+            assert len(merged[0]) == 2, merged
+        finally:
+            w.close(); w.deleteLater(); _app.processEvents()
+    return "Return and the keypad's Enter both merge"
+
+
+def test_enter_in_the_selection_box_applies_the_selection_and_does_not_merge():
+    """That field's placeholder reads "z.B. 1, 3, 5-8, 12  →  Enter": Enter
+    there is an instruction the app prints on the box itself.
+
+    A window-wide shortcut is seen before the focused widget's own
+    returnPressed, so merging on Enter unconditionally would have taken the
+    key away from the one control that documents it — and started a merge
+    while the user was still choosing what to merge.
+    """
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from tools.viewer.merge import MergeOrderWidget
+
+    w = MergeOrderWidget([FX["normal"], FX["single"]])
+    try:
+        w.show(); w.activateWindow(); w.raise_(); _app.processEvents()
+        merged = []
+        w.merge_confirmed.connect(lambda paths: merged.append(paths))
+        w.sel_edit.setFocus(); _app.processEvents()
+        QTest.keyClicks(w.sel_edit, "2"); _app.processEvents()
+        QTest.keyClick(w.sel_edit, Qt.Key.Key_Return); _app.processEvents()
+        assert not merged, "Enter in the selection box started a merge"
+        assert sorted(w._grid._selected) == [1], \
+            f"the typed selection was not applied: {sorted(w._grid._selected)}"
+    finally:
+        w.close(); w.deleteLater(); _app.processEvents()
+    return "the selection box keeps Enter, and nothing merges behind it"

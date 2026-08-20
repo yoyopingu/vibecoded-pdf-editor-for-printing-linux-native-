@@ -477,6 +477,31 @@ class PrintDialog(QDialog):
         self.range_edit.textChanged.connect(self._sync_preview_pages)
         self._sync_preview_pages()
 
+        self._make_enter_print(print_btn, cancel_btn)
+
+    def _make_enter_print(self, print_btn, cancel_btn):
+        """Enter prints, the way Enter runs a tool in every panel.
+
+        Every QPushButton in a QDialog is autoDefault, so Qt made the first one
+        in tab order the default — and the first one here belongs to the
+        embedded preview, whose ◀ ▶ arrows are built in printing/preview.py.
+        Enter turned the preview page instead of printing: not a missing
+        feature so much as the key already being spoken for by the wrong
+        control.
+
+        Cleared on every button and granted back to these two, rather than
+        named button by button, so a control added to the sidebar or the
+        preview later cannot quietly take Enter over again. Cancel keeps it
+        because a focused Cancel that prints on Enter is how a copyshop
+        discovers it has printed a hundred sheets it did not want.
+        """
+        for btn in self.findChildren(QPushButton):
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+        for btn in (print_btn, cancel_btn):
+            btn.setAutoDefault(True)
+        print_btn.setDefault(True)
+
     def _current_page_pos(self):
         """Position of the page the viewer is showing, or None if unknown.
 

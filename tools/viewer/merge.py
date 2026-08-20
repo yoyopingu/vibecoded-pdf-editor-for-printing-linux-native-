@@ -789,8 +789,32 @@ class MergeOrderWidget(QWidget):
         # Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+Z did nothing here while working one
         # view over.
         self._on_order_changed()
+
+        # Enter merges, the way Enter runs a tool in every panel. This is a
+        # plain QWidget in a tab rather than a QDialog, so there is no default
+        # button to inherit it from — the same two QShortcuts BasePanel
+        # registers are what carry it here.
+        from PyQt6.QtGui import QKeySequence, QShortcut
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            QShortcut(QKeySequence(key), self).activated.connect(
+                self._enter_pressed)
+
         _register_themed(self)
         self._apply_theme()
+
+    def _enter_pressed(self):
+        """Enter merges — except in the selection box, which asked for it first.
+
+        That field's own placeholder reads "z.B. 1, 3, 5-8, 12  →  Enter", so
+        Enter there is a documented instruction to apply what was typed. A
+        window-wide shortcut is seen before the focused widget's own
+        returnPressed, so merging on Enter unconditionally would have quietly
+        broken the one thing the field tells the user to do.
+        """
+        if self.sel_edit.hasFocus():
+            self._apply_sel_edit()
+            return
+        self._confirm()
 
     def _apply_theme(self):
         t = _TV

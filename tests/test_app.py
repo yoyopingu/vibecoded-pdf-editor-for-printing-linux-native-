@@ -581,3 +581,37 @@ def test_a_restricted_pdf_opens_and_a_locked_one_asks_for_the_password():
     except Exception:
         pass
     return "restricted opens silently, locked asks once, wrong password refused"
+
+
+def test_enter_saves_a_settings_dialog_rather_than_discarding_it():
+    """Enter runs the tool in every panel; in a settings dialog it threw the
+    settings away.
+
+    Every QPushButton in a QDialog is autoDefault, so Qt made the first in tab
+    order the default — and _dlg_buttons adds Cancel before Save, so Cancel
+    was it in three of the four. The prepress dialog was worse: its default
+    was "Profil installieren…" further up the page, so Enter opened a file
+    picker. Found while giving the print dialog its Enter back; the same
+    defect, in a helper all four share.
+    """
+    from PyQt6.QtWidgets import QPushButton
+    from tools.shell import settings as S
+
+    for name in ("AppearanceDialog", "PerformanceDialog",
+                 "PrepressDialog", "GeneralDialog"):
+        dlg = getattr(S, name)()
+        try:
+            dlg.show(); _app.processEvents()
+            defaults = [b.text().strip() for b in dlg.findChildren(QPushButton)
+                        if b.isDefault()]
+            assert defaults == ["Speichern"], \
+                f"{name}: Enter would press {defaults}, not Save"
+            # Cancel keeps its own Enter, so tabbing to it and pressing Enter
+            # still means cancel rather than save.
+            cancel = [b for b in dlg.findChildren(QPushButton)
+                      if b.text().strip() == "Abbrechen"]
+            assert cancel and cancel[0].autoDefault(), \
+                f"{name}: a focused Cancel would save instead of cancelling"
+        finally:
+            dlg.close(); dlg.deleteLater(); _app.processEvents()
+    return "all four settings dialogs save on Enter"

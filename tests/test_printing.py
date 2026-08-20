@@ -905,3 +905,83 @@ def test_the_preview_only_warns_when_something_will_actually_be_clipped():
     finally:
         pv.deleteLater(); tab.deleteLater(); _app.processEvents()
     return "blank overhang stays quiet, ink at the edge warns"
+
+
+def test_enter_prints_instead_of_turning_the_preview_page():
+    """Enter runs the tool in every panel, and the print dialog is the one
+    place a run costs paper — so it had better be the run it starts.
+
+    It was not. Every QPushButton in a QDialog is autoDefault, so Qt made the
+    first in tab order the default, and the first here belongs to the embedded
+    preview: the ▶ arrow built in printing/preview.py. Enter turned the
+    preview page. Not a missing feature so much as the key already being
+    answered by the wrong control.
+    """
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QPushButton
+    from tools.printing.dialog import PrintDialog
+
+    printed = []
+    real = PrintDialog._do_print
+    PrintDialog._do_print = lambda self: printed.append(1)
+    try:
+        tab, dlg = _print_dialog()
+        try:
+            dlg.show(); dlg.activateWindow(); dlg.raise_(); _app.processEvents()
+            assert dlg.isActiveWindow(), "fixture never got window focus"
+
+            # The arrows must no longer be able to answer for Enter.
+            defaults = [b.text().strip() for b in dlg.findChildren(QPushButton)
+                        if b.isDefault()]
+            assert defaults == ["Drucken"], \
+                f"the default button is {defaults}, not the print button"
+
+            QTest.keyClick(dlg, Qt.Key.Key_Return); _app.processEvents()
+            assert printed, "Enter did not print"
+
+            # Typing a page range and pressing Enter is the natural way in.
+            printed.clear()
+            dlg.range_edit.setFocus(); _app.processEvents()
+            QTest.keyClick(dlg.range_edit, Qt.Key.Key_Return); _app.processEvents()
+            assert printed, "Enter in the range box did not print"
+
+            # The numeric keypad's Enter is a different key, and the panels
+            # bind both.
+            printed.clear()
+            QTest.keyClick(dlg, Qt.Key.Key_Enter); _app.processEvents()
+            assert printed, "the keypad's Enter did not print"
+        finally:
+            dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+    finally:
+        PrintDialog._do_print = real
+    return "Enter prints, from the dialog, the range box and the keypad"
+
+
+def test_enter_on_a_focused_cancel_still_cancels():
+    """Cancel keeps its own Enter. A focused Cancel that prints instead is how
+    a copyshop finds out it has run a hundred sheets nobody asked for — and
+    every other button gave Enter up precisely so this one could keep it."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QPushButton
+    from tools.printing.dialog import PrintDialog
+
+    printed = []
+    real = PrintDialog._do_print
+    PrintDialog._do_print = lambda self: printed.append(1)
+    try:
+        tab, dlg = _print_dialog()
+        try:
+            dlg.show(); dlg.activateWindow(); dlg.raise_(); _app.processEvents()
+            cancel = [b for b in dlg.findChildren(QPushButton)
+                      if b.text().strip() == "Abbrechen"]
+            assert cancel, "no Cancel button to check"
+            cancel[0].setFocus(); _app.processEvents()
+            QTest.keyClick(cancel[0], Qt.Key.Key_Return); _app.processEvents()
+            assert not printed, "Enter on a focused Cancel started a print job"
+        finally:
+            dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+    finally:
+        PrintDialog._do_print = real
+    return "a focused Cancel keeps Enter to itself"

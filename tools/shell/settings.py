@@ -149,6 +149,21 @@ def _dlg_buttons(layout, save_slot):
     btn_row.addWidget(cancel)
     btn_row.addWidget(save)
     layout.addLayout(btn_row)
+
+    # Enter saves. Every QPushButton in a QDialog is autoDefault, so Qt made
+    # the first one in tab order the default — Cancel, which is added to this
+    # row before Save, and in the prepress dialog the "Profil installieren…"
+    # button further up the page. Enter threw away the settings just typed, or
+    # opened a file picker. Cleared across the whole dialog and granted back to
+    # these two, so a control added above cannot silently take it over again.
+    dlg = layout.parentWidget()
+    if dlg is not None:
+        for btn in dlg.findChildren(QPushButton):
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+    for btn in (cancel, save):
+        btn.setAutoDefault(True)
+    save.setDefault(True)
     return cancel  # caller connects cancel.clicked.connect(self.reject)
 
 
