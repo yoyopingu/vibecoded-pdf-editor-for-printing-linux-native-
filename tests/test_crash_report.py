@@ -193,6 +193,29 @@ def test_a_guess_is_not_made_from_words_that_merely_look_like_a_program_name():
     assert "Ghostscript" in shown[0]["cause"], shown[0]["cause"]
 
 
+def test_naming_a_program_is_not_read_as_that_program_being_missing():
+    """Found by running the app rather than the suite: qpdf returning
+    something unexpected mentions qpdf exactly as much as qpdf being absent
+    does, and the dialog told the user to go and install a program that was
+    installed and had just answered. The name has to arrive with a reason to
+    believe it is missing before that is worth saying."""
+    d = tempfile.mkdtemp(dir=_TMP)
+    shown = _dialogs(
+        "try: raise ValueError('qpdf returned an object id nobody expects')\n"
+        "except ValueError: sys.excepthook(*sys.exc_info())\n", d)
+    assert shown, "no dialog at all"
+    assert "installiert" not in shown[0]["cause"] and \
+           "installed separately" not in shown[0]["cause"], \
+        f"a working qpdf was reported as missing: {shown[0]['cause']!r}"
+
+    # The genuine article — same program named, but absent this time.
+    d2 = tempfile.mkdtemp(dir=_TMP)
+    shown = _dialogs(
+        "try: raise FileNotFoundError(2, 'No such file or directory', 'qpdf')\n"
+        "except FileNotFoundError: sys.excepthook(*sys.exc_info())\n", d2)
+    assert "qpdf" in shown[0]["cause"], shown[0]["cause"]
+
+
 def test_an_unrecognised_failure_says_so_rather_than_inventing_a_cause():
     """A guess that is always confident is a guess nobody can trust. Anything
     outside the known patterns has to admit it, or the ones that are offered
@@ -205,6 +228,25 @@ def test_an_unrecognised_failure_says_so_rather_than_inventing_a_cause():
     assert "nicht automatisch bestimmen" in shown[0]["cause"], shown[0]["cause"]
     # It still hands over the traceback, which is the part that is always true.
     assert "something entirely unfamiliar 4f3a9" in shown[0]["detail"]
+
+
+def test_the_last_dialog_still_says_what_it_knows():
+    """Seen in the running app: the note about further errors going only to
+    the log was written over the cause instead of after it, so the dialog most
+    likely to be the only one a user reads was the one that explained least —
+    a blank paragraph where the cause belonged."""
+    d = tempfile.mkdtemp(dir=_TMP)
+    shown = _dialogs(
+        "for i in range(3):\n"
+        "    try: raise ValueError('distinct failure %d' % i)\n"
+        "    except ValueError: sys.excepthook(*sys.exc_info())\n"
+        "    app.processEvents()\n", d)
+    assert len(shown) == 3, f"expected three distinct dialogs, got {len(shown)}"
+    last = shown[-1]["cause"]
+    assert "Protokoll" in last, f"the cap was never announced: {last!r}"
+    assert "nicht automatisch bestimmen" in last, \
+        f"the cause was dropped to make room for the note: {last!r}"
+    assert not last.startswith("\n"), f"empty paragraph before the cause: {last!r}"
 
 
 def test_a_failing_reporter_cannot_swallow_the_log_entry():

@@ -51,6 +51,15 @@ _EXTERNAL_TOOLS = (
     (r"\bqpdf\b",                      "qpdf"),
 )
 
+# Naming one of those programs is not the same as it being absent: qpdf
+# returning something unexpected mentions qpdf just as much as qpdf being
+# missing does, and telling someone to install what they already have sends
+# them off to fix the wrong thing. The name has to arrive together with a
+# reason to think it is not there.
+_MISSING = re.compile(
+    r"not found|nicht gefunden|no such file|cannot find|can't find"
+    r"|command not found|not installed|nicht installiert", re.I)
+
 _seen = set()
 _shown = 0
 _open = False
@@ -97,11 +106,12 @@ def _guess(exc_type, exc_value, text):
     # timeout would otherwise be reported as Ghostscript being missing.
     # Word-bounded for the same reason in miniature — "gs" as a loose
     # substring is inside "settings".
-    for pattern, label in _EXTERNAL_TOOLS:
-        if re.search(pattern, msg, re.I):
-            return tr("{p0} wurde nicht gefunden. Dieses Programm wird "
-                      "separat installiert — siehe README, Abschnitt "
-                      "Requirements.").format(p0=label)
+    if name == "FileNotFoundError" or _MISSING.search(msg):
+        for pattern, label in _EXTERNAL_TOOLS:
+            if re.search(pattern, msg, re.I):
+                return tr("{p0} wurde nicht gefunden. Dieses Programm wird "
+                          "separat installiert — siehe README, Abschnitt "
+                          "Requirements.").format(p0=label)
 
     if name in ("ModuleNotFoundError", "ImportError"):
         return tr("Ein benoetigtes Python-Paket fehlt oder laesst sich nicht "
@@ -165,13 +175,19 @@ def _show(title, headline, cause, detail, parent=None):
         return          # an exception raised while this box is up must not stack
     _open = True
     try:
+        # Built once, in full. Setting the cause and then overwriting it with
+        # the "no more of these" note dropped the "cause unknown" line on the
+        # floor, and left an empty paragraph where it had been.
+        body = cause or tr("Die Ursache liess sich nicht automatisch "
+                           "bestimmen. Die technischen Details stehen unten.")
+        if _shown + 1 >= _MAX_DIALOGS:
+            body += "\n\n" + tr("Weitere Fehler dieser Sitzung werden nur "
+                                "noch ins Protokoll geschrieben.")
         box = QMessageBox(parent)
         box.setIcon(QMessageBox.Icon.Critical)
         box.setWindowTitle(title)
         box.setText(headline)
-        box.setInformativeText(
-            cause or tr("Die Ursache liess sich nicht automatisch bestimmen. "
-                        "Die technischen Details stehen unten."))
+        box.setInformativeText(body)
         box.setDetailedText(detail)
         copy_btn = box.addButton(tr("Bericht kopieren"),
                                  QMessageBox.ButtonRole.ActionRole)
@@ -187,11 +203,6 @@ def _show(title, headline, cause, detail, parent=None):
             lambda: QApplication.clipboard().setText(detail))
         log_btn.clicked.connect(lambda: open_log_folder(box))
         _shown += 1
-        if _shown >= _MAX_DIALOGS:
-            box.setInformativeText(
-                (cause or "") + "\n\n" +
-                tr("Weitere Fehler dieser Sitzung werden nur noch ins "
-                   "Protokoll geschrieben."))
         box.exec()
     except Exception:
         logging.debug("the crash dialog could not be shown", exc_info=True)
