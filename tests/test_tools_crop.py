@@ -276,6 +276,45 @@ def test_a_scale_percentage_actually_scales():
     return "50%, 80% and 200% all land on the page size they name"
 
 
+def test_scale_pct_tracks_format_and_can_override_it():
+    """The Skalierung box used to be a fully independent multiplier: it kept
+    showing whatever number it was last set to no matter what Format or
+    margins did to the page, so a page already cropped to A5 still showed
+    "100 %" — a live lie about the size the tool was actually producing.
+
+    It should instead be a readout of the real combined size (auto-updating
+    whenever Format/margins change) that is still directly editable: typing a
+    new value overrides the Format/margins with a centred resize to that
+    percentage of the original page, exactly the way picking a Format
+    overrides hand-typed margins.
+    """
+    from tools.i18n import tr
+    _open(FX["normal"])            # A4: 210x297mm
+    p = CropResizePanel()
+
+    p.fmt.set_format("A5  (148x210mm)")
+    pm, _info = p._render_preview(500, 650, 1.0)
+    assert pm is not None
+    expected = 100.0 * ((148 * 210) / (210 * 297)) ** 0.5
+    assert abs(p.scale_pct.value() - expected) < 0.5, \
+        f"Skalierung did not track the A5 format: {p.scale_pct.value()}"
+
+    # Typing a new percentage overrides the format with a centred resize of
+    # the *original* page, not a further shrink of the A5 crop.
+    p.scale_pct.setValue(50.0)
+    assert p.fmt.current_text() == tr("— Kein —"), \
+        "a hand-typed percentage should drop the stale Format selection"
+    p.apply_all.setChecked(True)
+    out = os.path.join(_TMP, "scale_pct_override.pdf")
+    p.save_pdf = lambda *a, **k: out
+    p.open_result = lambda *a, **k: None
+    p._run_action()
+    mb = PdfReader(out).pages[0].mediabox
+    w_mm = float(mb.width) / MM; h_mm = float(mb.height) / MM
+    assert abs(w_mm - 105) <= 1, w_mm      # 50% of 210mm
+    assert abs(h_mm - 148.5) <= 1, h_mm    # 50% of 297mm
+
+
 def _ink_box(path, i):
     import pypdfium2 as pdfium
     from PIL import ImageOps

@@ -128,10 +128,10 @@ class CropResizePanel(BasePanel):
         self.scale_pct.setRange(5.0, 400.0); self.scale_pct.setDecimals(1)
         self.scale_pct.setSuffix(" %"); self.scale_pct.setValue(100.0)
         self.scale_pct.setSingleStep(5.0); self.scale_pct.setFixedWidth(100)
-        self.scale_pct.valueChanged.connect(self._update_preview)
+        self.scale_pct.valueChanged.connect(self._on_pct_edited)
         pct_row.addWidget(self.scale_pct); pct_row.addStretch()
         sg.addLayout(pct_row)
-        self._pct_hint = QLabel(tr("Seite und Inhalt zusammen. 100 % laesst die Groesse, wie sie ist."))
+        self._pct_hint = QLabel(tr("Zeigt, wie gross die Seite durch Format und Raender wird. Eingabe skaliert die ganze Seite zentriert auf diesen Wert."))
         self._pct_hint.setObjectName("dimLabel"); self._pct_hint.setWordWrap(True)
         sg.addWidget(self._pct_hint)
 
@@ -261,24 +261,58 @@ class CropResizePanel(BasePanel):
         except Exception as ex:
             self.log.log(str(ex), error=True)
 
-    def _scale_factor(self):
-        """The Skalierung box as a factor, or 1.0 when it does not apply.
-
-        Marks-only mode is "do not resize the page", so the percentage has
-        nothing to act on there and is switched off with the rest of it.
+    def _on_pct_edited(self, val):
+        """The user typed or spun a new Skalierung value: resize the previewed
+        page, centred, to `val`% of its own original size — the same way
+        picking a Format overwrites hand-typed margins. Programmatic updates
+        that only refresh the *display* (see _sync_pct_display) come with
+        signals blocked, so they never reach this handler; only a genuine
+        user edit does.
         """
         if self._marks_only():
-            return 1.0
-        return self.scale_pct.value() / 100.0
+            return
+        pdf_path = self.current_pdf()
+        if not pdf_path or not os.path.isfile(pdf_path):
+            return
+        pages    = self._get_target_pages()
+        page_idx = pages[0][0] if pages else 0
+        try:
+            _pil, pw, ph = self._base_page(pdf_path, page_idx)
+        except Exception as ex:
+            self.log.log(str(ex), error=True); return
+        self.fmt.reset()   # a typed percentage is not "the chosen Format" any more
+        # A percentage names a scale, not a crop: a page at 80% whose content
+        # stayed its old size is not what "Skalierung" means, so a typed value
+        # turns content-fit on rather than leaving a plain centred crop behind.
+        blocked = self.scale_check.blockSignals(True)
+        self.scale_check.setChecked(True)
+        self.scale_check.blockSignals(blocked)
+        factor = val / 100.0
+        self._set_margins_for_size(pw * factor, ph * factor)
+
+    def _sync_pct_display(self, new_w, new_h, pw, ph):
+        """Keep the Skalierung box showing the truth: how big the page (Format
+        and/or margins) currently comes out, as a single percentage — the
+        geometric mean of the width and height ratios, since an asymmetric
+        crop has no single exact percentage. Runs after every preview render,
+        signals blocked so it never re-triggers _on_pct_edited.
+        """
+        if self._marks_only() or pw <= 0 or ph <= 0:
+            return
+        pct = 100.0 * ((new_w * new_h) / (pw * ph)) ** 0.5
+        blocked = self.scale_pct.blockSignals(True)
+        self.scale_pct.setValue(pct)
+        self.scale_pct.blockSignals(blocked)
 
     def _scales_content(self):
         """Will the content be scaled into the new page size?
 
-        A percentage other than 100 says so by itself: a page at 80% whose
-        content stayed its old size is not what anyone means by 80%, it is a
-        crop. Shared by the preview and the run so the two cannot disagree.
+        Purely the checkbox now: Skalierung no longer carries its own,
+        independent shrink — it is a readout of, and shortcut editor for,
+        the page size that Format/margins already produce (see
+        _sync_pct_display / _on_pct_edited).
         """
-        return self.scale_check.isChecked() or self._scale_factor() != 1.0
+        return self.scale_check.isChecked()
 
     def _margins_mm(self):
         return (self.ct.value(), self.cb2.value(), self.cl2.value(), self.cr.value())
@@ -298,8 +332,11 @@ class CropResizePanel(BasePanel):
     def _effective_margins_pt(self, pw, ph):
         """(top, bottom, left, right) in points for a page of size (pw, ph) —
         derived from the chosen Format when one is active, else the four spin
-        boxes, and then taken down by the Skalierung percentage. Shared by the
-        preview and the run so they can never disagree."""
+        boxes. Shared by the preview and the run so they can never disagree.
+        The Skalierung percentage no longer feeds in here: it is a readout of
+        this result (see _sync_pct_display), and editing it writes new margins
+        through _on_pct_edited/_set_margins_for_size instead of a separate
+        multiplier — so there is exactly one source of truth for page size."""
         size = self._format_margins()
         if size is not None:
             dw = (pw - size[0]) / 2; dh = (ph - size[1]) / 2
@@ -307,15 +344,6 @@ class CropResizePanel(BasePanel):
         else:
             t, b = self.ct.value()  * MM_TO_PT, self.cb2.value() * MM_TO_PT
             l, r = self.cl2.value() * MM_TO_PT, self.cr.value()  * MM_TO_PT
-        factor = self._scale_factor()
-        if factor != 1.0:
-            # The percentage is the last word on the size: whatever the Format
-            # and the margin boxes have made of this page, the result is that
-            # page at `factor`. Taken off all four edges equally, so it stays
-            # centred on what it came from.
-            dw = (pw - l - r) * (1.0 - factor) / 2
-            dh = (ph - t - b) * (1.0 - factor) / 2
-            t += dh; b += dh; l += dw; r += dw
         return t, b, l, r
 
     def _get_target_pages(self):
@@ -391,6 +419,7 @@ class CropResizePanel(BasePanel):
         if new_w < 1. or new_h < 1.:
             # Same refusal the run makes — better than drawing a 1pt sliver.
             return None, tr("Ränder zu groß — von der Seite bleibt nichts übrig.")
+        self._sync_pct_display(new_w, new_h, pw, ph)
         do_scale = self._scales_content()
 
         # Fit everything that gets drawn, not only the page that comes out.

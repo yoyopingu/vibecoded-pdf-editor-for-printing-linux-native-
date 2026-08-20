@@ -1118,8 +1118,9 @@ _EN: dict[str, str] = {
     "Auf Null setzen": "Reset to zero",
     "Skalieren": "Scale",
     "Skalierung": "Scale",
-    "Seite und Inhalt zusammen. 100 % laesst die Groesse, wie sie ist.":
-        "Page and content together. 100 % leaves the size as it is.",
+    "Zeigt, wie gross die Seite durch Format und Raender wird. Eingabe skaliert die ganze Seite zentriert auf diesen Wert.":
+        "Shows how big the page becomes from Format and margins. "
+        "Typing a value scales the whole page, centred, to that amount.",
     "Inhalt in das neue Format einpassen": "Fit content into the new size",
     "Inhalt skalieren": "Scale content",
     "Proportionen beibehalten": "Keep proportions",
