@@ -297,7 +297,9 @@ class PageGrid(QWidget):
             e.ignore()  # Scroll an ScrollArea weitergeben
 
     def _per_row(self):
-        w = self.width() or 800  # Fallback wenn noch nicht gezeichnet
+        # Before layout, width() returns 0; using a default prevents zero-column layouts
+        # but we also clamp to at least 1 column.
+        w = self.width() or 800
         return max(1, (w - 2*MARGIN + GAP) // (self._card_w+16+GAP))
 
     def _rebuild(self):

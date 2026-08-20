@@ -347,7 +347,10 @@ def cancel_all(wait_ms=2000):
     # error traceback on every exit without an event loop.
     pool = QThreadPool.globalInstance()
     if pool is not None:
-        pool.waitForDone(wait_ms)
+        try:
+            pool.waitForDone(wait_ms)
+        except Exception:
+            logging.debug("cancel_all: waitForDone raised during Qt teardown", exc_info=True)
     with _jobs_lock:
         _prune_locked()
     return len(victims)

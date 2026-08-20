@@ -122,9 +122,14 @@ def _compress(src, out, gs_setting, use_gs, report):
             unlink(gs_tmp)
     else:
         report(tr("Komprimiere Streams …"))
-        pdf = pikepdf.open(src)
+        try:
+            pdf = pikepdf.open(src)
+        except Exception as e:
+            raise RuntimeError(tr("PDF konnte nicht geoeffnet werden: {p0}").format(p0=e))
         try:
             pdf.save(out, compress_streams=True, recompress_flate=True)
+        except Exception as e:
+            raise RuntimeError(tr("Komprimierung fehlgeschlagen: {p0}").format(p0=e))
         finally:
             pdf.close()
 
