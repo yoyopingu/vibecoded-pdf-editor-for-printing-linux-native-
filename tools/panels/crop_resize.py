@@ -247,12 +247,18 @@ class CropResizePanel(BasePanel):
             # Exakte Differenz — kein Runden damit Zielformat stimmt
             diff_w_mm = (pw - tw) / MM_TO_PT / 2
             diff_h_mm = (ph - th) / MM_TO_PT / 2
+            # Unblocked in a finally: anything raising between the two loops
+            # used to leave the four boxes muted for the life of the panel, and
+            # a muted box is one whose edits never reach _update_preview — the
+            # preview then sits on whatever it last drew, or on nothing.
             for w in [self.ct, self.cb2, self.cl2, self.cr]:
                 w.blockSignals(True)
-            self.cl2.setValue(diff_w_mm); self.cr.setValue(diff_w_mm)
-            self.ct.setValue(diff_h_mm);  self.cb2.setValue(diff_h_mm)
-            for w in [self.ct, self.cb2, self.cl2, self.cr]:
-                w.blockSignals(False)
+            try:
+                self.cl2.setValue(diff_w_mm); self.cr.setValue(diff_w_mm)
+                self.ct.setValue(diff_h_mm);  self.cb2.setValue(diff_h_mm)
+            finally:
+                for w in [self.ct, self.cb2, self.cl2, self.cr]:
+                    w.blockSignals(False)
             # Remember that these margins came from the format, so the run can
             # re-derive them for every page instead of applying this one page's
             # millimetres to pages of a different size (see _format_margins).
@@ -347,13 +353,28 @@ class CropResizePanel(BasePanel):
         return t, b, l, r
 
     def _get_target_pages(self):
+        """(page index, uid) for the pages this run should act on.
+
+        The index is a position in the document as displayed — the same thing
+        enumerate() yields over current_pdf()'s pages — and not the page's
+        original number in the file on disk.
+
+        It used to be the original number, from model.orig(). The two agree
+        only while the page manager is showing the file unchanged, which is
+        why this looked fine most of the time: reorder, delete or insert
+        anything and they part company, and every user of this measures
+        against the flattened snapshot, where display order is the only order
+        there is. Deleting the first five pages of an eight-page document left
+        the run hunting for pages 5, 6 and 7 of a file that now had three, so
+        it matched nothing, changed nothing, and saved a copy of the input.
+        """
         state = AppState.get(); model = state.page_model
         if model and model.selected:
-            return [(model.orig(uid), uid) for uid in model.order if uid in model.selected]
+            return [(pos, uid) for pos, uid in enumerate(model.order)
+                    if uid in model.selected]
         if model and model.order:
             cur = max(0, min(state.current_page, len(model.order)-1))
-            uid = model.order[cur]
-            return [(model.orig(uid), uid)]
+            return [(cur, model.order[cur])]
         return []
 
     def _base_page(self, pdf_path, page_idx):
@@ -553,7 +574,9 @@ class CropResizePanel(BasePanel):
         else:
             target_pages = self._get_target_pages()
             if not target_pages: raise ValueError(tr("Keine Seiten ausgewaehlt."))
-            target_origs = {orig for orig, _ in target_pages}
+            # Positions in the displayed document, which is what src_path holds
+            # — see _get_target_pages.
+            target_origs = {pos for pos, _ in target_pages}
 
         # Cut-marks-only mode: don't resize the page — just stamp crop marks at
         # the chosen size, centred on each page (shares the N-Up marks helper).

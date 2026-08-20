@@ -409,3 +409,109 @@ def test_an_oversized_preview_does_not_drag_the_pane_out_with_it():
     assert label.pixmap().width() > label.width(), \
         "the test never produced an oversized render"
     return f"6x zoom, label still {started[0]}x{started[1]}"
+
+
+def _numbered_pdf(name, n):
+    """A document whose pages say which page they are, so the output can be
+    checked against the page that was actually asked for."""
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    path = os.path.join(_TMP, name)
+    c = canvas.Canvas(path, pagesize=A4)
+    for i in range(n):
+        c.setFont("Helvetica", 90)
+        c.drawCentredString(300, 400, f"P{i+1}")
+        c.showPage()
+    c.save()
+    return path
+
+
+def test_cropping_follows_the_page_manager_after_pages_are_deleted():
+    """The tool measures and writes against the flattened view of the document
+    — the page manager's order, not the file on disk — but it picked its pages
+    by their *original* number in that file. The two agree only while the view
+    is untouched, which is why this worked most of the time.
+
+    Delete the first five pages of eight and the run went looking for pages 5,
+    6 and 7 of a document that now had three. Nothing matched, nothing was
+    cropped, and the file it saved was a copy of its input.
+    """
+    from tools.app_state import AppState
+    src = _numbered_pdf("del_src.pdf", 8)
+    _open(src)
+    model = AppState.get().page_model
+    model.selected = {model.order[i] for i in range(5)}
+    model.delete_selected()
+    assert len(model.order) == 3, "fixture did not delete what it meant to"
+
+    p = CropResizePanel(); p.log.log = lambda *a, **k: None
+    p.apply_all.setChecked(False)
+    model.selected = set(model.order)
+    p.fmt.set_format("A5  (148x210mm)")
+
+    out = os.path.join(_TMP, "del_out.pdf")
+    p.save_pdf = lambda *a, **k: out
+    p.open_result = lambda *a, **k: None
+    p._run_action()
+
+    sizes = [(round(float(pg.mediabox.width) / MM),
+              round(float(pg.mediabox.height) / MM))
+             for pg in PdfReader(out).pages]
+    assert len(sizes) == 3, f"expected the three surviving pages, got {sizes}"
+    for w, h in sizes:
+        assert abs(w - 148) <= 1 and abs(h - 210) <= 1, \
+            f"a page came out {w}x{h}mm — the run left the file untouched"
+    return "all three surviving pages cropped, none skipped"
+
+
+def test_cropping_acts_on_the_page_that_is_selected_not_the_one_beneath_it():
+    """Worse than doing nothing: with the pages reordered, picking a page
+    cropped a different one and said it had succeeded.
+
+    Reverse a six-page document and select what is now the first page — the
+    original page 6. The run took its number, 5, and applied it to position 5
+    of the displayed document, which is the original page 1. The wrong page
+    came back resized, the right one untouched, and the log said one page had
+    been processed.
+    """
+    from tools.app_state import AppState
+    from tests.support import _page_labels
+    src = _numbered_pdf("reorder_src.pdf", 6)
+    _open(src)
+    model = AppState.get().page_model
+    model.order.reverse()
+    model.selected = {model.order[0]}          # displayed first = original P6
+
+    p = CropResizePanel(); p.log.log = lambda *a, **k: None
+    p.apply_all.setChecked(False)
+    p.fmt.set_format("A5  (148x210mm)")
+    out = os.path.join(_TMP, "reorder_out.pdf")
+    p.save_pdf = lambda *a, **k: out
+    p.open_result = lambda *a, **k: None
+    p._run_action()
+
+    labels = _page_labels(out)
+    cropped = [labels[i] for i, pg in enumerate(PdfReader(out).pages)
+               if abs(float(pg.mediabox.width) / MM - 148) <= 1]
+    assert cropped == ["P6"], \
+        f"cropped {cropped}, but the selected page was P6 (labels: {labels})"
+    return "the selected page is the one that changes"
+
+
+def test_the_preview_still_draws_when_the_view_is_shorter_than_the_file():
+    """The same mixed-up numbering reached the preview, which asked the
+    flattened document for a page number that only existed in the original —
+    so the pane went blank at exactly the moment the run was about to do
+    nothing, and neither said why."""
+    from tools.app_state import AppState
+    src = _numbered_pdf("preview_src.pdf", 8)
+    _open(src)
+    model = AppState.get().page_model
+    model.selected = {model.order[i] for i in range(5)}
+    model.delete_selected()
+    model.selected = {model.order[-1]}         # the last page still showing
+
+    p = CropResizePanel(); p.log.log = lambda *a, **k: None
+    pm, info = p._render_preview(500, 650, 1.0)
+    assert pm is not None, f"the preview drew nothing: {info!r}"
+    return "the preview draws against the document that is on screen"
