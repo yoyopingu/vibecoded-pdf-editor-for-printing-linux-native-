@@ -41,6 +41,73 @@ def _forget_snapshot(sig):
     return path
 
 
+def snapshot_dir():
+    """Where the flattened copies live."""
+    return os.path.join(tempfile.gettempdir(), "copyshop_view")
+
+
+def discard_snapshots_for(base_path):
+    """Delete the flattened copies made of one document.
+
+    Called when its tab closes. Nothing used to: a snapshot was only ever
+    replaced, by the next snapshot of the same document, so closing a tab left
+    its copy behind and quitting left every copy behind. They are whole
+    documents — a customer's file, sitting in the temp directory of a shared
+    machine long after the job went out of the door — and on a counter that
+    opens a hundred files a day it is the largest thing this application
+    leaves lying around.
+    """
+    if not base_path:
+        return
+    for sig in [s for s in _VIEW_SNAPSHOTS if s[0] == base_path]:
+        stale = _forget_snapshot(sig)
+        if not stale:
+            continue
+        try:
+            os.remove(stale)
+        except OSError:
+            logging.debug("could not remove the view snapshot %s", stale,
+                          exc_info=True)
+
+
+def discard_all_snapshots():
+    """Delete every flattened copy this process made. For shutdown."""
+    for sig in list(_VIEW_SNAPSHOTS):
+        stale = _forget_snapshot(sig)
+        if not stale:
+            continue
+        try:
+            os.remove(stale)
+        except OSError:
+            logging.debug("could not remove the view snapshot %s", stale,
+                          exc_info=True)
+
+
+def sweep_orphan_snapshots():
+    """Remove flattened copies left behind by runs that did not get to clean up.
+
+    A crash, a kill, or any version of this application from before the two
+    functions above existed. Safe at startup because nothing of ours is on
+    disk yet, and because a snapshot is only ever a cache — ensure_view_snapshot
+    checks the file is still there and writes it again if it is not.
+    """
+    try:
+        for name in os.listdir(snapshot_dir()):
+            if not name.startswith("view_") or not name.endswith(".pdf"):
+                continue        # not ours; leave anything else alone
+            path = os.path.join(snapshot_dir(), name)
+            if path in _SNAPSHOT_PATHS:
+                continue        # this run is using it
+            try:
+                os.remove(path)
+            except OSError:
+                logging.debug("could not sweep %s", path, exc_info=True)
+    except FileNotFoundError:
+        pass                    # nothing has ever been written
+    except Exception:
+        logging.debug("could not sweep the view snapshots", exc_info=True)
+
+
 def _model_signature(model, base_path):
     """Everything about a PageModel that changes the document a tool should see."""
     return (base_path,
@@ -101,7 +168,7 @@ def ensure_view_snapshot(base_path: str) -> str:
             rot  = model.get_rotation(uid)
             if rot: page.rotate(rot)
             writer.add_page(page)
-        tmp_dir = os.path.join(tempfile.gettempdir(), "copyshop_view")
+        tmp_dir = snapshot_dir()
         os.makedirs(tmp_dir, exist_ok=True)
         out = os.path.join(tmp_dir, f"view_{uuid.uuid4().hex[:8]}.pdf")
         with open(out, "wb") as f:
@@ -110,12 +177,7 @@ def ensure_view_snapshot(base_path: str) -> str:
         return base_path        # never block a tool because the snapshot failed
     # Drop the previous snapshot of the same file — one temp file per document,
     # not one per edit.
-    for old_sig in [s for s in _VIEW_SNAPSHOTS if s[0] == base_path]:
-        stale = _forget_snapshot(old_sig)
-        try:
-            os.remove(stale)
-        except OSError:
-            pass       # already gone, or the temp dir was cleared under us
+    discard_snapshots_for(base_path)
     _remember_snapshot(sig, out)
     return out
 
@@ -517,10 +579,23 @@ class BasePanel(QWidget):
     def require_pdf(self) -> str:
         """Gibt aktuellen PDF-Pfad zurück, wirft Fehler wenn keine offen."""
         path = AppState.get().current_pdf
-        if not path or not os.path.isfile(path):
+        if not path:
             raise ValueError(tr(
                 "Keine PDF geöffnet.\n"
                 "Öffne zuerst eine PDF im Page Viewer (linke Seite)."))
+        if not os.path.isfile(path):
+            # A document *is* open — its file has gone from under it. Saying
+            # "no PDF open" here sent the operator to open the file they
+            # already had open, which is the one thing that cannot work; a
+            # stick pulled out, a share dropped or a file moved by someone
+            # else all arrived as that same wrong sentence.
+            raise ValueError(tr(
+                "Die Datei ist nicht mehr auffindbar:\n{p0}\n\n"
+                "Sie wurde verschoben, umbenannt oder geloescht — oder das "
+                "Laufwerk ist nicht mehr verbunden. Die Seitenansicht zeigt "
+                "noch den letzten Stand; zum Weiterarbeiten die Datei wieder "
+                "verfuegbar machen und neu oeffnen."
+            ).format(p0=path))
         # Central guard: a locked PDF cannot be processed and otherwise surfaces
         # as a cryptic library error (PasswordError / FileNotDecryptedError /
         # PdfiumError) in each tool. Give one clear message instead.

@@ -306,3 +306,111 @@ def test_a_page_card_is_one_widget_and_carries_no_stylesheet():
     finally:
         grid.deleteLater(); _app.processEvents()
     return "one widget, no stylesheet, paints itself"
+
+
+def test_closing_a_tab_takes_its_flattened_copy_with_it():
+    """A snapshot is a whole document written into the temp directory. Nothing
+    used to remove one: it was replaced only by the next snapshot of the same
+    file, so closing a tab left the copy behind and quitting left every copy
+    behind — 333 of them on this machine when the leak was found, each a
+    customer's file sitting in /tmp long after the job went out.
+    """
+    import glob, os, shutil
+    import tools._base as B
+    from tools._base import ensure_view_snapshot
+    from tools.viewer.model import PageModel
+
+    def on_disk():
+        return len(glob.glob(os.path.join(B.snapshot_dir(), "view_*.pdf")))
+
+    src = os.path.join(_TMP, "closing_tab.pdf")
+    shutil.copyfile(FX["normal"], src)
+    st = _open(src)
+    st.page_model = PageModel(5)
+    st.page_model.order.reverse()             # forces a real snapshot
+    flat = ensure_view_snapshot(st.current_pdf)
+    assert flat != src and os.path.isfile(flat)
+    before = on_disk()
+
+    B.discard_snapshots_for(src)
+    assert not os.path.isfile(flat), "the flattened copy outlived its tab"
+    assert on_disk() == before - 1
+    assert flat not in B._SNAPSHOT_PATHS, "stale path left in the set"
+    assert set(B._VIEW_SNAPSHOTS.values()) == B._SNAPSHOT_PATHS, \
+        "structures drifted"
+    return "the copy goes when the tab does"
+
+
+def test_quitting_and_restarting_leave_no_flattened_copies_behind():
+    """Two halves of the same leak: what this run made goes on the way out,
+    and what a run that crashed left behind goes at the next start. A snapshot
+    is only ever a cache, so removing one costs a rewrite at worst."""
+    import glob, os, shutil
+    import tools._base as B
+    from tools._base import ensure_view_snapshot
+    from tools.viewer.model import PageModel
+
+    def ours():
+        return glob.glob(os.path.join(B.snapshot_dir(), "view_*.pdf"))
+
+    for i in range(3):
+        src = os.path.join(_TMP, f"quitting_{i}.pdf")
+        shutil.copyfile(FX["normal"], src)
+        st = _open(src)
+        st.page_model = PageModel(5)
+        st.page_model.order.reverse()
+        ensure_view_snapshot(st.current_pdf)
+    assert len(B._VIEW_SNAPSHOTS) >= 3, "fixture wrote no snapshots"
+
+    B.discard_all_snapshots()
+    assert not B._VIEW_SNAPSHOTS and not B._SNAPSHOT_PATHS
+    assert not ours(), f"quitting left copies behind: {ours()}"
+
+    # A run that died leaves files nothing is tracking; the next start clears
+    # them — and touches nothing that is not one of ours.
+    os.makedirs(B.snapshot_dir(), exist_ok=True)
+    orphan  = os.path.join(B.snapshot_dir(), "view_deadbeef.pdf")
+    foreign = os.path.join(B.snapshot_dir(), "not_ours.pdf")
+    for p in (orphan, foreign):
+        with open(p, "wb") as f:
+            f.write(b"%PDF-1.4\n")
+    B.sweep_orphan_snapshots()
+    assert not os.path.exists(orphan), "an orphan survived the startup sweep"
+    assert os.path.exists(foreign), "the sweep removed a file that is not ours"
+    os.remove(foreign)
+    return "nothing of ours survives a quit, or a crash"
+
+
+def test_a_tool_says_the_file_vanished_rather_than_that_none_is_open():
+    """Pull out the stick a job came in on and every tool answered "Keine PDF
+    geoeffnet — open one first", about a document that was open and on screen.
+    That is the one instruction which cannot help, and it describes a
+    different problem than the one the operator has."""
+    import os, shutil
+    from tools._base import BasePanel
+    from tools.panels.crop_resize import CropResizePanel
+
+    drive = os.path.join(_TMP, "removable"); os.makedirs(drive, exist_ok=True)
+    src = os.path.join(drive, "on_a_stick.pdf")
+    shutil.copyfile(FX["normal"], src)
+    _open(src)
+    panel = CropResizePanel()
+    panel.require_pdf()                        # fine while the file is there
+
+    shutil.rmtree(drive)                       # the stick comes out
+    try:
+        panel.require_pdf()
+        raise AssertionError("a missing file was accepted as present")
+    except ValueError as e:
+        said = str(e)
+    assert "auffindbar" in said or "no longer" in said, \
+        f"still reports the wrong problem: {said!r}"
+    assert src in said, f"the message does not name the file: {said!r}"
+    assert "Öffne zuerst" not in said, \
+        "still tells the operator to open the document they already had open"
+
+    # The preview draws the same distinction rather than the old wording.
+    _pm, info = panel._render_preview(400, 500, 1.0)
+    assert "auffindbar" in info or "no longer" in info, \
+        f"the preview still says the wrong thing: {info!r}"
+    return "names the file that went missing, and says what happened to it"

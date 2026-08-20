@@ -574,6 +574,24 @@ class PageViewerPanel(QWidget):
                     release(w.pdf_path)
             except Exception:
                 logging.exception("close: releasing the cached document failed")
+            # And the flattened copy the tools were reading. It is a whole
+            # document in the temp directory; nothing used to remove it, so a
+            # counter that opens a hundred files a day left a hundred copies
+            # of customer work behind it.
+            try:
+                from tools._base import discard_snapshots_for
+                discard_snapshots_for(w.pdf_path)
+            except Exception:
+                logging.debug("close: removing the view snapshot failed",
+                              exc_info=True)
+            # If this tab was showing a locked document, its open file is the
+            # decrypted copy. That one does not wait for the quit.
+            try:
+                from tools.pdf_access import discard_unlocked_copy
+                discard_unlocked_copy(w.pdf_path)
+            except Exception:
+                logging.debug("close: removing the decrypted copy failed",
+                              exc_info=True)
         elif isinstance(w, MergeOrderWidget):
             # Closing the preview discards its conversions — unless one is still
             # running, in which case the worker is still writing in there.

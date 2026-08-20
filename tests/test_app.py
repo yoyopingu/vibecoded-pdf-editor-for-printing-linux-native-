@@ -615,3 +615,53 @@ def test_enter_saves_a_settings_dialog_rather_than_discarding_it():
         finally:
             dlg.close(); dlg.deleteLater(); _app.processEvents()
     return "all four settings dialogs save on Enter"
+
+
+def test_a_decrypted_copy_is_private_and_does_not_outlive_its_tab():
+    """Unlocking a password-protected file writes the document without its
+    protection into the temp directory.
+
+    That copy was created with whatever the umask allowed — 0644 here — in a
+    directory every account on the machine can read, and nothing ever deleted
+    it: 37 of them had accumulated on this machine. A customer hands over a
+    protected file, and a password-free copy of it stays on the counter's
+    shared computer for good. It is written owner-only now, and goes when the
+    tab closes or the application quits.
+    """
+    import glob, stat
+    import pikepdf
+    import tools.pdf_access as PA
+
+    src = os.path.join(_TMP, "protected_job.pdf")
+    doc = pikepdf.new(); doc.add_blank_page(page_size=(595, 842))
+    doc.save(src, encryption=pikepdf.Encryption(user="hunter2", owner="hunter2"))
+    assert PA.is_locked(src), "fixture is not actually locked"
+
+    dest = PA.unlock_to_temp(src, "hunter2")
+    try:
+        mode = stat.S_IMODE(os.stat(dest).st_mode)
+        assert not mode & (stat.S_IRGRP | stat.S_IROTH), (
+            f"the decrypted copy is readable by other accounts: {oct(mode)}")
+        assert dest in PA._UNLOCKED_COPIES, "the copy is not tracked for cleanup"
+        # It really is decrypted — this is what makes leaving it behind matter.
+        with pikepdf.open(dest) as opened:
+            assert len(opened.pages) == 1
+    finally:
+        PA.discard_unlocked_copy(dest)
+    assert not os.path.exists(dest), "the decrypted copy outlived its tab"
+
+    # Quitting takes any that are still open.
+    again = PA.unlock_to_temp(src, "hunter2")
+    PA.discard_all_unlocked_copies()
+    assert not os.path.exists(again), "quitting left a decrypted copy behind"
+    assert not PA._UNLOCKED_COPIES
+
+    # And a run that crashed leaves some for the next start to clear.
+    os.makedirs(PA.unlocked_dir(), exist_ok=True)
+    orphan = os.path.join(PA.unlocked_dir(), "left_behind_by_a_crash.pdf")
+    with open(orphan, "wb") as f:
+        f.write(b"%PDF-1.4\n")
+    PA.sweep_orphan_unlocked_copies()
+    assert not os.path.exists(orphan), \
+        "a decrypted copy from a crashed run survived the startup sweep"
+    return "owner-only, and gone by the time the tab is"

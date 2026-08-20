@@ -60,6 +60,23 @@ def main():
     # finish and emit into receivers we are about to delete below.
     app.aboutToQuit.connect(shutdown_render_queue)
 
+    # The flattened copies the tools read from are whole documents in the temp
+    # directory. Take ours with us on the way out, and clear what a run that
+    # crashed — or any version from before this existed — left behind. Both
+    # are safe: a snapshot is a cache, and ensure_view_snapshot writes another
+    # if the one it wanted has gone.
+    from tools._base import discard_all_snapshots, sweep_orphan_snapshots
+    sweep_orphan_snapshots()
+    app.aboutToQuit.connect(discard_all_snapshots)
+
+    # Decrypted copies are the same housekeeping with more at stake: each is a
+    # document with the protection its owner put on it taken off, and they
+    # were being left in a directory every account on the machine can read.
+    from tools.pdf_access import (discard_all_unlocked_copies,
+                                  sweep_orphan_unlocked_copies)
+    sweep_orphan_unlocked_copies()
+    app.aboutToQuit.connect(discard_all_unlocked_copies)
+
     # Hand the files to an already-running instance and quit, before building
     # any UI. With no files this just raises the existing window — the app is
     # tab-based, so a second launch should never mean a second window.

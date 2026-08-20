@@ -25,7 +25,6 @@ and goes the same way.
 import logging
 import os
 import tempfile
-import uuid
 
 from tools.i18n import tr
 
@@ -57,20 +56,88 @@ def is_locked(path):
     return encryption_state(path) == "locked"
 
 
+_UNLOCKED_COPIES: set = set()   # decrypted files this run wrote
+
+
+def unlocked_dir():
+    """Where decrypted copies live."""
+    return os.path.join(tempfile.gettempdir(), "copyshop_unlocked")
+
+
 def unlock_to_temp(path, password):
     """Write a decrypted copy of `path` and return where it went.
 
     Raises if the password is wrong — pikepdf's own PasswordError, which the
     caller turns into another attempt.
+
+    The copy is the document without the protection its owner put on it, so
+    it is written readable only by the user running the application and is
+    deleted again when the tab closes or the application quits. It used to be
+    written with whatever the umask gave — 0644 on this machine — into a
+    directory every account on the machine can read, and then left there for
+    good: a customer's protected file, unprotected, on the counter's shared
+    computer long after the job was done.
     """
     import pikepdf
-    out_dir = os.path.join(tempfile.gettempdir(), "copyshop_unlocked")
+    out_dir = unlocked_dir()
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(path))[0]
-    dest = os.path.join(out_dir, f"{stem}_{uuid.uuid4().hex[:8]}.pdf")
+    # mkstemp creates with 0600 already, and creating it before pikepdf writes
+    # leaves no moment where the decrypted bytes exist under a wider mode.
+    fd, dest = tempfile.mkstemp(prefix=f"{stem}_", suffix=".pdf", dir=out_dir)
+    os.close(fd)
     with pikepdf.open(path, password=password) as pdf:
         pdf.save(dest)
+    try:
+        os.chmod(dest, 0o600)      # pikepdf may have replaced the file
+    except OSError:
+        logging.debug("could not restrict %s", dest, exc_info=True)
+    _UNLOCKED_COPIES.add(dest)
     return dest
+
+
+def discard_unlocked_copy(path):
+    """Delete one decrypted copy, if it is one of ours."""
+    if not path or path not in _UNLOCKED_COPIES:
+        return
+    _UNLOCKED_COPIES.discard(path)
+    try:
+        os.remove(path)
+    except OSError:
+        logging.debug("could not remove the decrypted copy %s", path,
+                      exc_info=True)
+
+
+def discard_all_unlocked_copies():
+    """Delete every decrypted copy this run wrote. For shutdown."""
+    for path in list(_UNLOCKED_COPIES):
+        discard_unlocked_copy(path)
+
+
+def sweep_orphan_unlocked_copies():
+    """Remove decrypted copies left behind by a run that could not clean up.
+
+    A crash, a kill, or any version of this application from before these
+    existed — which is every copy written before today. Unlike a view
+    snapshot, one of these is a document with its protection taken off, so
+    leaving it is worse than losing it: re-opening the file asks for the
+    password again, which is the behaviour the owner expects anyway.
+    """
+    try:
+        for name in os.listdir(unlocked_dir()):
+            if not name.endswith(".pdf"):
+                continue
+            path = os.path.join(unlocked_dir(), name)
+            if path in _UNLOCKED_COPIES:
+                continue        # this run is using it
+            try:
+                os.remove(path)
+            except OSError:
+                logging.debug("could not sweep %s", path, exc_info=True)
+    except FileNotFoundError:
+        pass                    # nothing has ever been unlocked
+    except Exception:
+        logging.debug("could not sweep the decrypted copies", exc_info=True)
 
 
 def ask_password(path, parent=None):

@@ -406,9 +406,15 @@ class CropResizePanel(BasePanel):
         # See BasePanel.current_pdf()'s docstring for why this, not
         # AppState.get().current_pdf, is what a preview measures against.
         pdf_path = self.current_pdf()
-        if not pdf_path or not os.path.isfile(pdf_path):
+        if not pdf_path:
             self._sel_info.setText("")
             return None, tr("Keine PDF geoeffnet")
+        if not os.path.isfile(pdf_path):
+            # Same distinction the run makes: a document is open, its file is
+            # not there any more. "No PDF open" describes a different problem
+            # and sends the operator to fix the wrong one.
+            self._sel_info.setText("")
+            return None, tr("Datei nicht mehr auffindbar")
         from PIL import Image as PILImage
 
         pages    = self._get_target_pages()

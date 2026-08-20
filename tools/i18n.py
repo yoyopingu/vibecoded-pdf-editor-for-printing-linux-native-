@@ -407,6 +407,16 @@ _EN: dict[str, str] = {
     "Vorgang läuft bereits — bitte warten.": "Operation already running — please wait.",
     "Pruefung laeuft bereits — bitte warten.": "Check already running — please wait.",
     "Keine PDF geoeffnet": "No PDF open",
+    "Datei nicht mehr auffindbar": "File no longer found",
+    "Die Datei ist nicht mehr auffindbar:\n{p0}\n\n"
+    "Sie wurde verschoben, umbenannt oder geloescht — oder das "
+    "Laufwerk ist nicht mehr verbunden. Die Seitenansicht zeigt "
+    "noch den letzten Stand; zum Weiterarbeiten die Datei wieder "
+    "verfuegbar machen und neu oeffnen.":
+        "The file can no longer be found:\n{p0}\n\n"
+        "It has been moved, renamed or deleted — or its drive is no longer "
+        "connected. The page view still shows the last state; to carry on, "
+        "make the file available again and reopen it.",
     "Seite": "Page",
     "Blatt": "Sheet",
     "Schreibe Datei …": "Writing file …",
