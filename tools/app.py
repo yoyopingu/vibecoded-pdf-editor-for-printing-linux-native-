@@ -18,7 +18,15 @@ the console script pointed at it. main.py at the repository root is a launcher
 for the documented dev command, and is not installed.
 """
 
-import sys, os, traceback, logging
+import sys, os
+
+# Before the imports below, not after them: importing the thirteen tool panels
+# is itself a place things go wrong, and a traceback raised there is exactly
+# the kind that would otherwise leave no trace at all — the window never
+# appears, so there is nothing to read the error from.
+from tools.logging_setup  import install as _install_logging
+from tools.logging_setup  import install_qt_message_handler
+_install_logging()
 
 from PyQt6.QtWidgets import QApplication
 
@@ -36,38 +44,12 @@ from tools.shell.window   import MainWindow
 from tools.shell.style    import STYLE, LIGHT_STYLE              # noqa: F401
 
 
-def _init_log_file():
-    data_dir = os.path.join(
-        os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")),
-        "copyshop_pdf_suite")
-    try:
-        os.makedirs(data_dir, exist_ok=True)
-        return os.path.join(data_dir, "copyshop.log")
-    except Exception:
-        import tempfile
-        return os.path.join(tempfile.gettempdir(), "copyshop.log")
-
-try:
-    logging.basicConfig(
-        filename=_init_log_file(),
-        level=logging.DEBUG,
-        format="%(asctime)s %(levelname)s %(message)s"
-    )
-except Exception:
-    # Last resort: never let logging configuration crash the app.
-    logging.basicConfig(level=logging.DEBUG,
-                        format="%(asctime)s %(levelname)s %(message)s")
-
-def _excepthook(exc_type, exc_value, exc_tb):
-    msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-    logging.critical(msg)
-    sys.__excepthook__(exc_type, exc_value, exc_tb)
-
-sys.excepthook = _excepthook
-
-
 def main():
     app = QApplication(sys.argv)
+
+    # Needs the QApplication to exist before Qt will route messages to it.
+    install_qt_message_handler()
+
     app.setApplicationName("CopyShop PDF Suite")
     app.setStyle(AppStyle.create())
 

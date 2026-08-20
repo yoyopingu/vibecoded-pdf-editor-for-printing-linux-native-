@@ -12,6 +12,12 @@ Import order below is not arbitrary; see the note on main.
 import os, sys, time, tempfile
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
+# Before tools.app is imported below, because importing it is what configures
+# logging. Left unset, every test run appended its fixture chatter to the log
+# the user's real installation writes to — a day of runs buried the actual
+# tracebacks under a megabyte of /tmp paths.
+os.environ.setdefault("COPYSHOP_LOG_DIR",
+                      os.path.join(tempfile.gettempdir(), "copyshop_test_logs"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt6.QtWidgets import QApplication

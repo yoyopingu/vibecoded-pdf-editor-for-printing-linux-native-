@@ -54,6 +54,7 @@ _EN: dict[str, str] = {
     "Sprache": "Language",
     "Hilfe": "Help",
     "Über CopyShop PDF Suite": "About CopyShop PDF Suite",
+    "Fehlerprotokoll anzeigen": "Show error log",
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     "Seiten-Viewer": "Page Viewer",

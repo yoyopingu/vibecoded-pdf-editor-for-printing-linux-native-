@@ -255,6 +255,24 @@ class MainWindow(QMainWindow):
             else:
                 self._open_multi(paths)
 
+    def _show_log_folder(self):
+        """Open the folder holding the log and the native-crash file.
+
+        The app is normally started from the desktop entry, so stderr is
+        discarded and this is the only way to reach the record of a failure
+        without knowing the XDG path by heart.
+        """
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        from tools.logging_setup import log_dir, log_path, crash_log_path
+        folder = log_dir()
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(folder)):
+            # No file manager registered — the paths are still what was asked
+            # for, so show them rather than failing silently.
+            QMessageBox.information(
+                self, tr("Fehlerprotokoll anzeigen"),
+                f"{log_path()}\n{crash_log_path()}")
+
     def _show_about(self):
         QMessageBox.about(
             self,

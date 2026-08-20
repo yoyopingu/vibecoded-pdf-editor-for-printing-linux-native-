@@ -149,6 +149,23 @@ files to that window instead of starting a second copy.
 `install.sh` / `uninstall.sh` install a desktop entry and launcher for a
 system-wide setup; they are optional and not needed to run from the repo.
 
+### When something goes wrong
+
+**Help → Fehlerprotokoll anzeigen** ("Show error log") opens the folder holding
+both log files. Started from the desktop entry the app has no terminal, so
+these are the only record:
+
+| File | What it holds |
+|---|---|
+| `copyshop.log` | Everything Python-level: errors, warnings, Qt's own diagnostics, and an unhandled exception from any thread. Rotates at 2 MB, three kept. |
+| `copyshop-crash.log` | Native crashes — a segfault takes the interpreter out with no exception to report, so this is written by `faulthandler` from the signal handler itself. |
+
+Both live in `${XDG_DATA_HOME:-~/.local/share}/copyshop_pdf_suite/`. Set
+`COPYSHOP_LOG_DIR` to put them somewhere else.
+
+A session that logged `starting` and never logged `exiting cleanly` is one that
+died rather than quit — check `copyshop-crash.log` for the same timestamp.
+
 ---
 
 ## Tests
@@ -244,6 +261,7 @@ And the rest of `tools/`:
 | `theme.py` | The live palette every widget paints with, and the switch between light and dark. Shared by the viewer, the panels, the print dialog and the window, so it belongs to none of them. |
 | `colorspace.py` | Which colour spaces a page uses, read from the file's structure — declared spaces, image spaces, and the colour operators in the content streams, recursing into Form XObjects. Shared by the viewer's label, the Farbprofil tool and the greyscale scan, which each used to have their own copy and disagree. Read through one open of the file for the whole document, not one per page: opening a 500-page PDF costs 83 ms and reading every page out of it 181 ms, so asking page by page made a long document slow to browse precisely because it was long. |
 | `i18n.py` | `tr()` and the German→English string table. German source strings are the keys. |
+| `logging_setup.py` | The log files and everything that feeds them: rotation, the exception hooks for the main thread and every worker thread, Qt's own message handler, and `faulthandler` for native crashes. Installed from `app.py` before the panels are imported, so a failure while importing them is still recorded. |
 | `plugin_manager.py` | Discovers `BasePanel` subclasses in `plugins/`, and the panel for installing them. |
 
 Drop a `.py` file defining a `BasePanel` subclass with a `PLUGIN_NAME` into

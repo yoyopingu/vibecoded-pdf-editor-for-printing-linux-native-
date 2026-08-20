@@ -125,6 +125,10 @@ class TitleBar(QWidget):
 
         # Hilfe
         menu_help = mb.addMenu(tr("Hilfe"))
+        act_log = QAction(tr("Fehlerprotokoll anzeigen"), self)
+        act_log.triggered.connect(self._win._show_log_folder)
+        menu_help.addAction(act_log)
+        menu_help.addSeparator()
         act_about = QAction(tr("Über CopyShop PDF Suite"), self)
         act_about.triggered.connect(self._win._show_about)
         menu_help.addAction(act_about)
