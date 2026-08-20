@@ -1047,37 +1047,49 @@ def test_printing_as_a_bitmap_does_not_go_through_ghostscript():
     return "the Ghostscript path is skipped when a bitmap was asked for"
 
 
-def test_a_file_whose_fonts_are_not_embedded_says_so_before_it_is_printed():
-    """A referenced-but-absent font is resolved by Ghostscript and the printer,
-    not by the pdfium that drew the preview — so the paper can come back with
-    the letters spaced differently, or larger, than the operator approved on
-    screen. Nothing here can supply the missing font; saying so before the
-    paper is used is what it can do."""
+def test_a_file_the_print_path_redraws_says_so_before_it_is_printed():
+    """The first version of this warning asked whether fonts were embedded.
+    That is one reason among several, and the first real file to misprint had
+    its fonts embedded and produced no warning at all — a broken font program,
+    a Type 3 or a bad CID map would each have slipped past the same way.
+
+    So the check runs a page through the print path and redraws it with the
+    preview's renderer, and warns about what it sees rather than about the one
+    cause somebody thought of first."""
     import time
-    from reportlab.pdfgen import canvas as _canvas
+    import pikepdf
     from tools.printing.dialog import PrintDialog
     from tools.viewer.tab import PdfTab
 
-    src = os.path.join(_TMP, "warn_unembedded.pdf")
-    c = _canvas.Canvas(src, pagesize=A4)
-    c.setFont("Helvetica", 20); c.drawString(60, 700, "referenced only")
-    c.showPage(); c.save()
+    # A font that is only referenced, with metrics Ghostscript will not match.
+    src = os.path.join(_TMP, "warn_redrawn.pdf")
+    pdf = pikepdf.new()
+    font = pdf.make_indirect(pikepdf.Dictionary(
+        Type=pikepdf.Name("/Font"), Subtype=pikepdf.Name("/Type1"),
+        BaseFont=pikepdf.Name("/ArialNarrow"),
+        Encoding=pikepdf.Name("/WinAnsiEncoding")))
+    page = pdf.add_blank_page(page_size=(595, 842))
+    page.obj["/Resources"] = pikepdf.Dictionary(
+        Font=pikepdf.Dictionary(F1=font))
+    page.contents_add(pikepdf.Stream(pdf,
+        b"BT /F1 28 Tf 40 700 Td (HAMBURGEFONTSIV the quick brown fox) Tj ET"))
+    pdf.save(src)
 
     tab = PdfTab(src); dlg = PrintDialog(src, tab.model, tab)
     try:
-        for _ in range(150):                 # the check runs off the GUI thread
+        for _ in range(250):
             _app.processEvents(); time.sleep(0.02)
             if dlg.status_lbl.text():
                 break
-        assert dlg._unembedded == ["Helvetica"], \
-            f"the missing font was not identified: {dlg._unembedded}"
+        assert dlg._print_differs, \
+            "the print path redraws this page and the check did not notice"
         said = dlg.status_lbl.text()
-        assert "Helvetica" in said, f"the warning does not name it: {said!r}"
+        assert said, "nothing was said about a page that will print wrong"
         assert "Bitmap" in said, \
             "the warning does not point at the setting that fixes it"
     finally:
         dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
-    return "names the font, and names the way out"
+    return "warns on what the print path actually does to the page"
 
 
 def test_a_file_with_nothing_to_warn_about_stays_quiet():
@@ -1095,9 +1107,10 @@ def test_a_file_with_nothing_to_warn_about_stays_quiet():
 
     tab = PdfTab(src); dlg = PrintDialog(src, tab.model, tab)
     try:
-        for _ in range(60):
+        for _ in range(150):
             _app.processEvents(); time.sleep(0.02)
         assert dlg._unembedded == [], dlg._unembedded
+        assert not dlg._print_differs, "a blank page was said to redraw"
         assert dlg.status_lbl.text() == "", \
             f"warned about a file with no fonts: {dlg.status_lbl.text()!r}"
     finally:
@@ -1215,3 +1228,77 @@ def test_no_qt_print_attribute_is_spelled_the_pyqt5_way():
     assert not missing, ("attributes PyQt6 does not have:\n  "
                          + "\n  ".join(missing))
     return "every QPrinter/QPageSize/QPageLayout attribute used exists"
+
+
+def test_the_bitmap_print_fills_the_sheet_whatever_dpi_was_chosen():
+    """Choosing a resolution must change the detail, not the size.
+
+    The pages are rasterised for a device of the chosen dpi and then drawn a
+    dot to a pixel. That agreed by accident while the number came from the
+    printer itself; "Als Bitmap" is the first thing to choose a different one,
+    and 300 dpi of pixels drawn on a 1200 dpi device came out at a quarter
+    size in the corner of the sheet — smaller the lower the resolution asked
+    for, which is the opposite of what picking one is for.
+    """
+    import PyQt6.QtPrintSupport as QtPS
+    from PyQt6.QtPrintSupport import QPrinter
+    from PIL import ImageOps
+    from tools.printing.spool import prerender_for_qt
+
+    tab, dlg = _print_dialog(n_pages=1, name="bmp_geom.pdf")
+    real_qprinter = QtPS.QPrinter
+    dlg._on_print_failed = lambda m: (_ for _ in ()).throw(
+        AssertionError(f"the print path failed: {m}"))
+    dlg._finish = lambda *a: None
+
+    def coverage(dpi):
+        out = os.path.join(_TMP, f"bmp_geom_{dpi}.pdf")
+
+        def to_file(*a, **k):
+            p = real_qprinter(*a, **k)
+            p.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            p.setOutputFileName(out)
+            return p
+        for _enum in ("PrinterMode", "DuplexMode", "ColorMode", "OutputFormat"):
+            setattr(to_file, _enum, getattr(real_qprinter, _enum))
+
+        rendered, skipped = prerender_for_qt(
+            tab.pdf_path, tab.model, [0], "auto", 0, 0, "A4", dpi, 0.0,
+            null_progress())
+        QtPS.QPrinter = to_file
+        try:
+            dlg._qt_send_to_printer(rendered, skipped, [0], 1, "auto", True,
+                                    False, "long", "none", "A4", 0, dpi)
+        finally:
+            QtPS.QPrinter = real_qprinter
+        doc = pdfium.PdfDocument(out)
+        pil = doc[0].render(scale=1, fill_color=(255, 255, 255, 255)) \
+                    .to_pil().convert("L")
+        doc.close()
+        box = ImageOps.invert(pil).getbbox()
+        assert box, f"{dpi} dpi printed a blank sheet"
+        return (box[2] - box[0]) / pil.width
+
+    try:
+        got = {dpi: coverage(dpi) for dpi in (150, 300, 600)}
+    finally:
+        dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+
+    widest, narrowest = max(got.values()), min(got.values())
+    assert widest - narrowest < 0.03, \
+        f"the chosen dpi changed how big the page printed: {got}"
+
+    # And it has to come out the size the page is, not a stamp in the corner.
+    # Measured against the source rather than a number picked here, so the
+    # fixture can change its mind about how much ink it draws.
+    doc = pdfium.PdfDocument(tab.pdf_path)
+    pil = doc[0].render(scale=1, fill_color=(255, 255, 255, 255)) \
+                .to_pil().convert("L")
+    doc.close()
+    box = ImageOps.invert(pil).getbbox()
+    expected = (box[2] - box[0]) / pil.width
+    assert abs(narrowest - expected) < 0.03, (
+        f"printed at {100 * narrowest:.0f}% of the sheet, "
+        f"but the page itself is {100 * expected:.0f}%: {got}")
+    return ("same size at 150/300/600 dpi, and the size the page really is "
+            f"({100 * expected:.0f}% of the sheet wide)")

@@ -82,6 +82,88 @@ def _gs_blacked_out(before, after, budget=60):
         return None
 
 
+def print_path_redraws_the_page(pdf_path, page_index=0, timeout=30):
+    """Whether the print path lays a page out differently from the preview.
+
+    The preview is drawn by pdfium; the printed job is a PDF that Ghostscript
+    rewrites and the printer interprets. Where the two disagree about a font,
+    the paper comes back with the text in different places, or a different
+    size, than the operator approved on screen.
+
+    Asking which pathology is present — a font that is only referenced, a
+    broken embedded one, a Type 3, a bad CID map — means guessing, and each
+    guess misses the others. This asks the question the operator actually has
+    instead: put the page through the print path, draw the result with the
+    preview's own renderer, and see whether it still looks the same.
+
+    True only when they visibly differ. None when it could not be checked at
+    all, so a machine without Ghostscript stays quiet rather than crying wolf.
+    """
+    import os
+    import tempfile
+    import pikepdf
+    import pypdfium2 as pdfium
+
+    gs_bin = ghostscript_binary()
+    if not gs_bin:
+        return None
+
+    one = through = None
+    try:
+        # One page, so this costs the same on a 500-page document as on a
+        # one-page one — it runs every time the print dialog opens.
+        fd, one = tempfile.mkstemp(suffix="_one.pdf"); os.close(fd)
+        fd, through = tempfile.mkstemp(suffix="_gs.pdf"); os.close(fd)
+        with pikepdf.open(pdf_path) as src:
+            if page_index >= len(src.pages):
+                return None
+            out = pikepdf.new()
+            out.pages.append(src.pages[page_index])
+            out.save(one)
+
+        r = _run_capturing([
+            gs_bin, "-dBATCH", "-dNOPAUSE", "-dQUIET", "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.5", "-dPDFSETTINGS=/printer",
+            "-dEmbedAllFonts=true", "-dSubsetFonts=true",
+            f"-sOutputFile={through}", one], timeout=timeout)
+        if r.returncode != 0 or not os.path.getsize(through):
+            return None
+
+        def ink(path):
+            with _pdfium_lock:
+                doc = pdfium.PdfDocument(path)
+                try:
+                    pil = doc[0].render(
+                        scale=1.5, fill_color=(255, 255, 255, 255)
+                    ).to_pil().convert("L")
+                finally:
+                    doc.close()
+            from PIL import ImageOps
+            return ImageOps.invert(pil).getbbox(), pil.size
+
+        a, size_a = ink(one)
+        b, size_b = ink(through)
+        if a is None or b is None or size_a != size_b:
+            # A page that is blank either side of the conversion says nothing
+            # about fonts, and a page that changed size is a different report.
+            return None if (a is None) != (b is None) else False
+
+        # Compare where the ink sits, relative to the sheet. Antialiasing and
+        # Ghostscript's re-encoding move edges by a pixel or so on a page that
+        # is really unchanged; a substituted font moves them much further.
+        w, h = size_a
+        tol = max(3.0, 0.004 * max(w, h))
+        return any(abs(x - y) > tol for x, y in zip(a, b))
+    except Exception:
+        logging.debug("print: could not compare the print path with the preview",
+                      exc_info=True)
+        return None
+    finally:
+        for tmp in (one, through):
+            if tmp:
+                unlink(tmp)
+
+
 def printer_options(printer_name, timeout=10):
     """What one queue offers, as {keyword: (label, choices, default)}.
 

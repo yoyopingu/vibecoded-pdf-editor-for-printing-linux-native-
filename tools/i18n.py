@@ -321,12 +321,19 @@ _EN: dict[str, str] = {
     "Grafiken ueblich, 600 dpi fuer feine Linien und kleine Schrift.":
         "Resolution of the rasterisation. 300 dpi is usual for text and "
         "ordinary graphics, 600 dpi for fine lines and small type.",
-    "Hinweis: Schriften nicht eingebettet ({p1}) — der Ausdruck kann "
-    "von der Vorschau abweichen. „Als Bitmap drucken“ druckt genau "
-    "das, was die Vorschau zeigt.":
-        "Note: fonts are not embedded ({p1}) — the print may differ from "
-        "the preview. “Print as bitmap” prints exactly what the preview "
+    "Achtung: Der Ausdruck wird anders aussehen als die Vorschau "
+    "— die Schriften {p1} sind nicht eingebettet. „Als Bitmap "
+    "drucken“ druckt genau das, was die Vorschau zeigt.":
+        "Warning: the print will not look like the preview — the fonts {p1} "
+        "are not embedded. “Print as bitmap” prints exactly what the preview "
         "shows.",
+    "Achtung: Der Ausdruck wird anders aussehen als die Vorschau. "
+    "Die Schriften der Datei ueberstehen den Druckweg nicht. "
+    "„Als Bitmap drucken“ druckt genau das, was die Vorschau "
+    "zeigt.":
+        "Warning: the print will not look like the preview. This file's "
+        "fonts do not survive the print path. “Print as bitmap” prints "
+        "exactly what the preview shows.",
     "Lange Seite: Rückseite steht gleich herum wie die Vorderseite "
     "(Bindung an der langen Kante, wie ein Buch).\n"
     "Kurze Seite: Rückseite ist um 180° gedreht "

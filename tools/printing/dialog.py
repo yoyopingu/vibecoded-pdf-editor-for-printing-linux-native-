@@ -70,8 +70,9 @@ class PrintDialog(QDialog):
     # Delivers the async-enumerated printer list to the GUI thread.
     _printers_loaded = pyqtSignal(list, str)
 
-    # Names of fonts the file only references, found off the GUI thread.
-    _fonts_checked  = pyqtSignal(list)
+    # (unembedded font names, whether the print path redraws the page
+    # differently) — both worked out off the GUI thread.
+    _fonts_checked  = pyqtSignal(list, bool)
 
     # Print-job results delivered from the worker thread to the GUI thread.
     # (A background thread has no event loop, so QTimer.singleShot never fires
@@ -521,6 +522,7 @@ class PrintDialog(QDialog):
         # All widgets created — populate printers (triggers _on_printer_changed)
         self._load_printers()
         self._unembedded = []
+        self._print_differs = False
         self._check_fonts()
 
         # Live preview: update whenever any print-affecting setting changes
@@ -704,51 +706,77 @@ class PrintDialog(QDialog):
         return printer_dpi
 
     def _check_fonts(self):
-        """Warn when the file's fonts are only referenced, not embedded.
+        """Warn when the print path will not reproduce the preview.
 
-        Such a file prints through whatever replacement Ghostscript and the
-        printer choose, which is not the replacement pdfium chose for the
-        preview beside it — so the paper can come back with the letters spaced
-        differently, or larger, than the operator approved on screen. Nothing
-        here can supply a font the file does not carry; what it can do is say
-        so before the paper is used, and point at the one setting that makes
-        the print match the preview.
+        The first version of this asked whether the fonts were embedded, which
+        is one reason among several and not the one that turned up first in
+        practice: a file whose fonts *were* embedded still printed wrong, and
+        got no warning at all. Every other reason — a broken font program, a
+        Type 3, a bad CID map — would have slipped past the same way, because
+        each is a separate thing to think of.
 
-        Off the GUI thread: it opens the document and walks every page's
-        resources, which is 150 ms on a small 300-page file and more on a
-        large one — measurable in a dialog that is supposed to appear at once.
+        So the question asked is the operator's own: put a page through the
+        print path and draw the result with the preview's renderer. If it
+        still looks the same, there is nothing to say. The font list is kept
+        alongside it, as the usual explanation for a page that does not.
+
+        Off the GUI thread. It runs Ghostscript over a single page and renders
+        twice — about a quarter of a second, and the same on a 500-page
+        document as on a one-page one — which is still far too long to spend
+        in a dialog that is supposed to appear at once.
         """
         self._fonts_checked.connect(self._on_fonts_checked)
         import weakref
         self_ref = weakref.ref(self)
 
         def _bg(job):
-            names = []
+            names, differs = [], False
             try:
                 from tools.panels._prepress import unembedded_fonts
                 names = sorted(unembedded_fonts(self.pdf_path))
             except Exception:
                 logging.debug("could not check the fonts of %s",
                               self.pdf_path, exc_info=True)
+            if job.cancelled:
+                return
+            try:
+                from tools.printing.spool import print_path_redraws_the_page
+                # None means it could not be checked — no Ghostscript, an
+                # unreadable page. Not knowing is not the same as a problem.
+                differs = bool(print_path_redraws_the_page(self.pdf_path))
+            except Exception:
+                logging.debug("could not compare the print path with the "
+                              "preview for %s", self.pdf_path, exc_info=True)
             obj = self_ref()
             if obj is not None and not job.cancelled:
                 try:
-                    obj._fonts_checked.emit(names)
+                    obj._fonts_checked.emit(names, differs)
                 except RuntimeError:
                     pass   # dialog closed
         from tools.jobs import submit
         submit(_bg, owner=self, name="font-check")
 
-    def _on_fonts_checked(self, names):
-        if not names:
-            return
+    def _on_fonts_checked(self, names, differs):
         self._unembedded = list(names)
-        shown = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
-        self.status_lbl.setText(tr(
-            "Hinweis: Schriften nicht eingebettet ({p1}) — der Ausdruck kann "
-            "von der Vorschau abweichen. „Als Bitmap drucken“ druckt genau "
-            "das, was die Vorschau zeigt."
-        ).format(p0=len(names), p1=shown))
+        self._print_differs = bool(differs)
+        if not differs:
+            # Unembedded fonts that Ghostscript replaces with the same metrics
+            # print correctly, and most documents have some — warning about
+            # every one of them is how a warning stops being read.
+            return
+        if names:
+            shown = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
+            self.status_lbl.setText(tr(
+                "Achtung: Der Ausdruck wird anders aussehen als die Vorschau "
+                "— die Schriften {p1} sind nicht eingebettet. „Als Bitmap "
+                "drucken“ druckt genau das, was die Vorschau zeigt."
+            ).format(p1=shown))
+        else:
+            self.status_lbl.setText(tr(
+                "Achtung: Der Ausdruck wird anders aussehen als die Vorschau. "
+                "Die Schriften der Datei ueberstehen den Druckweg nicht. "
+                "„Als Bitmap drucken“ druckt genau das, was die Vorschau "
+                "zeigt."))
 
     def _note_user_change(self, *_):
         if not self._applying:
@@ -1379,7 +1407,7 @@ class PrintDialog(QDialog):
                 obj._print_qt_send.emit((
                     rendered, skipped, pages_to_print, copies, color_mode,
                     collate, duplex, duplex_edge, printer_name, paper_key,
-                    orient_idx))
+                    orient_idx, qt_dpi))
 
         from tools.jobs import submit
         self._print_job = submit(_bg, owner=self, name="print-job")
@@ -1460,7 +1488,7 @@ class PrintDialog(QDialog):
 
     def _qt_send_to_printer(self, rendered, skipped, pages, copies, color_mode,
                              collate, duplex, duplex_edge, printer_name,
-                             paper_key, orient_idx):
+                             paper_key, orient_idx, render_dpi=None):
         """Draw pre-rendered images to QPrinter.  MUST run on the GUI thread."""
         from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
         from PyQt6.QtGui import QPageSize, QPainter
@@ -1471,6 +1499,19 @@ class PrintDialog(QDialog):
                 info = QPrinterInfo.printerInfo(printer_name)
                 if not info.isNull():
                     printer = QPrinter(info, QPrinter.PrinterMode.HighResolution)
+
+            # The pages were rasterised for a device of this many dots per
+            # inch, and are about to be drawn a dot to a pixel — so the device
+            # has to agree, or they land at the wrong size.
+            #
+            # It used to agree by accident: the resolution was read off a
+            # HighResolution QPrinter and handed to the rasteriser, so both
+            # ends were the printer's own number. "Als Bitmap" is the first
+            # thing that chooses a different one, and 300 dpi of pixels drawn
+            # on a 1200 dpi device came out at a quarter size in a corner of
+            # the sheet.
+            if render_dpi:
+                printer.setResolution(int(render_dpi))
 
             printer.setCopyCount(copies)
             printer.setCollateCopies(collate)
