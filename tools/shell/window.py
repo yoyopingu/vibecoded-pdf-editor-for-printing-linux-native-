@@ -262,16 +262,8 @@ class MainWindow(QMainWindow):
         discarded and this is the only way to reach the record of a failure
         without knowing the XDG path by heart.
         """
-        from PyQt6.QtCore import QUrl
-        from PyQt6.QtGui import QDesktopServices
-        from tools.logging_setup import log_dir, log_path, crash_log_path
-        folder = log_dir()
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(folder)):
-            # No file manager registered — the paths are still what was asked
-            # for, so show them rather than failing silently.
-            QMessageBox.information(
-                self, tr("Fehlerprotokoll anzeigen"),
-                f"{log_path()}\n{crash_log_path()}")
+        from tools.shell.crash_report import open_log_folder
+        open_log_folder(self)
 
     def _show_about(self):
         QMessageBox.about(

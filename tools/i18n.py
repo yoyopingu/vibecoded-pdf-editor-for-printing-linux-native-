@@ -56,6 +56,83 @@ _EN: dict[str, str] = {
     "Über CopyShop PDF Suite": "About CopyShop PDF Suite",
     "Fehlerprotokoll anzeigen": "Show error log",
 
+    # ── Absturzbericht ────────────────────────────────────────────────────────
+    "Fehler in CopyShop PDF Suite": "Error in CopyShop PDF Suite",
+    "CopyShop PDF Suite wurde unerwartet beendet":
+        "CopyShop PDF Suite closed unexpectedly",
+    "Es ist ein unerwarteter Fehler {p0} aufgetreten.":
+        "An unexpected error occurred {p0}.",
+    "in der Anwendung": "in the application",
+    "in einem Hintergrund-Prozess": "in a background process",
+    "Beim letzten Mal wurde das Programm unerwartet beendet.":
+        "Last time, the program closed unexpectedly.",
+    "Die Ursache liess sich nicht automatisch bestimmen. "
+    "Die technischen Details stehen unten.":
+        "The cause could not be determined automatically. "
+        "The technical details are below.",
+    "Bericht kopieren": "Copy report",
+    "Weitere Fehler dieser Sitzung werden nur noch ins Protokoll geschrieben.":
+        "Further errors this session will only be written to the log.",
+    "Der Arbeitsspeicher hat nicht gereicht. Sehr grosse Seiten bei hohem "
+    "Zoom sind die haeufigste Ursache — mit weniger Zoom oder weniger "
+    "geoeffneten Dateien erneut versuchen.":
+        "There was not enough memory. Very large pages at high zoom are the "
+        "most common cause — try again with less zoom, or fewer files open.",
+    "Auf dem Datentraeger ist kein Platz mehr frei.":
+        "The disk is full.",
+    "Der Zugriff wurde vom Betriebssystem verweigert. Meist ist das Ziel "
+    "schreibgeschuetzt, gehoert einem anderen Benutzer, oder die Datei ist "
+    "in einem anderen Programm geoeffnet.":
+        "The operating system refused access. Usually the target is "
+        "read-only, belongs to another user, or the file is open in another "
+        "program.",
+    "{p0} wurde nicht gefunden. Dieses Programm wird separat installiert — "
+    "siehe README, Abschnitt Requirements.":
+        "{p0} was not found. It is installed separately — see the README, "
+        "Requirements section.",
+    "Ein benoetigtes Python-Paket fehlt oder laesst sich nicht laden. "
+    "requirements.txt nennt die Pakete, die installiert sein muessen.":
+        "A required Python package is missing or will not load. "
+        "requirements.txt lists the packages that must be installed.",
+    "Die Datei war nicht mehr da. Sie wurde vermutlich verschoben, "
+    "umbenannt oder geloescht, waehrend sie hier geoeffnet war.":
+        "The file was gone. It was probably moved, renamed or deleted while "
+        "it was open here.",
+    "Die PDF-Datei ist passwortgeschuetzt und kann ohne das Passwort nicht "
+    "bearbeitet werden.":
+        "The PDF is password-protected and cannot be edited without the "
+        "password.",
+    "Die PDF-Datei ist beschaedigt oder entspricht nicht dem Standard. "
+    "Andere Programme koennen sie trotzdem anzeigen — sie sind toleranter "
+    "als die Bibliothek, die hier bearbeitet.":
+        "The PDF is damaged, or does not follow the standard. Other programs "
+        "may still display it — they are more tolerant than the library that "
+        "edits it here.",
+    "Ein Fenster-Element wurde benutzt, nachdem Qt es bereits geloescht "
+    "hatte. Das ist ein Fehler in dieser Anwendung, nicht an Ihrer Datei — "
+    "der Bericht unten gehoert in eine Fehlermeldung an die Entwickler.":
+        "A window element was used after Qt had already deleted it. That is "
+        "a bug in this application, not a problem with your file — the "
+        "report below belongs in a bug report to the developers.",
+    "Eine Verschachtelung war zu tief — bei PDFs mit sehr tief "
+    "verschachtelten Strukturen kann das vorkommen.":
+        "Something was nested too deeply — PDFs with very deeply nested "
+        "structures can cause this.",
+    "Der Absturz geschah in der Qt-Anbindung, meist wenn ein Fenster-Element "
+    "benutzt wird, nachdem Qt es geloescht hat. Das ist ein Fehler in dieser "
+    "Anwendung, nicht an Ihrer Datei.":
+        "The crash happened in the Qt bindings, usually when a window element "
+        "is used after Qt has deleted it. That is a bug in this application, "
+        "not a problem with your file.",
+    "Der Absturz geschah beim Darstellen einer Seite. Meist liegt das an "
+    "einer beschaedigten PDF-Datei, die die Darstellungs-Bibliothek nicht "
+    "verarbeiten kann.":
+        "The crash happened while rendering a page. Usually this is a damaged "
+        "PDF the rendering library cannot handle.",
+    "Der Absturz geschah in Ghostscript, waehrend eine Datei konvertiert "
+    "wurde.":
+        "The crash happened inside Ghostscript, while converting a file.",
+
     # ── Sidebar ───────────────────────────────────────────────────────────────
     "Seiten-Viewer": "Page Viewer",
     "WERKZEUGE": "TOOLS",

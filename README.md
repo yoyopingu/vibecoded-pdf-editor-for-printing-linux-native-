@@ -151,6 +151,16 @@ system-wide setup; they are optional and not needed to run from the repo.
 
 ### When something goes wrong
 
+The app says so. An unexpected error raises a dialog with a plain-language
+cause where it recognises one — an encrypted file, a missing Ghostscript, a
+full disk — the full traceback behind **Show Details**, and a button to copy
+the report. Unrecognised failures say they are unrecognised rather than
+guessing, and the same fault repeating shows one dialog, not one per repaint.
+
+A native crash cannot announce itself as it happens: a segfault leaves no
+interpreter to build a dialog with. It is reported at the next start instead,
+once, and cleared after.
+
 **Help → Fehlerprotokoll anzeigen** ("Show error log") opens the folder holding
 both log files. Started from the desktop entry the app has no terminal, so
 these are the only record:
@@ -261,7 +271,8 @@ And the rest of `tools/`:
 | `theme.py` | The live palette every widget paints with, and the switch between light and dark. Shared by the viewer, the panels, the print dialog and the window, so it belongs to none of them. |
 | `colorspace.py` | Which colour spaces a page uses, read from the file's structure — declared spaces, image spaces, and the colour operators in the content streams, recursing into Form XObjects. Shared by the viewer's label, the Farbprofil tool and the greyscale scan, which each used to have their own copy and disagree. Read through one open of the file for the whole document, not one per page: opening a 500-page PDF costs 83 ms and reading every page out of it 181 ms, so asking page by page made a long document slow to browse precisely because it was long. |
 | `i18n.py` | `tr()` and the German→English string table. German source strings are the keys. |
-| `logging_setup.py` | The log files and everything that feeds them: rotation, the exception hooks for the main thread and every worker thread, Qt's own message handler, and `faulthandler` for native crashes. Installed from `app.py` before the panels are imported, so a failure while importing them is still recorded. |
+| `logging_setup.py` | The log files and everything that feeds them: rotation, the exception hooks for the main thread and every worker thread, Qt's own message handler, and `faulthandler` for native crashes. Installed from `app.py` before the panels are imported, so a failure while importing them is still recorded. Deliberately Qt-free — it hands failures to a registered reporter rather than drawing anything itself. |
+| `shell/crash_report.py` | The other half: the dialog that shows a failure to the user, the plain-language guesses at its cause, and the report of a native crash the previous run died of. Marshals onto the GUI thread, since the thread that failed is rarely the one that may build a widget. |
 | `plugin_manager.py` | Discovers `BasePanel` subclasses in `plugins/`, and the panel for installing them. |
 
 Drop a `.py` file defining a `BasePanel` subclass with a `PLUGIN_NAME` into

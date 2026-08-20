@@ -41,10 +41,6 @@ _CRASH_NAME = "copyshop-crash.log"
 _MAX_BYTES = 2 * 1024 * 1024
 _BACKUPS   = 3
 
-# The crash file only ever grows by a traceback at a time; the cap is here so
-# a machine that segfaults in a loop cannot fill the disk.
-_CRASH_CAP = 512 * 1024
-
 # These talk at DEBUG about every image they touch. Raised to WARNING, they
 # still report what actually went wrong and nothing else.
 _NOISY = ("PIL", "img2pdf", "pikepdf", "fontTools", "matplotlib", "urllib3")
@@ -53,6 +49,47 @@ _NOISY = ("PIL", "img2pdf", "pikepdf", "fontTools", "matplotlib", "urllib3")
 # time, so it keeps this one open for the life of the process.
 _crash_file = None
 _installed  = False
+
+# Set by the Qt side (tools/shell/crash_report.py) so a crash can reach the
+# user rather than only the file. A plain callback, so this module keeps
+# working — and keeps being importable — with no GUI in the process at all.
+_reporter = None
+
+# A native crash from the *previous* run, found at startup. Nothing can be
+# shown at the moment of a segfault: the interpreter is gone. The next start
+# is the first opportunity to tell anyone it happened.
+_previous_crash = None
+
+
+def set_crash_reporter(fn):
+    """Register `fn(kind, exc_type, exc_value, text)` to be shown to the user.
+
+    Called for every unhandled exception, from whichever thread raised it —
+    so `fn` is responsible for getting itself onto the GUI thread.
+    """
+    global _reporter
+    _reporter = fn
+
+
+def previous_crash():
+    """The native crash left behind by the last run, or None. Read once at
+    startup; see _install_crash_handler for why it cannot be reported live."""
+    return _previous_crash
+
+
+def _notify(kind, exc_type, exc_value, text):
+    """Hand a failure to the reporter, if one is registered.
+
+    Guarded, and deliberately after the logging call at every call site: a
+    reporter that raises (no display, Qt torn down mid-quit) must not be able
+    to lose the record that was already written to the file.
+    """
+    if _reporter is None:
+        return
+    try:
+        _reporter(kind, exc_type, exc_value, text)
+    except Exception:
+        logging.debug("crash reporter failed", exc_info=True)
 
 
 def log_dir():
@@ -90,14 +127,35 @@ def crash_log_path():
 
 def _install_crash_handler():
     """Point faulthandler at its own always-open file, under a header saying
-    which run is about to write there."""
-    global _crash_file
+    which run is about to write there.
+
+    Anything already in that file was put there by a run that died before it
+    could say so — a segfault leaves no interpreter to raise, catch or display
+    anything. So the file is read here, at the one moment there is a process
+    healthy enough to report it, and then emptied: what it holds afterwards is
+    only ever a crash nobody has been told about yet.
+    """
+    global _crash_file, _previous_crash
     path = crash_log_path()
     try:
-        # Truncate rather than rotate: a stale native traceback is worth less
-        # than the certainty that the file cannot grow without bound.
-        if os.path.exists(path) and os.path.getsize(path) > _CRASH_CAP:
-            os.truncate(path, 0)
+        if os.path.exists(path):
+            try:
+                prev = open(path, encoding="utf-8", errors="replace").read()
+            except Exception:
+                prev = ""
+            # faulthandler's own banner. Without it the file holds nothing but
+            # the header of a run that started and exited perfectly normally.
+            if "Fatal Python error" in prev:
+                _previous_crash = prev.strip()
+                # The rotating log is where history belongs; this file is a
+                # mailbox, and is about to be emptied.
+                logging.critical(
+                    "the previous session died of a native crash:\n%s",
+                    _previous_crash)
+            try:
+                os.truncate(path, 0)
+            except Exception:
+                logging.debug("could not clear the crash file", exc_info=True)
         _crash_file = open(path, "a", buffering=1, encoding="utf-8", errors="replace")
         _crash_file.write(
             f"\n--- session {os.getpid()} started "
@@ -116,9 +174,10 @@ def _install_excepthooks():
     an installed hook, Qt slots); threading.excepthook covers the rest, which
     sys.excepthook never sees."""
     def _hook(exc_type, exc_value, exc_tb):
+        text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
         try:
-            logging.critical("unhandled exception\n%s", "".join(
-                traceback.format_exception(exc_type, exc_value, exc_tb)))
+            logging.critical("unhandled exception\n%s", text)
+            _notify("exception", exc_type, exc_value, text)
         finally:
             # Still print it: run from a terminal, that is where it is wanted.
             sys.__excepthook__(exc_type, exc_value, exc_tb)
@@ -128,9 +187,10 @@ def _install_excepthooks():
         if args.exc_type is SystemExit:
             return
         name = getattr(args.thread, "name", "?")
-        logging.critical("unhandled exception in thread %s\n%s", name, "".join(
-            traceback.format_exception(
-                args.exc_type, args.exc_value, args.exc_traceback)))
+        text = "".join(traceback.format_exception(
+            args.exc_type, args.exc_value, args.exc_traceback))
+        logging.critical("unhandled exception in thread %s\n%s", name, text)
+        _notify("thread:" + str(name), args.exc_type, args.exc_value, text)
 
     sys.excepthook       = _hook
     threading.excepthook = _thread_hook

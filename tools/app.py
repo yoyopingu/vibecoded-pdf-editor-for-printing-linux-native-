@@ -97,6 +97,13 @@ def main():
         win = MainWindow()
 
     win.show()
+
+    # After the window exists, so a dialog has something to sit on — and so a
+    # crash the last run died of is reported against a built UI rather than an
+    # empty screen.
+    from tools.shell.crash_report import install as _install_crash_reporter
+    _install_crash_reporter(win)
+
     try:
         _listen_for_open_requests(win)
     except Exception:
