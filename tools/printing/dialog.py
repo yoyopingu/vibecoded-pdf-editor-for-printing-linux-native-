@@ -23,6 +23,23 @@ from tools.viewer.tab_base import owning_tab
 from tools.theme import _TV
 
 
+def _qt_page_sizes():
+    """The paper names this dialog uses, as Qt's page-size ids.
+
+    One table, read in both directions — the reverse of it is what turns the
+    queue's default back into a name for the combo. It used to be written out
+    twice, once each way, and the lp->Qt copy spelled the ids `QPrinter.PageSize`,
+    which is PyQt5: PyQt6 moved them to QPageSize.PageSizeId. That copy was only
+    reached when Ghostscript had already failed, so it sat there raising
+    AttributeError for anyone who got that far.
+    """
+    from PyQt6.QtGui import QPageSize
+    ids = QPageSize.PageSizeId
+    return {"A4": ids.A4, "A3": ids.A3, "A5": ids.A5, "Letter": ids.Letter,
+            "Legal": ids.Legal, "B4": ids.B4, "B5": ids.B5,
+            "Executive": ids.Executive, "Folio": ids.Folio}
+
+
 _QUEUE_INFO_CACHE = {}       # printer -> {"sources": ..., "defaults": ...}
 _PRINTER_LIST_CACHE = None   # (names:list[str], default:str) — last enumeration seen.
                              # Only ever a head start: every dialog open
@@ -960,17 +977,7 @@ class PrintDialog(QDialog):
             info = QPrinterInfo.printerInfo(printer_name) if have_info else None
             valid = info is not None and not info.isNull()
 
-            _qt_to_lp = {
-                QPageSize.PageSizeId.A4:        "A4",
-                QPageSize.PageSizeId.A3:        "A3",
-                QPageSize.PageSizeId.A5:        "A5",
-                QPageSize.PageSizeId.Letter:    "Letter",
-                QPageSize.PageSizeId.Legal:     "Legal",
-                QPageSize.PageSizeId.B4:        "B4",
-                QPageSize.PageSizeId.B5:        "B5",
-                QPageSize.PageSizeId.Executive: "Executive",
-                QPageSize.PageSizeId.Folio:     "Folio",
-            }
+            _qt_to_lp = {v: k for k, v in _qt_page_sizes().items()}
 
             # ── Paper sizes ───────────────────────────────────────────────────
             prev_paper = self.paper_combo.currentData()
@@ -1456,7 +1463,7 @@ class PrintDialog(QDialog):
                              paper_key, orient_idx):
         """Draw pre-rendered images to QPrinter.  MUST run on the GUI thread."""
         from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
-        from PyQt6.QtGui import QPainter
+        from PyQt6.QtGui import QPageSize, QPainter
 
         try:
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
@@ -1479,14 +1486,8 @@ class PrintDialog(QDialog):
             elif color_mode == "color":
                 printer.setColorMode(QPrinter.ColorMode.Color)
 
-            _lp_to_qt = {
-                "A4": QPrinter.PageSize.A4,   "A3": QPrinter.PageSize.A3,
-                "A5": QPrinter.PageSize.A5,   "Letter": QPrinter.PageSize.Letter,
-                "Legal": QPrinter.PageSize.Legal, "B4": QPrinter.PageSize.B4,
-                "B5": QPrinter.PageSize.B5,   "Executive": QPrinter.PageSize.Executive,
-                "Folio": QPrinter.PageSize.Folio,
-            }
-            printer.setPageSize(_lp_to_qt.get(paper_key, QPrinter.PageSize.A4))
+            printer.setPageSize(QPageSize(_qt_page_sizes().get(
+                paper_key, QPageSize.PageSizeId.A4)))
             if orient_idx == 1:
                 printer.setPageOrientation(QPageLayout.Orientation.Portrait)
             elif orient_idx == 2:
