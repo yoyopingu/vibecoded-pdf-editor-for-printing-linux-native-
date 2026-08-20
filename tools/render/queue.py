@@ -195,7 +195,8 @@ def shutdown_render_queue(timeout: float = 2.0):
         # raised a TypeError that the except below swallowed — shutdown quietly
         # cancelled nothing at all until a test went looking.
         from tools.jobs import cancel_all
-        cancel_all(int(timeout * 1000) if timeout else 2000)
+        wait_ms = max(100, int(timeout * 1000))
+        cancel_all(wait_ms)
     except Exception:
         logging.exception("shutdown: cancelling background jobs failed")
     try:
@@ -474,12 +475,6 @@ def apply_performance_settings(prerender=True, thumb_bytes=None,
     global _prerender_enabled
     _prerender_enabled = bool(prerender)
     if thumb_bytes is not None:
-        _ThumbnailCache.MAX_BYTES = max(8 * 1024 * 1024, int(thumb_bytes))
+        _ThumbnailCache.set_max_bytes(max(8 * 1024 * 1024, int(thumb_bytes)))
     if full_page_bytes is not None:
-        _FullPageCache.MAX_BYTES = max(16 * 1024 * 1024, int(full_page_bytes))
-    # Immediately evict surplus so RAM drops right away rather than at the next
-    # render, which on a document nobody is scrolling never comes.
-    with _ThumbnailCache._lock:
-        _ThumbnailCache._trim_locked()
-    with _FullPageCache._lock:
-        _FullPageCache._trim_locked()
+        _FullPageCache.set_max_bytes(max(16 * 1024 * 1024, int(full_page_bytes)))

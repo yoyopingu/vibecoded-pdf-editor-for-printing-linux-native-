@@ -49,6 +49,8 @@ _NOISY = ("PIL", "img2pdf", "pikepdf", "fontTools", "matplotlib", "urllib3")
 # time, so it keeps this one open for the life of the process.
 _crash_file = None
 _installed  = False
+_crash_file_closed = False
+_qt_handler_installed = False
 
 # Set by the Qt side (tools/shell/crash_report.py) so a crash can reach the
 # user rather than only the file. A plain callback, so this module keeps
@@ -123,6 +125,19 @@ def crash_log_path():
     rename the file out from under it and send the one report that matters to
     an inode nothing can find again."""
     return os.path.join(log_dir(), _CRASH_NAME)
+
+
+def _close_crash_file():
+    """Close the faulthandler crash file on clean exit."""
+    global _crash_file, _crash_file_closed
+    if _crash_file is not None and not _crash_file_closed:
+        try:
+            _crash_file.flush()
+            _crash_file.close()
+        except Exception:
+            logging.debug("could not close crash file", exc_info=True)
+        _crash_file = None
+        _crash_file_closed = True
 
 
 def _install_crash_handler():
@@ -230,6 +245,7 @@ def install():
 
     _install_excepthooks()
     _install_crash_handler()
+    atexit.register(_close_crash_file)
 
     logging.info("--- CopyShop PDF Suite starting (pid %s, python %s) ---",
                  os.getpid(), sys.version.split()[0])
@@ -248,11 +264,15 @@ def install_qt_message_handler():
     to abort the process, has been going nowhere. Kept apart from install() so
     the logging setup itself stays importable without Qt.
     """
+    global _qt_handler_installed
+    if _qt_handler_installed:
+        return
     try:
         from PyQt6.QtCore import QtMsgType, qInstallMessageHandler
     except Exception:
         logging.debug("Qt message handler unavailable", exc_info=True)
         return
+    _qt_handler_installed = True
 
     _levels = {
         QtMsgType.QtDebugMsg:    logging.DEBUG,

@@ -43,14 +43,13 @@ covering the viewport.
 import logging
 import math
 
-from tools.render.document_cache import _stat_key, open_page
+from tools.render.caches import _revision as _cached_revision
+from tools.render.document_cache import open_page
 
 
-def _revision(path):
-    """Identity of the file's current contents — the same one the document
-    cache keys on, so anything derived from a page is dropped when the file is
-    rewritten underneath us (which the page manager does constantly)."""
-    return _stat_key(path) or (path, None, None)
+# Re-export with the same name for backward compatibility
+_revision = _cached_revision
+
 
 # How far beyond the viewport to render. Panning inside this costs no render at
 # all, it is just a blit at a different offset.
