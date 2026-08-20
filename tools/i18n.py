@@ -301,6 +301,32 @@ _EN: dict[str, str] = {
         "→ CMYK: convert to CMYK before printing\n"
         "→ sRGB: convert to sRGB before printing",
     "Beidseitig drucken  (Duplex)": "Print double-sided  (duplex)",
+    "Als Bitmap drucken": "Print as bitmap",
+    "Druckt die Seiten so, wie sie in der Vorschau aussehen.\n\n"
+    "Normalerweise wird die PDF an den Drucker geschickt und dort "
+    "erneut interpretiert — mit einer anderen Schrift-Ersetzung als "
+    "in der Vorschau, wenn die Datei ihre Schriften nicht mitbringt.\n"
+    "Als Bitmap wird stattdessen genau das gedruckt, was die Vorschau "
+    "zeigt.\n\n"
+    "Dafuer ist der Text im Druckauftrag nicht mehr markierbar und "
+    "die Datei wird groesser.":
+        "Prints the pages exactly as they look in the preview.\n\n"
+        "Normally the PDF is sent to the printer and interpreted again "
+        "there — substituting fonts differently from the preview, when the "
+        "file does not carry its own.\n"
+        "As a bitmap, what gets printed is what the preview shows.\n\n"
+        "In exchange the text in the job is no longer selectable, and the "
+        "file is larger.",
+    "Aufloesung der Rasterung. 300 dpi ist fuer Text und normale "
+    "Grafiken ueblich, 600 dpi fuer feine Linien und kleine Schrift.":
+        "Resolution of the rasterisation. 300 dpi is usual for text and "
+        "ordinary graphics, 600 dpi for fine lines and small type.",
+    "Hinweis: Schriften nicht eingebettet ({p1}) — der Ausdruck kann "
+    "von der Vorschau abweichen. „Als Bitmap drucken“ druckt genau "
+    "das, was die Vorschau zeigt.":
+        "Note: fonts are not embedded ({p1}) — the print may differ from "
+        "the preview. “Print as bitmap” prints exactly what the preview "
+        "shows.",
     "Lange Seite: Rückseite steht gleich herum wie die Vorderseite "
     "(Bindung an der langen Kante, wie ein Buch).\n"
     "Kurze Seite: Rückseite ist um 180° gedreht "

@@ -53,6 +53,9 @@ class PrintDialog(QDialog):
     # Delivers the async-enumerated printer list to the GUI thread.
     _printers_loaded = pyqtSignal(list, str)
 
+    # Names of fonts the file only references, found off the GUI thread.
+    _fonts_checked  = pyqtSignal(list)
+
     # Print-job results delivered from the worker thread to the GUI thread.
     # (A background thread has no event loop, so QTimer.singleShot never fires
     # there — signals are auto-queued to the GUI thread instead.)
@@ -407,6 +410,37 @@ class PrintDialog(QDialog):
         duplex_row.addStretch()
         out.addLayout(duplex_row, 3, 0, 1, 2)
 
+        # Beside duplex, because it is the same kind of decision — how the job
+        # is put on paper, not what goes on it — and because one more row here
+        # costs nothing, where a section of its own would cost a heading.
+        bitmap_row = QHBoxLayout()
+        bitmap_row.setContentsMargins(0, 0, 0, 0)
+        bitmap_row.setSpacing(8)
+        self.bitmap_check = QCheckBox(tr("Als Bitmap drucken"))
+        self.bitmap_check.setToolTip(tr(
+            "Druckt die Seiten so, wie sie in der Vorschau aussehen.\n\n"
+            "Normalerweise wird die PDF an den Drucker geschickt und dort "
+            "erneut interpretiert — mit einer anderen Schrift-Ersetzung als "
+            "in der Vorschau, wenn die Datei ihre Schriften nicht mitbringt.\n"
+            "Als Bitmap wird stattdessen genau das gedruckt, was die Vorschau "
+            "zeigt.\n\n"
+            "Dafuer ist der Text im Druckauftrag nicht mehr markierbar und "
+            "die Datei wird groesser."))
+        bitmap_row.addWidget(self.bitmap_check)
+        self.bitmap_dpi = QComboBox()
+        for dpi in (150, 300, 600, 1200):
+            self.bitmap_dpi.addItem(f"{dpi} dpi", dpi)
+        self.bitmap_dpi.setCurrentIndex(1)          # 300 dpi
+        self.bitmap_dpi.setFixedWidth(96)
+        self.bitmap_dpi.setToolTip(tr(
+            "Aufloesung der Rasterung. 300 dpi ist fuer Text und normale "
+            "Grafiken ueblich, 600 dpi fuer feine Linien und kleine Schrift."))
+        self.bitmap_dpi.setEnabled(False)
+        self.bitmap_check.toggled.connect(self.bitmap_dpi.setEnabled)
+        bitmap_row.addWidget(self.bitmap_dpi)
+        bitmap_row.addStretch()
+        out.addLayout(bitmap_row, 4, 0, 1, 2)
+
         rl.addLayout(out)
         rl.addStretch(1)
 
@@ -424,6 +458,12 @@ class PrintDialog(QDialog):
         self.status_lbl = QLabel("")
         self.status_lbl.setObjectName("dimLabel")
         self.status_lbl.setWordWrap(True)
+        # A wrapped QLabel reports the height of a single line as its sizeHint,
+        # so the layout reserves one line and the second is cut off by the
+        # window edge — which is what happened to the unembedded-fonts notice,
+        # the longest thing that appears here. Reserve the two lines it can
+        # actually need; the bar is this tall either way, empty or not.
+        self.status_lbl.setMinimumHeight(30)
         bl.addWidget(self.status_lbl)
 
         btn_row = QHBoxLayout()
@@ -463,6 +503,8 @@ class PrintDialog(QDialog):
 
         # All widgets created — populate printers (triggers _on_printer_changed)
         self._load_printers()
+        self._unembedded = []
+        self._check_fonts()
 
         # Live preview: update whenever any print-affecting setting changes
         self._scale_group.idToggled.connect(lambda *_: self._sync_preview())
@@ -625,6 +667,71 @@ class PrintDialog(QDialog):
                     pass   # dialog closed
         from tools.jobs import submit
         submit(_bg, owner=self, name="printer-list")
+
+    def prints_as_bitmap(self):
+        """Whether this job is rasterised here rather than sent as a PDF.
+
+        Sent as a PDF, the file is interpreted a second time — by Ghostscript
+        and then the printer — and a font the file only references is resolved
+        again there, to something other than what pdfium chose for the preview.
+        Rasterising is what makes the paper match the screen, because it is the
+        preview's own renderer that draws it.
+        """
+        return self.bitmap_check.isChecked()
+
+    def _raster_dpi(self, printer_dpi):
+        """The resolution to rasterise at: the operator's choice when they have
+        asked for a bitmap, the printer's own resolution otherwise."""
+        if self.prints_as_bitmap():
+            return self.bitmap_dpi.currentData() or 300
+        return printer_dpi
+
+    def _check_fonts(self):
+        """Warn when the file's fonts are only referenced, not embedded.
+
+        Such a file prints through whatever replacement Ghostscript and the
+        printer choose, which is not the replacement pdfium chose for the
+        preview beside it — so the paper can come back with the letters spaced
+        differently, or larger, than the operator approved on screen. Nothing
+        here can supply a font the file does not carry; what it can do is say
+        so before the paper is used, and point at the one setting that makes
+        the print match the preview.
+
+        Off the GUI thread: it opens the document and walks every page's
+        resources, which is 150 ms on a small 300-page file and more on a
+        large one — measurable in a dialog that is supposed to appear at once.
+        """
+        self._fonts_checked.connect(self._on_fonts_checked)
+        import weakref
+        self_ref = weakref.ref(self)
+
+        def _bg(job):
+            names = []
+            try:
+                from tools.panels._prepress import unembedded_fonts
+                names = sorted(unembedded_fonts(self.pdf_path))
+            except Exception:
+                logging.debug("could not check the fonts of %s",
+                              self.pdf_path, exc_info=True)
+            obj = self_ref()
+            if obj is not None and not job.cancelled:
+                try:
+                    obj._fonts_checked.emit(names)
+                except RuntimeError:
+                    pass   # dialog closed
+        from tools.jobs import submit
+        submit(_bg, owner=self, name="font-check")
+
+    def _on_fonts_checked(self, names):
+        if not names:
+            return
+        self._unembedded = list(names)
+        shown = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
+        self.status_lbl.setText(tr(
+            "Hinweis: Schriften nicht eingebettet ({p1}) — der Ausdruck kann "
+            "von der Vorschau abweichen. „Als Bitmap drucken“ druckt genau "
+            "das, was die Vorschau zeigt."
+        ).format(p0=len(names), p1=shown))
 
     def _note_user_change(self, *_):
         if not self._applying:
@@ -1199,6 +1306,8 @@ class PrintDialog(QDialog):
             del _qp
         except Exception:
             qt_dpi = 600   # laser-printer safe default
+        as_bitmap = self.prints_as_bitmap()
+        qt_dpi = self._raster_dpi(qt_dpi)
         hw_margin_mm = self._hw_margin_mm   # capture now; _on_printer_changed won't run in bg
 
         import shutil, weakref
@@ -1216,7 +1325,11 @@ class PrintDialog(QDialog):
             errors = []
 
             # ── Primary: Ghostscript + lp/CUPS ───────────────────────────────
-            if shutil.which("lp"):
+            # Skipped entirely for "Als Bitmap": Ghostscript re-interprets the
+            # PDF and resolves its fonts a second time, which is the one thing
+            # this option exists to avoid. Going through it and rasterising
+            # afterwards would print the substitution, not the preview.
+            if shutil.which("lp") and not as_bitmap:
                 try:
                     skipped = print_via_gs(self.pdf_path, self.model,
                         pages_to_print, copies, color_mode, collate, duplex,

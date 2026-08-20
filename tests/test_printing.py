@@ -985,3 +985,121 @@ def test_enter_on_a_focused_cancel_still_cancels():
     finally:
         PrintDialog._do_print = real
     return "a focused Cancel keeps Enter to itself"
+
+
+def test_print_as_bitmap_offers_a_resolution_and_only_then():
+    """The rasterised route needs a resolution, and the number means nothing
+    while the box is unticked — so it follows the tick, the way the duplex
+    binding-edge selector follows its own checkbox."""
+    tab, dlg = _print_dialog()
+    try:
+        assert not dlg.bitmap_check.isChecked(), "bitmap must not be the default"
+        assert not dlg.bitmap_dpi.isEnabled(), \
+            "the resolution is selectable while it does nothing"
+        assert [dlg.bitmap_dpi.itemData(i) for i in range(dlg.bitmap_dpi.count())] \
+            == [150, 300, 600, 1200]
+        assert dlg.bitmap_dpi.currentData() == 300, "300 dpi is the sane default"
+
+        dlg.bitmap_check.setChecked(True); _app.processEvents()
+        assert dlg.bitmap_dpi.isEnabled()
+    finally:
+        dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+    return "150/300/600/1200 dpi, default 300, enabled only when ticked"
+
+
+def test_the_chosen_dpi_is_what_gets_rasterised():
+    """Unticked, the printer's own resolution is the right one to render at.
+    Ticked, the operator has named one and it is theirs that must be used —
+    asking for 150 dpi and getting the printer's 600 would be the setting
+    quietly doing nothing."""
+    tab, dlg = _print_dialog()
+    try:
+        assert dlg._raster_dpi(600) == 600, \
+            "unticked, the printer's resolution should be left alone"
+        dlg.bitmap_check.setChecked(True)
+        for i, want in ((0, 150), (2, 600), (3, 1200)):
+            dlg.bitmap_dpi.setCurrentIndex(i)
+            assert dlg._raster_dpi(600) == want, \
+                f"asked for {want} dpi, would rasterise at {dlg._raster_dpi(600)}"
+    finally:
+        dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+    return "the chosen dpi wins over the printer's, and only when chosen"
+
+
+def test_printing_as_a_bitmap_does_not_go_through_ghostscript():
+    """The whole point of the option: Ghostscript re-interprets the PDF and
+    resolves its fonts a second time, which is the substitution the operator
+    is trying to get away from. Rasterising the Ghostscript output instead of
+    the original would print that substitution at higher resolution — the bug,
+    faithfully reproduced."""
+    import inspect
+    from tools.printing.dialog import PrintDialog
+    src = inspect.getsource(PrintDialog._do_print)
+    assert "not as_bitmap" in src, \
+        "the Ghostscript branch is no longer guarded by the bitmap choice"
+    tab, dlg = _print_dialog()
+    try:
+        assert dlg.prints_as_bitmap() is False
+        dlg.bitmap_check.setChecked(True)
+        assert dlg.prints_as_bitmap() is True
+    finally:
+        dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+    return "the Ghostscript path is skipped when a bitmap was asked for"
+
+
+def test_a_file_whose_fonts_are_not_embedded_says_so_before_it_is_printed():
+    """A referenced-but-absent font is resolved by Ghostscript and the printer,
+    not by the pdfium that drew the preview — so the paper can come back with
+    the letters spaced differently, or larger, than the operator approved on
+    screen. Nothing here can supply the missing font; saying so before the
+    paper is used is what it can do."""
+    import time
+    from reportlab.pdfgen import canvas as _canvas
+    from tools.printing.dialog import PrintDialog
+    from tools.viewer.tab import PdfTab
+
+    src = os.path.join(_TMP, "warn_unembedded.pdf")
+    c = _canvas.Canvas(src, pagesize=A4)
+    c.setFont("Helvetica", 20); c.drawString(60, 700, "referenced only")
+    c.showPage(); c.save()
+
+    tab = PdfTab(src); dlg = PrintDialog(src, tab.model, tab)
+    try:
+        for _ in range(150):                 # the check runs off the GUI thread
+            _app.processEvents(); time.sleep(0.02)
+            if dlg.status_lbl.text():
+                break
+        assert dlg._unembedded == ["Helvetica"], \
+            f"the missing font was not identified: {dlg._unembedded}"
+        said = dlg.status_lbl.text()
+        assert "Helvetica" in said, f"the warning does not name it: {said!r}"
+        assert "Bitmap" in said, \
+            "the warning does not point at the setting that fixes it"
+    finally:
+        dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+    return "names the font, and names the way out"
+
+
+def test_a_file_with_nothing_to_warn_about_stays_quiet():
+    """A warning shown on every job is one nobody reads."""
+    import time
+    import pikepdf
+    from tools.printing.dialog import PrintDialog
+    from tools.viewer.tab import PdfTab
+
+    src = os.path.join(_TMP, "no_fonts_at_all.pdf")
+    pdf = pikepdf.new()
+    page = pdf.add_blank_page(page_size=(595, 842))
+    page.contents_add(pikepdf.Stream(pdf, b"0 0 1 rg 100 100 200 300 re f"))
+    pdf.save(src)
+
+    tab = PdfTab(src); dlg = PrintDialog(src, tab.model, tab)
+    try:
+        for _ in range(60):
+            _app.processEvents(); time.sleep(0.02)
+        assert dlg._unembedded == [], dlg._unembedded
+        assert dlg.status_lbl.text() == "", \
+            f"warned about a file with no fonts: {dlg.status_lbl.text()!r}"
+    finally:
+        dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+    return "no fonts, no warning"
