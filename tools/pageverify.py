@@ -23,6 +23,7 @@ cross the boundary.
 """
 import json
 import sys
+from tools.render.document_cache import open_document as _open_pdf
 
 
 VERIFY_SCALE   = 0.30    # ~180 px across an A4 page — enough to see a blackout
@@ -66,13 +67,12 @@ def verify_range(src, cand, indices, scale=VERIFY_SCALE, on_page=None):
     documents this runs on. No lock is taken — in a worker this process owns
     pdfium outright, and the in-process caller holds the lock around the call.
     """
-    import pypdfium2 as pdfium
     bad = {}
     src_doc = cand_doc = None
     try:
         try:
-            src_doc = pdfium.PdfDocument(src)
-            cand_doc = pdfium.PdfDocument(cand)
+            src_doc = _open_pdf(src)
+            cand_doc = _open_pdf(cand)
         except Exception:
             # Opened one and then the other failed: close what opened, or the
             # document handle leaks for the life of the process.

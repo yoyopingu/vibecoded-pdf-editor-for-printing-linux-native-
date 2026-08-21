@@ -22,6 +22,7 @@ from tools.jobs import Cancelled
 from tools.pageverify import VERIFY_SCALE as _VERIFY_SCALE, verify_range
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.i18n       import tr
+from tools.render.document_cache import open_document as _open_pdf
 
 
 # Below this there is nothing to win. A worker costs ~75 ms to start and has to
@@ -49,11 +50,10 @@ SPREAD_IF_PROJECTED_OVER = 1.5   # seconds
 
 def _page_luma(path, index, scale=_VERIFY_SCALE):
     """Greyscale render of one page, for comparing before against after."""
-    import pypdfium2 as pdfium
     gc.disable()
     try:
         with _pdfium_lock:
-            doc = pdfium.PdfDocument(path)
+            doc = _open_pdf(path)
             try:
                 return doc[index].render(scale=scale).to_pil().convert("L")
             finally:

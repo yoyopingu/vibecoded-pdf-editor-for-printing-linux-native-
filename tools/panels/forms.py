@@ -16,11 +16,18 @@ from tools.panels._shared import row
 def _plain_ink(path):
     """Dark pixels per page when the file is rendered *without* form support —
     i.e. what a printer, a RIP or any non-interactive viewer puts on paper."""
-    import pypdfium2 as pdfium
     gc.disable()
     try:
         with _pdfium_lock:
-            doc = pdfium.PdfDocument(path)
+            # The one place that must NOT go through open_document(). This
+            # measures the page as something with no form support draws it —
+            # a printer, a RIP, a plain viewer — because that is the whole
+            # question flattening answers. Opened with a form environment it
+            # would report the values pdfium paints from the field, which are
+            # exactly the ones flattening exists to replace, and the check
+            # would pass on a file where nothing had been baked in at all.
+            import pypdfium2 as pdfium
+            doc = pdfium.PdfDocument(path)      # no-forms: see above
             try:
                 out = []
                 for i in range(len(doc)):

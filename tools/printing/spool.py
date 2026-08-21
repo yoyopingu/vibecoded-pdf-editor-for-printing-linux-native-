@@ -16,6 +16,7 @@ from tools.app_state import AppState
 from tools.ghostscript import ghostscript_binary, unlink
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
+from tools.render.document_cache import open_document as _open_pdf
 
 def _run_capturing(cmd, timeout):
     """subprocess.run with the shape every call to lp/lpstat/lpoptions/
@@ -111,10 +112,9 @@ def _gs_blacked_out(before, after, budget=60):
     because this runs before every print and must not add noticeable delay.
 
     Returns [] when nothing is wrong and None if it could not be checked."""
-    import pypdfium2 as pdfium
     try:
         with _pdfium_lock:
-            a = pdfium.PdfDocument(before); b = pdfium.PdfDocument(after)
+            a = _open_pdf(before); b = _open_pdf(after)
             try:
                 n = min(len(a), len(b))
                 if not n:
@@ -156,7 +156,6 @@ def print_path_redraws_the_page(pdf_path, page_index=0, timeout=30):
     import os
     import tempfile
     import pikepdf
-    import pypdfium2 as pdfium
 
     gs_bin = ghostscript_binary()
     if not gs_bin:
@@ -185,7 +184,7 @@ def print_path_redraws_the_page(pdf_path, page_index=0, timeout=30):
 
         def ink(path):
             with _pdfium_lock:
-                doc = pdfium.PdfDocument(path)
+                doc = _open_pdf(path)
                 try:
                     pil = doc[0].render(
                         scale=1.5, fill_color=(255, 255, 255, 255)
@@ -434,7 +433,6 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
     Returns (rendered_list, skipped_list).
     rendered_list items: (pil_image, page_orient, target_w_px, target_h_px)
     """
-    import pypdfium2 as pdfium
 
     # With the paper left to the printer there is no sheet to rasterise onto,
     # so each page is drawn at its own size and the printer places it. Falling
@@ -468,7 +466,7 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
             try:
                 with _pdfium_lock:
                     if src_path not in pdfium_docs:
-                        pdfium_docs[src_path] = pdfium.PdfDocument(src_path)
+                        pdfium_docs[src_path] = _open_pdf(src_path)
                     pdfpage = pdfium_docs[src_path][orig]
                     pdfw    = pdfpage.get_width()
                     pdfh    = pdfpage.get_height()
@@ -591,9 +589,8 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         try:
             uid = model.order[pages[0]]
             src_path, orig = model.page_source(uid, pdf_path)
-            import pypdfium2 as pdfium
             with _pdfium_lock:
-                doc = pdfium.PdfDocument(src_path)
+                doc = _open_pdf(src_path)
                 try:
                     pg = doc[orig]; pdfw = pg.get_width(); pdfh = pg.get_height()
                 finally:

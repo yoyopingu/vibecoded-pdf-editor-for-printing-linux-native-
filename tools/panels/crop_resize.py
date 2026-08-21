@@ -14,6 +14,7 @@ from tools._base import BasePanel
 from tools.i18n import tr
 from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, _mat_mul, _display_matrix, PreviewPane
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
+from tools.render.document_cache import open_document as _open_pdf
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -231,14 +232,13 @@ class CropResizePanel(BasePanel):
         if not pdf_path or not os.path.isfile(pdf_path):
             return
         try:
-            import pypdfium2 as pdfium
             pages    = self._get_target_pages()
             page_idx = pages[0][0] if pages else 0
             # Runs on the GUI thread while the render worker may be inside
             # pdfium: constructing/closing the document needs the process-wide
             # lock, exactly like the page access in _render_base_page below.
             with _pdfium_lock:
-                doc  = pdfium.PdfDocument(pdf_path)
+                doc  = _open_pdf(pdf_path)
                 try:
                     page = doc[page_idx]
                     pw   = page.get_width(); ph = page.get_height()
@@ -385,11 +385,10 @@ class CropResizePanel(BasePanel):
         cache = getattr(self, "_base_cache", None)
         if cache is not None and cache[0] == key:
             return cache[1], cache[2], cache[3]
-        import pypdfium2 as pdfium
         gc.disable()
         try:
             with _pdfium_lock:
-                doc = pdfium.PdfDocument(pdf_path)
+                doc = _open_pdf(pdf_path)
                 try:
                     page = doc[page_idx]
                     pw = page.get_width(); ph = page.get_height()

@@ -10,6 +10,7 @@ from tools.i18n import tr
 from tools.panels._shared import PAPER_SIZES_PT, row
 from tools.panels._colour import _colour_histogram, _hist_stats
 from tools.panels._prepress import MIN_PRESS_DPI
+from tools.render.document_cache import open_document as _open_pdf
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -181,7 +182,6 @@ def _preflight(src, checks, target, min_dpi, report):
     it on screen back on the GUI thread.
     """
     from pypdf import PdfReader
-    import pypdfium2 as pdfium
     try:
         reader = PdfReader(src, strict=False)
     except Exception as e:
@@ -194,7 +194,7 @@ def _preflight(src, checks, target, min_dpi, report):
         # grayscale._scan_pages for the heap corruption an unlocked load caused.
         try:
             with _pdfium_lock:
-                doc = pdfium.PdfDocument(src)
+                doc = _open_pdf(src)
         except Exception as e:
             raise RuntimeError(tr("PDFium-Fehler beim Öffnen: {p0}").format(p0=e))
         try:

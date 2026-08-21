@@ -145,6 +145,37 @@ _pages: "OrderedDict" = OrderedDict()
 _pages_lock = threading.Lock()
 
 
+def open_document(path):
+    """Open a PDF for rendering, with its form fields ready to draw.
+
+    Every place that renders goes through here, because a document opened
+    without this draws a filled-in form as an empty one. A field's typed value
+    is painted from its appearance stream, and pdfium only paints those once a
+    form environment exists — so a delivery note filled in by the customer came
+    out blank, in the viewer, the thumbnails, the print preview and the printed
+    sheet alike, while Acrobat showed it filled.
+
+    The call has to come before any page handle is taken, which is the reason
+    this is a function and not a line repeated at nineteen call sites: get the
+    order wrong at one of them and that one renders empty again. It costs
+    nothing measurable on a document with no forms, where it does nothing.
+
+    The caller still owns the document and must close it. PDFIUM_LOCK is not
+    taken here — the callers hold it around wider critical sections.
+    """
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(path)
+    try:
+        doc.init_forms()
+    except Exception:
+        # A malformed or XFA form is not a reason to fail to open the file:
+        # without the form env the page still renders, only without the
+        # values in its fields, which is what happened everywhere before.
+        logging.debug("could not initialise the form fields of %s", path,
+                      exc_info=True)
+    return doc
+
+
 def _forget_pages(key):
     """Drop a document's pages from the page cache, without closing them.
 
@@ -222,7 +253,7 @@ def _checkout(path):
     # pdfium call.
     import pypdfium2 as pdfium
     with PDFIUM_LOCK:
-        doc = pdfium.PdfDocument(path)
+        doc = open_document(path)
 
     doomed = []
     with _registry_lock:
@@ -270,7 +301,7 @@ def page_document(path):
         # the cache existed: open, use, close.
         import pypdfium2 as pdfium
         with PDFIUM_LOCK:
-            doc = pdfium.PdfDocument(path)
+            doc = open_document(path)
             try:
                 yield doc
             finally:
@@ -304,7 +335,7 @@ def open_page(path, index):
         # Not cacheable (nothing to stat): open, use, close, like before.
         import pypdfium2 as pdfium
         with PDFIUM_LOCK:
-            doc = pdfium.PdfDocument(path)
+            doc = open_document(path)
             page = None
             try:
                 page = doc[index]

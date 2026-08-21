@@ -19,6 +19,7 @@ from tools.i18n import tr
 from tools.panels._colour import _colour_histogram, _hist_stats
 from tools.pageverify import BLACKOUT_LIMIT, conversion_damage
 from tools.panels._verify import _page_luma, _verify_pages_intact
+from tools.render.document_cache import open_document as _open_pdf
 
 
 # Default card size — kept in sync with tools/viewer/page_grid.py CARD_W/CARD_H.
@@ -995,9 +996,8 @@ class GrayscalePanel(BasePanel):
 
         # The page count, so the preview cards can go up before the work starts.
         try:
-            import pypdfium2 as pdfium
             with _pdfium_lock:
-                doc = pdfium.PdfDocument(src)
+                doc = _open_pdf(src)
                 try: n = len(doc)
                 finally: doc.close()
         except Exception as e:
@@ -1141,7 +1141,6 @@ def _scan_pages(src, thr, report):
 
     Plain data only; the panel classifies and draws back on the GUI thread.
     """
-    import pypdfium2 as pdfium
     hists = []
     # PIL images from to_pil() can end up in reference cycles; Python's cyclic
     # GC runs at allocation thresholds on whatever thread happens to allocate —
@@ -1161,7 +1160,7 @@ def _scan_pages(src, thr, report):
         # it unlocked corrupted the heap and took the whole app down with a
         # malloc abort, with no Python traceback to show for it.
         with _pdfium_lock:
-            doc = pdfium.PdfDocument(src)
+            doc = _open_pdf(src)
         try:
             with _pdfium_lock:
                 n = len(doc)

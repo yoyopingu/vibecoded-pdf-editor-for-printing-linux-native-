@@ -17,6 +17,7 @@ from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _visible_size, r
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
 from tools.panels._imposition import (_slot_placement, _flatten_annots,
                                       form_factory, full_scale_problem)
+from tools.render.document_cache import open_document as _open_pdf
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -294,9 +295,8 @@ class NUpPanel(BasePanel):
         key = (pdf_path, idx)
         if key in self._dims_cache:
             return self._dims_cache[key]
-        import pypdfium2 as pdfium
         with _pdfium_lock:
-            doc = pdfium.PdfDocument(pdf_path)
+            doc = _open_pdf(pdf_path)
             try:
                 n = len(doc)
                 i = min(idx, n - 1)

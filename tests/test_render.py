@@ -507,3 +507,105 @@ def test_switching_tabs_does_not_throw_away_the_other_tab_s_renders():
     finally:
         vp.deleteLater(); _app.processEvents()
     return f"{len(first)} rendered pages survived three tab switches"
+
+
+def _filled_form_pdf(name="filled_form.pdf"):
+    """A form with a value in it and NeedAppearances set — how nearly every
+    tool that fills a form leaves it, saying "viewer, draw this"."""
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from pypdf import PdfWriter
+    blank = os.path.join(_TMP, "blank_" + name)
+    c = canvas.Canvas(blank, pagesize=A4)
+    c.setFont("Helvetica", 12); c.drawString(60, 780, "Auftrag")
+    c.acroForm.textfield(name="kunde", x=60, y=700, width=300, height=24,
+                         borderWidth=1, fontSize=12)
+    c.showPage(); c.save()
+
+    out = os.path.join(_TMP, name)
+    w = PdfWriter(clone_from=blank)
+    w.update_page_form_field_values(w.pages[0], {"kunde": "Firma Muster GmbH"},
+                                    auto_regenerate=True)
+    with open(out, "wb") as f:
+        w.write(f)
+    return out
+
+
+def _ink_width(pil):
+    from PIL import ImageOps
+    box = ImageOps.invert(pil.convert("L")).getbbox()
+    return 0 if box is None else box[2] - box[0]
+
+
+def test_a_filled_in_form_is_not_rendered_empty():
+    """A field's typed value is painted from its appearance stream, and pdfium
+    paints those only once a form environment exists on the document. Without
+    one the page comes back with the field and its contents missing — so a
+    delivery note the customer filled in showed blank here while Acrobat
+    showed it filled.
+
+    Checked through the document cache, which is what the viewer and the
+    thumbnails render from.
+    """
+    from tools.render import document_cache as dc
+    src = _filled_form_pdf("cache_form.pdf")
+
+    try:
+        with dc.page_document(src) as doc:
+            page = doc[0]
+            try:
+                pil = page.render(scale=2,
+                                  fill_color=(255, 255, 255, 255)).to_pil()
+            finally:
+                page.close()
+    finally:
+        # The registry is shared, and a document left in it changes what the
+        # eviction tests further down see.
+        dc.close_all()
+    drawn = _ink_width(pil)
+
+    # The label alone is about 80px at this scale; the field box and the text
+    # in it reach several times that.
+    assert drawn > 300, \
+        f"only {drawn}px of ink — the filled field was not drawn"
+    return f"the field and its value are drawn ({drawn}px of ink)"
+
+
+def test_every_render_path_opens_documents_the_same_way():
+    """The form environment has to be set up before any page handle is taken,
+    which is not something to remember at nineteen separate call sites — get
+    it wrong at one and that one renders filled forms as empty ones, which is
+    how this started. Structural, so a twentieth cannot reintroduce it."""
+    import ast, pathlib
+
+    offenders = []
+    exempt = 0
+    for path in sorted(pathlib.Path("tools").rglob("*.py")):
+        if path.name == "document_cache.py":
+            continue        # the one place allowed to call the constructor
+        source = path.read_text()
+        lines = source.split("\n")
+        tree = ast.parse(source, str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if (isinstance(fn, ast.Attribute) and fn.attr == "PdfDocument"
+                    and isinstance(fn.value, ast.Name)
+                    and "pdfium" in fn.value.id):
+                # There is one honest reason to open without forms, and it has
+                # to say so on the line: forms.py measures the page as a
+                # printer draws it, to check that flattening really baked the
+                # values in. Marking it keeps that deliberate and rare rather
+                # than making the rule advisory.
+                if "no-forms:" in lines[node.lineno - 1]:
+                    exempt += 1
+                    continue
+                offenders.append(f"{path}:{node.lineno}")
+    assert not offenders, (
+        "documents opened without the form environment:\n  "
+        + "\n  ".join(offenders))
+    assert exempt <= 1, (
+        f"{exempt} places now opt out of form support; each one renders a "
+        "filled form as empty and needs to be worth it")
+    return f"every render path goes through open_document() ({exempt} marked exception)"

@@ -13,6 +13,7 @@ from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.theme import _TV
+from tools.render.document_cache import open_document as _open_pdf
 
 
 class _PrintPreview(QWidget):
@@ -198,9 +199,8 @@ class _PrintPreview(QWidget):
 
         def _bg(job):
             try:
-                import pypdfium2 as pdfium
                 with _pdfium_lock:
-                    doc = pdfium.PdfDocument(src_path)
+                    doc = _open_pdf(src_path)
                     try:
                         page = doc[orig]
                         pw_pt = page.get_width()

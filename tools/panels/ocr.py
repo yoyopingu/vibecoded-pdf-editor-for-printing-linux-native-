@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox
 from tools._base import BasePanel, make_label
 from tools.i18n import get_language, tr
 from tools.panels._shared import row
+from tools.render.document_cache import open_document as _open_pdf
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -58,9 +59,8 @@ def tesseract_langs():
 def _page_has_text(pdf_path, index):
     """True when this page already carries extractable text."""
     try:
-        import pypdfium2 as pdfium
         with _pdfium_lock:
-            doc = pdfium.PdfDocument(pdf_path)
+            doc = _open_pdf(pdf_path)
             try:
                 return bool(doc[index].get_textpage().get_text_range().strip())
             finally:
