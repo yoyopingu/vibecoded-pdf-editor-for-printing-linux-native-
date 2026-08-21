@@ -181,14 +181,15 @@ def _lp_options(**kw):
     src = kw.pop("src", FX["normal"])
     scale_idx = kw.pop("scale_idx", 0)
     orient_idx = kw.pop("orient_idx", 0)
+    paper_key  = kw.pop("paper_key", "A4")
     from pypdf import PdfReader
     n_pages = len(PdfReader(src).pages)
     _open(src)
     subprocess.run = spy
     try:
         print_via_gs(src, PageModel(n_pages), [0], 1, "auto", True,
-                     kw.pop("duplex"), kw.pop("edge", "long"), 0,
-                     "test-printer", scale_idx, "A4", orient_idx,
+                     kw.pop("duplex", False), kw.pop("edge", "long"), 0,
+                     "test-printer", scale_idx, paper_key, orient_idx,
                      null_progress(), **kw)
     finally:
         subprocess.run = real_run
@@ -465,7 +466,12 @@ def test_the_dialog_reopens_on_what_was_used_last():
     try:
         with _stub_queue(queue):
             tab, dlg = opened()
-            assert dlg.paper_combo.currentData() == "A4", "ignored the queue's paper"
+            # The queue's own paper is no longer copied into the combo: the
+            # dialog stays on "leave it to the printer", which is the same
+            # sheet without naming it on the job. Sides still come from the
+            # queue, because a duplex setting has to be sent to take effect.
+            assert dlg.paper_combo.currentData() == "", \
+                "the queue's paper was copied into the job as an override"
             assert dlg.duplex_check.isChecked() is False, "ignored the queue's sides"
 
             dlg.paper_combo.setCurrentIndex(dlg.paper_combo.findData("A3"))
@@ -603,8 +609,14 @@ def test_the_queue_wins_over_qt_on_every_open_not_just_the_first():
                 dlg.printer_combo.blockSignals(False)
                 dlg._on_printer_changed()
                 _spin(40, 0.0)
-                assert dlg.paper_combo.currentData() == "A4", (
-                    f"open {attempt + 1}: Qt's Letter beat the queue's A4")
+                # What this has always guarded is that Qt's guess does not
+                # win. It cannot now: no paper is chosen at all, so nothing
+                # is sent and the queue's own A4 stands. Letter appearing
+                # here would still be the bug it always was.
+                assert dlg.paper_combo.currentData() == "", (
+                    f"open {attempt + 1}: a paper was chosen for the operator")
+                assert dlg.paper_combo.currentData() != "Letter", (
+                    f"open {attempt + 1}: Qt's Letter beat the queue")
                 assert dlg.duplex_check.isChecked() is False, (
                     f"open {attempt + 1}: Qt's duplex beat the queue's one-sided")
     finally:
@@ -1302,3 +1314,100 @@ def test_the_bitmap_print_fills_the_sheet_whatever_dpi_was_chosen():
         f"but the page itself is {100 * expected:.0f}%: {got}")
     return ("same size at 150/300/600 dpi, and the size the page really is "
             f"({100 * expected:.0f}% of the sheet wide)")
+
+
+def _paper_dialog(queue="PageSize/Media Size: *A4 Letter A3\n"):
+    """A dialog with its paper list already populated, the way the other queue
+    tests in this file do it: stub the queue and drive the change directly,
+    rather than spinning the event loop until the background enumeration
+    happens to land."""
+    tab, dlg = _print_dialog(2, "paper_dlg.pdf")
+    with _stub_queue(queue):
+        dlg.printer_combo.blockSignals(True)
+        dlg.printer_combo.clear()
+        dlg.printer_combo.addItem("office", "office")
+        dlg.printer_combo.blockSignals(False)
+        dlg._on_printer_changed()
+        _spin(40, 0.0)
+    return tab, dlg
+
+
+def test_paper_defaults_to_leaving_the_printer_alone():
+    """A size was named on every job, and there was no way not to.
+
+    On a press with SRA3 loaded that meant "media=A4" went out with the job
+    and an A4-sized area came back printed on a 320x450 sheet. Naming a size
+    can only agree with what is loaded or override it wrongly; the operator
+    has already loaded the stock and chosen the tray. The colour control has
+    had "Drucker-Standard" all along — the paper had no equivalent.
+
+    The custom entry is checked here too: a driverless press reports no sizes
+    to enumerate, so a list, however long, cannot name the sheet it is running.
+    """
+    from tools.printing import prefs
+    prefs.forget()
+    tab, dlg = _paper_dialog()
+    try:
+        assert dlg.paper_combo.count(), "the paper list never populated"
+        assert dlg.paper_combo.itemData(0) == "", \
+            "leaving the paper alone is not the first choice"
+        assert dlg.selected_paper() == "", \
+            f"a size is chosen by default: {dlg.selected_paper()!r}"
+
+        idx = dlg.paper_combo.findData(dlg.PAPER_CUSTOM)
+        assert idx >= 0, "there is no way to type a size"
+        assert not dlg.paper_w_mm.isVisibleTo(dlg), \
+            "the millimetre boxes are shown when they mean nothing"
+        dlg.paper_combo.setCurrentIndex(idx); _app.processEvents()
+        assert dlg.paper_w_mm.isVisibleTo(dlg), "picking Custom showed no boxes"
+        dlg.paper_w_mm.setValue(320); dlg.paper_h_mm.setValue(450)
+        assert dlg.selected_paper() == "Custom.320x450mm", dlg.selected_paper()
+    finally:
+        prefs.forget()
+        dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+    return "opens on 'leave the paper to the printer', and a size can be typed"
+
+
+def test_no_media_option_is_sent_when_the_paper_is_left_alone():
+    """The whole point of the default: the job must carry nothing about paper,
+    so the queue's own setting stands. An orientation worked out from a sheet
+    nobody chose would override it just as effectively, so that goes too."""
+    opts = _lp_options(paper_key="")
+    flat = " ".join(opts)
+    assert "media=" not in flat, f"paper was named anyway: {opts}"
+    assert "orientation-requested" not in flat, \
+        f"an orientation for an unknown sheet was sent: {opts}"
+
+    # Naming one still works, and reaches lp verbatim.
+    opts = _lp_options(paper_key="SRA3")
+    assert any(o == "media=SRA3" for o in opts), f"SRA3 did not reach lp: {opts}"
+    opts = _lp_options(paper_key="Custom.320x450mm")
+    assert any(o == "media=Custom.320x450mm" for o in opts), \
+        f"a typed size did not reach lp: {opts}"
+    return "nothing sent by default, exactly what was asked for otherwise"
+
+
+def test_a_size_this_app_does_not_know_is_never_guessed_at():
+    """_PAPER_PTS answered A4 for anything missing from it, and SRA3 was
+    missing from it — so choosing SRA3 sized the job as A4 and printed an A4
+    area on the sheet. Not knowing has to read as not knowing."""
+    from tools.printing.spool import paper_size_pt, custom_paper_key
+    MM = 72 / 25.4                      # points per millimetre
+
+    a4 = paper_size_pt("A4")
+    assert paper_size_pt("SRA3") is not None, "SRA3 is still unknown"
+    w, h = paper_size_pt("SRA3")
+    assert abs(w / MM - 320) < 1 and abs(h / MM - 450) < 1, \
+        f"SRA3 is {w / MM:.0f}x{h / MM:.0f}mm"
+    assert paper_size_pt("SRA3") != a4, "SRA3 still resolves to A4"
+
+    for unknown in ("Nonsense", "B7", "Custom.notanumber"):
+        assert paper_size_pt(unknown) is None, \
+            f"{unknown} was guessed at as {paper_size_pt(unknown)}"
+    assert paper_size_pt("") is None, "the printer default is not a size"
+
+    # Custom sizes, in the spelling CUPS documents.
+    assert custom_paper_key(320, 450) == "Custom.320x450mm"
+    w, h = paper_size_pt("Custom.320x450mm")
+    assert abs(w / MM - 320) < 0.5 and abs(h / MM - 450) < 0.5
+    return "SRA3 is a real size, and an unknown one stays unknown"

@@ -302,6 +302,18 @@ _EN: dict[str, str] = {
         "→ sRGB: convert to sRGB before printing",
     "Beidseitig drucken  (Duplex)": "Print double-sided  (duplex)",
     "Als Bitmap drucken": "Print as bitmap",
+    "Benutzerdefiniert…": "Custom…",
+    "Drucker-Standard laesst das Papier so, wie die Warteschlange es "
+    "eingestellt hat — richtig, solange im Drucker liegt, worauf "
+    "gedruckt werden soll.\n\n"
+    "Eine Groesse hier zu waehlen ueberschreibt das. Wird eine "
+    "kleinere genannt als eingelegt ist, wird nur diese Flaeche "
+    "bedruckt; wird eine groessere genannt, verkleinert der Drucker.":
+        "Printer default leaves the paper as the queue has it set — right, "
+        "as long as what you mean to print on is what is loaded.\n\n"
+        "Choosing a size here overrides that. Name one smaller than what is "
+        "loaded and only that area is printed; name a larger one and the "
+        "printer shrinks to fit.",
     "Druckt die Seiten so, wie sie in der Vorschau aussehen.\n\n"
     "Normalerweise wird die PDF an den Drucker geschickt und dort "
     "erneut interpretiert — mit einer anderen Schrift-Ersetzung als "

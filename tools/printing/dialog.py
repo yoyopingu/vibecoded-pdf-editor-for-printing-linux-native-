@@ -16,7 +16,8 @@ from tools.i18n import tr
 from tools.printing.preview import _PrintPreview
 from tools.render.images import pil_to_qpixmap
 from tools.printing import prefs
-from tools.printing.spool import (_PAPER_PTS, _run_capturing, print_via_gs,
+from tools.printing.spool import (_PAPER_PTS, PAPER_PRINTER_DEFAULT,
+                                  _run_capturing, print_via_gs,
                                   prerender_for_qt, paper_sources, queue_defaults)
 from tools.viewer.model import _positions_to_str
 from tools.viewer.tab_base import owning_tab
@@ -38,6 +39,28 @@ def _qt_page_sizes():
     return {"A4": ids.A4, "A3": ids.A3, "A5": ids.A5, "Letter": ids.Letter,
             "Legal": ids.Legal, "B4": ids.B4, "B5": ids.B5,
             "Executive": ids.Executive, "Folio": ids.Folio}
+
+
+def _is_gone(obj):
+    """Has Qt already destroyed this widget's C++ half?
+
+    deleteLater() frees that half while the Python object it was wrapped in
+    lives on, so a weakref still hands back something that looks like a
+    dialog and is not one. Touching it — emitting one of its signals from a
+    worker that has just finished — does not raise RuntimeError, it takes the
+    process down. This is the check that has to happen first, and it is why
+    the font check crashed the print tests seven runs in eight: the only tests
+    that waited long enough for Ghostscript to finish were also the ones that
+    then closed the dialog.
+    """
+    try:
+        from PyQt6 import sip
+    except ImportError:      # not available in this build; the weakref is all
+        return False         # there is, and RuntimeError has to do the rest
+    try:
+        return sip.isdeleted(obj)
+    except Exception:
+        return False
 
 
 _QUEUE_INFO_CACHE = {}       # printer -> {"sources": ..., "defaults": ...}
@@ -323,8 +346,35 @@ class PrintDialog(QDialog):
         pg.addWidget(self.orient_combo, 2, 1)
 
         pg.addWidget(_lbl(tr("Papier:")), 3, 0)
+        paper_row = QHBoxLayout()
+        paper_row.setContentsMargins(0, 0, 0, 0)
+        paper_row.setSpacing(8)
         self.paper_combo = QComboBox()
-        pg.addWidget(self.paper_combo, 3, 1)
+        self.paper_combo.setToolTip(tr(
+            "Drucker-Standard laesst das Papier so, wie die Warteschlange es "
+            "eingestellt hat — richtig, solange im Drucker liegt, worauf "
+            "gedruckt werden soll.\n\n"
+            "Eine Groesse hier zu waehlen ueberschreibt das. Wird eine "
+            "kleinere genannt als eingelegt ist, wird nur diese Flaeche "
+            "bedruckt; wird eine groessere genannt, verkleinert der Drucker."))
+        paper_row.addWidget(self.paper_combo, 1)
+        # Two boxes for a size nobody's list has. Hidden until "Benutzer-
+        # definiert" is chosen, because that is the only time they mean
+        # anything and the row is tight enough already.
+        self.paper_w_mm = QSpinBox()
+        self.paper_w_mm.setRange(10, 2000); self.paper_w_mm.setValue(320)
+        self.paper_w_mm.setSuffix(" mm"); self.paper_w_mm.setFixedWidth(80)
+        self.paper_h_mm = QSpinBox()
+        self.paper_h_mm.setRange(10, 2000); self.paper_h_mm.setValue(450)
+        self.paper_h_mm.setSuffix(" mm"); self.paper_h_mm.setFixedWidth(80)
+        self._paper_x = QLabel("×")
+        for w in (self.paper_w_mm, self._paper_x, self.paper_h_mm):
+            w.setVisible(False)
+            paper_row.addWidget(w)
+        self.paper_combo.currentIndexChanged.connect(self._sync_custom_paper)
+        for box in (self.paper_w_mm, self.paper_h_mm):
+            box.valueChanged.connect(self._sync_preview)
+        pg.addLayout(paper_row, 3, 1)
 
         # Which tray to draw from. The choices come from the queue itself, and
         # a printer that offers only one is not asked about — see
@@ -523,6 +573,7 @@ class PrintDialog(QDialog):
         self._load_printers()
         self._unembedded = []
         self._print_differs = False
+        self._fonts_check_started = True
         self._check_fonts()
 
         # Live preview: update whenever any print-affecting setting changes
@@ -687,6 +738,29 @@ class PrintDialog(QDialog):
         from tools.jobs import submit
         submit(_bg, owner=self, name="printer-list")
 
+    PAPER_CUSTOM = "__custom__"      # combo entry, not a media name
+
+    def _sync_custom_paper(self):
+        """Show the two millimetre boxes only for "Benutzerdefiniert"."""
+        on = self.paper_combo.currentData() == self.PAPER_CUSTOM
+        for w in (self.paper_w_mm, self._paper_x, self.paper_h_mm):
+            w.setVisible(on)
+
+    def selected_paper(self):
+        """The media name for the job, or "" to leave the paper alone.
+
+        "" is not a size and is never sent: the queue keeps whatever it is set
+        to. That is the right answer far more often than naming one — the
+        operator has already loaded the stock and picked the tray, and a size
+        named here can only agree with that or override it wrongly.
+        """
+        data = self.paper_combo.currentData()
+        if data == self.PAPER_CUSTOM:
+            from tools.printing.spool import custom_paper_key
+            return custom_paper_key(self.paper_w_mm.value(),
+                                    self.paper_h_mm.value())
+        return data or ""
+
     def prints_as_bitmap(self):
         """Whether this job is rasterised here rather than sent as a PDF.
 
@@ -748,11 +822,12 @@ class PrintDialog(QDialog):
                 logging.debug("could not compare the print path with the "
                               "preview for %s", self.pdf_path, exc_info=True)
             obj = self_ref()
-            if obj is not None and not job.cancelled:
-                try:
-                    obj._fonts_checked.emit(names, differs)
-                except RuntimeError:
-                    pass   # dialog closed
+            if obj is None or job.cancelled or _is_gone(obj):
+                return
+            try:
+                obj._fonts_checked.emit(names, differs)
+            except RuntimeError:
+                pass   # dialog closed between the check above and here
         from tools.jobs import submit
         submit(_bg, owner=self, name="font-check")
 
@@ -850,12 +925,13 @@ class PrintDialog(QDialog):
         defaults = info.get("defaults") or {}
         if self._settings_touched:
             return                       # they have already said what they want
-        if "paper" in defaults and "paper" not in saved:
-            idx = self.paper_combo.findData(defaults["paper"])
-            if idx >= 0:
-                self.paper_combo.blockSignals(True)
-                self.paper_combo.setCurrentIndex(idx)
-                self.paper_combo.blockSignals(False)
+        # The queue's default paper is deliberately not selected here. Doing so
+        # turned "whatever this queue is set to" into a size named on the job —
+        # the same value, said out loud, and therefore an override. It read as
+        # harmless while the queue said A4 and the tray held A4; the moment
+        # SRA3 went in, the job still carried A4 and printed an A4 area on it.
+        # Leaving the combo on "Drucker-Standard" sends nothing and follows the
+        # queue wherever it goes.
         if "duplex" in defaults and "duplex" not in saved:
             self.duplex_check.setChecked(bool(defaults["duplex"]))
             ei = self.duplex_edge_combo.findData(defaults.get("duplex_edge", "long"))
@@ -986,12 +1062,21 @@ class PrintDialog(QDialog):
             self._on_printer_changed()
 
     # Fallback paper list used when printer reports no supported sizes
+    # Shown when the queue reports nothing to enumerate — which is every
+    # driverless press, including the one this came up on. It stopped at A3,
+    # so the oversized stock a copyshop runs could not be named at all.
     _FALLBACK_PAPERS = [
         ("A4  (210 × 297 mm)",    "A4"),
         ("A3  (297 × 420 mm)",    "A3"),
+        ("SRA3  (320 × 450 mm)",  "SRA3"),
+        ("SRA4  (225 × 320 mm)",  "SRA4"),
+        ("RA3  (305 × 430 mm)",   "RA3"),
+        ("A2  (420 × 594 mm)",    "A2"),
         ("A5  (148 × 210 mm)",    "A5"),
+        ("A6  (105 × 148 mm)",    "A6"),
         ("Letter  (216 × 279 mm)", "Letter"),
         ("Legal  (216 × 356 mm)", "Legal"),
+        ("Tabloid  (279 × 432 mm)", "Tabloid"),
     ]
 
     def _on_printer_changed(self):
@@ -1011,6 +1096,15 @@ class PrintDialog(QDialog):
             prev_paper = self.paper_combo.currentData()
             self.paper_combo.blockSignals(True)
             self.paper_combo.clear()
+
+            # First, and selected by default: leave the paper alone. A press
+            # with SRA3 loaded was being told "media=A4" on every job, because
+            # this list had no way to say "the one that is already in there" —
+            # and, for a driverless queue that reports no sizes at all, no way
+            # to name SRA3 either. The colour control has worked this way all
+            # along; the paper had no equivalent.
+            self.paper_combo.addItem(tr("Drucker-Standard"),
+                                     PAPER_PRINTER_DEFAULT)
 
             populated = False
             if valid:
@@ -1035,16 +1129,17 @@ class PrintDialog(QDialog):
                 for label, key in self._FALLBACK_PAPERS:
                     self.paper_combo.addItem(label, key)
 
-            # Default to the printer's OWN default page size (fall back to the
-            # previously selected paper, then the first entry).
-            default_paper = None
-            if valid:
-                try:
-                    default_paper = _qt_to_lp.get(info.defaultPageSize().id())
-                except Exception:
-                    logging.debug("Qt has no default page size for this queue",
-                                  exc_info=True)
-            target_paper = default_paper or prev_paper
+            # Last: a size no list here has. A driverless press reports nothing
+            # to enumerate, so without this there is no way to name the sheet
+            # it is actually running.
+            self.paper_combo.addItem(tr("Benutzerdefiniert…"), self.PAPER_CUSTOM)
+
+            # Stay on whatever was chosen before; otherwise leave the paper to
+            # the printer, which is the first entry. Qt's defaultPageSize() is
+            # deliberately not consulted any more — it answered A4 for a queue
+            # that reports no page sizes whatsoever, which is a guess wearing
+            # the printer's authority.
+            target_paper = prev_paper
             if target_paper:
                 idx = self.paper_combo.findData(target_paper)
                 if idx >= 0:
@@ -1171,7 +1266,7 @@ class PrintDialog(QDialog):
         self._preview.update_settings(
             scale_idx  = self._scale_index(),
             scale_pct  = self.scale_pct.value(),
-            paper_key  = self.paper_combo.currentData() or "A4",
+            paper_key  = self.selected_paper(),
             orient_idx = self.orient_combo.currentIndex(),
             margin_mm  = self._hw_margin_mm,
         )
@@ -1292,7 +1387,7 @@ class PrintDialog(QDialog):
         paper_source = (self._source_keyword, choice) if choice else None
         scale_idx  = self._scale_index()
         scale_pct  = self.scale_pct.value()
-        paper_key  = self.paper_combo.currentData() or "A4"
+        paper_key  = self.selected_paper()
         orient_idx = self.orient_combo.currentIndex()
 
         try:

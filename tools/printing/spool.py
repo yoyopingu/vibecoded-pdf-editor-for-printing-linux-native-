@@ -42,7 +42,61 @@ _PAPER_PTS = {
     "Legal":     (612.0,  1008.0),  "B4":     (708.66, 1000.63),
     "B5":        (498.90, 708.66),  "Executive": (521.86, 756.0),
     "Folio":     (612.0,  936.0),
+    # The oversized stock a copyshop actually runs: SRA3 is the sheet you
+    # impose an A3 job on and trim back, and it was not in this table at all.
+    # Nor were A2 and up, or the American large formats.
+    "SRA4":      (637.80, 907.09),  "SRA3":   (907.09, 1275.59),
+    "RA4":       (609.45, 864.57),  "RA3":    (864.57, 1218.90),
+    "A2":        (1190.55, 1683.78), "A1":    (1683.78, 2383.94),
+    "A0":        (2383.94, 3370.39), "A6":    (297.64, 419.53),
+    "B3":        (1000.63, 1417.32), "Tabloid": (792.0, 1224.0),
+    "Ledger":    (1224.0, 792.0),
 }
+
+# "Whatever the queue is already set to." Not a size: the option is left off
+# the job entirely, so the printer's own default applies.
+PAPER_PRINTER_DEFAULT = ""
+
+# lp's spelling for a size that is not on any list — see the CUPS options
+# documentation, which takes points, or a number with in/cm/mm after it.
+_CUSTOM_PREFIX = "Custom."
+
+
+def custom_paper_key(width_mm, height_mm):
+    """The lp media name for a sheet given in millimetres."""
+    return f"{_CUSTOM_PREFIX}{width_mm:g}x{height_mm:g}mm"
+
+
+def paper_size_pt(paper_key):
+    """(width, height) in points for an lp media name, or None when the size
+    is not ours to decide.
+
+    None means two different things that want the same handling: the operator
+    asked for the printer's own default, or named a size this application has
+    never heard of. Either way, guessing is worse than not knowing — the table
+    below used to answer A4 for anything it did not recognise, so choosing
+    SRA3 on a press that has SRA3 loaded printed an A4-sized area on it and
+    left the rest of the sheet blank.
+    """
+    if not paper_key:
+        return None
+    if paper_key.startswith(_CUSTOM_PREFIX):
+        try:
+            spec = paper_key[len(_CUSTOM_PREFIX):]
+            unit = "pt"
+            for suffix, name in (("mm", "mm"), ("cm", "cm"), ("in", "in")):
+                if spec.endswith(suffix):
+                    spec, unit = spec[:-len(suffix)], name
+                    break
+            w, h = (float(v) for v in spec.lower().split("x", 1))
+            factor = {"pt": 1.0, "mm": 72.0 / 25.4,
+                      "cm": 72.0 / 2.54, "in": 72.0}[unit]
+            return (w * factor, h * factor)
+        except Exception:
+            logging.debug("could not read the custom paper size %r", paper_key,
+                          exc_info=True)
+            return None
+    return _PAPER_PTS.get(paper_key)
 
 
 def _gs_blacked_out(before, after, budget=60):
@@ -382,12 +436,21 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
     """
     import pypdfium2 as pdfium
 
-    pw_pt, ph_pt = _PAPER_PTS.get(paper_key, (595.28, 841.89))
+    # With the paper left to the printer there is no sheet to rasterise onto,
+    # so each page is drawn at its own size and the printer places it. Falling
+    # back to A4 here is what made an SRA3 job come out A4-sized.
+    sheet = paper_size_pt(paper_key)
+    pw_pt, ph_pt = sheet if sheet else (0.0, 0.0)
     full_bleed   = hw_margin_mm < 0.5
     margin_px    = 0 if full_bleed else max(0, int(hw_margin_mm / 25.4 * qt_dpi))
 
-    def _target_dims(landscape):
-        w_pt, h_pt = (ph_pt, pw_pt) if landscape else (pw_pt, ph_pt)
+    def _target_dims(landscape, page_w_pt, page_h_pt):
+        if sheet:
+            w_pt, h_pt = (ph_pt, pw_pt) if landscape else (pw_pt, ph_pt)
+        else:
+            # No sheet was chosen, so the page is its own target: it goes out
+            # at the size it is, onto whatever the printer has loaded.
+            w_pt, h_pt = page_w_pt, page_h_pt
         w_px = max(1, int(w_pt * qt_dpi / 72) - 2 * margin_px)
         h_px = max(1, int(h_pt * qt_dpi / 72) - 2 * margin_px)
         return w_px, h_px
@@ -419,7 +482,9 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
                                    if page_is_ls
                                    else QPageLayout.Orientation.Portrait)
 
-                    target_w, target_h = _target_dims(page_is_ls)
+                    # As the page will be seen: a quarter turn swaps its sides.
+                    eff_w, eff_h = ((pdfh, pdfw) if rot % 180 else (pdfw, pdfh))
+                    target_w, target_h = _target_dims(page_is_ls, eff_w, eff_h)
 
                     scale_fit = min(target_w / max(pdfw, 1),
                                     target_h / max(pdfh, 1))
@@ -512,12 +577,17 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
     """
     import tempfile, os
 
-    pw_pt, ph_pt = _PAPER_PTS.get(paper_key, (595.28, 841.89))
+    # None = the operator left the paper to the printer. There is then no
+    # sheet for this side to reason about, and nothing about it is sent: the
+    # queue's own default applies, which is the only thing that can be right
+    # for a size this application does not know.
+    sheet = paper_size_pt(paper_key)
+    pw_pt, ph_pt = sheet if sheet else (0.0, 0.0)
 
     # Determine target paper orientation
-    if orient_idx == 2:          # explicit landscape
+    if orient_idx == 2 and sheet:   # explicit landscape
         pw_pt, ph_pt = ph_pt, pw_pt
-    elif orient_idx == 0:        # auto — detect from first selected page
+    elif orient_idx == 0 and sheet:  # auto — detect from first selected page
         try:
             uid = model.order[pages[0]]
             src_path, orig = model.page_source(uid, pdf_path)
@@ -562,7 +632,12 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                 "-dCompressFonts=true",
                 "-dDetectDuplicateImages=true",
             ]
-            if scale_idx == FIXED:
+            if scale_idx == FIXED and sheet:
+                # Only with a sheet to fix it to. Left to the printer, there is
+                # no size to hold the page against, and the pages go through at
+                # their own — which is what "print it at this size" means when
+                # the sheet is whatever happens to be loaded.
+                #
                 # The only mode Ghostscript resizes for: fix the media so the
                 # page lands on the sheet at its own size. The other two are
                 # CUPS's job, and pages are passed through untouched — see the
@@ -658,8 +733,12 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         # while CUPS was still told plain `media=A4`, so the landscape page
         # landed unrotated on portrait media and lost its right-hand edge.
         # Naming it is a no-op when the two already agree (measured).
-        cmd += ["-o", "orientation-requested=4" if pw_pt > ph_pt
-                else "orientation-requested=3"]
+        # Only when a sheet was chosen: with the paper left to the printer this
+        # would be an orientation for a sheet nobody here has seen, forcing a
+        # rotation onto a queue that had it right already.
+        if sheet:
+            cmd += ["-o", "orientation-requested=4" if pw_pt > ph_pt
+                    else "orientation-requested=3"]
 
         if duplex:
             # Emit BOTH the IPP attribute AND the PPD driver keyword.
@@ -705,7 +784,13 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                    else "separate-documents-uncollated-copies")
             cmd += ["-o", f"multiple-document-handling={mdc}"]
 
-        cmd += ["-o", f"media={paper_key}"]
+        # Only when the operator actually chose a size. Naming one on every job
+        # is how a press with SRA3 in the tray was told "media=A4" and printed
+        # an A4 area on a 320x450 sheet; saying nothing lets the queue's own
+        # setting stand, which is what the colour control beside it has always
+        # done with "Drucker-Standard".
+        if paper_key:
+            cmd += ["-o", f"media={paper_key}"]
         # The tray, under the keyword this queue actually uses — InputSlot on a
         # driver queue, media-source on a driverless one. paper_source carries
         # both, so nothing here has to guess which kind it is talking to.
