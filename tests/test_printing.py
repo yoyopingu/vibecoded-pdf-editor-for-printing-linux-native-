@@ -1489,3 +1489,96 @@ def test_the_preview_uses_the_size_that_was_actually_chosen():
     finally:
         pv.deleteLater(); tab.deleteLater(); _app.processEvents()
     return "SRA3 previews as 320x450, not as A4"
+
+
+_READY_TWO_TRAYS = """
+    media-col-ready (1setOf collection) =
+    {media-size={x-dimension=21000 y-dimension=29700} media-source=tray-1 media-type=stationery},
+    {media-size={x-dimension=29700 y-dimension=42000} media-source=tray-2 media-type=stationery}
+"""
+
+
+def _lp_with_ready(paper_key, source, ready=_READY_TWO_TRAYS):
+    """The -o options a job carries, with the printer answering `ready` when
+    asked what paper is loaded."""
+    import subprocess
+    from tools.printing import spool
+    from tools.viewer.model import PageModel
+    from pypdf import PdfReader
+
+    src = FX["normal"]
+    n = len(PdfReader(src).pages)
+    _open(src)
+    captured = []
+    real = subprocess.run
+
+    def spy(cmd, *a, **k):
+        if cmd and cmd[0] == "ipptool":
+            class R: returncode = 0; stdout = ready; stderr = ""
+            return R()
+        if cmd and cmd[0] == "lp":
+            captured.append(cmd)
+            class R: returncode = 0; stdout = "request id is t-1"; stderr = ""
+            return R()
+        return real(cmd, *a, **k)
+
+    subprocess.run = spy
+    try:
+        spool.print_via_gs(src, PageModel(n), [0], 1, "auto", False, False,
+                           "long", 0, "press", 0, paper_key, 0,
+                           null_progress(),
+                           paper_source=("media-source", source) if source else None)
+    finally:
+        subprocess.run = real
+    assert captured, "the job never reached lp"
+    last = captured[-1]
+    return [last[i + 1] for i, x in enumerate(last) if x == "-o"]
+
+
+def test_a_chosen_tray_is_sent_with_the_size_that_is_in_it():
+    """Leaving the size to the printer sends no media option, so CUPS fills in
+    the queue's *default* size — which is not what the chosen tray holds. Pick
+    the tray with A3 in it on a queue that defaults to A4 and the printer
+    refuses the job, saying it has not got the right paper. It is right: it was
+    asked for A4 out of a tray holding A3.
+
+    "As set on the printer" has to mean the tray that was picked, so the job
+    now carries the size actually loaded there.
+    """
+    opts = _lp_with_ready("", "tray-2")          # tray-2 holds A3
+    assert "media=A3" in opts, f"the A3 in the chosen tray was not named: {opts}"
+    assert "media-source=tray-2" in opts, opts
+
+    opts = _lp_with_ready("", "tray-1")          # tray-1 holds A4
+    assert "media=A4" in opts, f"the A4 in the chosen tray was not named: {opts}"
+    return "the job names the paper that is in the tray it asks for"
+
+
+def test_no_tray_and_no_size_still_sends_nothing_about_paper():
+    """The default with no tray picked is unchanged: say nothing, and the
+    queue's own setting stands. Only an explicitly chosen tray brings a size
+    with it, because only then is there a tray whose contents can disagree."""
+    opts = _lp_with_ready("", None)
+    assert not [o for o in opts if o.startswith("media")], \
+        f"paper was named for a job that chose neither: {opts}"
+    return "nothing named when nothing was chosen"
+
+
+def test_a_named_size_still_wins_over_what_is_in_the_tray():
+    """Naming a size is an override and stays one — the operator may be
+    deliberately running a smaller sheet out of a big tray."""
+    opts = _lp_with_ready("SRA3", "tray-1")      # tray-1 holds A4
+    assert "media=SRA3" in opts, f"the chosen size was overridden: {opts}"
+    assert "media=A4" not in opts, opts
+    return "an explicit size is not second-guessed"
+
+
+def test_a_printer_that_cannot_say_what_is_loaded_changes_nothing():
+    """Older queues, no network, no ipptool: the answer is unknown, and an
+    unknown answer must leave the job exactly as it was rather than inventing
+    a size for it."""
+    opts = _lp_with_ready("", "tray-2", ready="")
+    assert not [o for o in opts if o.startswith("media=")], \
+        f"a size was invented from an empty answer: {opts}"
+    assert "media-source=tray-2" in opts, "the tray choice was lost too"
+    return "unknown stays unknown, and the tray is still asked for"

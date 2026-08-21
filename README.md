@@ -34,7 +34,9 @@ Written in Python with PyQt6. The interface ships in German and English
   sends no size at all and lets the queue's own setting stand — the right answer whenever what you mean to print
   on is what is loaded, and the only one that works for oversized stock like
   SRA3 on a driverless press that reports no sizes to choose from. Name a size
-  only to override that, or type one under **Benutzerdefiniert**. The preview
+  only to override that, or type one under **Benutzerdefiniert**. Picking a
+  tray brings the size loaded in it along (read from the printer over IPP), so
+  the job cannot ask for one size out of a tray holding another. The preview
   then shows the page alone — no sheet, no bleed marks — because none of that
   is known until a size is named. The spooled
   job is verified against what was requested.

@@ -304,6 +304,7 @@ _EN: dict[str, str] = {
     "Als Bitmap drucken": "Print as bitmap",
     "Benutzerdefiniert…": "Custom…",
     "Wie im Drucker eingestellt": "As set on the printer",
+    "Papier im Schacht: {p0}": "Paper in the tray: {p0}",
     "Papier wie im Drucker eingestellt": "Paper as set on the printer",
     "Drucker-Standard laesst das Papier so, wie die Warteschlange es "
     "eingestellt hat — richtig, solange im Drucker liegt, worauf "

@@ -331,6 +331,84 @@ def queue_defaults(printer_name):
     return found
 
 
+def ready_media(printer_name, timeout=15):
+    """What paper is actually loaded, per tray: {media-source: (w_mm, h_mm)}.
+
+    "Wie im Drucker eingestellt" sends no size, so CUPS fills in the queue's
+    *default* one. That is not the same thing as what is in the tray the
+    operator just picked, and when the two disagree the printer refuses the
+    job: a press with A3 in the chosen tray, asked for a job whose size
+    defaulted to A4, answers that it does not have the right paper.
+
+    IPP knows the answer. media-col-ready is the loaded stock, reported per
+    source, which is what "as set in the printer" ought to mean. Returns {}
+    when the printer cannot say — an older queue, no network, no ipptool — and
+    the caller then behaves as it did before.
+    """
+    import os
+    import re
+    import shutil
+    import tempfile
+    if not printer_name or printer_name in ("lp", "none"):
+        return {}
+    if not shutil.which("ipptool"):
+        return {}
+
+    fd, script = tempfile.mkstemp(suffix=".test")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("{\n"
+                    "    OPERATION Get-Printer-Attributes\n"
+                    "    GROUP operation-attributes-tag\n"
+                    "    ATTR charset attributes-charset utf-8\n"
+                    "    ATTR naturalLanguage attributes-natural-language en\n"
+                    "    ATTR uri printer-uri $uri\n"
+                    "    ATTR keyword requested-attributes media-col-ready\n"
+                    "}\n")
+        uri = f"ipp://localhost/printers/{printer_name}"
+        r = _run_capturing(["ipptool", "-tv", uri, script], timeout=timeout)
+        out = r.stdout or ""
+    except Exception:
+        logging.debug("could not ask %s what paper is loaded", printer_name,
+                      exc_info=True)
+        return {}
+    finally:
+        unlink(script)
+
+    ready = {}
+    # One collection per tray:
+    #   {media-size={x-dimension=29700 y-dimension=42000} media-source=tray-2 ...}
+    # Dimensions are hundredths of a millimetre, per PWG 5101.1.
+    for block in re.findall(r"\{[^{}]*\{[^{}]*\}[^{}]*\}", out):
+        src = re.search(r"media-source=([\w-]+)", block)
+        x   = re.search(r"x-dimension=(\d+)", block)
+        y   = re.search(r"y-dimension=(\d+)", block)
+        if src and x and y:
+            ready[src.group(1)] = (int(x.group(1)) / 100.0,
+                                   int(y.group(1)) / 100.0)
+    return ready
+
+
+def media_for_tray(printer_name, source):
+    """The lp media name for whatever is loaded in `source`, or "" if unknown.
+
+    A name from the table when the loaded size matches one, so the driver sees
+    something it recognises, and an explicit Custom otherwise — better than
+    saying nothing and letting a default that contradicts the tray decide.
+    """
+    if not source:
+        return ""
+    loaded = ready_media(printer_name).get(source)
+    if not loaded:
+        return ""
+    w_mm, h_mm = loaded
+    for name, (w_pt, h_pt) in _PAPER_PTS.items():
+        if (abs(w_pt * 25.4 / 72.0 - w_mm) < 1.5
+                and abs(h_pt * 25.4 / 72.0 - h_mm) < 1.5):
+            return name
+    return custom_paper_key(round(w_mm, 1), round(h_mm, 1))
+
+
 def paper_sources(printer_name):
     """(keyword, choices, default) for the paper tray, or None if the queue
     does not offer a choice of one."""
@@ -786,8 +864,22 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         # an A4 area on a 320x450 sheet; saying nothing lets the queue's own
         # setting stand, which is what the colour control beside it has always
         # done with "Drucker-Standard".
-        if paper_key:
-            cmd += ["-o", f"media={paper_key}"]
+        media_name = paper_key
+        if not media_name and paper_source:
+            # A tray was chosen and the size was left to the printer. Sending
+            # nothing lets CUPS fill in the queue's *default* size, which is
+            # not what the chosen tray holds — and when the two disagree the
+            # printer refuses the job outright, saying it has not got the right
+            # paper. Ask what is actually loaded in that tray and say so.
+            try:
+                media_name = media_for_tray(printer_name, paper_source[1])
+                if media_name:
+                    report(tr("Papier im Schacht: {p0}").format(p0=media_name))
+            except Exception:
+                logging.debug("could not read the loaded paper", exc_info=True)
+                media_name = ""
+        if media_name:
+            cmd += ["-o", f"media={media_name}"]
         # The tray, under the keyword this queue actually uses — InputSlot on a
         # driver queue, media-source on a driverless one. paper_source carries
         # both, so nothing here has to guess which kind it is talking to.
