@@ -7,7 +7,7 @@ from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox, QTextEdit
 from tools._base import BasePanel, make_label
 from tools.i18n import tr
-from tools.panels._shared import PAPER_SIZES_PT, row
+from tools.panels._shared import _paper_sizes_pt, row
 from tools.panels._colour import _colour_histogram, _hist_stats
 from tools.panels._prepress import MIN_PRESS_DPI
 from tools.render.document_cache import open_document as _open_pdf
@@ -23,7 +23,7 @@ class PreflightPanel(BasePanel):
     def build_ui(self, layout):
         cb=QGroupBox(tr("PRUEFUNGEN")); cl=QVBoxLayout(cb)
         self.size_combo=QComboBox(); self.size_combo.addItem(tr("Beliebige Groesse"))
-        self.size_combo.addItems(list(PAPER_SIZES_PT.keys()))
+        self.size_combo.addItems(list(_paper_sizes_pt().keys()))
         cl.addLayout(row(tr("Erwartetes Format:"), self.size_combo))
         self.chk_size=QCheckBox(tr("Seitenformat korrekt")); self.chk_size.setChecked(True); cl.addWidget(self.chk_size)
         self.chk_orient=QCheckBox(tr("Einheitliche Ausrichtung")); self.chk_orient.setChecked(True); cl.addWidget(self.chk_orient)
@@ -68,7 +68,7 @@ class PreflightPanel(BasePanel):
             "trans":  self.chk_trans.isChecked(),
             "layers": self.chk_layers.isChecked(),
         }
-        target = PAPER_SIZES_PT.get(self.size_combo.currentText())
+        target = _paper_sizes_pt().get(self.size_combo.currentText())
 
         self.run_async(
             lambda report: _preflight(src, checks, target, MIN_PRESS_DPI, report),

@@ -818,17 +818,23 @@ def test_original_size_takes_a_percentage_that_reaches_the_file():
         finally:
             doc.close()
 
-    # Measured on the framed fixture — a drawn rectangle — and not on a page
-    # of text. The text fixture uses base-14 Helvetica, which is not embedded,
-    # so pdfium substitutes whatever the system offers: stable within one
-    # process and *not* stable between them. That made this test fail about
-    # one run in four, with the 100 % span coming back as 62 px instead of 79
-    # because a different substitute font is a different width. A rectangle
-    # has the width it has.
+    # Measured on a rectangle and nothing else. This used to use the framed
+    # fixture, on the reasoning that a drawn rectangle has the width it has
+    # while base-14 text does not — pdfium substitutes whatever the system
+    # offers, stable within a process and not between them. But that fixture
+    # draws "CENTER" in Helvetica as well as the frame, so the substituted
+    # font was still in the measurement and this still failed about half the
+    # time. A page with no text in it cannot have that problem.
+    from reportlab.pdfgen import canvas as _canvas
+    plain = os.path.join(_TMP, "pct_src.pdf")
+    c = _canvas.Canvas(plain, pagesize=A4)
+    c.setLineWidth(3); c.rect(20, 20, A4[0] - 40, A4[1] - 40)
+    c.showPage(); c.save()
+
     full = os.path.join(_TMP, "pct_100.pdf")
     half = os.path.join(_TMP, "pct_50.pdf")
-    recenter_on_paper(FX["framed"], full, 595.276, 841.89, factor=1.0)
-    recenter_on_paper(FX["framed"], half, 595.276, 841.89, factor=0.5)
+    recenter_on_paper(plain, full, 595.276, 841.89, factor=1.0)
+    recenter_on_paper(plain, half, 595.276, 841.89, factor=0.5)
     fw, fh = ink_span(full)
     hw, hh = ink_span(half)
     assert fw > 0 and hw > 0, "nothing was drawn to measure"

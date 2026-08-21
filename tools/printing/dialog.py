@@ -16,7 +16,7 @@ from tools.i18n import tr
 from tools.printing.preview import _PrintPreview
 from tools.render.images import pil_to_qpixmap
 from tools.printing import prefs
-from tools.printing.spool import (_PAPER_PTS, PAPER_PRINTER_DEFAULT,
+from tools.printing.spool import (PAPER_PRINTER_DEFAULT,
                                   _run_capturing, print_via_gs,
                                   prerender_for_qt, paper_sources, queue_defaults)
 from tools.viewer.model import _positions_to_str
@@ -1062,22 +1062,17 @@ class PrintDialog(QDialog):
             self._on_printer_changed()
 
     # Fallback paper list used when printer reports no supported sizes
-    # Shown when the queue reports nothing to enumerate — which is every
-    # driverless press, including the one this came up on. It stopped at A3,
-    # so the oversized stock a copyshop runs could not be named at all.
-    _FALLBACK_PAPERS = [
-        ("A4  (210 × 297 mm)",    "A4"),
-        ("A3  (297 × 420 mm)",    "A3"),
-        ("SRA3  (320 × 450 mm)",  "SRA3"),
-        ("SRA4  (225 × 320 mm)",  "SRA4"),
-        ("RA3  (305 × 430 mm)",   "RA3"),
-        ("A2  (420 × 594 mm)",    "A2"),
-        ("A5  (148 × 210 mm)",    "A5"),
-        ("A6  (105 × 148 mm)",    "A6"),
-        ("Letter  (216 × 279 mm)", "Letter"),
-        ("Legal  (216 × 356 mm)", "Legal"),
-        ("Tabloid  (279 × 432 mm)", "Tabloid"),
-    ]
+    @property
+    def _FALLBACK_PAPERS(self):
+        """Shown when the queue reports nothing to enumerate — which is every
+        driverless press, including the one this came up on.
+
+        The operator's own list, so a sheet added in Einstellungen can be named
+        here too. It used to be five entries ending at A3, so the stock
+        actually in the machine could not be picked at all.
+        """
+        from tools.paper import label, sizes
+        return [(label(name), name) for name in sizes()]
 
     def _on_printer_changed(self):
         """Aktualisiert Papierformat, Duplex und Farbe basierend auf dem gewaehlten Drucker."""
@@ -1286,7 +1281,8 @@ class PrintDialog(QDialog):
             if pw > ph:             # normalise to portrait for comparison
                 pw, ph = ph, pw
             best_key, best_diff = None, float("inf")
-            for key, (w, h) in _PAPER_PTS.items():
+            from tools.paper import sizes as _paper_sizes
+            for key, (w, h) in _paper_sizes().items():
                 diff = abs(pw - w) + abs(ph - h)
                 if diff < best_diff and diff < 15:   # 15 pt ≈ 5 mm tolerance
                     best_diff, best_key = diff, key

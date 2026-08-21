@@ -11,17 +11,16 @@ from tools.i18n      import tr
 
 
 MM_TO_PT = 2.8346456693
-PAPER_SIZES_PT = {
-    "A0  (841x1189mm)":   (2383.94, 3370.39),
-    "A1  (594x841mm)":    (1683.78, 2383.94),
-    "A2  (420x594mm)":    (1190.55, 1683.78),
-    "A3  (297x420mm)":    (841.89,  1190.55),
-    "A4  (210x297mm)":    (595.28,  841.89),
-    "A5  (148x210mm)":    (419.53,  595.28),
-    "A6  (105x148mm)":    (297.64,  419.53),
-    "Letter (216x279mm)": (612.0,   792.0),
-    "Legal  (216x356mm)": (612.0,   1008.0),
-}
+def _paper_sizes_pt():
+    """The sizes to offer, keyed by the label shown in a dropdown.
+
+    Built from tools/paper.py, which is the one list the operator edits in
+    Einstellungen. This used to be a table of its own with nine entries, so
+    the tools reached A0 and had never heard of SRA3 — a job could be printed
+    on SRA3 and not cropped to it.
+    """
+    from tools.paper import label, sizes
+    return {label(name): size for name, size in sizes().items()}
 LABEL_W = 220   # Feste Label-Breite — passt alle deutschen Bezeichnungen
 
 
@@ -247,7 +246,8 @@ class PaperFormatSelector(QWidget):
 
     Crop/Scale had this and N-Up did not, so the same choice was offered in one
     tool and not the other. One widget now, and the paper list comes from
-    PAPER_SIZES_PT so both offer the same formats.
+    tools/paper.py so both offer the same formats — and the same ones the
+    print dialog offers, edited in one place in Einstellungen.
 
     `before` and `after` are entries that are not paper — "— Kein —", "Wie
     Quellseite × Raster" — placed at either end of the list. target_size_pt()
@@ -275,7 +275,7 @@ class PaperFormatSelector(QWidget):
 
         self.combo = QComboBox()
         self.combo.addItems(self._before)
-        self.combo.addItems(list(PAPER_SIZES_PT.keys()))
+        self.combo.addItems(list(_paper_sizes_pt().keys()))
         self.combo.addItem(self._custom)
         self.combo.addItems(self._after)
         self.combo.currentIndexChanged.connect(self._on_combo)
@@ -327,7 +327,7 @@ class PaperFormatSelector(QWidget):
             size = (self.width_mm.value() * MM_TO_PT,
                     self.height_mm.value() * MM_TO_PT)
         else:
-            size = PAPER_SIZES_PT.get(self.combo.currentText())
+            size = _paper_sizes_pt().get(self.combo.currentText())
         if size is None:
             return None
         w, h = size
@@ -336,7 +336,23 @@ class PaperFormatSelector(QWidget):
     # ── driving it ───────────────────────────────────────────────────────────
 
     def set_format(self, text):
-        self.combo.setCurrentText(text)
+        """Pick a format by its label, or by its bare name.
+
+        setCurrentText does nothing at all when the string is not in the list,
+        so a label that changed shape left every caller silently on whatever
+        was selected before — the size check downstream then had nothing to
+        check against and passed. Matching the name as well means the label
+        can be rewritten without taking callers with it.
+        """
+        idx = self.combo.findText(text)
+        if idx < 0:
+            for i in range(self.combo.count()):
+                entry = self.combo.itemText(i)
+                if entry == text or entry.split("  (")[0] == text:
+                    idx = i
+                    break
+        if idx >= 0:
+            self.combo.setCurrentIndex(idx)
 
     def set_custom_size(self, width_mm, height_mm):
         self.width_mm.setValue(width_mm)

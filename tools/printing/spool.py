@@ -35,24 +35,16 @@ def _run_capturing(cmd, timeout):
                           errors="replace", timeout=timeout)
 
 
-# Paper in points. Here rather than on the dialog: it is what a sheet
-# measures, which the spooler needs as much as the widget that offers it.
-_PAPER_PTS = {
-    "A4":        (595.28, 841.89),  "A3":     (841.89, 1190.55),
-    "A5":        (419.53, 595.28),  "Letter": (612.0,  792.0),
-    "Legal":     (612.0,  1008.0),  "B4":     (708.66, 1000.63),
-    "B5":        (498.90, 708.66),  "Executive": (521.86, 756.0),
-    "Folio":     (612.0,  936.0),
-    # The oversized stock a copyshop actually runs: SRA3 is the sheet you
-    # impose an A3 job on and trim back, and it was not in this table at all.
-    # Nor were A2 and up, or the American large formats.
-    "SRA4":      (637.80, 907.09),  "SRA3":   (907.09, 1275.59),
-    "RA4":       (609.45, 864.57),  "RA3":    (864.57, 1218.90),
-    "A2":        (1190.55, 1683.78), "A1":    (1683.78, 2383.94),
-    "A0":        (2383.94, 3370.39), "A6":    (297.64, 419.53),
-    "B3":        (1000.63, 1417.32), "Tabloid": (792.0, 1224.0),
-    "Ledger":    (1224.0, 792.0),
-}
+# Paper in points, from the one list the operator edits in Einstellungen.
+# A dict rather than a call at each site because two places iterate it, and a
+# function that rereads QSettings per lookup inside a loop is a poor trade.
+def _paper_table():
+    """Every size known, for resolving a name and for matching a measured
+    sheet to one. Not sizes(): a size hidden from the dropdowns must still
+    resolve, or a job saved with it — or a queue reporting it — stops working
+    the moment somebody tidies the list."""
+    from tools.paper import all_sizes
+    return all_sizes()
 
 # "Whatever the queue is already set to." Not a size: the option is left off
 # the job entirely, so the printer's own default applies.
@@ -97,7 +89,7 @@ def paper_size_pt(paper_key):
             logging.debug("could not read the custom paper size %r", paper_key,
                           exc_info=True)
             return None
-    return _PAPER_PTS.get(paper_key)
+    return _paper_table().get(paper_key)
 
 
 def _gs_blacked_out(before, after, budget=60):
@@ -402,7 +394,7 @@ def media_for_tray(printer_name, source):
     if not loaded:
         return ""
     w_mm, h_mm = loaded
-    for name, (w_pt, h_pt) in _PAPER_PTS.items():
+    for name, (w_pt, h_pt) in _paper_table().items():
         if (abs(w_pt * 25.4 / 72.0 - w_mm) < 1.5
                 and abs(h_pt * 25.4 / 72.0 - h_mm) < 1.5):
             return name

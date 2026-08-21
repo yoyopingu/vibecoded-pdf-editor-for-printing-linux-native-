@@ -3,8 +3,11 @@ Persisted preferences, and the four dialogs over them — appearance,
 performance, prepress and general.
 """
 import os
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QDialog, QRadioButton, QCheckBox, QComboBox, QSpinBox, QFormLayout
-from PyQt6.QtCore import QSettings, pyqtSignal
+from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+                             QDialog, QRadioButton, QCheckBox, QComboBox,
+                             QSpinBox, QFormLayout, QLineEdit, QListWidget,
+                             QListWidgetItem)
+from PyQt6.QtCore import QSettings, Qt, pyqtSignal
 from tools.i18n import tr
 
 
@@ -136,6 +139,14 @@ def _dlg_section(layout, title):
     lbl.setObjectName("sectionLabel")
     lbl.setContentsMargins(0, 4, 0, 2)
     layout.addWidget(lbl)
+
+
+def _dlg_note(text):
+    """The dim explanatory line these dialogs put under a section heading."""
+    lbl = QLabel(text)
+    lbl.setObjectName("dimLabel")
+    lbl.setWordWrap(True)
+    return lbl
 
 
 def _dlg_buttons(layout, save_slot):
@@ -372,11 +383,121 @@ class PrepressDialog(QDialog):
             "Höher heißt größere Dateien und längere Exportzeiten."))
         note.setObjectName("dimLabel")
         outer.addWidget(note)
+
+        _dlg_section(outer, "PAPIERFORMATE")
+        outer.addWidget(_dlg_note(tr(
+            "Welche Formate in allen Werkzeugen und im Druckdialog zur Auswahl "
+            "stehen. Abgewaehlte werden nirgends mehr angeboten; eigene "
+            "Formate erscheinen ueberall, wo ein Format gewaehlt wird.")))
+        outer.addWidget(self._build_paper_list())
+
+        add_row = QHBoxLayout()
+        add_row.setSpacing(6)
+        self._paper_name = QLineEdit()
+        self._paper_name.setPlaceholderText(tr("Name"))
+        self._paper_name.setMaximumWidth(150)
+        self._paper_w = QSpinBox(); self._paper_w.setRange(1, 5000)
+        self._paper_w.setValue(320); self._paper_w.setSuffix(" mm")
+        self._paper_h = QSpinBox(); self._paper_h.setRange(1, 5000)
+        self._paper_h.setValue(450); self._paper_h.setSuffix(" mm")
+        add_btn = QPushButton(tr("Hinzufuegen"))
+        add_btn.setObjectName("secondaryBtn")
+        add_btn.clicked.connect(self._add_paper)
+        del_btn = QPushButton(tr("Eigenes entfernen"))
+        del_btn.setObjectName("secondaryBtn")
+        del_btn.clicked.connect(self._remove_paper)
+        for w in (self._paper_name, self._paper_w, QLabel("×"), self._paper_h,
+                  add_btn, del_btn):
+            add_row.addWidget(w)
+        add_row.addStretch()
+        outer.addLayout(add_row)
+        self._paper_msg = QLabel("")
+        self._paper_msg.setObjectName("dimLabel")
+        self._paper_msg.setWordWrap(True)
+        outer.addWidget(self._paper_msg)
+
         outer.addStretch()
         self._resolve_icc = resolve_icc
         self._update_profile_hint()
         cancel = _dlg_buttons(outer, self._save)
         cancel.clicked.connect(self.reject)
+
+    def _build_paper_list(self):
+        """One row per size, ticked when it is offered.
+
+        Built-ins are hidden rather than deleted — a size that ships is always
+        recoverable, and a job or a queue that still names one must keep
+        resolving even while it is off the dropdowns.
+        """
+        import tools.paper as paper
+        self._paper_list = QListWidget()
+        self._paper_list.setMaximumHeight(190)
+        hidden = paper.hidden_names()
+        custom = paper.custom_sizes()
+        for name in paper.builtin_names() + sorted(custom):
+            item = QListWidgetItem(paper.label(name))
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked if name in hidden
+                               else Qt.CheckState.Checked)
+            if name in custom:
+                item.setToolTip(tr("Eigenes Format"))
+            self._paper_list.addItem(item)
+        return self._paper_list
+
+    def _reload_paper_list(self):
+        row = self._paper_list.currentRow()
+        self._paper_list.clear()
+        import tools.paper as paper
+        hidden = paper.hidden_names()
+        custom = paper.custom_sizes()
+        for name in paper.builtin_names() + sorted(custom):
+            item = QListWidgetItem(paper.label(name))
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked if name in hidden
+                               else Qt.CheckState.Checked)
+            if name in custom:
+                item.setToolTip(tr("Eigenes Format"))
+            self._paper_list.addItem(item)
+        self._paper_list.setCurrentRow(min(row, self._paper_list.count() - 1))
+
+    def _add_paper(self):
+        import tools.paper as paper
+        try:
+            name = paper.add_custom(self._paper_name.text(),
+                                    self._paper_w.value(),
+                                    self._paper_h.value())
+        except ValueError as e:
+            self._paper_msg.setText(str(e))
+            return
+        self._paper_name.clear()
+        self._reload_paper_list()
+        self._paper_msg.setText(
+            tr("{p0} hinzugefuegt.").format(p0=paper.label(name)))
+
+    def _remove_paper(self):
+        """Only the shop's own sizes can be removed; a built-in is unticked."""
+        import tools.paper as paper
+        item = self._paper_list.currentItem()
+        if item is None:
+            return
+        name = item.data(Qt.ItemDataRole.UserRole)
+        if name not in paper.custom_sizes():
+            self._paper_msg.setText(tr(
+                "Mitgelieferte Formate lassen sich nicht loeschen — "
+                "das Haekchen entfernen blendet sie ueberall aus."))
+            return
+        paper.remove_custom(name)
+        self._reload_paper_list()
+        self._paper_msg.setText(tr("{p0} entfernt.").format(p0=name))
+
+    def _save_paper_visibility(self):
+        import tools.paper as paper
+        for i in range(self._paper_list.count()):
+            item = self._paper_list.item(i)
+            paper.set_hidden(item.data(Qt.ItemDataRole.UserRole),
+                             item.checkState() == Qt.CheckState.Unchecked)
 
     def _selected_row(self):
         from tools.panels._icc import profile_by_key
@@ -447,6 +568,10 @@ class PrepressDialog(QDialog):
         self._s.set_pdfx_standard(self._std_combo.currentData())
         self._s.set_pdfx_condition(self._cond_combo.currentData())
         self._s.set_pdfx_image_dpi(self._dpi_spin.value())
+        # Adding and removing a size take effect at once — they are their own
+        # buttons. Which sizes are offered is a form field like the rest, and
+        # is written when Speichern is pressed.
+        self._save_paper_visibility()
         self.accept()
 
 

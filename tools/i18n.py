@@ -304,6 +304,23 @@ _EN: dict[str, str] = {
     "Als Bitmap drucken": "Print as bitmap",
     "Benutzerdefiniert…": "Custom…",
     "Wie im Drucker eingestellt": "As set on the printer",
+    "PAPIERFORMATE": "PAPER SIZES",
+    "Welche Formate in allen Werkzeugen und im Druckdialog zur Auswahl "
+    "stehen. Abgewaehlte werden nirgends mehr angeboten; eigene "
+    "Formate erscheinen ueberall, wo ein Format gewaehlt wird.":
+        "Which sizes are offered in every tool and in the print dialog. "
+        "Unticked ones are offered nowhere; your own sizes appear everywhere "
+        "a size is chosen.",
+    "Name": "Name",
+    "Hinzufuegen": "Add",
+    "Eigenes entfernen": "Remove own",
+    "Eigenes Format": "Your own size",
+    "{p0} hinzugefuegt.": "{p0} added.",
+    "{p0} entfernt.": "{p0} removed.",
+    "Mitgelieferte Formate lassen sich nicht loeschen — "
+    "das Haekchen entfernen blendet sie ueberall aus.":
+        "Sizes that ship with the app cannot be deleted — unticking one hides "
+        "it everywhere instead.",
     "Papier im Schacht: {p0}": "Paper in the tray: {p0}",
     "Papier wie im Drucker eingestellt": "Paper as set on the printer",
     "Drucker-Standard laesst das Papier so, wie die Warteschlange es "
