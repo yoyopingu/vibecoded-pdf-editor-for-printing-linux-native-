@@ -24,15 +24,6 @@ class _PrintPreview(QWidget):
     # and the preview stayed blank forever.
     _render_ready = pyqtSignal(int, object, float, float)
 
-    # Physical paper sizes in mm  (width × height in portrait)
-    _PAPER_MM = {
-        "A4":        (210.0, 297.0), "A3":     (297.0, 420.0),
-        "A5":        (148.0, 210.0), "Letter": (215.9, 279.4),
-        "Legal":     (215.9, 355.6), "B4":     (250.0, 353.0),
-        "B5":        (176.0, 250.0), "Executive": (184.2, 266.7),
-        "Folio":     (215.9, 330.2),
-    }
-
     def __init__(self, pdf_path, model, parent=None):
         super().__init__(parent)
         self._render_ready.connect(self._on_render_done)
@@ -249,8 +240,19 @@ class _PrintPreview(QWidget):
         self._redraw()
 
     def _paper_dims_mm(self):
-        """Returns (w_mm, h_mm) for the selected paper in the correct orientation."""
-        pw, ph = self._PAPER_MM.get(self._paper_key, (210.0, 297.0))
+        """(w_mm, h_mm) for the chosen paper, or None when there is no chosen
+        paper to draw.
+
+        The sizes come from the spooler's table rather than a second copy kept
+        here. The copy had the same nine entries the spooler's used to, and the
+        same answer of A4 for everything else — so choosing SRA3 drew an A4
+        sheet in the preview while the job went out as SRA3.
+        """
+        from tools.printing.spool import paper_size_pt
+        size = paper_size_pt(self._paper_key)
+        if size is None:
+            return None
+        pw, ph = size[0] * 25.4 / 72.0, size[1] * 25.4 / 72.0
         # Auto-orient: match paper to page shape
         page_landscape = self._page_w_pt > self._page_h_pt
         if self._orient_idx == 0:   # auto
@@ -271,10 +273,23 @@ class _PrintPreview(QWidget):
         if cw < 20 or ch < 20:
             return
 
-        paper_w_mm, paper_h_mm = self._paper_dims_mm()
         page_w_mm = self._page_w_pt * 25.4 / 72.0
         page_h_mm = self._page_h_pt * 25.4 / 72.0
-        full_bleed = self._margin_mm < 0.5
+
+        # No chosen paper means no sheet to draw the page against, and nothing
+        # here knows what it will land on. Everything the sheet is used for —
+        # the white rectangle, the dashed printable-area boundary, the fitting,
+        # the warning about edges that will be cut — is a statement about a
+        # sheet nobody picked, so none of it is drawn. The page is shown at its
+        # own size, which is all that is actually known.
+        sheet = self._paper_dims_mm()
+        on_a_sheet = sheet is not None
+        if on_a_sheet:
+            paper_w_mm, paper_h_mm = sheet
+            full_bleed = self._margin_mm < 0.5
+        else:
+            paper_w_mm, paper_h_mm = page_w_mm, page_h_mm
+            full_bleed = True          # no margin is known, so none is marked
         m = self._margin_mm
         printable_w = paper_w_mm if full_bleed else max(1.0, paper_w_mm - 2*m)
         printable_h = paper_h_mm if full_bleed else max(1.0, paper_h_mm - 2*m)
@@ -282,7 +297,12 @@ class _PrintPreview(QWidget):
         # Compute the scale factor that will actually be applied when printing
         scale_fit  = min(printable_w / max(page_w_mm, 0.001),
                          printable_h / max(page_h_mm, 0.001))
-        if self._scale_idx == 0:        # Fit
+        if not on_a_sheet:
+            # Fit and shrink both need a sheet to work against; the percentage
+            # is the operator's own number and still means what it says.
+            content_scale = (self._scale_pct / 100.0
+                             if self._scale_idx == 1 else 1.0)
+        elif self._scale_idx == 0:      # Fit
             content_scale = scale_fit
         elif self._scale_idx == 1:      # Originalgrösse, at the chosen %
             content_scale = self._scale_pct / 100.0
@@ -299,7 +319,7 @@ class _PrintPreview(QWidget):
         # preview go red for jobs that print perfectly — and a warning that
         # cries wolf on every file is one nobody reads on the file that
         # deserves it.
-        will_clip = overflows and self._ink_outside(
+        will_clip = on_a_sheet and overflows and self._ink_outside(
             content_w_mm, content_h_mm, printable_w, printable_h)
 
         # Map the paper rectangle into the canvas
@@ -316,10 +336,12 @@ class _PrintPreview(QWidget):
         p = QPainter(canvas_pm)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        # Drop shadow
-        p.fillRect(ox + 3, oy + 3, pw, ph, QColor(0, 0, 0, 60))
-        # White paper
-        p.fillRect(ox, oy, pw, ph, QColor(255, 255, 255))
+        # The sheet — a drop shadow and white paper — only when there is a
+        # sheet. Drawn for "leave it to the printer" it would be a picture of
+        # a sheet of some size, and the size it would look like is the page's.
+        if on_a_sheet:
+            p.fillRect(ox + 3, oy + 3, pw, ph, QColor(0, 0, 0, 60))
+            p.fillRect(ox, oy, pw, ph, QColor(255, 255, 255))
 
         # Printable-area rect (where content can go)
         if full_bleed:
@@ -366,24 +388,37 @@ class _PrintPreview(QWidget):
             # No image yet — grey placeholder
             p.fillRect(content_rect, QColor(200, 200, 200))
 
-        # Margin indicator — dashed line showing the printable-area boundary
-        if not full_bleed:
+        # Margin indicator — dashed line showing the printable-area boundary.
+        # There is no printable area to bound without a sheet: the margin comes
+        # from the queue's hardware margin for a paper size, and no size was
+        # named.
+        if on_a_sheet and not full_bleed:
             pen = QPen(QColor(180, 100, 100, 200), 1, Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.drawRect(pr.toRect())
 
-        # Paper border
+        # Paper border, or — with no paper — the edge of the page itself, so
+        # the pixmap does not float unbounded on the canvas.
         p.setPen(QPen(QColor(140, 140, 140), 1))
-        p.drawRect(ox, oy, pw - 1, ph - 1)
+        if on_a_sheet:
+            p.drawRect(ox, oy, pw - 1, ph - 1)
+        else:
+            p.drawRect(content_rect.toRect().adjusted(0, 0, -1, -1))
 
         p.end()
         self._canvas.setPixmap(canvas_pm)
 
         # Info line
         pct = content_scale * 100.0
-        info = (f"{pct:.0f}%  ·  "
-                f"{page_w_mm:.0f}×{page_h_mm:.0f} mm  →  "
-                f"{paper_w_mm:.0f}×{paper_h_mm:.0f} mm")
+        if on_a_sheet:
+            info = (f"{pct:.0f}%  ·  "
+                    f"{page_w_mm:.0f}×{page_h_mm:.0f} mm  →  "
+                    f"{paper_w_mm:.0f}×{paper_h_mm:.0f} mm")
+        else:
+            # Naming a target size here would be inventing one. The page size
+            # is known; what it goes onto is the printer's business.
+            info = (f"{pct:.0f}%  ·  {page_w_mm:.0f}×{page_h_mm:.0f} mm  ·  "
+                    + tr("Papier wie im Drucker eingestellt"))
         self._info_lbl.setText(info)
         self._clip_lbl.setVisible(will_clip)
 

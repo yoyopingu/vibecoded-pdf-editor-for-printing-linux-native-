@@ -303,6 +303,8 @@ _EN: dict[str, str] = {
     "Beidseitig drucken  (Duplex)": "Print double-sided  (duplex)",
     "Als Bitmap drucken": "Print as bitmap",
     "Benutzerdefiniert…": "Custom…",
+    "Wie im Drucker eingestellt": "As set on the printer",
+    "Papier wie im Drucker eingestellt": "Paper as set on the printer",
     "Drucker-Standard laesst das Papier so, wie die Warteschlange es "
     "eingestellt hat — richtig, solange im Drucker liegt, worauf "
     "gedruckt werden soll.\n\n"

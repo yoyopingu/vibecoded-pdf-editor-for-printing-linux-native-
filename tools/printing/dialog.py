@@ -1103,7 +1103,10 @@ class PrintDialog(QDialog):
             # and, for a driverless queue that reports no sizes at all, no way
             # to name SRA3 either. The colour control has worked this way all
             # along; the paper had no equivalent.
-            self.paper_combo.addItem(tr("Drucker-Standard"),
+            # Not "Drucker-Standard": that reads as "look up the printer's
+            # default size and send it", which is the thing this exists to
+            # stop — and was, until recently, exactly what happened.
+            self.paper_combo.addItem(tr("Wie im Drucker eingestellt"),
                                      PAPER_PRINTER_DEFAULT)
 
             populated = False

@@ -30,11 +30,13 @@ Written in Python with PyQt6. The interface ships in German and English
 - Printing with page ranges, copies and collation, paper size and tray,
   orientation, scaling, duplex and a colour mode — read from the queue's own
   CUPS defaults, and reopened on whatever you printed with last. Paper
-  defaults to **Drucker-Standard**, which sends no size at all and lets the
-  queue's own setting stand — the right answer whenever what you mean to print
+  defaults to **Wie im Drucker eingestellt** ("as set on the printer"), which
+  sends no size at all and lets the queue's own setting stand — the right answer whenever what you mean to print
   on is what is loaded, and the only one that works for oversized stock like
   SRA3 on a driverless press that reports no sizes to choose from. Name a size
-  only to override that, or type one under **Benutzerdefiniert**. The spooled
+  only to override that, or type one under **Benutzerdefiniert**. The preview
+  then shows the page alone — no sheet, no bleed marks — because none of that
+  is known until a size is named. The spooled
   job is verified against what was requested.
 
 **Tools** (left sidebar)
