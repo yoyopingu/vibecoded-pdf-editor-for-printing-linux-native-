@@ -11,16 +11,61 @@ from tools.panels._colour import _colour_histogram, _hist_stats
 from tests.support import FX, _TMP, _app, _open, _page_labels, _spin
 
 
+_LIVE = []          # the (tab, dialog) this handed out last
+
+
+def _dispose_live():
+    """Take apart whatever the previous _print_dialog() handed out.
+
+    A PrintDialog that is never closed crashes the process — not at some
+    unlucky moment, but reliably, once Qt gets round to the deferred deletion
+    of a widget whose C++ half has already gone. tools/app.py carries the same
+    note about the main window and does the same dance on the way out.
+
+    Doing it here means at most one is ever alive, whether or not the test
+    that asked for it remembered to clean up — four of them did not, and the
+    module died six runs in six. The very last one is still alive when the
+    module ends, and that one is survivable: run.py leaves through os._exit(),
+    which skips the finalisation the leak would otherwise crash in.
+
+    Sweeping every top-level widget at the end of a module was tried instead
+    and is worse — it takes panels apart that other modules' tests are still
+    holding, and killed tools_misc three runs in three.
+    """
+    if _LIVE:
+        # Jobs before widgets, for the reason tools/app.py gives: a task that
+        # finishes after its receiver is gone emits into a dangling object.
+        try:
+            from tools.jobs import cancel_all
+            cancel_all(4000)
+        except Exception:
+            pass
+    while _LIVE:
+        tab, dlg = _LIVE.pop()
+        for obj in (dlg, tab):
+            try:
+                if hasattr(obj, "close"):
+                    obj.close()
+                obj.deleteLater()
+            except Exception:
+                pass          # already gone; nothing left to take apart
+    _app.processEvents()
+    _app.processEvents()
+
+
 def _print_dialog(n_pages=10, name="print_src.pdf"):
     from tools.viewer.tab import PdfTab
     from tools.printing.dialog import PrintDialog
+    _dispose_live()
     src = os.path.join(_TMP, name)
     c = canvas.Canvas(src, pagesize=A4)
     for i in range(n_pages):
         c.setFont("Helvetica", 90); c.drawCentredString(300, 400, f"P{i+1}"); c.showPage()
     c.save()
     tab = PdfTab(src)
-    return tab, PrintDialog(tab.pdf_path, tab.model, tab)
+    made = (tab, PrintDialog(tab.pdf_path, tab.model, tab))
+    _LIVE.append(made)
+    return made
 
 
 def test_print_spools_exactly_what_was_asked_for():
