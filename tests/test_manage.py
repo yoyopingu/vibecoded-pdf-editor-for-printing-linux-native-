@@ -353,6 +353,9 @@ def test_quitting_and_restarting_leave_no_flattened_copies_behind():
     def ours():
         return glob.glob(os.path.join(B.snapshot_dir(), "view_*.pdf"))
 
+    # Clean slate: remove any orphans left by previous test runs
+    B.sweep_orphan_snapshots()
+
     for i in range(3):
         src = os.path.join(_TMP, f"quitting_{i}.pdf")
         shutil.copyfile(FX["normal"], src)

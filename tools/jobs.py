@@ -117,6 +117,10 @@ class Progress:
     rather than inside them: a half-converted page is worse than a whole one.
     """
 
+    # Polling interval for subprocess communication. Shorter = more responsive
+    # cancellation, longer = less overhead. Default 0.2s.
+    POLL_INTERVAL = 0.2
+
     def __init__(self, job):
         self._job = job
 
@@ -144,7 +148,7 @@ class Progress:
         kwargs.setdefault("stdout", subprocess.PIPE)
         kwargs.setdefault("stderr", subprocess.PIPE)
         proc = subprocess.Popen(cmd, **kwargs)
-        return _watch(proc, cmd, timeout, lambda: self._job.cancelled)
+        return _watch(proc, cmd, timeout, lambda: self._job.cancelled, self.POLL_INTERVAL)
 
     def run_many(self, cmds, timeout=None, max_workers=None, **kwargs):
         """run(), fanned out: several commands at once, and Stop kills all of
@@ -190,7 +194,7 @@ class Progress:
                     proc = subprocess.Popen(cmd, **kwargs)
                     with procs_lock:
                         procs[i] = proc
-                    results[i] = _watch(proc, cmd, timeout, stop_now)
+                    results[i] = _watch(proc, cmd, timeout, stop_now, self.POLL_INTERVAL)
                 finally:
                     if gate is not None:
                         gate.release()
@@ -228,9 +232,14 @@ class Progress:
 class _NoJob:
     """Stands in for a Job when the work is not running as one."""
     cancelled = False
+    _done = True
 
     def report(self, message):
         pass
+
+    @property
+    def is_finished(self):
+        return True
 
 
 def null_progress():
@@ -244,7 +253,7 @@ def null_progress():
     return Progress(_NoJob())
 
 
-def _watch(proc, cmd, timeout, should_stop):
+def _watch(proc, cmd, timeout, should_stop, poll_interval=0.2):
     """Wait for `proc`, polling so that stopping stays possible.
 
     Blocking in communicate() until the child is done is the one thing that
@@ -258,7 +267,7 @@ def _watch(proc, cmd, timeout, should_stop):
     deadline = None if timeout is None else _time.monotonic() + timeout
     while True:
         try:
-            out, err = proc.communicate(timeout=0.2)
+            out, err = proc.communicate(timeout=poll_interval)
             return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
         except subprocess.TimeoutExpired:
             pass

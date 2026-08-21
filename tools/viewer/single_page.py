@@ -1426,9 +1426,6 @@ class SinglePageView(QWidget):
         self._scroll_x  = 0.0
         self._scroll_y  = 0.0
         self._want_bottom = False
-        # "put me at the bottom of this page once its height is known" — see
-        # _place_scroll. Never expressed as a coordinate.
-        self._want_bottom = False
         self._page_w_pt = 0.0
         self._page_h_pt = 0.0
         self._render()

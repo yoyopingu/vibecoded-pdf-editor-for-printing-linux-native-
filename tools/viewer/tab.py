@@ -6,7 +6,7 @@ over it. It is also the anchor of the viewer's one reference cycle: a tab builds
 its children, and each child walks back up the parent chain to ask which tab
 owns it, so the tab imports them at call time and they import the tab normally.
 """
-import os, logging
+import os, logging, tempfile
 from PyQt6.QtWidgets import QVBoxLayout, QFrame, QScrollArea, QStackedWidget
 from PyQt6.QtCore import pyqtSignal, QTimer
 from tools.app_state import AppState
@@ -168,7 +168,7 @@ class PdfTab(PdfTabBase):
         `uids` limits the output to those pages, in display order — used by
         Ctrl+Shift+S when pages are picked in the page manager."""
         if not self.model: raise ValueError(tr("Keine PDF geladen."))
-        import tempfile
+        from tools.render.caches import invalidate_revision
         from pypdf import PdfReader, PdfWriter
         readers = {}
         def _rdr(p):
@@ -199,4 +199,5 @@ class PdfTab(PdfTabBase):
             try: os.unlink(tmp_path)
             except OSError: pass   # nothing written, or already removed
             raise
+        invalidate_revision(out_path)
         return tr('Gespeichert: {p0} Seiten -> {p1}').format(p0=n, p1=out_path)

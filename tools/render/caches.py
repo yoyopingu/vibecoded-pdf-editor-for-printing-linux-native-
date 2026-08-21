@@ -28,9 +28,19 @@ tab, and the page on screen last of all — an LRU alone would happily evict the
 one image that is about to be painted.
 """
 import threading
+import time
 from collections import OrderedDict
 
 from tools.render.document_cache import _stat_key
+
+
+_REVISION_CACHE: "dict" = {}
+_REVISION_TTL = 0.1  # seconds
+
+
+def invalidate_revision(path):
+    """Force re-stat of `path` on next revision check."""
+    _REVISION_CACHE.pop(path, None)
 
 
 def _image_bytes(image):
@@ -48,8 +58,19 @@ def _image_bytes(image):
 def _revision(path):
     """What the file at `path` is right now — size and mtime, or None if it
     cannot be stat'd. Two renders of the same path with different revisions are
-    renders of different documents."""
-    return _stat_key(path)
+    renders of different documents.
+
+    Cached with a short TTL to avoid repeated stat() calls during rapid access.
+    """
+    now = time.monotonic()
+    cached = _REVISION_CACHE.get(path)
+    if cached is not None:
+        rev, ts = cached
+        if now - ts < _REVISION_TTL:
+            return rev
+    rev = _stat_key(path)
+    _REVISION_CACHE[path] = (rev, now)
+    return rev
 
 
 _active_path: str = ""
@@ -105,6 +126,13 @@ class _ByteBoundedCache:
     _store: "OrderedDict"
     MAX_BYTES: int
     _bytes = 0
+
+    @classmethod
+    def set_max_bytes(cls, value: int):
+        """Thread-safe setter for MAX_BYTES that trims immediately."""
+        with cls._lock:
+            cls.MAX_BYTES = value
+            cls._trim_locked()
 
     @classmethod
     def invalidate(cls, pdf_path=None):
