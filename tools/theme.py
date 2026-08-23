@@ -68,6 +68,16 @@ PALETTE = {
             "sel_bg":     "#1a4a80",
             "splitter":   "#1e3a5a",
             "placeholder": "#2a3a5a",
+            # The scroll rail's groove. Its own colour rather than the canvas's:
+            # the rail sits on sidebar_bg, and a groove painted in viewer_bg is
+            # near-invisible against it in the light theme, where the two are
+            # a few per cent apart.
+            "track":      "#0b1220",
+            # The status bar's preflight light. Semantic, not decorative: green
+            # means the document could go on a press, amber means something is
+            # worth knowing first.
+            "ok":         "#4caf7d",
+            "warn":       "#e9a23b",
         },
     },
     "light": {
@@ -107,6 +117,9 @@ PALETTE = {
             "sel_bg":     "#b0ccec",
             "splitter":   "#b8cce0",
             "placeholder": "#ccd8e8",
+            "track":      "#c6cdd6",
+            "ok":         "#1e8a57",
+            "warn":       "#b87309",
         },
     },
 }
@@ -131,6 +144,18 @@ STATUS = {
     "skipped":   "#e67e22",   # left alone
     "colour":    "#c0392b",   # still colour, and will be billed as colour
     "copy":      "#3a8a3a",   # the "+" on a drag that copies instead of moves
+}
+
+# The find highlights, painted over the rendered page. Fixed like PAPER and INK
+# and for the same reason: they are marks on the sheet, not part of the
+# application's chrome, and a highlighter is yellow on a white page whatever the
+# interface around it is set to. The alpha is what keeps the text readable
+# through them — the match under the cursor is the stronger of the two so it can
+# be picked out of a page full of hits.
+FIND = {
+    "hit":     (255, 214, 0, 96),
+    "current": (255, 138, 0, 150),
+    "edge":    (196, 120, 0, 200),
 }
 
 # The eight names that leave this module: theme_color() answers for these, and

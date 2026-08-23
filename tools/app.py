@@ -1,5 +1,5 @@
 """
-CopyShop PDF Suite v3 — the entry point.
+The entry point. The application's name lives in tools/branding.py.
 
 Starten:  copyshop-pdf              (installed)
           python3 main.py           (from the repository)
@@ -42,6 +42,7 @@ from tools.shell.window   import MainWindow
 
 # Re-exported because the suite drives the app through this module.
 from tools.shell.style    import STYLE, LIGHT_STYLE              # noqa: F401
+from tools.branding import app_title
 
 
 def main():
@@ -50,7 +51,7 @@ def main():
     # Needs the QApplication to exist before Qt will route messages to it.
     install_qt_message_handler()
 
-    app.setApplicationName("CopyShop PDF Suite")
+    app.setApplicationName(app_title())
     app.setStyle(AppStyle.create())
 
     # Click a number field and its value is selected, ready to be typed over.

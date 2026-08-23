@@ -30,6 +30,7 @@ from PyQt6.QtCore import QObject, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
+from tools.branding import APP_NAME
 from tools.i18n import tr
 from tools.logging_setup import (crash_log_path, log_dir, log_path,
                                  previous_crash, set_crash_reporter)
@@ -251,7 +252,7 @@ def _on_report(kind, exc_type, exc_value, text, parent=None):
 
     where = tr("in einem Hintergrund-Prozess") if kind.startswith("thread:") \
         else tr("in der Anwendung")
-    _show(tr("Fehler in CopyShop PDF Suite"),
+    _show(tr("Fehler in {p0}").format(p0=APP_NAME),
           tr("Es ist ein unerwarteter Fehler {p0} aufgetreten.").format(p0=where),
           _guess(exc_type, exc_value, text), text, parent)
 
@@ -265,6 +266,6 @@ def report_previous_crash(parent=None):
     text = previous_crash()
     if not text or QApplication.instance() is None:
         return
-    _show(tr("CopyShop PDF Suite wurde unerwartet beendet"),
+    _show(tr("{p0} wurde unerwartet beendet").format(p0=APP_NAME),
           tr("Beim letzten Mal wurde das Programm unerwartet beendet."),
           _guess_native(text), text, parent)

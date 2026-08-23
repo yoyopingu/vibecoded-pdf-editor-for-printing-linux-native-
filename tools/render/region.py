@@ -103,9 +103,20 @@ def page_px_size(page_w_pt, page_h_pt, scale, rotation=0):
     device size, and the same number the viewer lays out and scrolls against.
     They have to be the one number or the two drift apart by a fraction of a
     pixel and every pan looks like a change of scale.
+
+    Rounded *up*, which is what pdfium itself does — pypdfium2's
+    ``render(scale=…)`` sizes its bitmap ``math.ceil(page_w * scale)``. This
+    rounded to nearest, so the two agreed only when the product's fraction
+    happened to land above a half: at one viewport our render came out 625 px
+    across where pdfium's was 626, and one row of pixels further down the window
+    both said 590. Nothing ever looked broken, because every derived
+    measurement comes from this one function — but "render this page at this
+    scale" meant two different sizes in two parts of the same program, and the
+    half that rounded down was discarding the page's last fractional pixel
+    column. Rounding up matches pdfium and keeps the whole page.
     """
-    w = max(1, int(round(page_w_pt * scale)))
-    h = max(1, int(round(page_h_pt * scale)))
+    w = max(1, math.ceil(page_w_pt * scale))
+    h = max(1, math.ceil(page_h_pt * scale))
     return (h, w) if rotation % 180 == 90 else (w, h)
 
 

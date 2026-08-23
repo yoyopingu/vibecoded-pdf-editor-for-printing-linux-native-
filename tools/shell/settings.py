@@ -2,6 +2,7 @@
 Persisted preferences, and the four dialogs over them — appearance,
 performance, prepress and general.
 """
+import json
 import os
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                              QDialog, QRadioButton, QCheckBox, QComboBox,
@@ -123,6 +124,16 @@ class AppSettings:
     def set_pdfx_image_dpi(self, val: int):
         self._qs.setValue("prepress/pdfx_image_dpi", int(val))
 
+    # How the pages are laid out in the viewer. Off by default: turning one
+    # page at a time is what this application has always done, and a document
+    # that suddenly scrolls under the reader is not a setting anybody asked for
+    # by opening the program.
+    def continuous_scroll(self) -> bool:
+        return self._qs.value("appearance/continuous_scroll", False, type=bool)
+
+    def set_continuous_scroll(self, val: bool):
+        self._qs.setValue("appearance/continuous_scroll", bool(val))
+
     # General
     def reopen_last(self) -> bool:
         return self._qs.value("general/reopen_last", False, type=bool)
@@ -132,6 +143,34 @@ class AppSettings:
 
     def last_file(self) -> str:
         return self._qs.value("general/last_file", "")
+
+    # Recent files — the empty window's "Zuletzt geöffnet" row. A JSON list
+    # rather than QSettings' own array support: that stores each entry under
+    # an indexed key (recent_files/1/path, /2/path, …), which needs its own
+    # size-tracking and leaves stale trailing keys behind when the list
+    # shrinks. One string, one write, nothing to go stale.
+    def recent_files(self) -> list:
+        """Up to four most-recently-opened paths, newest first, filtered to
+        files that still exist — a removed USB stick should not leave a dead
+        card in the empty window."""
+        raw = self._qs.value("general/recent_files", "")
+        try:
+            paths = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
+            paths = []
+        return [p for p in paths if isinstance(p, str) and os.path.isfile(p)][:4]
+
+    def add_recent_file(self, path: str):
+        if not path:
+            return
+        raw = self._qs.value("general/recent_files", "")
+        try:
+            paths = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
+            paths = []
+        paths = [p for p in paths if p != path]
+        paths.insert(0, path)
+        self._qs.setValue("general/recent_files", json.dumps(paths[:4]))
 
 
 def _dlg_section(layout, title):
@@ -180,6 +219,7 @@ def _dlg_buttons(layout, save_slot):
 
 class AppearanceDialog(QDialog):
     theme_changed = pyqtSignal(str)
+    scroll_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -212,6 +252,14 @@ class AppearanceDialog(QDialog):
         theme_row.addStretch()
         outer.addLayout(theme_row)
 
+        _dlg_section(outer, "SEITENDARSTELLUNG")
+        self._cont_cb = QCheckBox(tr("Seiten fortlaufend scrollen"))
+        self._cont_cb.setChecked(self._s.continuous_scroll())
+        self._cont_cb.setToolTip(tr(
+            "Aus: eine Seite auf einmal, wie bisher.\n"
+            "Ein: die Seiten laufen untereinander durch, mit Abstand dazwischen."))
+        outer.addWidget(self._cont_cb)
+
         outer.addStretch()
         cancel = _dlg_buttons(outer, self._save)
         cancel.clicked.connect(self.reject)
@@ -223,6 +271,11 @@ class AppearanceDialog(QDialog):
         s.set_theme(new_theme)
         if changed:
             self.theme_changed.emit(new_theme)
+
+        new_cont = self._cont_cb.isChecked()
+        if new_cont != s.continuous_scroll():
+            s.set_continuous_scroll(new_cont)
+            self.scroll_changed.emit(new_cont)
         self.accept()
 
 

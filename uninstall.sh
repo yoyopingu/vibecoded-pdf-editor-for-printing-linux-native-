@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ================================================================
-#  CopyShop PDF Suite v3 — Deinstallation
+#  Deinstallation — the app name comes from tools/branding.py
 #  Entfernt alle vom Installer (install.sh) angelegten Dateien.
 #
 #  System-Pakete (ghostscript, cups, tesseract, poppler, python)
@@ -37,10 +37,22 @@ DESKTOP_ICONS=(
 RC_FILES=("$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile")
 PATH_MARKER="# CopyShop: add ~/.local/bin to PATH"
 
+# Display name only — every path above stays as it is, because they are what
+# the installed copy actually put on disk. See tools/branding.py.
+_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_NAME="$(python3 -c "import sys; sys.path.insert(0, '$_SRC'); from tools.branding import APP_NAME; print(APP_NAME)" 2>/dev/null || echo "CopyShop PDF Suite")"
+_banner() {
+    local text="$1" width=50 len left right
+    len=${#text}
+    left=$(( (width - len) / 2 )); [ "$left" -lt 0 ] && left=0
+    right=$(( width - len - left )); [ "$right" -lt 0 ] && right=0
+    printf "${BOLD}║%*s%s%*s║${NC}\n" "$left" "" "$text" "$right" ""
+}
+
 # ── Banner ───────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║     CopyShop PDF Suite v3  —  Deinstallation     ║${NC}"
+_banner "$APP_NAME v3  —  Deinstallation"
 echo -e "${BOLD}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -63,7 +75,7 @@ done
 
 if [ "$found_any" -eq 0 ]; then
     echo ""
-    ok "Nichts gefunden — CopyShop scheint bereits deinstalliert zu sein."
+    ok "Nichts gefunden — ${APP_NAME} scheint bereits deinstalliert zu sein."
     exit 0
 fi
 
@@ -129,6 +141,6 @@ echo -e "${BOLD}╔════════════════════�
 echo -e "${BOLD}║  ${GREEN}Deinstallation abgeschlossen.${NC}${BOLD}                   ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  Falls ${BOLD}~/.local/bin${NC} nur wegen CopyShop im PATH war, wirkt die"
+echo -e "  Falls ${BOLD}~/.local/bin${NC} nur wegen ${APP_NAME} im PATH war, wirkt die"
 echo -e "  Änderung nach einem Terminal-Neustart."
 echo ""

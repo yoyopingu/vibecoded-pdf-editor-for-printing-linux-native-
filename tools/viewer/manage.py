@@ -31,12 +31,11 @@ class ManagePanel(QWidget):
         self.pdf_path     = pdf_path
         self.grid         = grid
         # The owning PdfTab, kept explicitly. Manage mode reparents this panel
-        # into a splitter owned by the viewer, so the parent chain no longer
-        # leads back to the tab — see _swap_source.
+        # into the app's sidebar column, so the parent chain no longer leads
+        # back to the tab — see _swap_source.
         self.tab          = tab if tab is not None else parent
-        self._history     = []
-        self._redo_stack  = []
         self._filter    = None
+        self._op_btns   = []   # for _apply_theme — the compact operation rows
         self.setMinimumWidth(220)
         self._setup()
         _register_themed(self)
@@ -47,17 +46,9 @@ class ManagePanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Titel oben (fixiert)
-        self._title_w = QWidget()
-        self._title_w.setObjectName("manageTitleW")
-        self._title_w.setFixedHeight(36)
-        tl = QHBoxLayout(self._title_w)
-        tl.setContentsMargins(10, 0, 10, 0)
-        self._title_lbl = QLabel(tr("Seiten verwalten"))
-        self._title_lbl.setStyleSheet(
-            "font-size:13px;font-weight:bold;background:transparent;")
-        tl.addWidget(self._title_lbl)
-        outer.addWidget(self._title_w)
+        # No title row: this panel mounts directly under the view switch,
+        # whose "Seiten verwalten" segment is already highlighted — a second
+        # label saying the same thing spent 36px of a 224px column on nothing.
 
         # Scrollbarer Bereich
         self._scroll_area = QScrollArea()
@@ -68,13 +59,14 @@ class ManagePanel(QWidget):
         self._content_w = QWidget()
         self._content_w.setObjectName("manageContentW")
         layout = QVBoxLayout(self._content_w)
-        layout.setContentsMargins(10, 8, 22, 10)
-        layout.setSpacing(5)
+        layout.setContentsMargins(10, 8, 12, 10)
+        layout.setSpacing(4)
         self._scroll_area.setWidget(self._content_w)
         outer.addWidget(self._scroll_area, 1)
 
         sel_lbl = QLabel(tr("Auswahl  (z.B. 1, 3, 5-8)"))
-        sel_lbl.setObjectName("sectionLabel")
+        sel_lbl.setObjectName("navGroup")
+        sel_lbl.setContentsMargins(0, 2, 0, 3)
         layout.addWidget(sel_lbl)
 
         self.sel_edit = QLineEdit()
@@ -93,7 +85,7 @@ class ManagePanel(QWidget):
         self._zoom_btns_manage = []
         def _icon_btn(text, tip, slot):
             b = QPushButton(text)
-            b.setFixedSize(32, 26)
+            b.setFixedSize(30, 24)
             b.setToolTip(tr(tip))
             b.clicked.connect(slot)
             view_row.addWidget(b)
@@ -111,9 +103,14 @@ class ManagePanel(QWidget):
         layout.addLayout(view_row)
         layout.addWidget(self._sep())
 
-        self._section(layout, tr("AUSWAHL"))
-        layout.addWidget(self._btn(tr("Alle auswaehlen  (Strg+A)"),  self.grid.select_all))
-        layout.addWidget(self._btn(tr("Auswahl aufheben  (Strg+D)"), self.grid.deselect_all))
+        sel_row = QHBoxLayout(); sel_row.setSpacing(4)
+        for text, tip, fn in (
+                (tr("Alle"),  tr("Alle auswaehlen") + "  (Strg+A)",  self.grid.select_all),
+                (tr("Keine"), tr("Auswahl aufheben") + "  (Strg+D)", self.grid.deselect_all)):
+            b = self._btn(text, fn)
+            b.setToolTip(tip)
+            sel_row.addWidget(b)
+        layout.addLayout(sel_row)
         layout.addWidget(self._sep())
 
         self._section(layout, tr("OPERATIONEN"))
@@ -172,21 +169,30 @@ class ManagePanel(QWidget):
 
     def _apply_theme(self):
         t = _TV
-        self.setStyleSheet(
-            f"QWidget#managePanel{{background:{t['sidebar_bg']};border-right:1px solid {t['border']};}}")
-        self._title_w.setStyleSheet(
-            f"QWidget#manageTitleW{{background:{t['sidebar_bg']};}}")
-        self._title_lbl.setStyleSheet(
-            f"color:{t['text']};font-size:13px;font-weight:bold;background:transparent;")
+        # No border-right of its own: this panel now fills the app's own
+        # 224px tool column, which already draws that border at the true
+        # window edge — a second one here would sit one pixel off it.
+        self.setStyleSheet(f"QWidget#managePanel{{background:{t['sidebar_bg']};}}")
         self._scroll_area.setStyleSheet(
             f"QScrollArea{{background:{t['sidebar_bg']};border:none;}}")
         self._content_w.setStyleSheet(
             f"QWidget#manageContentW{{background:{t['sidebar_bg']};}}")
         _zs = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
-               f"border:1px solid {t['btn_brd']};border-radius:4px;font-size:13px;}}"
+               f"border:1px solid {t['btn_brd']};border-radius:4px;font-size:12px;}}"
                f"QPushButton:hover{{background:{t['hover']};}}")
         for b in getattr(self, '_zoom_btns_manage', []):
             b.setStyleSheet(_zs)
+        # Operation rows: compact, left-aligned — the density the concept
+        # draws, instead of the 28px centred buttons every other tool uses
+        # (those sit in a much wider 340-480px sidebar of their own; this one
+        # is 224px and lists nine of them at once).
+        _op = (f"QPushButton#opRow{{background:{t['btn_bg']};color:{t['text']};"
+               f"border:1px solid {t['btn_brd']};border-radius:5px;"
+               f"padding:0 9px;font-size:11px;text-align:left;}}"
+               f"QPushButton#opRow:hover{{background:{t['hover']};border-color:{t['acc']};}}"
+               f"QPushButton#opRow:pressed{{background:{t['acc']};color:{t['sidebar_bg']};}}")
+        for b in getattr(self, '_op_btns', []):
+            b.setStyleSheet(_op)
         if hasattr(self, '_zoom_hint_lbl'):
             self._zoom_hint_lbl.setStyleSheet(
                 f"color:{t['vdim']};font-size:9px;background:transparent;")
@@ -198,15 +204,20 @@ class ManagePanel(QWidget):
                 f"QLineEdit:focus{{border:1px solid {t['acc']};}}")
 
     def _section(self, layout, text):
+        # navGroup, not sectionLabel: this panel now sits in the same 224px
+        # column as the tool list, and its headings have to carry the same
+        # weight as FARBE / INHALT / AUSGABE do there.
         lbl = QLabel(text)
-        lbl.setObjectName("sectionLabel")
+        lbl.setObjectName("navGroup")
+        lbl.setContentsMargins(0, 8, 0, 3)
         layout.addWidget(lbl)
 
     def _btn(self, text, fn):
         b = QPushButton(text)
-        b.setObjectName("secondaryBtn")
+        b.setObjectName("opRow")
+        b.setFixedHeight(25)
         b.clicked.connect(fn)
-        b.setMinimumHeight(28)
+        self._op_btns.append(b)
         return b
 
     def _sep(self):
@@ -235,42 +246,25 @@ class ManagePanel(QWidget):
         # ungültiger Eingabe — die Auswahl bleibt dann unverändert).
         self.update_info()
 
-    def _snapshot(self):
-        return (
-            list(self.model.order),
-            dict(self.model.rotations),
-            dict(self.model.src),
-            self.model._next_uid,
-            dict(self.model.foreign_src),
-            self.pdf_path,
-        )
+    # ── history ──────────────────────────────────────────────────────────────
+    # The stack itself belongs to the tab (see PdfTab.push_history): the same
+    # document is edited from outside this panel too, and two stacks over one
+    # model would each undo into a state the other had moved on from.
 
-    def _restore_snapshot(self, snap):
-        order, rotations, model_src, next_uid, foreign_src, pdf_path = snap
-        self.model.order       = order
-        self.model.rotations   = rotations
-        self.model.src         = model_src
-        self.model._next_uid   = next_uid
-        self.model.foreign_src = foreign_src
-        self.model.selected.clear()
-        if pdf_path and pdf_path != self.pdf_path:
-            self.pdf_path      = pdf_path
-            self.grid.pdf_path = pdf_path
+    def _owning_tab(self):
+        tab = self.tab if isinstance(self.tab, PdfTabBase) else None
+        return tab if tab is not None else owning_tab(self.parent())
 
     def _save_history(self):
-        self._history.append(self._snapshot())
-        self._redo_stack.clear()   # new action clears redo branch
-        if len(self._history) > 50: self._history.pop(0)
-
-    def _cap_redo(self):
-        if len(self._redo_stack) > 50: self._redo_stack.pop(0)
+        tab = self._owning_tab()
+        if tab is not None:
+            tab.push_history()
 
     def _delete(self):
         if not self.model.selected:
             self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
-        self._save_history()
         n = len(self.model.selected)
-        self.grid.delete_selected()
+        self.grid.delete_selected()      # records its own history entry
         self.status.setText(tr('{p0} Seite(n) geloescht.  Strg+Z = Rueckgaengig.').format(p0=n))
 
     def _copy(self):
@@ -291,9 +285,8 @@ class ManagePanel(QWidget):
         if not self.model.selected:
             self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
         self._copy()
-        self._save_history()
         n = len(self.model.selected)
-        self.grid.delete_selected()
+        self.grid.delete_selected()      # records its own history entry
         self.status.setText(
             tr('{p0} Seite(n) ausgeschnitten.  Strg+V = Einfuegen.').format(p0=n))
 
@@ -324,21 +317,17 @@ class ManagePanel(QWidget):
         self.status.setText(tr('{p0} Seite(n) eingefuegt.').format(p0=n))
 
     def _undo(self):
-        if not self._history:
+        tab = self._owning_tab()
+        if tab is None or not tab.undo():
             self.status.setText(tr("Nichts zum Rueckgaengig.")); return
-        self._redo_stack.append(self._snapshot())
-        self._cap_redo()
-        self._restore_snapshot(self._history.pop())
-        self.grid._rebuild(); self.grid.order_changed.emit()
+        self.pdf_path = tab.pdf_path
         self.status.setText(tr("Rueckgaengig.  Strg+Y = Wiederholen."))
 
     def _redo(self):
-        if not self._redo_stack:
+        tab = self._owning_tab()
+        if tab is None or not tab.redo():
             self.status.setText(tr("Nichts zum Wiederholen.")); return
-        self._history.append(self._snapshot())
-        if len(self._history) > 50: self._history.pop(0)
-        self._restore_snapshot(self._redo_stack.pop())
-        self.grid._rebuild(); self.grid.order_changed.emit()
+        self.pdf_path = tab.pdf_path
         self.status.setText(tr("Wiederholt."))
 
     def _zoom_grid(self, direction):
@@ -450,12 +439,9 @@ class ManagePanel(QWidget):
         # page indexes against the old, shorter file — an inserted blank page is
         # past its last index, so the render threw and the preview showed the
         # blue "could not render" fallback at a bogus size.
-        tab = self.tab if isinstance(self.tab, PdfTabBase) else None
-        if tab is None:
-            tab = owning_tab(self.parent())
+        tab = self._owning_tab()
         if tab is not None:
-            tab.pdf_path = new_path
-            tab.single.pdf_path = new_path
+            tab.retarget(new_path)
         if AppState.get().page_model is self.model:
             AppState.get().current_pdf = new_path
 

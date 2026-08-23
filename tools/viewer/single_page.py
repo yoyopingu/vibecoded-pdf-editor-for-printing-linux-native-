@@ -21,8 +21,8 @@ import math
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QPushButton, QLabel, QFrame, QApplication,
                              QSizePolicy)
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect, QPoint
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
 from tools.colorspace import (cached_page_colorspaces, describe,
                               document_revision, page_colorspaces,
                               scan_document)
@@ -30,11 +30,11 @@ from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
-from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
+from tools.render.region import cached_page_size_pt, covers, page_px_size, page_size_pt, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
 from tools.viewer.rulers import RulerBar, RulerCorner
 from tools.viewer.tab_base import owning_tab
-from tools.theme import _PREV_BTN, _TV, _register_themed
+from tools.theme import FIND, _PREV_BTN, _TV, _register_themed
 
 
 # How far the user may zoom in. Was 8x, which existed because the page was
@@ -44,6 +44,173 @@ from tools.theme import _PREV_BTN, _TV, _register_themed
 # question of what is useful.
 MAX_ZOOM = 40.0
 MIN_ZOOM = 0.1
+
+
+class _PageField(QLabel):
+    """The page number at the foot of the rail. A label you can click.
+
+    A QLineEdit here would be 40 px of permanent input box for something read a
+    hundred times and typed into once; a label that answers a click with the
+    go-to prompt costs nothing and says the same thing."""
+    clicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__("1", parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+
+
+class _PageTrack(QWidget):
+    """The rail's track: one tick per page, and a thumb marking where you are.
+
+    Drawn rather than assembled from a QScrollBar because the two things that
+    make it useful are not a scroll bar's business — a tick per page, so the
+    length of the document is visible rather than implied, and later the marks
+    that say where a search found something.
+
+    The thumb sits *inside* the track and is squared off, 11 px in a 13 px
+    groove: it is the same object as the rail with a section filled in, not a
+    capsule laid on top of it.
+
+    Two modes. Paged (`picked`, a page number): the thumb snaps to the page
+    being shown and a drag picks pages. Continuous (`position_dragged`, a
+    0..1 fraction of the track): the thumb mirrors the exact scroll position
+    and a drag scrolls to the fraction under the pointer — a drag in a paged
+    rail jumps a page at a time, which in a document that flows reads as the
+    rail moving in chunks.
+    """
+    picked = pyqtSignal(int)              # a page, 1-based
+    position_dragged = pyqtSignal(float)  # 0..1 of the track, continuous mode
+
+    GROOVE   = 13
+    THUMB_IN = 1                      # inset each side, so 11 px of thumb
+    MIN_THUMB = 26
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._n       = 0
+        self._page    = 1
+        self._span    = 1             # pages visible at once; 1 until slice 4
+        self._hits    = []            # pages a search found something on
+        self._drag    = False
+        self._scroll_mode = False     # continuous: thumb tracks the scroll
+        self._scroll_frac = None      # 0..1 while _scroll_mode
+        self.setFixedWidth(self.GROOVE)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed,
+                           QSizePolicy.Policy.Expanding)
+
+    def set_document(self, n_pages, page=1):
+        n_pages = max(0, int(n_pages))
+        if (n_pages, page) == (self._n, self._page):
+            return
+        self._n    = n_pages
+        self._page = max(1, min(int(page), max(1, n_pages)))
+        self.update()
+
+    def set_scroll_mode(self, on):
+        """Continuous mode: the thumb follows the scroll position, not the page."""
+        on = bool(on)
+        if on == self._scroll_mode:
+            return
+        self._scroll_mode = on
+        if not on:
+            self._scroll_frac = None
+        self.update()
+
+    def set_scroll_position(self, frac):
+        """Where the viewport is along the strip, as a 0..1 fraction."""
+        frac = None if frac is None else min(1.0, max(0.0, float(frac)))
+        if self._scroll_mode and frac != self._scroll_frac:
+            self._scroll_frac = frac
+            self.update()
+
+    def set_hits(self, pages):
+        """Which pages a search found something on, so the rail can say where
+        the answers are before you scroll to them."""
+        pages = sorted(set(pages))
+        if pages != self._hits:
+            self._hits = pages
+            self.update()
+
+    def _thumb_rect(self):
+        h = self.height()
+        if self._n <= 0:
+            return None
+        frac = min(1.0, self._span / self._n)
+        th   = max(self.MIN_THUMB, int(h * frac))
+        # Where the thumb's *top* goes, so the last page puts it flush with the
+        # bottom rather than half off the end.
+        travel = max(0, h - th)
+        if self._scroll_mode and self._scroll_frac is not None:
+            pos = self._scroll_frac
+        else:
+            pos = 0 if self._n <= 1 else (self._page - 1) / (self._n - 1)
+        return QRect(self.THUMB_IN, int(travel * pos),
+                     self.GROOVE - 2 * self.THUMB_IN, th)
+
+    def _frac_at(self, y):
+        rect = self._thumb_rect()
+        th = rect.height() if rect else self.MIN_THUMB
+        travel = max(1, self.height() - th)
+        return min(1.0, max(0.0, (y - th / 2) / travel))
+
+    def _page_at(self, y):
+        pos = self._frac_at(y)
+        return int(round(pos * (self._n - 1))) + 1 if self._n > 1 else 1
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(_TV['track']))
+        p.drawRoundedRect(0, 0, self.GROOVE, self.height(), 3, 3)
+
+        # One tick per page — but only while they are far enough apart to read
+        # as ticks. On a 900-page document they would be a solid bar.
+        if self._n > 1:
+            step = self.height() / self._n
+            if step >= 4:
+                p.setPen(QPen(QColor(_TV['border']), 1))
+                for i in range(1, self._n):
+                    y = int(i * step)
+                    p.drawLine(2, y, self.GROOVE - 3, y)
+
+        # Search hits, before the thumb so the thumb is never hidden by one.
+        if self._hits and self._n > 0:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(*FIND["current"]))
+            h = self.height()
+            for page in self._hits:
+                y = int((page - 1) / max(1, self._n - 1) * max(0, h - 3))
+                p.drawRect(1, y, self.GROOVE - 2, 2)
+
+        rect = self._thumb_rect()
+        if rect is not None:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(_TV['acc']))
+            p.drawRoundedRect(rect, 2, 2)
+        p.end()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._n > 0:
+            self._drag = True
+            if self._scroll_mode:
+                self.position_dragged.emit(self._frac_at(e.position().y()))
+            else:
+                self.picked.emit(self._page_at(e.position().y()))
+
+    def mouseMoveEvent(self, e):
+        if self._drag and self._n > 0:
+            if self._scroll_mode:
+                self.position_dragged.emit(self._frac_at(e.position().y()))
+            else:
+                self.picked.emit(self._page_at(e.position().y()))
+
+    def mouseReleaseEvent(self, _e):
+        self._drag = False
 
 
 class SinglePageView(QWidget):
@@ -68,6 +235,11 @@ class SinglePageView(QWidget):
         # "put me at the bottom of this page once its height is known" — see
         # _place_scroll. Never expressed as a coordinate.
         self._want_bottom = False
+        # "…and bring this spot on the page into view once you know how big it
+        # is" — a search hit on a page zoomed in past the window. Held in
+        # points, resolved by _apply_reveal when there is a scale to resolve it
+        # against, which on an unmeasured page is not until the render lands.
+        self._want_reveal = None
         self._zoom_timer = QTimer()
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.timeout.connect(self._render)
@@ -107,6 +279,22 @@ class SinglePageView(QWidget):
         self._dims_rot = None
         self._render_signals = _PageSignals()
         self._render_signals.ready.connect(self._on_page_ready)
+        self._strip_signals = _PageSignals()
+        self._strip_signals.ready.connect(self._on_strip_page)
+        self._strip_pending: set = set()
+        self._strip_tasks: dict = {}   # (path, orig, rot) -> _PageRenderTask
+        self._strip_gens: dict = {}    # task generation -> pending key
+        self._strip_gen = 10 ** 9      # offset: never collide with paged gens
+        self._strip_pm: dict = {}   # drawn pixmaps, see _render_continuous
+        self._doc_scroll = 0.0
+        # Where the scroll is heading, as against where it is. A wheel notch
+        # moves the goal; the timer below walks the view to it over a few
+        # frames, which is the difference between a document that scrolls and
+        # one that jumps a third of a page at a time.
+        self._scroll_goal = 0.0
+        self._scroll_anim = QTimer(self)
+        self._scroll_anim.setInterval(self.SCROLL_FRAME_MS)
+        self._scroll_anim.timeout.connect(self._step_scroll_anim)
         # Pre-render (background warm-up) state
         self._prerender_tasks: list = []
         # Guides, per page, in points from the sheet's top-left corner. Page
@@ -114,6 +302,23 @@ class SinglePageView(QWidget):
         # 20 mm into the sheet through a zoom, a scroll and a page turn.
         self._guides: dict = {}
         self._rulers_on = False
+        # Search hits for the whole document, and which one is being looked at.
+        # Held in page points — the same space the guides use — so a zoom or a
+        # scroll moves them with the sheet instead of leaving them behind at
+        # the pixels they were computed at.
+        self._find_hits    = []
+        self._find_current = -1
+        # Continuous scrolling, off unless Darstellung says otherwise. When it
+        # is off nothing below runs and the view behaves exactly as it always
+        # has — one page at a time, turned by the wheel at its edges.
+        self._continuous  = False
+        self._strip       = []     # [(page_pos, y_top, w_px, h_px)] in the strip
+        self._strip_h     = 0.0
+        self._strip_key   = None   # what _strip was built for
+        # The page the continuous fit is measured against: zoom 1.0 shows this
+        # page whole, and every other sheet shares its pixels-per-point so the
+        # strip keeps one scale. Re-resolved on load, mode change and Ctrl+0.
+        self._cont_ref = None      # (w_pt, h_pt)
         self._setup()
         _register_themed(self)
 
@@ -156,59 +361,132 @@ class SinglePageView(QWidget):
             bar.guide_dropped.connect(self._drop_guide)
             bar.clear_requested.connect(self._clear_guides)
         self._view.guide_moved.connect(self._guide_moved)
-        self._view.repainted.connect(self._sync_rulers)
+        self._view.repainted.connect(self._sync_overlays)
 
-        # Rechte Seitenleiste (Navigation)
+        # ── Navigationsschiene ───────────────────────────────────────────────
+        # 40 px where there were 50, and almost all of it is the track. The old
+        # rail spent its height on a page number in 16 pt and two arrows, and
+        # said nothing at all about how long the document was or where in it
+        # you were — the two questions a rail exists to answer.
         self._nav_side = QWidget()
         self._nav_side.setObjectName("navSide")
-        self._nav_side.setFixedWidth(50)
+        self._nav_side.setFixedWidth(40)
         sl = QVBoxLayout(self._nav_side)
-        sl.setContentsMargins(4, 10, 4, 10)
+        sl.setContentsMargins(0, 5, 0, 7)
         sl.setSpacing(4)
 
-        self._num_lbl = QLabel("1")
+        self._nav_btns = []
+        for text, tip, fn in [("▲", tr("Vorherige Seite"), self.prev_page),
+                              ("▼", tr("Nächste Seite"),   self.next_page)]:
+            b = QPushButton(text)
+            b.setFixedSize(22, 16)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            self._nav_btns.append(b)
+
+        sl.addWidget(self._nav_btns[0], alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        self._track = _PageTrack()
+        self._track.picked.connect(self._on_track_picked)
+        self._track.position_dragged.connect(self._on_track_dragged)
+        sl.addWidget(self._track, 1, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        sl.addWidget(self._nav_btns[1], alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # The page over the total, read vertically — the only way a fraction
+        # fits in 40 px. The number is the jump target: click it and type one.
+        self._num_lbl = _PageField()
         self._num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sl.addWidget(self._num_lbl)
+        self._num_lbl.setToolTip(tr("Gehe zu Seite") + "  (Strg+G)")
+        self._num_lbl.clicked.connect(self._go_to_dialog)
+        sl.addWidget(self._num_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self._nav_sep = QFrame()
         self._nav_sep.setFrameShape(QFrame.Shape.HLine)
-        sl.addWidget(self._nav_sep)
+        self._nav_sep.setFixedWidth(17)
+        sl.addWidget(self._nav_sep, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        self._tot_lbl = QLabel("/ 0")
+        self._tot_lbl = QLabel("0")
         self._tot_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sl.addWidget(self._tot_lbl)
-        sl.addStretch()
-
-        # Same metrics as the zoom cluster below — the two sets of controls sit
-        # in the same corner of the preview and used to be different sizes.
-        self._nav_btns = []
-        for text, fn in [("▲", self.prev_page), ("▼", self.next_page)]:
-            b = QPushButton(text)
-            b.setFixedSize(*_PREV_BTN)
-            b.clicked.connect(fn)
-            sl.addWidget(b, alignment=Qt.AlignmentFlag.AlignCenter)
-            self._nav_btns.append(b)
+        sl.addWidget(self._tot_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         main.addWidget(self._nav_side)
         layout.addLayout(main, 1)
 
-        # Untere Info-Leiste
+        # ── Statusleiste ─────────────────────────────────────────────────────
+        # What the document *is*, on the left; how it is being drawn, on the
+        # right. Nothing here is a command except the switches at the right end
+        # — the readings report, they do not act.
+        self._seps = []
         self._info_bar = QWidget()
         self._info_bar.setObjectName("infoBar")
         self._info_bar.setFixedHeight(30)
         il = QHBoxLayout(self._info_bar)
-        il.setContentsMargins(12, 0, 12, 0)
-        il.setSpacing(20)
+        il.setContentsMargins(12, 0, 10, 0)
+        il.setSpacing(0)
+
+        # How long the document is. It was only ever on the rail, at the far
+        # right — so the bar opened with two readings and a stretch, and read
+        # as an empty strip with the zoom controls pushed to the far end.
+        self._pages_lbl = QLabel("")
+        self._pages_lbl.setObjectName("dimLabel")
+        il.addWidget(self._pages_lbl)
+
+        self._add_sep(il)
 
         self._size_lbl = QLabel(tr("Masse: —"))
         self._size_lbl.setObjectName("dimLabel")
         il.addWidget(self._size_lbl)
 
+        self._add_sep(il)
+
         self._color_lbl = QLabel(tr("Farbprofil: —"))
         self._color_lbl.setObjectName("dimLabel")
         il.addWidget(self._color_lbl)
 
+        self._add_sep(il)
+
+        # ── Druckvorstufen-Licht ─────────────────────────────────────────────
+        # One indicator for the whole preflight, where a single font check used
+        # to sit. Green when the document could go on a press, amber for what is
+        # worth knowing first. Click it for the list.
+        self._pf_btn = QPushButton("")
+        self._pf_btn.setObjectName("pfLight")
+        self._pf_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pf_btn.setFlat(True)
+        self._pf_btn.clicked.connect(self._show_preflight)
+        self._pf_state  = "unknown"
+        self._pf_issues = []
+        il.addWidget(self._pf_btn)
+        self.set_preflight("unknown")
+
+        # Whatever the app last had to say — a save, a failed render, the number
+        # of pages a tool wrote. These used to go nowhere at all: the viewer's
+        # status slot was an empty method whose comment claimed they appeared
+        # here, and they were discarded.
+        #
+        # It sits at the end of the readings rather than between two stretches:
+        # centred, a message that is blank almost always left a gap the width of
+        # the window with a reading marooned at either end.
+        self._status_sep = self._add_sep(il)
+        self._status_lbl = QLabel("")
+        self._status_lbl.setObjectName("dimLabel")
+        il.addWidget(self._status_lbl)
+        self._status_timer = QTimer()
+        self._status_timer.setSingleShot(True)
+        self._status_timer.timeout.connect(self._clear_status)
+        self._clear_status()
+
         il.addStretch()
+
+        # When the document was last written. Blank until it has been: "never
+        # saved" and "saved a moment ago" are different states and the bar
+        # should not blur them.
+        self._saved_lbl = QLabel("")
+        self._saved_lbl.setObjectName("dimLabel")
+        il.addWidget(self._saved_lbl)
+
+        self._add_sep(il)
 
         # Lineale — Strg+R schaltet sie ebenfalls um, aber ein Kuerzel allein
         # findet niemand, der nicht weiss, dass es die Lineale gibt.
@@ -219,18 +497,25 @@ class SinglePageView(QWidget):
         self._ruler_btn.clicked.connect(lambda on: self._set_rulers_visible(on))
         il.addWidget(self._ruler_btn)
 
+        self._add_sep(il)
+
         # Zoom-Steuerung
         self._zoom_btns = []
-        for txt, fn in [("−", self._zoom_out), ("fit", self._zoom_fit), ("+", self._zoom_in)]:
+        for txt, tip, fn in [("−",   tr("Verkleinern"),  self._zoom_out),
+                             ("fit", tr("Ganze Seite"),  self._zoom_fit),
+                             ("+",   tr("Vergrössern"),  self._zoom_in)]:
             zb = QPushButton(txt)
             zb.setFixedSize(*_PREV_BTN)
+            zb.setToolTip(tip)
             zb.clicked.connect(fn)
             il.addWidget(zb)
             self._zoom_btns.append(zb)
 
         self._zoom_lbl = QLabel("100%")
         self._zoom_lbl.setObjectName("dimLabel")
-        self._zoom_lbl.setFixedWidth(42)
+        self._zoom_lbl.setFixedWidth(46)
+        self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignRight
+                                    | Qt.AlignmentFlag.AlignVCenter)
         il.addWidget(self._zoom_lbl)
 
         layout.addWidget(self._info_bar)
@@ -238,16 +523,549 @@ class SinglePageView(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._apply_theme()
 
+    # ── continuous scrolling ─────────────────────────────────────────────────
+
+    # The gutter between two sheets, so a page boundary stays visible — and the
+    # bottom margin a sheet fitted by Ctrl+0 leaves, which is what keeps the
+    # next sheet from poking into the frame as a sliver: the fit in
+    # _display_scale uses it as its vertical pad, so a fitted sheet plus its
+    # gutter is exactly the viewport. _build_strip gives the strip the same
+    # room above its first sheet and below its last.
+    GAP_PX = 14
+
+    # Smooth scrolling, the way a reader does it. A mouse wheel arrives as
+    # discrete notches, so a notch sets a target and the view is walked to it
+    # over a handful of frames — the eye reads that as motion, where the same
+    # distance applied in one go reads as a jolt. A touchpad already sends
+    # pixel deltas and is followed exactly; easing something that is already
+    # continuous only adds lag.
+    SCROLL_FRAME_MS  = 16      # ~60 fps
+    SCROLL_NOTCH_PX  = 110     # one wheel notch
+    SCROLL_EASE      = 0.35    # of the remaining distance, per frame
+    SCROLL_SNAP_PX   = 0.5     # close enough to stop
+    # How many strip pages to warm beyond the viewport. One screenful each way
+    # is enough that a fast flick rarely lands on blank paper, without flooding
+    # the render queue the way pre-rendering the whole document would.
+    STRIP_PREFETCH_SCREENS = 1.0
+    STRIP_PM_MAX = 12          # drawn QPixmaps kept between frames
+
+    def _max_scroll(self):
+        """How far down the strip the view can go."""
+        return max(0.0, self._strip_h - float(self._view.height()))
+
+    def _clamp_scroll(self, value):
+        return max(0.0, min(float(value), self._max_scroll()))
+
+    def _jump_scroll(self, value):
+        """Put the view somewhere at once, with no animation — a page picked
+        from the rail, a find hit, a mode change. The goal has to move with it
+        or the animator would immediately drag the view back."""
+        self._scroll_anim.stop()
+        self._doc_scroll = self._scroll_goal = self._clamp_scroll(value)
+
+    def _step_scroll_anim(self):
+        """One frame: close a fixed fraction of the remaining distance.
+
+        Exponential rather than linear, so the scroll leaves quickly and
+        settles gently instead of stopping dead — the same shape a reader
+        expects from a scroll it did not have to think about.
+
+        Calls _render_continuous rather than _render: the latter emits
+        page_changed unconditionally, which at sixty frames a second would
+        re-aim the pre-render and re-read the colour spaces on every frame.
+        _render_continuous already tracks the current page and only announces
+        a change when the page really changed.
+        """
+        gap = self._scroll_goal - self._doc_scroll
+        if abs(gap) < self.SCROLL_SNAP_PX:
+            self._doc_scroll = self._scroll_goal
+            self._scroll_anim.stop()
+        else:
+            self._doc_scroll += gap * self.SCROLL_EASE
+        scale = self._display_scale(self._zoom)
+        if scale is None:
+            self._scroll_anim.stop()
+            return
+        self._render_continuous(scale, self._view.width(), self._view.height())
+
+    def scroll_by(self, dy_px, animate=True):
+        """Move the view `dy_px` down the strip (negative is up)."""
+        self._scroll_goal = self._clamp_scroll(self._scroll_goal + dy_px)
+        if not animate:
+            self._jump_scroll(self._scroll_goal)
+            # Direct continuous paint: _render() would re-emit page_changed and
+            # re-aim pre-render on every touchpad event.
+            scale = self._display_scale(self._zoom)
+            if scale is not None:
+                self._render_continuous(scale, self._view.width(),
+                                        self._view.height())
+            else:
+                self._render()
+            return
+        if not self._scroll_anim.isActive():
+            self._scroll_anim.start()
+        # First frame immediately so the wheel does not wait one timer tick
+        # before anything moves — that tick was the hitch between notches.
+        self._step_scroll_anim()
+
+    def set_continuous(self, on):
+        """Turn continuous scrolling on or off and redraw.
+
+        Off is the default and is exactly what this view has always done — one
+        page at a time, turned at its edges. Nothing below runs in that mode.
+        Switching keeps the reader's place: the page being looked at stays the
+        page being looked at."""
+        on = bool(on)
+        if on == self._continuous:
+            return
+        self._continuous = on
+        self._strip_key  = None
+        self._cont_ref   = None
+        self._scroll_x   = 0.0
+        self._scroll_y   = 0.0
+        self._cancel_strip_tasks()
+        self._strip_pm.clear()
+        self._track.set_scroll_mode(on)
+        if on:
+            scale = self._display_scale(self._zoom) or 1.0
+            self._build_strip(scale)
+            self._jump_scroll(self._strip_top_of(self._current))
+        self._view.clear()
+        self._render()
+
+    def _page_size_pts(self, uid):
+        """(w_pt, h_pt) of a page as displayed, or a safe A4 fallback."""
+        try:
+            src_path, orig = self.model.page_source(uid, self.pdf_path)
+            rot  = self.model.get_rotation(uid)
+            size = cached_page_size_pt(src_path, orig)
+            w_pt, h_pt = size if size else page_size_pt(src_path, orig)
+            if rot % 180 == 90:
+                w_pt, h_pt = h_pt, w_pt
+            return w_pt, h_pt
+        except Exception:
+            logging.debug("strip: page has no size", exc_info=True)
+            return (self._page_w_pt or 595.0), (self._page_h_pt or 842.0)
+
+    def _ensure_cont_ref(self):
+        """The page the continuous fit is measured against, as (w_pt, h_pt).
+
+        Zoom 1.0 shows this page whole — that is what "fit" means everywhere
+        else in this view, and what a reader expects the strip to start at.
+        Every other sheet is laid out at the same pixels-per-point, so a
+        differently-sized page is not rescaled as it scrolls past and the
+        strip never changes shape under the pointer.
+
+        The page being read when the mode was entered is the reference; a new
+        document and Ctrl+0 re-resolve it.
+        """
+        if self._cont_ref is not None:
+            return self._cont_ref
+        if self.model is None or not self.model.order:
+            self._cont_ref = (595.0, 842.0)
+        else:
+            pos = max(0, min(self._current, len(self.model.order) - 1))
+            self._cont_ref = self._page_size_pts(self.model.order[pos])
+        return self._cont_ref
+
+    def _build_strip(self, scale):
+        """Where every page sits in the document strip, in display pixels.
+
+        Rebuilt only when the zoom, the page list or the window width changes.
+        The sizes are a box lookup per page and cached — measured at 27 ms cold
+        for a 500-page document and 0.2 ms warm — so the strip costs nothing to
+        keep accurate on a mixed-size document, which is the case this app
+        exists for and the one a uniform-height guess gets wrong."""
+        if self.model is None:
+            self._strip = []
+            self._strip_h = 0.0
+            self._strip_key = None
+            return
+        key = (id(self.model), tuple(self.model.order), round(scale, 6),
+               self._view.width())
+        if self._strip_key == key:
+            return
+        # Keep the viewport's place in the document when the strip is rebuilt
+        # (zoom, resize). Without this the same _doc_scroll lands on a different
+        # page once page heights change.
+        old_h = self._strip_h
+        old_scroll = self._doc_scroll
+        old_goal = self._scroll_goal
+        animating = abs(old_goal - old_scroll) > 1.0
+        strip, y = [], 0.0
+        # A gutter's worth of breathing room above the first sheet and below
+        # the last: without it the first page opens glued to the top edge of
+        # the view and the last page ends glued to the bottom.
+        y = float(self.GAP_PX)
+        for pos, uid in enumerate(self.model.order):
+            w_pt, h_pt = self._page_size_pts(uid)
+            w_px, h_px = page_px_size(w_pt, h_pt, scale, 0)
+            strip.append((pos, y, w_px, h_px))
+            y += h_px + self.GAP_PX
+        self._strip     = strip
+        # y ends one gutter past the last sheet: the trailing breathing room.
+        self._strip_h   = y if strip else 0.0
+        self._strip_key = key
+        if old_h > 0 and self._strip_h > 0 and abs(self._strip_h - old_h) > 0.5:
+            ratio = self._strip_h / old_h
+            self._doc_scroll = self._clamp_scroll(old_scroll * ratio)
+            if animating:
+                self._scroll_goal = self._clamp_scroll(old_goal * ratio)
+            else:
+                self._scroll_goal = self._doc_scroll
+
+    def _strip_top_of(self, pos):
+        for p, y, _w, _h in self._strip:
+            if p == pos:
+                return y
+        return 0.0
+
+    def _page_at_strip_y(self, y):
+        """The page the viewport is mostly looking at."""
+        best = 0
+        vh = float(self._view.height())
+        for pos, top, _w, h in self._strip:
+            if top + h * 0.5 <= y + vh * 0.5:
+                best = pos
+            else:
+                break
+        return best
+
+    def _cancel_strip_tasks(self):
+        for task in self._strip_tasks.values():
+            try:
+                task.cancel()
+            except Exception:
+                pass
+        self._strip_tasks.clear()
+        self._strip_pending.clear()
+        self._strip_gens.clear()
+
+    def _drop_strip_task(self, key):
+        """Cancel and forget one in-flight strip request."""
+        task = self._strip_tasks.pop(key, None)
+        if task is not None:
+            self._strip_gens.pop(getattr(task, "_strip_gen", None), None)
+            try:
+                task.cancel()
+            except Exception:
+                pass
+        self._strip_pending.discard(key)
+
+    def _strip_cache_entry(self, src_path, orig, rot, avail_w, avail_h, w_px):
+        """Best full-page image for a strip sheet, or None.
+
+        Prefers the viewport-bucketed cache entry; falls back to any render of
+        the page at least as wide as the sheet, so a page already drawn in
+        single-page mode is not blank while the strip re-renders it."""
+        cached = _FullPageCache.get(src_path, orig, rot, avail_w, avail_h)
+        if cached is not None:
+            return cached
+        img = _FullPageCache.get_at_least(src_path, orig, rot, max(1, int(w_px)))
+        if img is None:
+            return None
+        pw, ph = _FullPageCache.get_dims(src_path, orig, rot)
+        return (img, pw or 0.0, ph or 0.0, 0.0, [])
+
+    def _pixmap_for_strip(self, src_path, orig, rot, img, w_px, h_px):
+        """QPixmap of `img` drawn at the sheet size, cached across frames."""
+        pm_key = (src_path, orig, rot, int(w_px), int(h_px), img.cacheKey())
+        pm = self._strip_pm.get(pm_key)
+        if pm is not None:
+            return pm
+        pm = QPixmap.fromImage(img)
+        if abs(pm.width() - w_px) > 1 or abs(pm.height() - h_px) > 1:
+            # Fast while scrolling: SmoothTransformation on multi-megapixel
+            # pages is what made continuous mode hitch every frame a new sheet
+            # entered the viewport. Settle quality comes from an exact-size
+            # render, not from this scale.
+            smooth = (not self._scroll_anim.isActive()
+                      and abs(self._scroll_goal - self._doc_scroll) < 1.0)
+            pm = pm.scaled(max(1, int(w_px)), max(1, int(h_px)),
+                           Qt.AspectRatioMode.IgnoreAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation if smooth
+                           else Qt.TransformationMode.FastTransformation)
+        if len(self._strip_pm) >= self.STRIP_PM_MAX:
+            # Drop oldest insertion rather than wipe everything — wiping forced
+            # a full rescan of every on-screen page on the next frame.
+            try:
+                del self._strip_pm[next(iter(self._strip_pm))]
+            except StopIteration:
+                pass
+        self._strip_pm[pm_key] = pm
+        return pm
+
+    def _render_continuous(self, scale, avail_w, avail_h):
+        """Draw every sheet that intersects the viewport."""
+        self._build_strip(scale)
+        if not self._strip:
+            return
+        max_scroll = max(0.0, self._strip_h - avail_h)
+        self._doc_scroll  = max(0.0, min(self._doc_scroll, max_scroll))
+        # The goal follows the same clamp, or a zoom that shortens the strip
+        # would leave the animator pulling towards an offset off the end.
+        self._scroll_goal = max(0.0, min(self._scroll_goal, max_scroll))
+        top = self._doc_scroll
+        bot = top + avail_h
+        prefetch = avail_h * self.STRIP_PREFETCH_SCREENS
+
+        # Which page the rest of this class means by "the page" — the rulers,
+        # the colour label and the find highlights all still speak of one.
+        pos = self._page_at_strip_y(top)
+        page_changed = pos != self._current
+        if page_changed:
+            self._current = pos
+            self._num_lbl.setText(str(pos + 1))
+            self.page_changed.emit(pos + 1)
+            QTimer.singleShot(0, self._update_color_label)
+            if self._prerender_aim != self._current:
+                self._prerender_aim = self._current
+                self._prerender_timer.start(350)
+        self._sync_track_span()
+        self._track.set_document(len(self.model.order), pos + 1)
+        self._track.set_scroll_position(
+            self._doc_scroll / max_scroll if max_scroll > 0 else 0.0)
+
+        sheets, chars = [], []
+        needed = set()
+        pad = 16.0
+        for p_pos, p_top, w_px, h_px in self._strip:
+            in_view = not (p_top + h_px < top or p_top > bot)
+            near = not (p_top + h_px < top - prefetch or p_top > bot + prefetch)
+            if not near:
+                continue
+            uid = self.model.order[p_pos]
+            src_path, orig = self.model.page_source(uid, self.pdf_path)
+            rot = self.model.get_rotation(uid)
+            key = (src_path, orig, rot)
+            cached = self._strip_cache_entry(src_path, orig, rot,
+                                            avail_w, avail_h, w_px)
+            # _PageRenderTask still fits page×height. Convert the continuous
+            # display scale into the zoom factor that makes target_scale land
+            # on that same scale for this page's dimensions.
+            strip_zoom = self._strip_render_zoom(
+                scale, avail_w, avail_h, pad, src_path, orig, rot, w_px, h_px)
+            if cached is None:
+                needed.add(key)
+                self._request_page(src_path, orig, rot, avail_w, avail_h,
+                                   strip_zoom)
+            elif not _good_enough(cached[3], scale) and cached[3] > 0:
+                # Have pixels, but coarser than the strip scale — show them and
+                # ask for a sharper render in the background.
+                needed.add(key)
+                self._request_page(src_path, orig, rot, avail_w, avail_h,
+                                   strip_zoom)
+            if not in_view:
+                continue
+            x = max(0.0, (avail_w - w_px) / 2.0) - self._scroll_x
+            y = p_top - top
+            pm = None
+            if cached is not None:
+                img, pw_pt, ph_pt, _cs, raw = cached
+                pm = self._pixmap_for_strip(src_path, orig, rot, img, w_px, h_px)
+                if p_pos == self._current and pw_pt > 0 and ph_pt > 0:
+                    self._page_w_pt, self._page_h_pt = pw_pt, ph_pt
+                    self._dims_key = (src_path, orig)
+                    self._dims_rot = rot
+                if raw:
+                    r = (w_px / img.width()) if img.width() else 1.0
+                    chars.extend((ch, x + a * r, y + b * r, x + c * r, y + d * r)
+                                 for ch, a, b, c, d in raw)
+            sheets.append((pm, x, y, w_px, h_px))
+
+        # Drop pending work for pages that scrolled far off screen so the queue
+        # stays aimed at what is about to be visible.
+        for key in list(self._strip_pending):
+            if key not in needed:
+                self._drop_strip_task(key)
+
+        self._view.set_sheets(sheets, chars, keep_selection=True)
+        if sheets:
+            # Labels from the current page's width when it is on screen, else
+            # the first visible sheet — not always sheets[0], which is the top
+            # of the viewport and often the page being left.
+            label_w = sheets[0][3]
+            for p_pos, p_top, w_px, h_px in self._strip:
+                if p_pos == self._current and not (
+                        p_top + h_px < top or p_top > bot):
+                    label_w = w_px
+                    break
+            self._apply_zoom_labels_for(label_w)
+        self._showing_provisional = any(pm is None for pm, *_rest in sheets)
+
+    def _strip_render_zoom(self, display_scale, avail_w, avail_h, pad,
+                           src_path, orig, rot, w_px, h_px):
+        """Zoom argument for _PageRenderTask so its fit-page scale matches
+        the continuous fit-width display scale for this sheet."""
+        pw, ph = 0.0, 0.0
+        size = cached_page_size_pt(src_path, orig)
+        if size is not None:
+            pw, ph = size
+            if rot % 180 == 90:
+                pw, ph = ph, pw
+        if pw <= 0 or ph <= 0:
+            # Infer from the sheet we already laid out.
+            if display_scale > 0 and w_px > 0:
+                pw = w_px / display_scale
+                ph = h_px / display_scale if h_px > 0 else pw
+            else:
+                return max(self._zoom, 1.0)
+        fit_page = min((avail_w - pad) / pw, (avail_h - pad) / ph)
+        if fit_page <= 0:
+            return max(self._zoom, 1.0)
+        return max(0.05, display_scale / fit_page)
+
+    def _request_page(self, src_path, orig, rot, avail_w, avail_h, zoom=1.0):
+        """Ask for a page the strip needs and has not got. The result lands in
+        the shared cache and the repaint that follows picks it up.
+
+        The in-flight set is what stops this asking again for a page it is
+        already waiting on — without it, every repaint while a page renders
+        queues another render of the same page."""
+        key = (src_path, orig, rot)
+        if key in self._strip_pending:
+            return
+        self._strip_pending.add(key)
+        self._strip_gen += 1
+        gen = self._strip_gen
+        # Priority 0 for the page under the read position, 1 for neighbours:
+        # strip pages used to sit behind every thumbnail at P1 forever.
+        pri = 0 if key == self._current_page_key() else 1
+        task = _PageRenderTask(gen, src_path, orig, rot, avail_w, avail_h, zoom,
+                               signals=self._strip_signals)
+        task._strip_gen = gen
+        self._strip_gens[gen] = key
+        self._strip_tasks[key] = task
+        _render_queue.submit(task, pri)
+
+    def _on_strip_page(self, gen, image, off_x, off_y,
+                       page_w_pt, page_h_pt, scale, raw_chars,
+                       provisional=False):
+        """A page the strip was waiting for has arrived.
+
+        The pending key is released by generation, not by looking in the cache:
+        a task submitted before a resize lands in a different cache bucket than
+        the view now reads, and a cache lookup here would find nothing — the
+        key stayed pending forever, the strip never asked again, and the
+        preview sat blank until something else happened to repaint. The task's
+        generation identifies exactly which request finished.
+        """
+        if not provisional:
+            key = self._strip_gens.pop(gen, None)
+            if key is not None:
+                self._strip_pending.discard(key)
+                self._strip_tasks.pop(key, None)
+        if self._continuous:
+            ds = self._display_scale(self._zoom)
+            if ds is not None:
+                self._render_continuous(ds, self._view.width(),
+                                        self._view.height())
+
+    def _add_sep(self, layout):
+        """A hairline between two readings, so the bar reads as fields rather
+        than as a sentence.
+
+        The gap comes from the layout, not from the frame's own margins: the
+        rule is one pixel wide and a stylesheet margin has nothing to take room
+        from, so the readings ran together with no line between them at all."""
+        layout.addSpacing(11)
+        f = QFrame()
+        f.setFrameShape(QFrame.Shape.VLine)
+        f.setFixedWidth(1)
+        f.setStyleSheet(f"color:{_TV['border']};")
+        layout.addWidget(f)
+        layout.addSpacing(11)
+        self._seps.append(f)
+        return f
+
+    def _clear_status(self):
+        """Blank the transient message, and take its separator with it — a rule
+        with nothing after it reads as a reading that failed to load."""
+        self._status_lbl.setText("")
+        self._status_lbl.setVisible(False)
+        self._status_sep.setVisible(False)
+
+    def show_status(self, message, ms=6000):
+        """Put a message on the status bar for a few seconds."""
+        self._status_timer.stop()
+        if not message:
+            self._clear_status()
+            return
+        self._status_lbl.setText(message)
+        self._status_lbl.setVisible(True)
+        self._status_sep.setVisible(True)
+        self._status_timer.start(ms)
+
+    # ── the preflight light ──────────────────────────────────────────────────
+
+    def set_preflight(self, state, issues=()):
+        """state: "unknown" | "running" | "ok" | "warn"."""
+        self._pf_state  = state
+        self._pf_issues = list(issues)
+        t = _TV
+        label, colour = {
+            "running": (tr("Druckvorstufe …"), t['dim']),
+            "ok":      ("● " + tr("Druckvorstufe OK"), t['ok']),
+        }.get(state, ("", t['dim']))
+        if state == "warn":
+            # tr() has no plural machinery, so the branch is here rather than a
+            # "1 Hinweis(e)" that is wrong in both directions.
+            n = len(self._pf_issues)
+            label  = "● " + (tr("1 Hinweis") if n == 1
+                             else tr('{p0} Hinweise').format(p0=n))
+            colour = t['warn']
+        self._pf_btn.setText(label)
+        self._pf_btn.setVisible(bool(label))
+        self._pf_btn.setStyleSheet(
+            f"QPushButton#pfLight{{color:{colour};border:none;background:transparent;"
+            f"font-size:12px;padding:0 2px;text-align:left;}}")
+        self._pf_btn.setToolTip(
+            "\n".join(self._pf_issues) if self._pf_issues
+            else tr("Druckvorstufenprüfung"))
+
+    def _show_preflight(self):
+        """The findings, and the way through to the full check."""
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        if self._pf_issues:
+            for issue in self._pf_issues[:8]:
+                act = menu.addAction("● " + issue)
+                act.setEnabled(False)
+        else:
+            act = menu.addAction(tr("Keine Hinweise."))
+            act.setEnabled(False)
+        menu.addSeparator()
+        opener = getattr(self, "open_preflight_panel", None)
+        act = menu.addAction(tr("Vollständige Prüfung öffnen…"))
+        act.setEnabled(opener is not None)
+        if opener is not None:
+            act.triggered.connect(lambda: opener())
+        menu.exec(self._pf_btn.mapToGlobal(
+            self._pf_btn.rect().topLeft()) - QPoint(0, menu.sizeHint().height()))
+
+    def set_saved_at(self, when):
+        """Show when the document was last written, or nothing if never."""
+        if not when:
+            self._saved_lbl.setText("")
+            return
+        import time
+        self._saved_lbl.setText(
+            tr('Zuletzt gespeichert {p0}').format(
+                p0=time.strftime("%H:%M", time.localtime(when))))
+
     def _apply_theme(self):
         t = _TV
         self._view.setStyleSheet(f"background:{t['viewer_bg']};")
         self._nav_side.setStyleSheet(
             f"QWidget#navSide{{background:{t['sidebar_bg']};border-left:1px solid {t['border']};}}")
         self._num_lbl.setStyleSheet(
-            f"color:{t['text']};font-size:16px;font-weight:bold;background:transparent;")
+            f"color:{t['text']};font-size:10px;font-weight:500;"
+            f"background:{t['input_bg']};border:1px solid {t['border']};"
+            f"border-radius:4px;padding:2px 0;min-width:27px;")
         self._nav_sep.setStyleSheet(f"color:{t['border']};")
         self._tot_lbl.setStyleSheet(
-            f"color:{t['dim']};font-size:11px;background:transparent;")
+            f"color:{t['vdim']};font-size:9px;background:transparent;")
+        self._track.update()
         _nb = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
                f"border:1px solid {t['btn_brd']};border-radius:5px;font-size:12px;}}"
                f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}")
@@ -257,9 +1075,14 @@ class SinglePageView(QWidget):
             f"QWidget#infoBar{{background:{t['sidebar_bg']};border-top:1px solid {t['border']};}}")
         _zb = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
                f"border:1px solid {t['btn_brd']};border-radius:5px;font-size:12px;padding:0;}}"
-               f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}")
+               f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}"
+               f"QPushButton:checked{{background:{t['sel_bg']};border-color:{t['acc']};}}")
         for zb in self._zoom_btns:
             zb.setStyleSheet(_zb)
+        self._ruler_btn.setStyleSheet(_zb)
+        for f in getattr(self, "_seps", ()):
+            f.setStyleSheet(f"color:{t['border']};")
+        self.set_preflight(self._pf_state, self._pf_issues)
 
     # ── Zoom-Methoden ─────────────────────────────────────────────────────────
 
@@ -274,13 +1097,26 @@ class SinglePageView(QWidget):
         rendered at differ in the seventh decimal, and every pan reads as a new
         zoom and re-renders instead of blitting.
         """
-        if self._page_w_pt <= 0 or self._page_h_pt <= 0:
-            return None
         avail_w = self._view.width()
         avail_h = self._view.height()
         if avail_w < 16 or avail_h < 16:
             return None
         pad = 16
+        if self._continuous:
+            # One reference page for the whole document: zoom 1.0 shows that
+            # page whole — the same "fit" the paged view starts at — and every
+            # other sheet shares its pixels-per-point, so the strip keeps one
+            # scale however mixed the page sizes are.
+            rw, rh = self._ensure_cont_ref()
+            if rw <= 0 or rh <= 0:
+                return None
+            # The gutter below a sheet is the fit's bottom margin: a fitted
+            # page plus its gutter is exactly the viewport, so the sheet after
+            # it starts off screen instead of poking in as a sliver.
+            fit = min((avail_w - pad) / rw, (avail_h - self.GAP_PX) / rh)
+            return snap_scale(rw, rh, fit * zoom)
+        if self._page_w_pt <= 0 or self._page_h_pt <= 0:
+            return None
         fit = min((avail_w - pad) / self._page_w_pt,
                   (avail_h - pad) / self._page_h_pt)
         return snap_scale(self._page_w_pt, self._page_h_pt, fit * zoom)
@@ -329,8 +1165,31 @@ class SinglePageView(QWidget):
 
         old_zoom = self._zoom
         self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, float(new_zoom)))
+        if old_zoom <= 0:
+            return
 
-        if self._last_pm is None or self._last_zoom <= 0 or old_zoom <= 0:
+        # Continuous: the document is one strip. Anchor the point under the
+        # cursor in strip coordinates so a zoom does not jump to another page.
+        # The paged branch below only knows about one sheet's _scroll_x/y.
+        if self._continuous:
+            old_scale = self._display_scale(old_zoom)
+            new_scale = self._display_scale(self._zoom)
+            if old_scale and new_scale and old_scale > 0:
+                content_y = self._doc_scroll + my
+                content_x = self._scroll_x + mx
+                ratio = new_scale / old_scale
+                self._strip_key = None
+                self._strip_pm.clear()
+                self._cancel_strip_tasks()
+                self._build_strip(new_scale)
+                self._jump_scroll(content_y * ratio - my)
+                max_sx = 0.0
+                for _p, _t, w_px, _h in self._strip:
+                    max_sx = max(max_sx, max(0.0, w_px - avail_w))
+                self._scroll_x = max(0.0, min(content_x * ratio - mx, max_sx))
+            return
+
+        if self._last_pm is None or self._last_zoom <= 0:
             return
 
         # Use cap-aware display sizes when page dimensions are known.
@@ -383,13 +1242,28 @@ class SinglePageView(QWidget):
         self._zoom_timer.start(120)
 
     def _zoom_fit(self):
+        """Ctrl+0: fit the page (or, continuously, the reference page) whole."""
         self._zoom     = 1.0
         self._scroll_x = 0.0
         self._scroll_y = 0.0
+        if self._continuous:
+            # Re-measure the fit against the page being read, keeping the
+            # reader's place in the strip.
+            self._cont_ref = None
+            self._strip_key = None
+            self._strip_pm.clear()
+            self._cancel_strip_tasks()
         self._render()
 
     def _zoom_actual_size(self):
-        """Zoom so the page appears at its true physical size (100% = 1pt = 1/72 in)."""
+        """Ctrl+1: the page at its true physical size (100% = 1pt = 1/72 in).
+
+        The zoom factor is actual scale ÷ the fit scale at zoom 1.0 — computed
+        through _display_scale so it is the same arithmetic in both modes.
+        This used to use the paged fit formula directly, which in continuous
+        mode described a different fit than the one the strip is laid out
+        with, so the shortcut zoomed to the wrong size.
+        """
         try:
             win    = self.window().windowHandle()
             screen = (win.screen() if win and win.screen()
@@ -398,14 +1272,10 @@ class SinglePageView(QWidget):
             dpr      = screen.devicePixelRatio()
             if phys_dpi < 50 or phys_dpi > 600:
                 phys_dpi = screen.logicalDotsPerInchX() * dpr
-            actual_scale = phys_dpi / 72.0          # px per PDF point at physical size
-            avail_w = self._view.width()
-            avail_h = self._view.height()
-            if self._page_w_pt > 0 and avail_w > 16 and avail_h > 16:
-                pad       = 16
-                fit_scale = min((avail_w - pad) / self._page_w_pt,
-                                (avail_h - pad) / self._page_h_pt)
-                self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, actual_scale / fit_scale)) if fit_scale > 0 else 1.0
+            actual_scale = phys_dpi / 72.0   # px per PDF point at physical size
+            base = self._display_scale(1.0)  # the fit this view actually uses
+            if base and base > 0:
+                self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, actual_scale / base))
             else:
                 self._zoom = 1.0
         except Exception:
@@ -414,6 +1284,10 @@ class SinglePageView(QWidget):
             self._zoom = 1.0
         self._scroll_x = 0.0
         self._scroll_y = 0.0
+        if self._continuous:
+            self._strip_key = None
+            self._strip_pm.clear()
+            self._cancel_strip_tasks()
         self._render()
 
     def wheelEvent(self, e):
@@ -443,6 +1317,25 @@ class SinglePageView(QWidget):
                 step_x = max(50.0, avail_w * 0.18)
                 self._scroll_x = max(0.0, min(self._scroll_x + (step_x if dx > 0 else -step_x), max_sx))
                 self._render_preview(); self._schedule_settle()
+            e.accept()
+            return
+
+        # Continuous: one scroll position for the whole document, and no page
+        # flip at all — the boundary between two sheets is just more strip.
+        if self._continuous:
+            ang = e.angleDelta().y()
+            pix = e.pixelDelta().y()
+            # A mouse wheel reports whole detents (±120, and a pixel delta
+            # alongside it on some platforms whose sign and size are not to be
+            # trusted) — it is eased over frames like every other reader. A
+            # touchpad reports many small deltas with a phase; following those
+            # exactly is what makes the surface feel 1:1, and easing input
+            # that is already smooth would only add lag.
+            detent = abs(ang) >= 120
+            if pix and not detent:
+                self.scroll_by(-float(pix), animate=False)
+            elif ang:
+                self.scroll_by(-self.SCROLL_NOTCH_PX * (ang / 120.0))
             e.accept()
             return
 
@@ -611,6 +1504,9 @@ class SinglePageView(QWidget):
     def _sheet_on_screen(self):
         """(left_px, top_px, px_per_pt) of the sheet, or None if unmeasured.
 
+        Continuous mode answers for the page currently being read, which is the
+        one everything else in this class already means by "the page".
+
         The one conversion between a place on the page and a place on screen.
         Everything about guides and rulers goes through it, so they cannot
         drift apart from the page they are measuring.
@@ -619,7 +1515,17 @@ class SinglePageView(QWidget):
         if scale is None or self._page_w_pt <= 0:
             return None
         page_px_w, page_px_h = self._page_px(scale)
-        ox, oy = self._page_origin(page_px_w, page_px_h)
+        if self._continuous and self._strip:
+            for pos, top, w_px, h_px in self._strip:
+                if pos == self._current:
+                    ox = max(0.0, (float(self._view.width()) - w_px) / 2.0) - self._scroll_x
+                    oy = top - getattr(self, "_doc_scroll", 0.0)
+                    page_px_w, page_px_h = w_px, h_px
+                    break
+            else:
+                return None
+        else:
+            ox, oy = self._page_origin(page_px_w, page_px_h)
         if page_px_w <= 0:
             return None
         return ox, oy, page_px_w / self._page_w_pt
@@ -641,6 +1547,51 @@ class SinglePageView(QWidget):
         page = self._guides.get(self._current_page_key(), {"h": [], "v": []})
         self._view.set_guides([oy + y * px_per_pt for y in page["h"]],
                               [ox + x * px_per_pt for x in page["v"]])
+
+    def _sync_overlays(self):
+        """Everything painted *over* the page follows it — one repaint, one
+        place. Both overlays are held in page coordinates and converted here,
+        so a zoom or a scroll moves them with the sheet rather than leaving
+        them behind at the pixel position they were computed at."""
+        self._sync_rulers()
+        self._sync_find()
+
+    # ── find highlights ──────────────────────────────────────────────────────
+
+    def set_find_hits(self, hits, current=-1):
+        """The search results for the whole document, and which one is active.
+
+        Only the hits on the page being shown are ever drawn, but the whole
+        list is kept so paging through the document needs no second search."""
+        self._find_hits    = list(hits)
+        self._find_current = int(current)
+        self._track.set_hits(h.page + 1 for h in self._find_hits)
+        self._sync_find()
+
+    def clear_find_hits(self):
+        self.set_find_hits([], -1)
+
+    def _sync_find(self):
+        """Put the search highlights where the page currently is."""
+        if not self._find_hits:
+            self._view.set_find_boxes([], [])
+            return
+        sheet = self._sheet_on_screen()
+        if sheet is None:
+            self._view.set_find_boxes([], [])
+            return
+        ox, oy, px_per_pt = sheet
+        boxes, current = [], []
+        for i, hit in enumerate(self._find_hits):
+            if hit.page != self._current:
+                continue
+            for x0, y0, x1, y1 in hit.boxes:
+                box = (ox + x0 * px_per_pt, oy + y0 * px_per_pt,
+                       ox + x1 * px_per_pt, oy + y1 * px_per_pt)
+                boxes.append(box)
+                if i == self._find_current:
+                    current.append(box)
+        self._view.set_find_boxes(boxes, current)
 
     def _preview_guide(self, axis, px_along_ruler):
         """Dashed line following the drag out of a ruler."""
@@ -706,6 +1657,48 @@ class SinglePageView(QWidget):
             self._want_bottom = False
         self._scroll_x = max(0.0, min(self._scroll_x, max_sx))
         self._scroll_y = max(0.0, min(self._scroll_y, max_sy))
+
+    def reveal_page_point(self, x_pt, y_pt):
+        """Scroll so that a place on the page is on screen.
+
+        Used when a search hit is found on a page being viewed zoomed in: the
+        page turn alone would leave the match somewhere off the bottom of the
+        window with nothing to say so."""
+        self._want_reveal = (float(x_pt), float(y_pt))
+        if self._apply_reveal():
+            self._render()
+
+    def _apply_reveal(self, page_px_w=None, page_px_h=None):
+        """Resolve a pending reveal against the page's size on screen. True when
+        it was resolved (and cleared), False while the size is still unknown and
+        the request has to wait for the render."""
+        if self._want_reveal is None:
+            return False
+        if self._page_w_pt <= 0 or self._page_h_pt <= 0:
+            return False
+        if page_px_w is None:
+            scale = self._display_scale(self._zoom)
+            if scale is None:
+                return False
+            page_px_w, page_px_h = self._page_px(scale)
+        x_pt, y_pt = self._want_reveal
+        px = x_pt * page_px_w / self._page_w_pt
+        py = y_pt * page_px_h / self._page_h_pt
+        avail_w = float(self._view.width())
+        avail_h = float(self._view.height())
+        margin  = 60.0
+        # Only move if the point is not comfortably on screen already: a hit
+        # two lines below the last one should not jump the page under the eye.
+        if page_px_w > avail_w and not (self._scroll_x + margin <= px
+                                        <= self._scroll_x + avail_w - margin):
+            self._scroll_x = px - avail_w / 2.0
+        if page_px_h > avail_h and not (self._scroll_y + margin <= py
+                                        <= self._scroll_y + avail_h - margin):
+            self._scroll_y = py - avail_h / 3.0
+        self._want_bottom = False
+        self._place_scroll(page_px_w, page_px_h, avail_w, avail_h)
+        self._want_reveal = None
+        return True
 
     def _leave_region_mode(self):
         if self._region_task is not None:
@@ -873,6 +1866,13 @@ class SinglePageView(QWidget):
         if avail_w < 50 or avail_h < 50:
             return
         scale = self._display_scale(self._zoom)
+        # Continuous keeps its own strip paint path. The single-page stand-in
+        # below calls set_page and wipes the multi-sheet canvas mid-scroll.
+        if self._continuous and scale is not None:
+            self._render_continuous(scale, avail_w, avail_h)
+            if schedule_settle:
+                self._schedule_settle()
+            return
         if scale is not None:
             # One path for both modes: crop to what is on screen, then scale.
             # The old whole-page branch stretched the entire sheet on every
@@ -910,6 +1910,15 @@ class SinglePageView(QWidget):
         for t in self._prerender_tasks:
             t.cancel()
         self._prerender_tasks.clear()
+        self._cancel_strip_tasks()
+        self._strip_pm.clear()
+        self._strip = []
+        self._strip_h = 0.0
+        self._strip_key = None
+        self._cont_ref = None
+        self._doc_scroll = 0.0
+        self._scroll_goal = 0.0
+        self._scroll_anim.stop()
 
         self.pdf_path  = pdf_path
         self.model     = model
@@ -919,7 +1928,9 @@ class SinglePageView(QWidget):
         self._scroll_x = 0.0
         self._scroll_y = 0.0
         n = len(model.order)
-        self._tot_lbl.setText(f"/ {n}")
+        self._tot_lbl.setText(str(n))
+        self._pages_lbl.setText(tr('{p0} Seiten').format(p0=n))
+        self._track.set_document(n, 1)
         self._prerender_aim = None   # a new file: re-aim even at the same index
         QTimer.singleShot(0, self._render)
         # Give the canvas focus so arrow keys work without needing a click first
@@ -929,13 +1940,14 @@ class SinglePageView(QWidget):
         """Cancel every render this view has outstanding and stop it asking for
         more. Called when the tab closes; safe to call twice."""
         for timer in (self._zoom_timer, self._size_retry_timer,
-                      self._prerender_timer):
+                      self._prerender_timer, self._scroll_anim):
             try: timer.stop()
             except RuntimeError: pass   # C++ timer already destroyed
         for task in list(self._prerender_tasks):
             try: task.cancel()
             except Exception: pass   # a task past its checkpoint stops on its own
         self._prerender_tasks.clear()
+        self._cancel_strip_tasks()
         for name in ("_render_task", "_region_task"):
             task = getattr(self, name, None)
             if task is not None:
@@ -950,7 +1962,14 @@ class SinglePageView(QWidget):
         hundreds of renders for a file the cache can't hold anyway.
         Thumbnails are rendered on-demand by PageGrid — we don't bulk-pre-render
         them here to avoid flooding the pool for large PDFs.
+
+        Continuous mode does not pre-render: the strip already asks for a
+        screenful either side of the viewport as the user scrolls, and a second
+        window of speculative renders here would compete with it for the one
+        render thread — cancelling and re-submitting its own work.
         """
+        if self._continuous:
+            return
         if not prerender_enabled():
             return
         if not self.pdf_path or not self.model:
@@ -959,7 +1978,7 @@ class SinglePageView(QWidget):
         # the gesture, not in the middle of it: the page the user is actually
         # looking at is about to be rendered, and a pre-render started now holds
         # the render thread when that happens.
-        if self._zoom_timer.isActive():
+        if self._zoom_timer.isActive() or self._scroll_anim.isActive():
             self._prerender_timer.start(350)
             return
         # Skip pre-rendering if the system is low on free RAM (< 512 MB)
@@ -1004,7 +2023,7 @@ class SinglePageView(QWidget):
             rot            = self.model.get_rotation(uid)
             if _FullPageCache.get(src_path, orig, rot, avail_w, avail_h) is None:
                 task = _PageRenderTask(0, src_path, orig, rot,
-                                       avail_w, avail_h, 1.0,
+                                       avail_w, avail_h, self._zoom,
                                        signals=None)
                 self._prerender_tasks.append(task)
                 _render_queue.submit(task, 2)   # lowest priority: pre-render
@@ -1012,8 +2031,14 @@ class SinglePageView(QWidget):
     def refresh(self):
         if self.model:
             n = len(self.model.order)
-            self._tot_lbl.setText(f"/ {n}")
-            self._current = min(self._current, max(0, n-1))
+            self._tot_lbl.setText(str(n))
+            self._pages_lbl.setText(tr('{p0} Seiten').format(p0=n))
+            self._current = min(self._current, max(0, n - 1))
+            self._track.set_document(n, self._current + 1)
+            self._strip_key = None
+            self._cont_ref = None
+            self._cancel_strip_tasks()
+            self._strip_pm.clear()
             self._render()
 
     def _render(self):
@@ -1036,6 +2061,7 @@ class SinglePageView(QWidget):
 
         # Update page counter immediately
         self._num_lbl.setText(str(self._current + 1))
+        self._track.set_document(n, self._current + 1)
         self.page_changed.emit(self._current + 1)
 
         # The page's dimensions have to be right *before* anything is computed
@@ -1043,6 +2069,7 @@ class SinglePageView(QWidget):
         # that had just been rotated — or not yet rendered at all — was measured
         # as it used to be, and at deep zoom that misplaces the whole window.
         self._ensure_page_dims(src_path, orig, rot)
+        self._apply_reveal()
 
         # Pre-rendering used to run once, 400 ms after the file opened, over a
         # window around page 1 — so it warmed the pages the user had already
@@ -1064,6 +2091,13 @@ class SinglePageView(QWidget):
             # on the large pages where the scan is slow the render is slow
             # too, so the answer is usually there when the page appears.
             self._update_color_label()
+
+        # ── Continuous: the whole strip, not one page ─────────────────────────
+        if self._continuous:
+            scale = self._display_scale(self._zoom)
+            if scale is not None:
+                self._render_continuous(scale, avail_w, avail_h)
+                return
 
         # ── Too big to render whole: render the window instead ────────────────
         scale = self._display_scale(self._zoom)
@@ -1248,7 +2282,32 @@ class SinglePageView(QWidget):
         # height this render just established.
         avail_w = self._view.width()
         avail_h = self._view.height()
-        self._place_scroll(pm.width(), pm.height(), avail_w, avail_h)
+
+        # The dimensions this render carries have to be recorded *before* the
+        # scroll is placed, because placing it needs to know how big the page
+        # really is at this zoom — which is not necessarily how big the pixmap
+        # is. Past MAX_RENDER_PX a whole-page render comes back clamped, and a
+        # clamped bitmap is a stand-in for a page that is larger than it.
+        self._page_w_pt = page_w_pt
+        self._page_h_pt = page_h_pt
+
+        # A reveal asked for before anything had measured this page can be
+        # resolved now that it has been.
+        if self._want_reveal is not None:
+            self._apply_reveal()
+
+        # Clamp against the page, not against the picture of it. Honouring a
+        # pending "start at the bottom" against a clamped render left the view
+        # 81 px short of the bottom of a 4,081 px page — and the intent is
+        # consumed by that placement, so the window render that followed a
+        # moment later never corrected it. Only the wheel could, one click at a
+        # time, which is precisely the class of bug _place_scroll exists to end.
+        scale = self._display_scale(self._zoom)
+        if scale is not None:
+            true_w, true_h = self._page_px(scale)
+        else:
+            true_w, true_h = pm.width(), pm.height()
+        self._place_scroll(true_w, true_h, avail_w, avail_h)
         off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._scroll_x)
         off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._scroll_y)
 
@@ -1259,8 +2318,7 @@ class SinglePageView(QWidget):
         self._last_pm   = pm
         self._last_zoom = self._zoom
         self._last_pm_key = self._current_page_key()
-        self._page_w_pt = page_w_pt   # needed by _capped_display_size
-        self._page_h_pt = page_h_pt
+        # _page_w_pt/_page_h_pt were set above, before the scroll was placed.
         self._showing_provisional = provisional
         if not provisional:
             self._render_task = None
@@ -1400,6 +2458,10 @@ class SinglePageView(QWidget):
 
 
     def next_page(self):
+        if self._continuous:
+            if self.model and self._current < len(self.model.order) - 1:
+                self.go_to(self._current + 2)
+            return
         if self.model and self._current < len(self.model.order) - 1:
             self._current += 1
             self._scroll_x  = 0.0
@@ -1410,6 +2472,10 @@ class SinglePageView(QWidget):
             self._render()
 
     def prev_page(self, start_at_bottom=False):
+        if self._continuous:
+            if self._current > 0:
+                self.go_to(self._current)
+            return
         if self._current > 0:
             self._current -= 1
             self._scroll_x  = 0.0
@@ -1422,6 +2488,19 @@ class SinglePageView(QWidget):
             self._render()
 
     def go_to(self, page_1based):
+        if self._continuous:
+            n = len(self.model.order) if self.model else 0
+            if n <= 0:
+                return
+            self._current = max(0, min(page_1based - 1, n - 1))
+            scale = self._display_scale(self._zoom)
+            if scale is not None and not self._strip:
+                self._build_strip(scale)
+            if self._strip:
+                self._jump_scroll(self._strip_top_of(self._current))
+            self._scroll_x = 0.0
+            self._render()
+            return
         self._current  = max(0, page_1based - 1)
         self._scroll_x  = 0.0
         self._scroll_y  = 0.0
@@ -1483,6 +2562,36 @@ class SinglePageView(QWidget):
             if self.model: self.go_to(len(self.model.order))
         else:
             super().keyPressEvent(e)
+
+    def _sync_track_span(self):
+        """How much of the document one screenful is, so the thumb is a
+        proportion rather than a fixed block. Paged mode always shows exactly
+        one page, so the span is 1 there and this only matters continuously."""
+        if not (self._continuous and self._strip_h > 0):
+            self._track._span = 1
+            return
+        n = max(1, len(self._strip))
+        visible = float(self._view.height()) / max(1.0, self._strip_h) * n
+        self._track._span = max(1, min(n, int(round(visible))))
+
+    def _on_track_picked(self, page):
+        """The rail was dragged or clicked. It is a page slider today; when the
+        pages flow continuously it becomes a true scrollbar, and only this
+        method changes."""
+        if self.model and page != self._current + 1:
+            self.go_to(page)
+
+    def _on_track_dragged(self, frac):
+        """The rail was dragged in continuous mode: scroll to that fraction of
+        the strip, following the pointer directly — a drag that jumps a page at
+        a time reads as the rail moving in chunks."""
+        if not self._continuous:
+            return
+        self._jump_scroll(frac * self._max_scroll())
+        scale = self._display_scale(self._zoom)
+        if scale is not None:
+            self._render_continuous(scale, self._view.width(),
+                                    self._view.height())
 
     def _go_to_dialog(self):
         """Ctrl+G / Ctrl+Shift+N: Go-to-page input (like Acrobat)."""

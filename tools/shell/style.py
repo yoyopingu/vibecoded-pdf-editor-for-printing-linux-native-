@@ -108,14 +108,34 @@ QWidget#sidebar {{
     background: {_SB};
     border-right: 1px solid {_LINE};
 }}
+/* The containers inside it stay out of the way. They are plain QWidgets, so the
+   blanket `QWidget {{ background: {_BG} }}` above painted the window colour over
+   the sidebar's own — the column came out two-tone, sidebar-coloured for the
+   height of the view switch and window-coloured for the tool list below it. */
+QWidget#sidebarSlot, QWidget#toolList {{ background: transparent; }}
 QWidget#sidebarLogo {{ background: {_SB_LOGO}; }}
 
 /* ── Nav buttons ────────────────────────────────────────── */
+/* Tightened from 36 px rows: nine tools at 36 px spread the column down the
+   whole window, which is what left the group headings floating in space with
+   no visible relationship to the entries under them. */
+/* Indented past the heading's own 16 px, so the entries read as sitting under
+   it rather than beside it — the indent is what says "contained by". */
 QPushButton#navBtn {{
     background: transparent; color: {_NB_TEXT};
     border: none; border-left: 4px solid transparent;
-    padding: 9px 16px; text-align: left;
-    font-size: 12px; border-radius: 0; min-height: 36px;
+    padding: 5px 14px 5px 24px; text-align: left;
+    font-size: 12px; border-radius: 0; min-height: 26px;
+}}
+/* The tool-list group headings — FARBE, INHALT, AUSGABE. Their own name, not
+   the shared #sectionLabel: that one is 9 px with 3 px of letter-spacing, which
+   is legible inside a dialog beside the field it names and turns into a row of
+   disconnected capitals when it has to head a list from across the column.
+   The rule above closes the group off from the one before it; the heading then
+   belongs to what follows it, which is the whole point of a heading. */
+QLabel#navGroup {{
+    color: {_ACC}; font-size: 11px; font-weight: bold; letter-spacing: 1px;
+    border-top: 1px solid {_LINE};
 }}
 QPushButton#navBtn:hover {{
     background: {_NB_HOV}; color: {_NB_ACT_TEXT};
@@ -124,6 +144,33 @@ QPushButton#navBtn:hover {{
 QPushButton#navBtn[active="true"] {{
     background: {_NB_HOV}; color: {_NB_ACT_TEXT};
     border-left: 4px solid {_ACC}; font-weight: bold;
+}}
+/* The three views, as one segmented control at the top of the sidebar.
+   One rectangle holding three segments — the border and the ground belong to
+   the container, never to the segments. Giving each segment its own border
+   turned the control into three separate blobs floating in the column. */
+QWidget#viewSwitch {{
+    background: {_VB_BG};
+    border: 1px solid {_LINE};
+    border-radius: 8px;
+}}
+QPushButton#viewSeg {{
+    background: transparent; color: {_NB_TEXT};
+    border: none; border-radius: 6px;
+    padding: 6px 1px; font-size: 10px; min-height: 26px;
+}}
+QPushButton#viewSeg:hover {{ background: {_VB_HOV}; color: {_NB_ACT_TEXT}; }}
+/* No bold on the checked segment: the accent fill already marks it, and the
+   extra width pushed "Seiten verwalten" past the 224 px column and clipped it. */
+QPushButton#viewSeg:checked {{
+    background: {_ACC}; color: {_ON_ACC};
+}}
+QLabel#betaChip {{
+    color: {_ACC}; font-family: 'JetBrains Mono','DejaVu Sans Mono',monospace;
+    font-size: 9px; font-weight: bold; letter-spacing: 2px;
+}}
+QCheckBox#stageHead {{
+    color: {_TEXT}; font-weight: bold; font-size: 12px; padding: 6px 0 2px;
 }}
 QPushButton#viewerBtn {{
     background: {_VB_BG}; color: {_NB_ACT_TEXT};
@@ -336,6 +383,12 @@ QSlider::sub-page:horizontal {{ background: {_ACC}; border-radius: 2px; }}
 QFrame#separator {{ background: {_LINE}; max-height: 1px; min-height: 1px; }}
 
 /* ── Tabs ───────────────────────────────────────────────── */
+/* The document row has to read as one band across the whole window. QTabBar is
+   only as wide as its tabs, and the corner widget only covers the right end —
+   the strip between them fell through to the window background, so the band
+   stopped dead after the last tab. Painting the QTabWidget itself fills that
+   gap; the pane below covers everything else. */
+QTabWidget {{ background: {_TAB_B}; }}
 QTabWidget::pane {{
     border: none;
     border-top: 1px solid {_LINE};
@@ -358,6 +411,34 @@ QTabBar::tab:selected {{
 }}
 QTabBar::tab:hover:!selected {{ background: {_HOVER}; color: {_TEXT}; }}
 QTabBar::close-button {{ subcontrol-position: right; }}
+
+/* ── The document row ───────────────────────────────────── */
+/* The tab bar IS the row: the actions ride in its right-hand corner, so one
+   40 px strip carries what used to take a 46 px button bar above a tab strip. */
+QWidget#docActions {{ background: {_TAB_B}; }}
+QPushButton#docBtn {{
+    background: transparent; color: {_TEXT};
+    border: 1px solid transparent; border-radius: 5px;
+    padding: 3px 10px; font-size: 12px;
+}}
+QPushButton#docBtn:hover {{ background: {_HOVER}; border-color: {_ACC_DIM}; }}
+QPushButton#docBtn:pressed {{ background: {_SEL}; }}
+QPushButton#docBtn:disabled {{ color: {_BTN_DIS_T}; background: transparent; }}
+/* No arrow of our own: the label already ends in one, and Qt's indicator would
+   sit a second caret beside it. */
+QPushButton#docBtn::menu-indicator {{ image: none; width: 0; }}
+QPushButton#docIconBtn {{
+    background: transparent; color: {_TEXT};
+    border: 1px solid transparent; border-radius: 5px;
+    padding: 0; font-size: 14px;
+}}
+QPushButton#docIconBtn:hover {{ background: {_HOVER}; border-color: {_ACC_DIM}; }}
+QPushButton#docIconBtn:pressed {{ background: {_SEL}; }}
+QPushButton#docIconBtn:disabled {{ color: {_BTN_DIS_T}; background: transparent; }}
+QLineEdit#findEdit {{
+    min-height: 22px; font-size: 12px; padding: 2px 8px;
+    border: 1px solid {_ACC};
+}}
 """
 
 
@@ -434,6 +515,26 @@ _ICON_ACC   = "#3d82f0"
 # the application happened to start in. A mid grey reads on either background.
 _ICON_CROSS        = "#8892a4"
 _ICON_CROSS_ACTIVE = "#e05260"
+
+
+def search_icon(colour: str):
+    """A magnifier, drawn rather than typed.
+
+    "⌕" (U+2315) is in almost no UI font and fell back to a glyph that rendered
+    as a small circle — a button that looks like a rendering fault is worse than
+    no button. Drawn here for the same reason the tab's close cross is: the app
+    already owns its own small marks, and one that is always there deserves to
+    be one of them."""
+    pm = QPixmap(28, 28)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(QPen(QColor(colour), 2.2))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawEllipse(6, 6, 12, 12)
+    p.drawLine(17, 17, 23, 23)
+    p.end()
+    return QIcon(pm)
 
 
 def app_icon():

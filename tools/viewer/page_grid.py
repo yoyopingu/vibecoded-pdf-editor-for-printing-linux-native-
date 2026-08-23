@@ -595,6 +595,7 @@ class PageGrid(QWidget):
 
     def handle_drop(self, from_pos, to_pos, multi=False, copy=False):
         self._drop_indicator = -1; self.update()
+        self._record()
         if copy:
             # Ctrl+drag: duplicate pages at destination, leave originals in place
             if multi:
@@ -659,10 +660,27 @@ class PageGrid(QWidget):
             self.handle_drop(from_pos, to_pos)
 
     # Public
+    def _record(self):
+        """Note the document's shape before changing it.
+
+        Whoever mutates, records — and the grid mutates in three places. They
+        used to record in none of them: every button in the page manager's
+        sidebar called _save_history and then asked the grid to do the work, so
+        the edits reached by dragging a card or pressing the rotate buttons
+        wrote no history entry at all. Strg+Z after either of those undid
+        whatever had been done *before* it, and neither marked the document as
+        having unsaved changes."""
+        from tools.viewer.tab_base import owning_tab
+        tab = owning_tab(self)
+        if tab is not None:
+            tab.push_history()
+
     def rotate_selected(self, deg):
+        self._record()
         self.model.rotate_selected(deg); self._rebuild(); self.order_changed.emit()
 
     def delete_selected(self):
+        self._record()
         self.model.delete_selected(); self._rebuild()
         self.order_changed.emit(); self.selection_changed.emit()
 

@@ -18,6 +18,114 @@ from tools.render.document_cache import open_document as _open_pdf
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# The two transforms, as plain functions
+# ══════════════════════════════════════════════════════════════════════════════
+# Lifted out of CropResizePanel._run_action unchanged so that the Layout view
+# can run the same crop, the same scale and the same marks as one stage of a
+# chain. The panel calls them too, so there is one implementation and the
+# existing tests cover both callers.
+
+def stamp_crop_marks_pdf(src_path, out_path, target_origs, tw, th):
+    """Stamp cut marks of `tw` x `th` points, centred on each targeted page,
+    without changing the page. Returns how many pages were marked."""
+    import pikepdf
+    pdf = pikepdf.open(src_path)
+    n_changed = 0
+    for i, page in enumerate(pdf.pages):
+        if i not in target_origs:
+            continue
+        # Centre the marks on the *visible* page; on a rotated page the
+        # requested size is meant as seen, so it swaps in page space.
+        bx0, by0, bx1, by1 = _visible_box(page)
+        mw, mh = ((th, tw) if _inherited_rotate(page) in (90, 270) else (tw, th))
+        x0 = bx0 + ((bx1 - bx0) - mw) / 2
+        y0 = by0 + ((by1 - by0) - mh) / 2
+        ops = _crop_marks_content_stream([(x0, y0, x0 + mw, y0 + mh)])
+        page.contents_add(pikepdf.Stream(pdf, ops))
+        n_changed += 1
+    pdf.save(out_path)
+    return n_changed
+
+
+def crop_scale_pdf(src_path, out_path, target_origs, margins_pt,
+                   do_scale, keep_ratio):
+    """Crop, extend or scale the targeted pages.
+
+    `margins_pt` is called as ``margins_pt(pw, ph)`` for each page and returns
+    ``(top, bottom, left, right)`` in points — so the caller decides whether
+    those come from four fixed millimetre values or are re-derived per page
+    from a target format. Returns how many pages were changed.
+    """
+    import pikepdf
+    pdf = pikepdf.open(src_path)
+    n_changed = 0
+
+    def _apply_ctm(pg, m):
+        """Prepend `q a b c d e f cm` to the page's content stream."""
+        if m == (1.0, 0.0, 0.0, 1.0, 0.0, 0.0):
+            return
+        contents = pg.get("/Contents")
+        if contents is None:
+            return
+        old = (b" ".join(bytes(s.read_bytes()) for s in contents)
+               if isinstance(contents, pikepdf.Array)
+               else bytes(contents.read_bytes()))
+        hdr = ("q %.6f %.6f %.6f %.6f %.4f %.4f cm\n" % m).encode()
+        pg["/Contents"] = pikepdf.Stream(pdf, hdr + old + (chr(10) + "Q").encode())
+
+    for i, page in enumerate(pdf.pages):
+        if i not in target_origs:
+            continue
+        # Measure the page the way the preview draws it: the visible box
+        # (CropBox clipped to MediaBox) with /Rotate applied. Reading the raw
+        # MediaBox instead meant the millimetres came off the wrong edges on
+        # any page with a CropBox or a /Rotate, and a MediaBox that did not
+        # start at (0,0) shifted the whole content.
+        box = _visible_box(page)
+        rot = _inherited_rotate(page)
+        R   = _display_matrix(box, rot)
+        pw, ph = _visible_size(page)
+
+        t_pt, b_pt, l_pt, r_pt = margins_pt(pw, ph)
+
+        new_w = pw - l_pt - r_pt
+        new_h = ph - t_pt - b_pt
+        if new_w < 1.0 or new_h < 1.0:
+            raise ValueError(tr("Ränder zu groß — von der Seite bleibt nichts übrig."))
+
+        if do_scale:
+            if keep_ratio:
+                # Proportionen beibehalten: kleinerer Faktor, zentriert
+                s = min(new_w / pw, new_h / ph)
+                C = (s, 0.0, 0.0, s, (new_w - pw * s) / 2, (new_h - ph * s) / 2)
+            else:
+                # Strecken: Inhalt füllt neuen Rahmen exakt
+                C = (new_w / pw, 0.0, 0.0, new_h / ph, 0.0, 0.0)
+        else:
+            # Nur Rahmen verschieben, Inhalt bleibt
+            C = (1.0, 0.0, 0.0, 1.0, -l_pt, -b_pt)
+        _apply_ctm(page, _mat_mul(R, C))
+
+        page.mediabox = pikepdf.Array([pikepdf.Real(0), pikepdf.Real(0),
+                                       pikepdf.Real(new_w), pikepdf.Real(new_h)])
+        # The rotation and the old boxes are now baked into the content —
+        # leaving them behind used to hand every later tool (N-Up above all)
+        # a page whose declared boxes no longer matched its content, which is
+        # what pushed the content off-centre there. /CropBox and /Rotate are
+        # inheritable, so they must be overwritten rather than deleted.
+        page.obj["/CropBox"] = pikepdf.Array([pikepdf.Real(0), pikepdf.Real(0),
+                                              pikepdf.Real(new_w), pikepdf.Real(new_h)])
+        page.obj["/Rotate"]  = 0
+        for key in ("/TrimBox", "/BleedBox", "/ArtBox"):
+            if key in page.obj:
+                del page.obj[key]
+        n_changed += 1
+
+    pdf.save(out_path)
+    return n_changed
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # CROP / RESIZE
 # ══════════════════════════════════════════════════════════════════════════════
 class CropResizePanel(BasePanel):
@@ -588,87 +696,16 @@ class CropResizePanel(BasePanel):
         marks_size = self._target_size_pt() if self._marks_only() else None
         if marks_size:
             tw, th = marks_size
-            pdf = pikepdf.open(src_path); n_changed = 0
-            for i, page in enumerate(pdf.pages):
-                if i not in target_origs: continue
-                # Centre the marks on the *visible* page; on a rotated page the
-                # requested size is meant as seen, so it swaps in page space.
-                bx0, by0, bx1, by1 = _visible_box(page)
-                mw, mh = ((th, tw) if _inherited_rotate(page) in (90, 270)
-                          else (tw, th))
-                x0 = bx0 + ((bx1 - bx0) - mw) / 2; y0 = by0 + ((by1 - by0) - mh) / 2
-                ops = _crop_marks_content_stream([(x0, y0, x0 + mw, y0 + mh)])
-                page.contents_add(pikepdf.Stream(pdf, ops))
-                n_changed += 1
-            pdf.save(out)
+            n_changed = stamp_crop_marks_pdf(src_path, out, target_origs, tw, th)
             self.open_result(out, os.path.basename(out))
             return tr('Schnittmarken auf {p0} Seite(n) gesetzt ({p1:.0f}×{p2:.0f} mm).').format(p0=n_changed, p1=tw / MM_TO_PT, p2=th / MM_TO_PT)
 
-        do_scale = self._scales_content()
-        pdf = pikepdf.open(src_path)
-        n_changed = 0
-
-        def _apply_ctm(pg, m):
-            """Prepend `q a b c d e f cm` to the page's content stream."""
-            if m == (1.0, 0.0, 0.0, 1.0, 0.0, 0.0): return
-            contents = pg.get("/Contents")
-            if contents is None: return
-            old = (b" ".join(bytes(s.read_bytes()) for s in contents)
-                   if isinstance(contents, pikepdf.Array)
-                   else bytes(contents.read_bytes()))
-            hdr = ("q %.6f %.6f %.6f %.6f %.4f %.4f cm\n" % m).encode()
-            pg["/Contents"] = pikepdf.Stream(pdf, hdr + old + (chr(10) + "Q").encode())
-
-        for i, page in enumerate(pdf.pages):
-            if i not in target_origs: continue
-            # Measure the page the way the preview draws it: the visible box
-            # (CropBox clipped to MediaBox) with /Rotate applied. Reading the raw
-            # MediaBox instead meant the millimetres came off the wrong edges on
-            # any page with a CropBox or a /Rotate, and a MediaBox that did not
-            # start at (0,0) shifted the whole content.
-            box = _visible_box(page)
-            rot = _inherited_rotate(page)
-            R   = _display_matrix(box, rot)
-            pw, ph = _visible_size(page)
-
-            # With a Format selected this derives the margins from *this* page,
-            # so a document with mixed page sizes ends up all one size and
-            # centred instead of inheriting the previewed page's millimetres.
-            t_pt, b_pt, l_pt, r_pt = self._effective_margins_pt(pw, ph)
-
-            # Neue Seitengröße
-            new_w = pw - l_pt - r_pt
-            new_h = ph - t_pt - b_pt
-            if new_w < 1.0 or new_h < 1.0:
-                raise ValueError(tr("Ränder zu groß — von der Seite bleibt nichts übrig."))
-
-            if do_scale:
-                if self.keep_ratio.isChecked():
-                    # Proportionen beibehalten: kleinerer Faktor, zentriert
-                    s = min(new_w/pw, new_h/ph)
-                    C = (s, 0.0, 0.0, s, (new_w - pw*s)/2, (new_h - ph*s)/2)
-                else:
-                    # Strecken: Inhalt füllt neuen Rahmen exakt
-                    C = (new_w/pw, 0.0, 0.0, new_h/ph, 0.0, 0.0)
-            else:
-                # Nur Rahmen verschieben, Inhalt bleibt
-                C = (1.0, 0.0, 0.0, 1.0, -l_pt, -b_pt)
-            _apply_ctm(page, _mat_mul(R, C))
-
-            page.mediabox = pikepdf.Array([pikepdf.Real(0),pikepdf.Real(0),
-                                         pikepdf.Real(new_w),pikepdf.Real(new_h)])
-            # The rotation and the old boxes are now baked into the content —
-            # leaving them behind used to hand every later tool (N-Up above all)
-            # a page whose declared boxes no longer matched its content, which is
-            # what pushed the content off-centre there. /CropBox and /Rotate are
-            # inheritable, so they must be overwritten rather than deleted.
-            page.obj["/CropBox"] = pikepdf.Array([pikepdf.Real(0), pikepdf.Real(0),
-                                               pikepdf.Real(new_w), pikepdf.Real(new_h)])
-            page.obj["/Rotate"]  = 0
-            for key in ("/TrimBox", "/BleedBox", "/ArtBox"):
-                if key in page.obj: del page.obj[key]
-            n_changed += 1
-
-        pdf.save(out)
+        # With a Format selected _effective_margins_pt derives the margins from
+        # *this* page, so a document with mixed page sizes ends up all one size
+        # and centred instead of inheriting the previewed page's millimetres.
+        n_changed = crop_scale_pdf(src_path, out, target_origs,
+                                   self._effective_margins_pt,
+                                   self._scales_content(),
+                                   self.keep_ratio.isChecked())
         self.open_result(out, os.path.basename(out))
         return tr('{p0} Seite(n) bearbeitet.').format(p0=n_changed)

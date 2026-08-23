@@ -20,6 +20,29 @@ os.environ.setdefault("COPYSHOP_LOG_DIR",
                       os.path.join(tempfile.gettempdir(), "copyshop_test_logs"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Before any QSettings exists, and before tools.app is imported below.
+#
+# Every settings object in this application is QSettings("CopyShop",
+# "PDFSuite"), which resolves to ~/.config/CopyShop/PDFSuite.conf — the file
+# the operator's own installation uses. Left alone, a test run takes its
+# defaults from whatever that person last changed in the Einstellungen
+# dialogs, and writes its own scratch values back over them.
+#
+# Both halves of that have bitten: turning on "Seiten fortlaufend scrollen" in
+# the app made seventeen render tests fail, because they assume the paged
+# layout and were suddenly measuring a continuous strip — a real preference
+# breaking an unrelated suite, with nothing in the failure to say so. And in
+# the other direction the suite has been quietly editing preferences that do
+# not belong to it.
+#
+# setPath redirects the whole user scope into the throwaway test directory, so
+# every QSettings built from here on — tools/paper.py and
+# tools/printing/prefs.py included — starts empty and stays local.
+from PyQt6.QtCore import QSettings as _QSettings
+_SETTINGS_DIR = tempfile.mkdtemp(prefix="copyshop_test_settings_")
+for _fmt in (_QSettings.Format.NativeFormat, _QSettings.Format.IniFormat):
+    _QSettings.setPath(_fmt, _QSettings.Scope.UserScope, _SETTINGS_DIR)
+
 from PyQt6.QtWidgets import QApplication
 _app = QApplication.instance() or QApplication(sys.argv)
 

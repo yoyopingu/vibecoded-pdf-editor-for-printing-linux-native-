@@ -1,4 +1,4 @@
-# CopyShop PDF Suite
+# Folio
 
 A desktop PDF viewer, page manager and prepress toolkit built for copy shops —
 the jobs you do before something goes on paper: reorder and rotate pages, merge
@@ -8,7 +8,7 @@ printer.
 Written in Python with PyQt6. The interface ships in German and English
 (Einstellungen ▸ Sprache).
 
-![CopyShop PDF Suite](docs/screenshot.png)
+![Folio](docs/screenshot.png)
 
 > **Screenshot placeholder** — drop a PNG at `docs/screenshot.png` and this
 > renders. Nothing else depends on it.

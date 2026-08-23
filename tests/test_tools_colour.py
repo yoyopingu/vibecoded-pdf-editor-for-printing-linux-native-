@@ -807,6 +807,22 @@ def test_the_viewer_reads_a_long_document_s_colour_spaces_once():
         vp, sv = _open_single_view(src)
         # The whole-document pass is the point: wait for it, not for a number.
         _settle(vp, lambda: cached_page_colorspaces(src, 39) is not None, tries=300)
+        # …and then let the panel go quiet before the count starts. Opening a
+        # document also starts the status bar's preflight light, which reads the
+        # file a few times on a worker and is nothing to do with turning pages;
+        # sampling before it has finished measured that burst instead of the
+        # page turns. Waiting for the number to stop moving keeps the assertion
+        # below about the one thing it names.
+        # _spin(50) is a full second of wall time, which is what this waits
+        # for: the light is on a debounce, so "no opens since the last check"
+        # is only meaningful once enough real time has passed for it to have
+        # fired.
+        settled = -1
+        for _ in range(8):
+            if len(opens) == settled:
+                break
+            settled = len(opens)
+            _spin(50)
         after_open = len(opens)
         for _ in range(20):
             sv.next_page()

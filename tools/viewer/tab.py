@@ -23,11 +23,28 @@ from tools.viewer.tab_base import PdfTabBase
 
 class PdfTab(PdfTabBase):
     changed = pyqtSignal()
+    # Whether this document has edits that are not on disk. The document row
+    # watches it for the tab's dot and for whether Speichern is live.
+    dirty_changed = pyqtSignal(bool)
+
+    # How many edits back a document can be taken. Each entry is a copy of the
+    # page list and its bookkeeping — a few kilobytes for a long document, and
+    # no page data at all.
+    HISTORY_MAX = 50
 
     def __init__(self, pdf_path, parent=None):
         super().__init__(parent)
         self.pdf_path = pdf_path
         self.model    = None
+        # One undo stack per document, owned here rather than by the page
+        # manager. It used to live in ManagePanel, which meant an edit was
+        # undoable from the thumbnail sidebar and nowhere else — so a
+        # Rückgängig anywhere else in the window had nothing to undo with, and
+        # the panel had to exist for Strg+Z to mean anything at all.
+        self._history    = []
+        self._redo_stack = []
+        self._dirty      = False
+        self._saved_at   = None
         self._setup()
         self._load()
 
@@ -140,6 +157,106 @@ class PdfTab(PdfTabBase):
         self.single._view.setFocus()
         self.changed.emit()
 
+    # ── unsaved changes ──────────────────────────────────────────────────────
+
+    def is_dirty(self):
+        return self._dirty
+
+    def saved_at(self):
+        """When this document was last written, or None if it has not been."""
+        return self._saved_at
+
+    def mark_dirty(self, dirty=True):
+        if self._dirty != bool(dirty):
+            self._dirty = bool(dirty)
+            self.dirty_changed.emit(self._dirty)
+
+    # ── undo history ─────────────────────────────────────────────────────────
+
+    def snapshot(self):
+        """The document's shape right now: which pages it has, in what order,
+        turned which way, and which file they are read from."""
+        return (list(self.model.order),
+                dict(self.model.rotations),
+                dict(self.model.src),
+                self.model._next_uid,
+                dict(self.model.foreign_src),
+                self.pdf_path)
+
+    def push_history(self):
+        """Record the current shape, before changing it. Every edit calls this
+        first — the page manager's and the toolbar's alike."""
+        if not self.model:
+            return
+        self._history.append(self.snapshot())
+        self._redo_stack.clear()      # a new edit abandons the redo branch
+        if len(self._history) > self.HISTORY_MAX:
+            self._history.pop(0)
+        self.mark_dirty(True)
+
+    def can_undo(self):
+        return bool(self._history)
+
+    def can_redo(self):
+        return bool(self._redo_stack)
+
+    def undo(self):
+        if not self._history:
+            return False
+        self._redo_stack.append(self.snapshot())
+        if len(self._redo_stack) > self.HISTORY_MAX:
+            self._redo_stack.pop(0)
+        self._restore(self._history.pop())
+        # Undoing back to the last saved state is not "clean": the file on disk
+        # may itself be a rewritten temp (an inserted blank page swaps the
+        # source file), so there is no cheap way to know. Saying "unsaved" when
+        # the truth is unknown is the safe direction.
+        self.mark_dirty(True)
+        return True
+
+    def redo(self):
+        if not self._redo_stack:
+            return False
+        self._history.append(self.snapshot())
+        if len(self._history) > self.HISTORY_MAX:
+            self._history.pop(0)
+        self._restore(self._redo_stack.pop())
+        self.mark_dirty(True)
+        return True
+
+    def _restore(self, snap):
+        order, rotations, src, next_uid, foreign_src, pdf_path = snap
+        self.model.order       = order
+        self.model.rotations   = rotations
+        self.model.src         = src
+        self.model._next_uid   = next_uid
+        self.model.foreign_src = foreign_src
+        self.model.selected.clear()
+        if pdf_path and pdf_path != self.pdf_path:
+            self.retarget(pdf_path)
+        self.refresh_views()
+
+    def retarget(self, path):
+        """Point everything that resolves a page index at `path`.
+
+        Four places cache it — the tab, the single view, the page manager and
+        its grid — and an edit that rewrites the file (inserting a blank page,
+        inserting another document) has to move all four together, or the views
+        resolve new indexes against the old, shorter file."""
+        self.pdf_path        = path
+        self.single.pdf_path = path
+        if self._manage_panel is not None:
+            self._manage_panel.pdf_path = path
+            self._manage_panel.grid.pdf_path = path
+
+    def refresh_views(self):
+        """Redraw whatever is on screen after the model changed."""
+        if self._manage_panel is not None:
+            self._manage_panel.grid._rebuild()
+            self._manage_panel.grid.order_changed.emit()
+        self.single.refresh()
+        self.changed.emit()
+
     def _print(self):
         """Oeffnet den vollstaendigen Druckdialog."""
         if not self.model:
@@ -200,4 +317,11 @@ class PdfTab(PdfTabBase):
             except OSError: pass   # nothing written, or already removed
             raise
         invalidate_revision(out_path)
+        # Only a save of the whole document settles it. Writing a subset is an
+        # export — the tab still shows everything, and everything is still
+        # unsaved.
+        if uids is None:
+            import time
+            self._saved_at = time.time()
+            self.mark_dirty(False)
         return tr('Gespeichert: {p0} Seiten -> {p1}').format(p0=n, p1=out_path)

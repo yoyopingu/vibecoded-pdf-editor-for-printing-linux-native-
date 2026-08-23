@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
 from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import QKeySequence, QAction
 from tools.i18n import tr, get_language
+from tools.branding import APP_NAME, app_title
 
 
 class NavBtn(QPushButton):
@@ -35,7 +36,7 @@ class TitleBar(QWidget):
         layout.setSpacing(0)
 
         # App title
-        title = QLabel(tr("CopyShop PDF Suite"))
+        title = QLabel(app_title())
         title.setObjectName("titleBarLabel")
         layout.addWidget(title)
 
@@ -129,7 +130,7 @@ class TitleBar(QWidget):
         act_log.triggered.connect(self._win._show_log_folder)
         menu_help.addAction(act_log)
         menu_help.addSeparator()
-        act_about = QAction(tr("Über CopyShop PDF Suite"), self)
+        act_about = QAction(tr("Über {p0}").format(p0=APP_NAME), self)
         act_about.triggered.connect(self._win._show_about)
         menu_help.addAction(act_about)
 

@@ -3,19 +3,17 @@ MainWindow: the sidebar, and what it switches between — the viewer and the
 tool panels.
 """
 import sys, os
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox, QPushButton
+from PyQt6.QtCore import Qt, pyqtSignal
 from tools.i18n import tr, set_language
+from tools.branding import APP_NAME, APP_TAGLINE, app_title, versioned
 from tools.viewer.panel import PageViewerPanel
 from tools.plugin_manager import PluginManagerPanel, discover_plugins
 from tools.panels.colour_profile import ColourProfilePanel
 from tools.panels.compress import CompressPanel
-from tools.panels.crop_resize import CropResizePanel
 from tools.panels.forms import FormsPanel
 from tools.panels.grayscale import GrayscalePanel
-from tools.panels.img_pdf import ImgPdfPanel
-from tools.panels.impose import ImposePanel
-from tools.panels.nup import NUpPanel
+from tools.panels.layout_view import LayoutPanel
 from tools.panels.ocr import OcrPanel
 from tools.panels.page_numbers import PageNumbersPanel
 from tools.panels.pdfx import PdfxPanel
@@ -25,27 +23,90 @@ from tools.shell.style import apply_theme_globally
 from tools.shell.titlebar import NavBtn, TitleBar
 
 
-TOOLS = [
-    ("N-Up Layout",               NUpPanel),
-    ("Broschüre / Ausschießen",   ImposePanel),
-    ("Komprimieren",              CompressPanel),
-    ("Zuschneiden / Skalieren",   CropResizePanel),
-    ("Seitenzahlen",              PageNumbersPanel),
-    ("Bild ↔ PDF",                ImgPdfPanel),
-    ("Graustufen",                GrayscalePanel),
-    ("Formulare / Reduzieren",    FormsPanel),
-    ("OCR — Texterkennung",       OcrPanel),
-    ("Druckvorstufenprüfung",     PreflightPanel),
-    ("PDF/X-Export",              PdfxPanel),
-    ("Farbprofil / CMYK",         ColourProfilePanel),
-    ("Plugin-Manager",            PluginManagerPanel),
+# The tool list, grouped by what each tool acts on. Layout is not in it:
+# N-Up, Broschüre and Zuschneiden/Skalieren became stages of the Layout view
+# (tools/panels/layout_view.py), which runs the same functions they do. Their
+# panels still exist and still work — they are simply not a sidebar entry any
+# more, because the view does all three together and previews the result.
+#
+# Bild ↔ PDF is likewise absent: an image opened becomes a PDF on the way in,
+# and the other direction is an export.
+TOOL_GROUPS = [
+    ("Farbe", [
+        ("Graustufen",              GrayscalePanel),
+        ("Farbprofil / CMYK",       ColourProfilePanel),
+    ]),
+    ("Inhalt", [
+        ("Seitenzahlen",            PageNumbersPanel),
+        ("Formulare / Reduzieren",  FormsPanel),
+        ("OCR — Texterkennung",     OcrPanel),
+    ]),
+    ("Ausgabe", [
+        ("Druckvorstufenprüfung",   PreflightPanel),
+        ("PDF/X-Export",            PdfxPanel),
+        ("Komprimieren",            CompressPanel),
+    ]),
 ]
+
+# Flat, in sidebar order, for the stack indexes. Layout is index 1 — the first
+# thing after the viewer — because it is a view, not a tool.
+TOOLS = ([("Layout", LayoutPanel)]
+         + [entry for _grp, entries in TOOL_GROUPS for entry in entries]
+         + [("Plugin-Manager", PluginManagerPanel)])
+
+
+VIEW_PREVIEW = 0
+VIEW_PAGES   = 1
+VIEW_LAYOUT  = 2
+
+
+class ViewSwitch(QWidget):
+    """Vorschau · Seiten verwalten · Layout, as one segmented control.
+
+    Sized to the labels rather than to thirds: "Seiten verwalten" is three
+    times the word "Layout", and equal thirds would spend the difference on
+    padding around the short one.
+    """
+    picked = pyqtSignal(int)
+
+    LABELS = ("Vorschau", "Seiten verwalten", "Layout")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Two layouts, on purpose. The outer one holds the control off the
+        # sidebar's edges; the inner one is the rectangle itself, so its border
+        # encloses all three segments instead of each segment carrying its own.
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(6, 8, 6, 8)
+        self._box = QWidget()
+        self._box.setObjectName("viewSwitch")
+        outer.addWidget(self._box)
+
+        lay = QHBoxLayout(self._box)
+        lay.setContentsMargins(3, 3, 3, 3)
+        lay.setSpacing(2)
+        self._segs = []
+        for i, label in enumerate(self.LABELS):
+            b = QPushButton(tr(label))
+            b.setObjectName("viewSeg")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _c, x=i: self.picked.emit(x))
+            # Sized to its own label, as the concept has it: equal thirds would
+            # spend on "Layout" the width "Seiten verwalten" needs.
+            lay.addWidget(b, b.fontMetrics().horizontalAdvance(b.text()))
+            self._segs.append(b)
+        self.set_current(VIEW_PREVIEW)
+
+    def set_current(self, which):
+        for i, b in enumerate(self._segs):
+            b.setChecked(i == which)
 
 
 class MainWindow(QMainWindow):
     def __init__(self, open_file=None, open_files=None):
         super().__init__()
-        self.setWindowTitle(tr("CopyShop PDF Suite"))
+        self.setWindowTitle(app_title())
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setMinimumSize(1000, 640)
         self.resize(1280, 760)
@@ -155,7 +216,7 @@ class MainWindow(QMainWindow):
         # ── Seitenleiste ─────────────────────────────────────────────────────
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(210)
+        sidebar.setFixedWidth(224)
         sb = QVBoxLayout(sidebar)
         sb.setContentsMargins(0, 6, 0, 0)
         sb.setSpacing(0)
@@ -163,10 +224,13 @@ class MainWindow(QMainWindow):
         self._btns  = []
         self._stack = QStackedWidget()
 
-        # Page Viewer Button (hervorgehoben)
-        vb = NavBtn(tr("Seiten-Viewer"), viewer=True)
-        vb.clicked.connect(lambda: self._switch(0))
-        sb.addWidget(vb); self._btns.append(vb)
+        # ── The three views ──────────────────────────────────────────────────
+        # Vorschau, Seiten verwalten and Layout are three ways of looking at the
+        # same document, so they are one switch rather than three entries in a
+        # list of tools — the tools change the document, the views show it.
+        self._view_switch = ViewSwitch()
+        self._view_switch.picked.connect(self._pick_view)
+        sb.addWidget(self._view_switch)
 
         self.viewer = PageViewerPanel()
         self._stack.addWidget(self.viewer)
@@ -175,40 +239,97 @@ class MainWindow(QMainWindow):
         self.viewer.get_main_stack_idx = lambda: self._stack.currentIndex()
         self.viewer.restore_main_idx   = lambda idx: self._switch(idx)
 
-        # Tools
-        tl = QLabel("  " + tr("WERKZEUGE"))
-        tl.setObjectName("sectionLabel")
-        tl.setContentsMargins(14, 8, 0, 2)
-        sb.addWidget(tl)
+        # Layout is stack index 1 and has no NavBtn: the switch above is how it
+        # is reached. A placeholder keeps _btns aligned with the stack.
+        #
+        # Only its preview goes into the stack. Its staging column is a second
+        # tenant of the same 224px sidebar slot that lists tools everywhere
+        # else — mounted in _switch(), the way "Seiten verwalten" mounts
+        # ManagePanel there. That is the one column the concept draws: same
+        # width, same rhythm, a different job depending on the view.
+        self._btns.append(None)          # index 0 — the viewer
+        self._layout_panel = TOOLS[0][1]()
+        self._stack.addWidget(self._layout_panel.preview_widget)
+        self._btns.append(None)          # index 1 — Layout
 
-        for i, (label, PanelClass) in enumerate(TOOLS):
-            btn = NavBtn(tr(label))
-            idx = i + 1
-            btn.clicked.connect(lambda c, x=idx: self._switch(x))
-            sb.addWidget(btn); self._btns.append(btn)
-            self._stack.addWidget(PanelClass())
+        # ── The tools, grouped by what they act on ───────────────────────────
+        # In their own container: the page manager and the merge preview each
+        # bring a panel of their own, and two stacked lists of things to click
+        # is one too many — but the view switch above must survive that, or the
+        # way back out of those views disappears with the list.
+        #
+        # This column is a slot, not just the tool list: "Seiten verwalten"
+        # mounts ManagePanel's operations here and Layout mounts its staging
+        # sections here, in place of the tool list — one column, same width,
+        # a different job depending on the view, exactly as the concept has it.
+        self._sidebar_extra = None
+        self._sidebar_slot = QWidget()
+        self._sidebar_slot.setObjectName("sidebarSlot")
+        slot_lay = QVBoxLayout(self._sidebar_slot)
+        slot_lay.setContentsMargins(0, 0, 0, 0)
+        slot_lay.setSpacing(0)
+
+        self._tool_list = QWidget()
+        self._tool_list.setObjectName("toolList")
+        tl = QVBoxLayout(self._tool_list)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(0)
+        idx = 2
+        for group, entries in TOOL_GROUPS:
+            gl = QLabel(tr(group).upper())
+            gl.setObjectName("navGroup")
+            gl.setContentsMargins(16, 13, 0, 3)
+            tl.addWidget(gl)
+            for label, PanelClass in entries:
+                btn = NavBtn(tr(label))
+                btn.clicked.connect(lambda c, x=idx: self._switch(x))
+                tl.addWidget(btn); self._btns.append(btn)
+                self._stack.addWidget(PanelClass())
+                idx += 1
+
+        sep0 = QFrame(); sep0.setObjectName("separator")
+        sep0.setFrameShape(QFrame.Shape.HLine)
+        tl.addWidget(sep0)
+        pm_btn = NavBtn(tr("Plugin-Manager"))
+        pm_btn.clicked.connect(lambda c, x=idx: self._switch(x))
+        tl.addWidget(pm_btn); self._btns.append(pm_btn)
+        self._stack.addWidget(PluginManagerPanel())
+        slot_lay.addWidget(self._tool_list)
+        sb.addWidget(self._sidebar_slot, 1)
 
         # Plugins
         plugins = discover_plugins()
         if plugins:
             sep = QFrame(); sep.setObjectName("separator")
-            sep.setFrameShape(QFrame.Shape.HLine); sb.addWidget(sep)
-            pl = QLabel("  " + tr("PLUGINS")); pl.setObjectName("sectionLabel")
-            pl.setContentsMargins(14, 10, 0, 4); sb.addWidget(pl)
-            base = len(TOOLS) + 1
-            for pi, (plabel, PCls) in enumerate(plugins):
+            sep.setFrameShape(QFrame.Shape.HLine); tl.addWidget(sep)
+            pl = QLabel(tr("PLUGINS")); pl.setObjectName("navGroup")
+            pl.setContentsMargins(16, 13, 0, 3); tl.addWidget(pl)
+            for plabel, PCls in plugins:
+                idx += 1
                 btn = NavBtn(plabel.strip())
-                idx = base + pi
                 btn.clicked.connect(lambda c, x=idx: self._switch(x))
-                sb.addWidget(btn); self._btns.append(btn)
+                tl.addWidget(btn); self._btns.append(btn)
                 self._stack.addWidget(PCls())
 
-        # ── Version am unteren Rand ───────────────────────────────────────────
-        sb.addStretch()
+        # The column is taller than the list, and the slack has to land
+        # somewhere. Without this it went to the only children that can grow
+        # vertically — the group headings — which took 103 px each for 33 px of
+        # text and left every heading stranded 70 px above the tools under it.
+        tl.addStretch(1)
 
-        ver = QLabel(tr("v3.0  —  open source"))
-        ver.setObjectName("dimLabel"); ver.setContentsMargins(14, 0, 0, 8)
-        sb.addWidget(ver)
+        # ── Stand am unteren Rand ────────────────────────────────────────────
+        # No addStretch() here: self._sidebar_slot above already carries the
+        # stretch factor, so whatever is mounted in it — the tool list,
+        # ManagePanel's operations, or Layout's staging sections — fills the
+        # column down to this footer instead of leaving it pinned to its own
+        # sizeHint with a gap of dead space underneath.
+
+        # A version number told nobody anything — it belongs in the about box,
+        # where somebody reporting a fault goes looking for it.
+        beta = QLabel(tr("BETA"))
+        beta.setObjectName("betaChip")
+        beta.setContentsMargins(14, 0, 0, 10)
+        sb.addWidget(beta)
 
         root.addWidget(sidebar)
         self._sidebar = sidebar   # keep reference for manage-mode hide/show
@@ -222,16 +343,102 @@ class MainWindow(QMainWindow):
         wrapper = QWidget(); wrapper.setLayout(main_col)
         root.addWidget(wrapper, 1)
 
-        # Wire sidebar hide/show into the page viewer
-        self.viewer.hide_sidebar = lambda: self._sidebar.setVisible(False)
-        self.viewer.show_sidebar = lambda: self._sidebar.setVisible(True)
+        # The status bar's preflight light offers a way through to the full
+        # check; the viewer knows it wants the panel, not where the panel is.
+        self.viewer.show_tool_panel = self._show_tool_panel
+
+        # Wire the tool list's hide/show into the page viewer. The merge
+        # preview brings its own sidebar and just needs the list out of the
+        # way — no replacement content of its own — so it keeps this plain
+        # pair rather than the mount/unmount below.
+        self.viewer.hide_sidebar = lambda: self._tool_list.setVisible(False)
+        self.viewer.show_sidebar = lambda: self._tool_list.setVisible(True)
+
+        # "Seiten verwalten" mounts ManagePanel's operations into the same
+        # slot Layout's staging sections use below — one column, swapped
+        # content, per the concept.
+        self.viewer.mount_sidebar_widget   = self._mount_sidebar_widget
+        self.viewer.unmount_sidebar_widget = self._unmount_sidebar_widget
+        self.viewer.sync_view_switch       = self._sync_view_switch
 
         self._switch(0)
 
+    def _mount_sidebar_widget(self, widget):
+        """Show `widget` in the tool column instead of the tool list — what
+        "Seiten verwalten" does with ManagePanel's operations, and what
+        _switch() below does with Layout's staging sections."""
+        self._unmount_sidebar_widget()
+        self._tool_list.setVisible(False)
+        self._sidebar_extra = widget
+        self._sidebar_slot.layout().addWidget(widget)
+        widget.show()
+
+    def _unmount_sidebar_widget(self):
+        """Undo _mount_sidebar_widget(): detach whatever is mounted and bring
+        the tool list back. Safe to call when nothing is mounted."""
+        if self._sidebar_extra is not None:
+            self._sidebar_slot.layout().removeWidget(self._sidebar_extra)
+            self._sidebar_extra.setParent(None)
+            self._sidebar_extra = None
+        self._tool_list.setVisible(True)
+
+    def _show_tool_panel(self, label):
+        """Bring a tool panel forward by the name it carries in the sidebar."""
+        for i, (name, _cls) in enumerate(TOOLS):
+            if name == label:
+                self._switch(i + 1)
+                return
+
     def _switch(self, idx: int):
+        # _btns carries a None where a stack page is reached by the view switch
+        # rather than by a nav button (the viewer, and Layout).
         for i, btn in enumerate(self._btns):
-            btn.set_active(i == idx)
+            if btn is not None:
+                btn.set_active(i == idx)
         self._stack.setCurrentIndex(idx)
+        # Layout mounts its staging sections into the tool column; every other
+        # page (the viewer included) gets the tool list back — "Seiten
+        # verwalten" then mounts ManagePanel over that on its own, via the
+        # viewer's enter/exit-manage calls.
+        if idx == 1:
+            self._mount_sidebar_widget(self._layout_panel.controls_widget)
+        else:
+            self._unmount_sidebar_widget()
+        self._sync_view_switch()
+
+    def _sync_view_switch(self):
+        """Keep the segmented control showing where we actually are.
+
+        The three views are not three stack pages: Seiten verwalten is a mode
+        *inside* the viewer, so the switch has to read the viewer's state and
+        not just the stack index."""
+        idx = self._stack.currentIndex()
+        if idx == 1:
+            which = VIEW_LAYOUT
+        elif idx == 0:
+            tab = self.viewer._current()
+            which = (VIEW_PAGES
+                     if tab is not None and tab.in_manage_mode()
+                     else VIEW_PREVIEW)
+        else:
+            which = -1          # a tool panel: none of the three is current
+        self._view_switch.set_current(which)
+
+    def _pick_view(self, which: int):
+        """A click on the segmented control."""
+        tab = self.viewer._current()
+        in_manage = tab is not None and tab.in_manage_mode()
+        if which == VIEW_LAYOUT:
+            if in_manage:
+                self.viewer._ensure_single_view()
+            self._switch(1)
+            return
+        self._switch(0)
+        if which == VIEW_PAGES and not in_manage:
+            self.viewer._toggle_manage()
+        elif which == VIEW_PREVIEW and in_manage:
+            self.viewer._ensure_single_view()
+        self._sync_view_switch()
 
     def _open_dialog(self):
         # Every open path offers the same formats. This dialog used to filter to
@@ -268,9 +475,9 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self,
-            tr("Über CopyShop PDF Suite"),
-            "<b>CopyShop PDF Suite v3</b><br><br>"
-            + tr("Professionelles PDF-Werkzeug für Copyshops und Druckvorstufe.") + "<br><br>"
+            tr("Über {p0}").format(p0=APP_NAME),
+            f"<b>{versioned()}</b><br><br>"
+            + tr(APP_TAGLINE) + "<br><br>"
             + tr("Entwickelt mit Python · PyQt6 · pypdfium2 · pikepdf · pypdf") + "<br><br>"
             "<i>" + tr("open source") + "</i>"
         )
@@ -282,6 +489,7 @@ class MainWindow(QMainWindow):
     def _open_appearance(self):
         dlg = AppearanceDialog(self)
         dlg.theme_changed.connect(self._apply_theme)
+        dlg.scroll_changed.connect(self.viewer.set_continuous_scroll)
         dlg.exec()
 
     def _open_performance(self):

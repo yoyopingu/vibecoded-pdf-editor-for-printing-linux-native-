@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ================================================================
-#  CopyShop PDF Suite v3 — Installer
+#  Installer — the app name comes from tools/branding.py
 #  Unterstützte Distributionen:
 #    Arch / CachyOS / Manjaro / EndeavourOS
 #    Ubuntu / Debian / Mint / Pop!_OS
@@ -30,6 +30,16 @@ info() { echo -e "${BLUE}  →  ${NC}$1"; }
 warn() { echo -e "${YELLOW}  !  ${NC}$1"; }
 fail() { echo -e "${RED}  ✗  ${NC}$1"; exit 1; }
 step() { echo ""; echo -e "${BOLD}[$1] $2${NC}"; echo ""; }
+# Centre one line inside the 50-column banner box. The name is read at run
+# time and is not a fixed width any more, so the padding has to be computed
+# rather than typed.
+_banner() {
+    local text="$1" width=50 len left right
+    len=${#text}
+    left=$(( (width - len) / 2 )); [ "$left" -lt 0 ] && left=0
+    right=$(( width - len - left )); [ "$right" -lt 0 ] && right=0
+    printf "${BOLD}║%*s%s%*s║${NC}\n" "$left" "" "$text" "$right" ""
+}
 
 # ── Pfade ────────────────────────────────────────────────────────
 INSTALL_DIR="$HOME/.local/share/copyshop_pdf_suite"
@@ -45,19 +55,31 @@ APP_SRC="$SCRIPT_DIR"
 [ -f "$APP_SRC/main.py" ] || \
     fail "main.py nicht gefunden. Installer aus dem App-Verzeichnis ausführen."
 
+# The application's name comes from tools/branding.py — the same module the
+# app itself reads it from — so `APP_NAME = "..."` is the only edit a rename
+# needs. Falls back rather than failing: a missing python3 here is a problem
+# for step 2, not a reason to refuse to print a banner.
+# Paths and command names are deliberately NOT derived from it: $INSTALL_DIR,
+# the copyshop-pdf launcher and the .desktop filename are what an existing
+# install, its shortcuts and its settings already point at.
+APP_NAME="$(python3 -c "import sys; sys.path.insert(0, '$APP_SRC'); from tools.branding import APP_NAME; print(APP_NAME)" 2>/dev/null || echo "CopyShop PDF Suite")"
+APP_TAGLINE="$(python3 -c "import sys; sys.path.insert(0, '$APP_SRC'); from tools.branding import APP_TAGLINE; print(APP_TAGLINE)" 2>/dev/null || echo "PDF-Werkzeug für Copyshop und Druckvorstufe")"
+
 # ── Banner ───────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║      CopyShop PDF Suite v3  —  Installer         ║${NC}"
+_banner "$APP_NAME v3  —  Installer"
 echo -e "${BOLD}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 
 # ── Update-Erkennung ─────────────────────────────────────────────
 if [ -f "$INSTALL_DIR/main.py" ]; then
-    echo -e "  ${YELLOW}CopyShop PDF Suite ist bereits installiert.${NC}"
+    echo -e "  ${YELLOW}${APP_NAME} ist bereits installiert.${NC}"
     # "|| REPLY=J": ohne interaktives Terminal (z. B. aus dem Dateimanager
     # gestartet) liefert read EOF und würde unter 'set -e' sonst still abbrechen.
-    read -rp "  Jetzt aktualisieren / neu installieren? [J/n] " REPLY || REPLY="J"
+    # "-t 30": ein Terminal, das den Fokus verliert bevor jemand antwortet,
+    # sieht sonst wie ein hängender Installer aus statt wie eine offene Frage.
+    read -rt 30 -rp "  Jetzt aktualisieren / neu installieren? [J/n] (30s) " REPLY || REPLY="J"
     REPLY="${REPLY:-J}"
     [[ "$REPLY" =~ ^[JjYy]$ ]] || { echo "  Abgebrochen."; exit 0; }
     echo ""
@@ -291,7 +313,7 @@ step "4/5" "Starter und Desktop-Symbol einrichten"
 mkdir -p "$BIN_DIR"
 cat > "$LAUNCHER" << LAUNCHER_SCRIPT
 #!/usr/bin/env bash
-# CopyShop PDF Suite — Launcher (generiert von install.sh)
+# ${APP_NAME} — Launcher (generiert von install.sh)
 exec "$VENV_DIR/bin/python" "$INSTALL_DIR/main.py" "\$@"
 LAUNCHER_SCRIPT
 chmod +x "$LAUNCHER"
@@ -359,9 +381,9 @@ cat > "$DESKTOP_FILE" << DESKTOP_ENTRY
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=CopyShop PDF Suite
+Name=${APP_NAME}
 GenericName=PDF-Editor
-Comment=Professionelles PDF-Werkzeug für Copyshops und Druckvorstufe
+Comment=${APP_TAGLINE}
 Exec=$LAUNCHER %F
 Icon=$ICON_FIELD
 Terminal=false
@@ -443,16 +465,16 @@ echo -e "${BOLD}║  ${GREEN}  Installation abgeschlossen!${NC}${BOLD}          
 echo -e "${BOLD}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  Terminal:     ${BOLD}copyshop-pdf${NC}"
-echo -e "  App-Menü:     Office → CopyShop PDF Suite"
+echo -e "  App-Menü:     Office → ${APP_NAME}"
 echo -e "  Desktop:      Doppelklick auf das Icon"
 echo -e "  Datei öffnen: ${BOLD}copyshop-pdf datei.pdf${NC}"
 echo -e "  Entfernen:    ${BOLD}bash uninstall.sh${NC}"
 echo ""
 
-read -rp "  Jetzt starten? [J/n] " REPLY || REPLY="J"
+read -rt 30 -rp "  Jetzt starten? [J/n] (30s) " REPLY || REPLY="J"
 REPLY="${REPLY:-J}"
 if [[ "$REPLY" =~ ^[JjYy]$ ]]; then
-    info "Starte CopyShop PDF Suite..."
+    info "Starte ${APP_NAME}..."
     nohup "$LAUNCHER" &>/dev/null &
     ok "Gestartet!"
 fi

@@ -7,16 +7,47 @@ dropped, and the parsed document behind them is released. A loaded page of a
 large PDF is hundreds of megabytes, so a tab that is gone must not keep one.
 """
 import os, shutil, atexit, logging
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFileDialog, QApplication, QSplitter, QLineEdit
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFileDialog, QApplication, QLineEdit, QMenu
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent, QTimer, QSize
 from PyQt6.QtGui import QKeySequence, QShortcut
 from tools.app_state import AppState
+from tools.branding import APP_NAME
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache, _set_active
 from tools.render.document_cache import release
+from tools.viewer.empty_state import EmptyStateWidget
 from tools.viewer.merge import MergeOrderWidget
 from tools.viewer.tab import PdfTab
-from tools.theme import _TOP_BTN_W, _TV, _register_themed
+from tools.shell.style import search_icon
+from tools.theme import _TV, _register_themed
+
+
+class _ElidedLabel(QLabel):
+    """A label that shortens its own text rather than pushing the row wider.
+
+    It shares the tab bar with everything else in the corner, so it is the part
+    that has to give way — and a message cut off mid-glyph reads as a fault
+    where an ellipsis reads as a message too long to show."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._full = ""
+
+    def setText(self, text):
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self._elide()
+
+    def full_text(self):
+        return self._full
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self):
+        super().setText(self.fontMetrics().elidedText(
+            self._full, Qt.TextElideMode.ElideRight, max(0, self.width() - 2)))
 
 
 class _ViewerKeyFilter(QObject):
@@ -58,7 +89,11 @@ class _ViewerKeyFilter(QObject):
             # Qt reports Ctrl+Shift+Tab as Key_Backtab with Ctrl modifier
             if ctrl and k in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab, Qt.Key.Key_W,
                               Qt.Key.Key_Plus, Qt.Key.Key_Equal,
-                              Qt.Key.Key_Minus, Qt.Key.Key_0, Qt.Key.Key_1):
+                              Qt.Key.Key_Minus, Qt.Key.Key_0, Qt.Key.Key_1,
+                              Qt.Key.Key_F):
+                event.accept()
+                return False
+            if k == Qt.Key.Key_F3:
                 event.accept()
                 return False
             return False
@@ -80,6 +115,29 @@ class _ViewerKeyFilter(QObject):
                 self._vp._toggle_manage()
             except Exception as exc:
                 logging.error(f"_toggle_manage: {exc}", exc_info=True)
+            return True
+
+        # Strg+F opens the find field and F3 walks the results — both from
+        # anywhere, including from inside the field itself, which is why they
+        # are handled before the text-field guard below.
+        if ctrl and k == Qt.Key.Key_F:
+            try:
+                self._vp.toggle_find()
+            except Exception as exc:
+                logging.error(f"toggle_find: {exc}", exc_info=True)
+            return True
+        if k == Qt.Key.Key_F3:
+            try:
+                self._vp._step_find(-1 if shift else +1)
+            except Exception as exc:
+                logging.error(f"_step_find: {exc}", exc_info=True)
+            return True
+        # Escape closes the find field before it does anything else: the field
+        # has the keyboard at that moment, and this is the one thing a person
+        # expects Escape to do while typing in a search box.
+        if k == Qt.Key.Key_Escape and self._vp._find_box.isVisible():
+            self._vp.set_find_visible(False)
+            self._vp.focus_page_view()
             return True
 
         # Nie abfangen wenn ein Textfeld fokussiert ist
@@ -159,7 +217,17 @@ class PageViewerPanel(QWidget):
         self.restore_main_idx   = None   # lambda idx: main._switch(idx)
         self.hide_sidebar       = None   # lambda: sidebar.setVisible(False)
         self.show_sidebar       = None   # lambda: sidebar.setVisible(True)
+        self.mount_sidebar_widget   = None   # lambda w: mounts w in the tool column
+        self.unmount_sidebar_widget = None   # lambda: restores the tool list there
+        self.sync_view_switch       = None   # lambda: reread which of the 3 views is current
         self._pre_manage_idx    = None   # gespeicherter Stack-Index vor Manage-Modus
+        # The find state belongs to the panel rather than to a tab: the field is
+        # one field above all of them, and switching tabs abandons it.
+        self._find_job    = None
+        self._find_hits   = []
+        self._find_index  = -1
+        self._find_needle = ""
+        self._pf_job      = None
         self._setup_ui()
         AppState.get().result_ready.connect(self._open_result_tab)
         # Globaler Tab/Escape-Filter
@@ -204,13 +272,10 @@ class PageViewerPanel(QWidget):
                 self.switch_to_viewer()
             tab = self._current()   # nach switch_to_viewer neu holen
             if tab:
-                if self.hide_sidebar:
-                    self.hide_sidebar()
-                show_sb = self.show_sidebar
                 def _on_exit():
                     self._exit_manage_layout()
-                    if show_sb:
-                        show_sb()
+                    if self.sync_view_switch:
+                        self.sync_view_switch()
                 try:
                     tab._enter_manage(on_exit=_on_exit)
                     self._enter_manage_layout(tab._manage_panel)
@@ -220,8 +285,13 @@ class PageViewerPanel(QWidget):
                 except Exception:
                     import traceback
                     logging.error(traceback.format_exc())
-                    if show_sb:
-                        show_sb()  # always restore sidebar on failure
+                    self._exit_manage_layout()  # always restore the tool column on failure
+        # Reached by the Ctrl+Shift+O shortcut as well as the view switch —
+        # the switch itself only resyncs when a click on it is what triggered
+        # this, so it has to happen here too, or entering/leaving manage mode
+        # from the keyboard leaves "Seiten verwalten" unhighlighted.
+        if self.sync_view_switch:
+            self.sync_view_switch()
 
     def _ensure_single_view(self):
         """Esc: immer zur Einzelansicht — Manage verlassen, Viewer zeigen, kein Zurück-Sprung."""
@@ -231,8 +301,8 @@ class PageViewerPanel(QWidget):
         if tab and tab._stack.currentWidget() is not tab.single:
             self._exit_manage_layout()
             tab._exit_manage()
-            if self.show_sidebar:
-                self.show_sidebar()
+        if self.sync_view_switch:
+            self.sync_view_switch()
         self._pre_manage_idx = None   # Esc bricht den Rücksprung-Pfad ab
 
     def _cycle_tab(self, forward=True):
@@ -256,61 +326,27 @@ class PageViewerPanel(QWidget):
         sc_print = QShortcut(QKeySequence("Ctrl+P"), self)
         sc_print.activated.connect(self._print_current)
 
-        # ── Obere Toolbar ────────────────────────────────────────────────────
-        self._top_bar = QWidget()
-        self._top_bar.setObjectName("pvTopBar")
-        self._top_bar.setFixedHeight(46)
-        self._top_bar.setStyleSheet(
-            f"QWidget#pvTopBar{{background:{_TV['sidebar_bg']};border-bottom:1px solid {_TV['border']};}}")
-        top_bar = self._top_bar
         _register_themed(self)
-        tbl = QHBoxLayout(top_bar)
-        tbl.setContentsMargins(12, 0, 12, 0)
-        tbl.setSpacing(8)
 
-        # One primary action on the left, the document-scoped actions grouped on
-        # the right in the *same* weight. "Öffnen" and "Seiten verwalten" used to
-        # both be accent-filled, so the bar had two competing primaries pulling
-        # at opposite ends with a third, differently-styled button beside one of
-        # them.
-        open_btn = QPushButton(tr("Öffnen..."))
-        open_btn.setObjectName("actionBtn")
-        open_btn.setMinimumWidth(_TOP_BTN_W)
-        open_btn.clicked.connect(self._open)
-        tbl.addWidget(open_btn)
-
-        self._viewer_info = QLabel("")
-        self._viewer_info.setObjectName("currentFileLabel")
-        tbl.addWidget(self._viewer_info, 1)
-
-        # The shortcut lives in the tooltip, not in the label: spelled out it made
-        # this button twice the width of every other one in the app.
-        self._manage_btn = QPushButton(tr("Seiten verwalten"))
-        self._manage_btn.setObjectName("secondaryBtn")
-        self._manage_btn.setToolTip(tr("Seiten verwalten") + "  (Strg+Umschalt+O)")
-        self._manage_btn.setMinimumWidth(_TOP_BTN_W)
-        self._manage_btn.setEnabled(False)
-        self._manage_btn.clicked.connect(self._manage_current)
-        tbl.addWidget(self._manage_btn)
-
-        self._print_btn = QPushButton(tr("Drucken"))
-        self._print_btn.setObjectName("secondaryBtn")
-        self._print_btn.setToolTip(tr("Drucken") + "  (Strg+P)")
-        self._print_btn.setMinimumWidth(_TOP_BTN_W)
-        self._print_btn.setEnabled(False)
-        self._print_btn.clicked.connect(self._print_current)
-        tbl.addWidget(self._print_btn)
-
-        layout.addWidget(top_bar)
-
+        # ── Dokumentleiste ───────────────────────────────────────────────────
+        # One row where there were two: a 46 px bar of buttons above a tab strip
+        # is 76 px of chrome saying the same thing twice — the bar named the open
+        # file, and so did its tab. The tab bar *is* the row now, and the actions
+        # ride in its corner. Everything that acts on the open document lives
+        # here; the window's own menus stay in the title bar.
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.tabCloseRequested.connect(self._close_tab)
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs.setCornerWidget(self._build_doc_actions(),
+                                  Qt.Corner.TopRightCorner)
 
-        # Body: holds [ManagePanel (optional)] + [tabs]
+        # Body: just the tabs. ManagePanel used to share this row with them
+        # behind a QSplitter of its own; it now mounts into the app's 224px
+        # tool column instead (see MainWindow._mount_sidebar_widget), so the
+        # tabs keep the full body width in every mode.
         self._body = QWidget()
         self._body_layout = QHBoxLayout(self._body)
         self._body_layout.setContentsMargins(0, 0, 0, 0)
@@ -318,47 +354,410 @@ class PageViewerPanel(QWidget):
         self._body_layout.addWidget(self.tabs, 1)
         layout.addWidget(self._body, 1)
 
-        self._manage_splitter_widget = None  # QSplitter shown in manage mode
-        self._manage_tab             = None  # PdfTab whose panel is in the splitter
-        self._toggle_in_progress     = False # reentrancy guard for _toggle_manage
+        # Before the first file, the tab strip is an empty sliver saying
+        # nothing — this fills the same space with a drop target, the two ways
+        # to start, and up to four recently opened files. Swapped for the tabs
+        # rather than layered under them, so it takes the tab strip's own
+        # open/find/save row with it; the empty state supplies its own
+        # "Datei öffnen…" for that.
+        self._empty_state = EmptyStateWidget()
+        self._empty_state.open_requested.connect(self._open_via_dialog)
+        self._empty_state.merge_requested.connect(self._merge_via_dialog)
+        self._empty_state.file_chosen.connect(self.open_file)
+        self._empty_state.files_dropped.connect(self._open_dropped)
+        self._body_layout.addWidget(self._empty_state, 1)
+        self._sync_empty_state()
+
+        self._manage_tab         = None   # PdfTab whose panel is mounted
+        self._toggle_in_progress = False  # reentrancy guard for _toggle_manage
+
+        # The preflight light re-checks a little after the document settles.
+        self._pf_timer = QTimer(self)
+        self._pf_timer.setSingleShot(True)
+        self._pf_timer.timeout.connect(self._run_preflight)
 
         AppState.get().status_message.connect(self._on_status)
+        # Settle the row before anything is open, or every action looks
+        # available on an empty window.
+        self._update_toolbar()
+
+    # ── the document row ─────────────────────────────────────────────────────
+
+    def _build_doc_actions(self):
+        """What rides in the tab bar's right-hand corner: open, find, and the
+        three things you do to the document that is open."""
+        w = QWidget()
+        w.setObjectName("docActions")
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(6, 0, 8, 0)
+        lay.setSpacing(4)
+
+        def act(text, tip, slot, shortcut="", icon=False, obj="docBtn"):
+            b = QPushButton(text)
+            b.setObjectName("docIconBtn" if icon else obj)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolTip(tip + (f"  ({shortcut})" if shortcut else ""))
+            if icon:
+                b.setFixedSize(26, 24)
+            else:
+                b.setMinimumHeight(24)
+            if slot is not None:
+                b.clicked.connect(slot)
+            lay.addWidget(b)
+            return b
+
+        # Transient messages — a conversion running, a merge failing. They used
+        # to have a whole label's width of the old bar to themselves and were
+        # blank almost always; here they are given room only while they have
+        # something to say. Slice 2 moves them to the status bar.
+        self._viewer_info = _ElidedLabel()
+        self._viewer_info.setObjectName("currentFileLabel")
+        self._viewer_info.setMaximumWidth(260)
+        lay.addWidget(self._viewer_info)
+
+        self._new_btn = act("+", tr("Datei öffnen"), lambda: self._open(),
+                            "Strg+O", icon=True)
+
+        # An icon until it is used, then a field. 26 px at rest against 214 px
+        # in use: the tab strip keeps the difference for the nine tenths of the
+        # time nobody is searching.
+        self._find_box = QWidget()
+        self._find_box.setObjectName("findBox")
+        fl = QHBoxLayout(self._find_box)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.setSpacing(2)
+        self._find_edit = QLineEdit()
+        self._find_edit.setObjectName("findEdit")
+        self._find_edit.setPlaceholderText(tr("Im Dokument suchen…"))
+        self._find_edit.setFixedWidth(150)
+        self._find_edit.returnPressed.connect(self._find_entered)
+        fl.addWidget(self._find_edit)
+        self._find_count = QLabel("")
+        self._find_count.setObjectName("dimLabel")
+        self._find_count.setMinimumWidth(58)
+        fl.addWidget(self._find_count)
+        self._find_prev = act("▲", tr("Vorheriger Treffer"),
+                              lambda: self._step_find(-1), "Umschalt+F3", icon=True)
+        self._find_next = act("▼", tr("Nächster Treffer"),
+                              lambda: self._step_find(+1), "F3", icon=True)
+        self._find_close = act("✕", tr("Suche schliessen"),
+                               lambda: self.set_find_visible(False), icon=True)
+        for b in (self._find_prev, self._find_next, self._find_close):
+            b.setParent(self._find_box)
+            fl.addWidget(b)
+        lay.addWidget(self._find_box)
+        self._find_box.setVisible(False)
+
+        self._find_btn = act("", tr("Im Dokument suchen"),
+                             lambda: self.toggle_find(), "Strg+F", icon=True)
+        self._find_btn.setIcon(search_icon(_TV['text']))
+        self._find_btn.setIconSize(QSize(15, 15))
+
+        self._edit_btn = act(tr("Bearbeiten") + " ▾", tr("Bearbeiten"), None)
+        menu = QMenu(self._edit_btn)
+        self._act_undo = menu.addAction(tr("Rückgängig"))
+        self._act_undo.setShortcut(QKeySequence("Ctrl+Z"))
+        self._act_undo.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+        self._act_undo.triggered.connect(self._undo)
+        self._act_redo = menu.addAction(tr("Wiederholen"))
+        self._act_redo.setShortcut(QKeySequence("Ctrl+Y"))
+        self._act_redo.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+        self._act_redo.triggered.connect(self._redo)
+        menu.addSeparator()
+        a = menu.addAction(tr("Kopieren"))
+        a.triggered.connect(self._copy_selection)
+        a = menu.addAction(tr("Alles auswählen"))
+        a.triggered.connect(self._select_all_text)
+        self._edit_btn.setMenu(menu)
+
+        self._save_btn = act(tr("Speichern"), tr("Am Originalpfad speichern"),
+                             self._save_current, "Strg+S")
+        self._print_btn = act(tr("Drucken"), tr("Drucken"),
+                              self._print_current, "Strg+P")
+
+        # Kept under its old name: the page manager is reached from the sidebar's
+        # view switch now, but _update_toolbar and the merge paths still speak of
+        # a manage button, and the shortcut still works.
+        self._manage_btn = self._edit_btn
+        return w
 
     def _apply_theme(self):
-        self._top_bar.setStyleSheet(
-            f"QWidget#pvTopBar{{background:{_TV['sidebar_bg']};border-bottom:1px solid {_TV['border']};}}")
+        # The row is styled from the application stylesheet, which
+        # apply_theme_globally replaces before this runs — Qt re-polishes for a
+        # new sheet by itself.
+        self._find_btn.setIcon(search_icon(_TV['text']))
 
     def _on_status(self, msg):
-        pass  # Status wird in der Info-Leiste der SinglePageView angezeigt
+        """Whatever the app has to say goes on the status bar of the page being
+        looked at. It went nowhere at all: this was an empty method whose
+        comment claimed the message appeared in the page view's info bar, and
+        every AppState.status_message — including "Gespeichert: …" — was
+        discarded.
+
+        With no document there is no status bar, so the row's own label takes
+        it: a conversion running before any tab exists still has to be able to
+        say so."""
+        tab = self._current()
+        if tab is not None:
+            tab.single.show_status(msg or "")
+            self._viewer_info.setText("")
+        else:
+            self._viewer_info.setText(msg or "")
+
+    # ── edit actions, aimed at the tab that is open ──────────────────────────
+
+    def _undo(self):
+        tab = self._current()
+        if tab is None:
+            return
+        AppState.get().status_message.emit(
+            tr("Rueckgaengig.") if tab.undo() else tr("Nichts zum Rueckgaengig."))
+        self._update_toolbar()
+
+    def _redo(self):
+        tab = self._current()
+        if tab is None:
+            return
+        AppState.get().status_message.emit(
+            tr("Wiederholt.") if tab.redo() else tr("Nichts zum Wiederholen."))
+        self._update_toolbar()
+
+    def _copy_selection(self):
+        self._on_canvas("_copy")
+
+    def _select_all_text(self):
+        self._on_canvas("_select_all")
+
+    def _on_canvas(self, method):
+        tab = self._current()
+        if tab is None:
+            return
+        fn = getattr(tab.single._view, method, None)
+        if fn is not None:
+            fn()
+
+    def _tab_label(self, tab, name):
+        """A tab's text: the file, shortened, with a dot while it has unsaved
+        edits. The dot is the answer to "have I saved this" without having to
+        look anywhere else — and it is why the row can tell whether Speichern
+        should be live."""
+        disp = name if len(name) <= 22 else name[:19] + "..."
+        dot = "\u25cf  " if (isinstance(tab, PdfTab) and tab.is_dirty()) else ""
+        return f"  {dot}{disp}  "
+
+    def _sync_tab_label(self, tab):
+        if not isinstance(tab, PdfTab):
+            return
+        idx = self.tabs.indexOf(tab)
+        if idx >= 0:
+            self.tabs.setTabText(idx, self._tab_label(
+                tab, os.path.basename(tab.pdf_path)))
+
+    def _wire_tab(self, tab):
+        """Let a newly opened document drive the row."""
+        tab.dirty_changed.connect(lambda _d, t=tab: self._on_tab_dirty(t))
+        tab.changed.connect(self._update_toolbar)
+        tab.changed.connect(self._schedule_preflight)
+        # The panel is reached from the sidebar; the view only knows it wants it.
+        tab.single.open_preflight_panel = self._open_preflight_panel
+        # A document opened after the setting was changed still has to honour it.
+        from tools.shell.settings import AppSettings
+        tab.single.set_continuous(AppSettings.get().continuous_scroll())
+
+    def _on_tab_dirty(self, tab):
+        self._sync_tab_label(tab)
+        tab.single.set_saved_at(tab.saved_at())
+        if tab is self._current():
+            self._update_toolbar()
+
+    # ── the preflight light ──────────────────────────────────────────────────
+
+    def _schedule_preflight(self):
+        """Ask again shortly. Debounced because the trigger is "the document
+        changed", and dragging a page across a grid emits that per drop —
+        checking on each one would queue a job per edit for an answer only the
+        last one is about."""
+        self._pf_timer.start(700)
+
+    def _run_preflight(self):
+        tab = self._current()
+        if tab is None or not tab.model:
+            return
+        if self._pf_job is not None:
+            self._pf_job.cancel()
+            self._pf_job = None
+        tab.single.set_preflight("running")
+
+        from tools.jobs import submit
+        from tools.panels.preflight import ambient_check
+        # The flattened view, not the file on disk: the light has to describe
+        # the document as the page manager currently has it, which is what a
+        # print or an export would produce.
+        try:
+            from tools._base import ensure_view_snapshot
+            src = ensure_view_snapshot(tab.pdf_path)
+        except Exception:
+            src = tab.pdf_path
+
+        self._pf_job = submit(
+            lambda job: ambient_check(src),
+            owner=tab, name="preflight-light",
+            on_done=lambda res, t=tab: self._preflight_done(t, res),
+            on_error=lambda _e, t=tab: t.single.set_preflight("unknown"))
+
+    def _preflight_done(self, tab, result):
+        self._pf_job = None
+        if tab is not self._current():
+            return
+        issues, _oks = result
+        tab.single.set_preflight("warn" if issues else "ok", issues)
+
+    # ── find ─────────────────────────────────────────────────────────────────
+
+    def set_continuous_scroll(self, on):
+        """Darstellung changed the page layout: every open document follows."""
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if isinstance(w, PdfTab):
+                w.single.set_continuous(on)
+
+    def toggle_find(self):
+        """Strg+F — open the find bar, or close it if it is already open."""
+        if self._current() is None:
+            return
+        self.set_find_visible(not self._find_box.isVisible())
+
+    def set_find_visible(self, visible):
+        visible = bool(visible) and self._current() is not None
+        self._find_box.setVisible(visible)
+        self._find_btn.setVisible(not visible)
+        if visible:
+            self._find_edit.setFocus()
+            self._find_edit.selectAll()
+        else:
+            self._find_count.setText("")
+            self._clear_find()
+
+    def _find_entered(self):
+        """Enter in the field. The same term again means "find the next one",
+        which is what every other search field in the world does."""
+        text = self._find_edit.text().strip()
+        if not text:
+            return
+        if text == self._find_needle and self._find_hits:
+            self._step_find(+1)
+        else:
+            self._start_find(text)
+
+    def _cancel_find(self):
+        if self._find_job is not None:
+            self._find_job.cancel()
+            self._find_job = None
+
+    def _clear_find(self):
+        """Nothing is being searched for any more — take the marks off the
+        page. Every tab, not just the current one: a search run before a tab
+        switch has left its highlights on the other document."""
+        self._cancel_find()
+        self._find_hits   = []
+        self._find_index  = -1
+        self._find_needle = ""
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if isinstance(w, PdfTab):
+                w.single.clear_find_hits()
+
+    def _start_find(self, text):
+        tab = self._current()
+        if tab is None or not tab.model:
+            return
+        self._cancel_find()
+        self._find_needle = text
+        self._find_hits   = []
+        self._find_index  = -1
+        tab.single.clear_find_hits()
+        self._find_count.setText(tr("Suche läuft…"))
+
+        from tools.jobs import submit
+        from tools.viewer.search import find_all
+        model, path = tab.model, tab.pdf_path
+
+        def work(job):
+            def report(pos, total, _found):
+                job.signals.progress.emit(f"{pos + 1} / {total}")
+            return find_all(path, model, text,
+                            should_stop=lambda: job.cancelled, progress=report)
+
+        # Owned by the tab, so closing the document stops the search with it.
+        self._find_job = submit(
+            work, owner=tab, name="find",
+            on_progress=self._find_count.setText,
+            on_done=lambda hits, t=tab, q=text: self._find_done(t, q, hits))
+
+    def _find_done(self, tab, needle, hits):
+        self._find_job = None
+        if tab is not self._current() or needle != self._find_needle:
+            return                # moved on, to another tab or another word
+        self._find_hits = list(hits)
+        if not self._find_hits:
+            self._find_count.setText(tr("Keine Treffer"))
+            tab.single.clear_find_hits()
+            return
+        from tools.viewer.search import first_at_or_after
+        self._show_hit(first_at_or_after(self._find_hits, tab.single._current))
+
+    def _step_find(self, direction):
+        if not self._find_hits:
+            return
+        self._show_hit((self._find_index + direction) % len(self._find_hits))
+
+    def _show_hit(self, index):
+        """Go to one occurrence: mark it, turn to its page, and scroll it into
+        view if the page is larger than the window."""
+        tab = self._current()
+        if tab is None or not self._find_hits:
+            return
+        index = index % len(self._find_hits)
+        self._find_index = index
+        hit = self._find_hits[index]
+        if tab.single._current != hit.page:
+            tab.single.go_to(hit.page + 1)
+        tab.single.set_find_hits(self._find_hits, index)
+        if hit.boxes:
+            x0, y0, x1, y1 = hit.boxes[0]
+            tab.single.reveal_page_point((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+        self._find_count.setText(f"{index + 1} / {len(self._find_hits)}")
+
+    def _open_preflight_panel(self):
+        """Switch to the Druckvorstufenprüfung panel, if the window has one."""
+        opener = getattr(self, "show_tool_panel", None)
+        if opener is not None:
+            opener("Druckvorstufenprüfung")
+
+    def _close_current_tab(self):
+        idx = self.tabs.currentIndex()
+        if idx >= 0:
+            self._close_tab(idx)
 
     # ── Manage-Layout helpers ─────────────────────────────────────────────────
 
     def _enter_manage_layout(self, panel):
-        """Place ManagePanel left of QTabWidget using a splitter."""
-        if self._manage_splitter_widget:
+        """Mount ManagePanel's operations into the app's 224px tool column —
+        the same slot the tool list and Layout's staging sections use, so the
+        column stays at one width and one place regardless of which of the
+        three fills it."""
+        if self._manage_tab is not None:
             return  # already in manage layout
 
         panel.show()
         # Remember which tab owns this layout so _exit can detach correctly
         self._manage_tab = self._current()
-        # Detach tabs from body, put into splitter alongside panel
-        self._body_layout.removeWidget(self.tabs)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(panel)
-        splitter.addWidget(self.tabs)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([240, 800])
-        splitter.setStyleSheet(
-            f"QSplitter::handle{{background:{_TV['splitter']};width:4px;}}")
-
-        self._body_layout.addWidget(splitter, 1)
-        self._manage_splitter_widget = splitter
+        if self.mount_sidebar_widget:
+            self.mount_sidebar_widget(panel)
 
     def _exit_manage_layout(self):
-        """Restore QTabWidget to full body width, remove the splitter."""
-        if not self._manage_splitter_widget:
+        """Detach ManagePanel from the tool column and give it back."""
+        if self._manage_tab is None:
             return
         # Detach panel back to its OWNING tab (not _current() which may have changed)
         tab = self._manage_tab
@@ -366,12 +765,8 @@ class PageViewerPanel(QWidget):
             tab._manage_panel.setParent(tab)
             tab._manage_panel.hide()
         self._manage_tab = None
-        # Detach tabs, then destroy the splitter
-        self.tabs.setParent(None)
-        self._body_layout.removeWidget(self._manage_splitter_widget)
-        self._manage_splitter_widget.deleteLater()
-        self._manage_splitter_widget = None
-        self._body_layout.addWidget(self.tabs, 1)
+        if self.unmount_sidebar_widget:
+            self.unmount_sidebar_widget()
 
     def _current(self):
         w = self.tabs.currentWidget()
@@ -399,7 +794,8 @@ class PageViewerPanel(QWidget):
         if ext not in PDF_EXT | IMAGE_EXTS | OFFICE_EXTS:
             QMessageBox.warning(
                 self, tr("Format nicht unterstuetzt"),
-                tr('CopyShop kann "{p0}" nicht oeffnen.').format(p0=ext or "?"))
+                tr('{p0} kann "{p1}" nicht oeffnen.').format(
+                    p0=APP_NAME, p1=ext or "?"))
             return
 
         if ext in IMAGE_EXTS:
@@ -467,6 +863,7 @@ class PageViewerPanel(QWidget):
         return self._add_pdf_tab(converted)
 
     def _add_pdf_tab(self, path):
+        self._reveal_tabs()
         from PyQt6.QtWidgets import QMessageBox
         from tools.pdf_access import ensure_openable
         # A file that genuinely needs a password gets asked about, once, with an
@@ -488,11 +885,11 @@ class PageViewerPanel(QWidget):
                 self, tr("Datei konnte nicht geoeffnet werden"),
                 tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
             return
-        name = os.path.basename(path)
-        disp = name if len(name) <= 22 else name[:19] + "..."
-        idx  = self.tabs.addTab(tab, f"  {disp}  ")
+        self._wire_tab(tab)
+        idx  = self.tabs.addTab(tab, self._tab_label(tab, os.path.basename(path)))
         self.tabs.setCurrentIndex(idx)
         AppState.get().open_pdf(path)
+        self._update_toolbar()
         self.focus_page_view()
         self.tab_opened.emit()
         self.tabs_changed.emit()
@@ -512,8 +909,6 @@ class PageViewerPanel(QWidget):
         until the preview had been clicked, because the keys were still going
         to whatever was focused before — usually the Öffnen button.
         """
-        from PyQt6.QtCore import QTimer
-
         def _focus():
             widget = self._current()
             if widget is not None and widget.isVisible():
@@ -522,9 +917,10 @@ class PageViewerPanel(QWidget):
 
     def open_file(self, path):
         tab = self._open(path)
-        # Persist last opened file for the "reopen on startup" setting — but
-        # only when it actually opened. Remembering a file that failed meant the
-        # next start reopened it and failed again, every time.
+        # Persist last opened file for the "reopen on startup" setting, and add
+        # it to "Zuletzt geöffnet" in the empty window — but only when it
+        # actually opened. Remembering a file that failed meant the next start
+        # reopened it and failed again, every time.
         if tab is None:
             return
         try:
@@ -532,11 +928,73 @@ class PageViewerPanel(QWidget):
             QSettings("CopyShop", "PDFSuite").setValue("general/last_file", path)
         except Exception:
             logging.debug("could not record the last opened file", exc_info=True)
+        try:
+            from tools.shell.settings import AppSettings
+            AppSettings.get().add_recent_file(path)
+        except Exception:
+            logging.debug("could not record the recent file", exc_info=True)
+
+    # ── the empty window ──────────────────────────────────────────────────────
+
+    def _open_via_dialog(self):
+        """"Datei öffnen…" in the empty window — the same picker Strg+O opens,
+        going through open_file() so the choice is recorded like any other."""
+        from tools.multi_open import file_dialog_filter
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("Datei oeffnen"), "", file_dialog_filter())
+        if path:
+            self.open_file(path)
+
+    def _merge_via_dialog(self):
+        """"Mehrere zusammenführen…" in the empty window."""
+        from tools.multi_open import file_dialog_filter
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, tr("Mehrere Dateien oeffnen"), "", file_dialog_filter())
+        self._open_dropped(paths)
+
+    def _open_dropped(self, paths):
+        """One or more files dragged onto the empty window: one opens, several
+        go to the same merge-or-separate preview a multi-select open does."""
+        paths = [p for p in paths if p]
+        if not paths:
+            return
+        if len(paths) == 1:
+            self.open_file(paths[0])
+        else:
+            self.show_merge_tab(paths)
+
+    def _reveal_tabs(self):
+        """Make the tab strip visible before a new tab's content is built.
+
+        Must run before PdfTab(...)/MergeOrderWidget(...) construction, not
+        only afterwards from _sync_empty_state() reacting to currentChanged:
+        a page view built while an ancestor is still hidden skips its first
+        render, and nothing later asks it to try again — the render stays
+        armed on a page nobody is looking at until the next zoom or turn."""
+        if not self.tabs.isVisible():
+            self._empty_state.setVisible(False)
+            self.tabs.setVisible(True)
+
+    def _sync_empty_state(self):
+        """Swap the tab strip for the empty state, or back, whenever the count
+        of open tabs crosses zero in either direction. The reverse direction
+        (tabs → empty) is always safe here; the forward one goes through
+        _reveal_tabs() instead, called before the new tab exists rather than
+        after — see there for why the order matters."""
+        empty = self.tabs.count() == 0
+        if empty:
+            self.tabs.setVisible(False)
+            self._empty_state.setVisible(True)
+            from tools.shell.settings import AppSettings
+            self._empty_state.set_recent(AppSettings.get().recent_files())
+        else:
+            self._reveal_tabs()
 
     def _open_result_tab(self, path, title):
         # Reached from AppState.result_ready, i.e. from a tool that just wrote a
         # file. If that file is unreadable this raises inside a slot and takes
         # the process with it — the tool's own error handling never sees it.
+        self._reveal_tabs()
         try:
             tab = PdfTab(path)
         except Exception as e:
@@ -546,9 +1004,10 @@ class PageViewerPanel(QWidget):
                 self, tr("Ergebnis konnte nicht geoeffnet werden"),
                 tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
             return
-        disp = title if len(title) <= 22 else title[:19] + "..."
-        idx  = self.tabs.addTab(tab, f"  {disp}  ")
+        self._wire_tab(tab)
+        idx  = self.tabs.addTab(tab, self._tab_label(tab, title))
         self.tabs.setCurrentIndex(idx)
+        self._update_toolbar()
         self.tab_opened.emit()
         self.tabs_changed.emit()
 
@@ -628,6 +1087,7 @@ class PageViewerPanel(QWidget):
         file_paths = [p for p in file_paths if os.path.isfile(p)]
         if not file_paths:
             return
+        self._reveal_tabs()
         logging.debug(f"show_merge_tab: {len(file_paths)} Dateien: {file_paths}")
 
         # A repeat call with the same files is a double click or a re-sent open
@@ -647,8 +1107,7 @@ class PageViewerPanel(QWidget):
         widget.tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
         idx = self.tabs.addTab(widget, tr("  📂  Dateien oeffnen  "))
         self.tabs.setCurrentIndex(idx)
-        self._manage_btn.setEnabled(False)
-        self._print_btn.setEnabled(False)
+        self._update_toolbar()
         self._viewer_info.setText(tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
 
         def _on_confirmed(paths):
@@ -779,15 +1238,23 @@ class PageViewerPanel(QWidget):
         self._start_conversion(file_paths, merge_widget, _on_done)
 
     def _update_toolbar(self):
+        """Bring the document row in line with the tab that is open.
+
+        Called on every tab change and after every edit: what is available
+        depends on there being a document, and on whether it has a history and
+        unsaved changes."""
         tab = self._current()
-        if tab and isinstance(tab, PdfTab):
-            self._manage_btn.setEnabled(True)
-            self._print_btn.setEnabled(True)
-            self._viewer_info.setText(os.path.basename(tab.pdf_path))
-        else:
-            self._manage_btn.setEnabled(False)
-            self._print_btn.setEnabled(False)
-            self._viewer_info.setText("")
+        has_doc = isinstance(tab, PdfTab)
+        for w in (self._edit_btn, self._print_btn, self._find_btn):
+            w.setEnabled(has_doc)
+        if not has_doc:
+            self.set_find_visible(False)
+        # Speichern lights only when there is something to save. It is the one
+        # question the old bar could not answer at all — it had no save button.
+        self._save_btn.setEnabled(bool(has_doc and tab.is_dirty()))
+        self._act_undo.setEnabled(bool(has_doc and tab.can_undo()))
+        self._act_redo.setEnabled(bool(has_doc and tab.can_redo()))
+        self._sync_tab_label(tab)
 
     def _print_current(self):
         tab = self._current()
@@ -853,35 +1320,28 @@ class PageViewerPanel(QWidget):
         Re-pathing alone made a reordered or rotated document show the wrong
         pages after Save As."""
         model = tab.model
-        tab.pdf_path        = path
-        tab.single.pdf_path = path
+        tab.retarget(path)          # tab, single view, manage panel and its grid
         model.src         = {uid: i for i, uid in enumerate(model.order)}
         model.foreign_src = {}
         model.rotations   = {}
-        if tab._manage_panel is not None:
-            tab._manage_panel.pdf_path = path
-            tab._manage_panel.grid.pdf_path = path
-        idx  = self.tabs.indexOf(tab)
-        name = os.path.basename(path)
-        disp = name if len(name) <= 22 else name[:19] + "..."
-        if idx >= 0:
-            self.tabs.setTabText(idx, f"  {disp}  ")
+        self._sync_tab_label(tab)
 
     def _on_tab_changed(self, idx):
+        # Covers every path that adds or removes a tab: currentChanged fires
+        # on the transition to/from -1, whichever call site caused it.
+        self._sync_empty_state()
+
         # ── Always clean up manage layout when switching file tabs ────────────
-        # The manage panel belongs to the outgoing tab; if it is still in the
-        # splitter we must detach it now, before _current() changes meaning.
-        if self._manage_splitter_widget and self._manage_tab is not None:
+        # The manage panel belongs to the outgoing tab; if it is still mounted
+        # in the tool column we must detach it now, before _current() changes
+        # meaning.
+        if self._manage_tab is not None:
             old_tab = self._manage_tab   # tab that owns the panel
             # Exit manage mode on the old tab so its stack returns to single view
             if old_tab._stack.currentWidget() is not old_tab.single:
                 old_tab._stack.setCurrentWidget(old_tab.single)
                 old_tab._on_manage_exit = None  # discard stale callback
-            try:
-                self._exit_manage_layout()   # detach panel → old tab, destroy splitter
-            finally:
-                if self.show_sidebar:
-                    self.show_sidebar()
+            self._exit_manage_layout()   # detach panel → old tab, unmount
 
         # ── Memory management: freeze outgoing tab, resume incoming tab ────────
         # Cancel pre-render tasks for ALL non-active tabs to stop them burning
@@ -906,23 +1366,24 @@ class PageViewerPanel(QWidget):
                 # anything asks for the space just means doing it twice.
 
         w = active_widget
+        # A search belongs to the document it was run over: carrying its hits
+        # across a tab switch would mark positions in one file from the text of
+        # another.
+        self.set_find_visible(False)
         if isinstance(w, PdfTab):
+            self._schedule_preflight()
             _set_active(w.pdf_path, w.single._current)
             AppState.get().open_pdf(w.pdf_path)
             AppState.get().page_model   = w.model
             AppState.get().current_page = w.single._current
-            self._manage_btn.setEnabled(True)
-            self._print_btn.setEnabled(True)
-            self._viewer_info.setText(os.path.basename(w.pdf_path))
+            self._update_toolbar()
             self.focus_page_view()
         elif isinstance(w, MergeOrderWidget):
-            self._manage_btn.setEnabled(False)
-            self._print_btn.setEnabled(False)
+            self._update_toolbar()
             self._viewer_info.setText(tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
             w.setFocus()
         else:
-            self._manage_btn.setEnabled(False)
-            self._print_btn.setEnabled(False)
+            self._update_toolbar()
             self._viewer_info.setText("")
         self._sync_sidebar()
 
@@ -934,5 +1395,5 @@ class PageViewerPanel(QWidget):
         w = self.tabs.currentWidget()
         if isinstance(w, MergeOrderWidget):
             if self.hide_sidebar: self.hide_sidebar()
-        elif self._manage_splitter_widget is None:   # manage mode owns it there
+        elif self._manage_tab is None:   # manage mode owns it there
             if self.show_sidebar: self.show_sidebar()

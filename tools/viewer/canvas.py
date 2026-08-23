@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QWidget, QApplication, QMenu, QSizePolicy
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QKeySequence, QBrush, QCursor
 from tools.i18n import tr
-from tools.theme import PAPER, _TV
+from tools.theme import FIND, PAPER, _TV
 from tools.viewer.rulers import GUIDE_COLOUR
 
 
@@ -27,6 +27,7 @@ class PdfPageCanvas(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap     = None
+        self._sheets     = []   # continuous mode: [(pm|None, x, y, w, h), …]
         self._chars      = []   # Liste von (char, x0, y0, x1, y1) in Widget-Koordinaten
         self._sel_start  = -1
         self._sel_end    = -1
@@ -41,6 +42,11 @@ class PdfPageCanvas(QWidget):
         self._guides_v   = []     # x positions
         self._preview    = None   # ("h"|"v", px) while one is being dragged out
         self._drag_guide = None   # ("h"|"v", index) while one is being moved
+        # Find highlights, in this widget's pixels. Kept apart from the text
+        # selection: one is where the user dragged, the other is where the
+        # document answered a question, and both can be on screen at once.
+        self._find_boxes   = []   # [(x0, y0, x1, y1), …]
+        self._find_current = []   # the subset belonging to the active match
 
         self.setStyleSheet(f"background:{_TV['viewer_bg']};")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -63,6 +69,43 @@ class PdfPageCanvas(QWidget):
         if preview != self._preview:
             self._preview = preview
             self.update()
+
+    # ── find highlights ──────────────────────────────────────────────────────
+
+    def set_find_boxes(self, boxes, current=()):
+        """Where the search hits are, in widget pixels, and which of them is the
+        one being looked at. The view recomputes these from page coordinates
+        whenever the page moves, so this only ever stores and repaints."""
+        boxes   = [tuple(b) for b in boxes]
+        current = [tuple(b) for b in current]
+        if boxes != self._find_boxes or current != self._find_current:
+            self._find_boxes   = boxes
+            self._find_current = current
+            self.update()
+
+    def _paint_find(self, p):
+        if not self._find_boxes:
+            return
+        p.save()
+        p.setPen(Qt.PenStyle.NoPen)
+        active = set(self._find_current)
+        for box in self._find_boxes:
+            x0, y0, x1, y1 = box
+            rect = QRect(int(x0), int(y0),
+                         max(1, int(x1 - x0)), max(1, int(y1 - y0)))
+            if box in active:
+                p.setBrush(QBrush(QColor(*FIND["current"])))
+                p.drawRect(rect)
+                # An outline as well as a stronger wash: on a dense page the
+                # fill alone is not enough to find at a glance.
+                p.setPen(QPen(QColor(*FIND["edge"]), 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(rect)
+                p.setPen(Qt.PenStyle.NoPen)
+            else:
+                p.setBrush(QBrush(QColor(*FIND["hit"])))
+                p.drawRect(rect)
+        p.restore()
 
     def _guide_at(self, point):
         """The guide under `point` as ("h"|"v", index), or None."""
@@ -89,6 +132,40 @@ class PdfPageCanvas(QWidget):
             else:
                 p.drawLine(int(pos), 0, int(pos), self.height())
 
+    def set_sheets(self, sheets, chars, keep_selection=False):
+        """Several pages at once, for continuous scrolling.
+
+        `sheets` is [(pixmap_or_None, x, y, w, h), …] — the pixmap and the
+        rectangle of the whole sheet it belongs to, both in widget pixels. A
+        None pixmap draws blank paper of the right size, which is how a page
+        that has not been rendered yet keeps the strip's shape instead of
+        leaving a hole in it.
+
+        `chars` are already in widget coordinates and carry every visible page's
+        characters, so a selection can run from one page into the next.
+
+        `keep_selection` is for scroll frames: the character list is the same
+        pages in the same order with updated coordinates, so the indices stay
+        valid. Clearing them on every frame made a drag-select impossible the
+        moment the wheel moved, and flashed the highlight off sixty times a
+        second during an eased scroll.
+        """
+        self._sheets    = list(sheets)
+        self._chars     = chars
+        if not keep_selection:
+            self._sel_start = -1
+            self._sel_end   = -1
+        else:
+            n = len(chars)
+            if self._sel_start >= n:
+                self._sel_start = -1
+            if self._sel_end >= n:
+                self._sel_end = -1
+        self._pixmap    = None
+        self._page_rect = None
+        self.update()
+        self.repainted.emit()
+
     def set_page(self, pixmap, chars, offset_x, offset_y, page_rect=None):
         """
         pixmap   — gerendertes QPixmap
@@ -100,6 +177,7 @@ class PdfPageCanvas(QWidget):
                     instead of around the pixmap, which would otherwise put a
                     hairline through the middle of the page.
         """
+        self._sheets    = []
         self._pixmap    = pixmap
         self._chars     = chars
         self._sel_start = -1
@@ -118,6 +196,7 @@ class PdfPageCanvas(QWidget):
         size, so the document keeps its shape and its scrollbar under you and
         the real page arrives underneath when it is ready.
         """
+        self._sheets    = []
         self._pixmap    = None
         self._chars     = []
         self._sel_start = -1
@@ -128,6 +207,7 @@ class PdfPageCanvas(QWidget):
         self.update()
 
     def clear(self):
+        self._sheets = []
         self._pixmap = None
         self._page_rect = None
         self._chars  = []
@@ -236,6 +316,24 @@ class PdfPageCanvas(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(_TV['viewer_bg']))
 
+        if self._sheets:
+            # Continuous: a strip of sheets. Same two strokes per sheet as the
+            # single-page branch below — the paper, then the hairline that keeps
+            # it defined against a light backdrop.
+            for pm, x, y, w, h in self._sheets:
+                if pm is not None:
+                    p.drawPixmap(int(x), int(y), pm)
+                else:
+                    p.fillRect(int(x), int(y), int(w), int(h), QColor(PAPER))
+                p.setPen(QPen(QColor(0, 0, 0, 45), 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(int(x), int(y), int(w) - 1, int(h) - 1)
+            self._paint_find(p)
+            self._paint_selection(p)
+            self._paint_guides(p)
+            p.end()
+            return
+
         if not self._pixmap:
             # A page still rendering: draw the sheet it will be, so scrolling
             # past it looks like a document rather than a hole. Only when its
@@ -247,6 +345,7 @@ class PdfPageCanvas(QWidget):
                 p.setPen(QPen(QColor(0, 0, 0, 45), 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(int(rx), int(ry), int(rw) - 1, int(rh) - 1)
+            self._paint_find(p)
             self._paint_guides(p)
             p.end()
             return
@@ -266,26 +365,29 @@ class PdfPageCanvas(QWidget):
             p.drawRect(self._offset_x, self._offset_y,
                        self._pixmap.width() - 1, self._pixmap.height() - 1)
 
-        # Auswahl-Highlights
-        if self._sel_start >= 0 and self._sel_end >= 0 and self._chars:
-            lo = min(self._sel_start, self._sel_end)
-            hi = max(self._sel_start, self._sel_end)
-            sel_color = QColor(66, 135, 245, 80)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(sel_color))
-            for i in range(lo, hi + 1):
-                if i < len(self._chars):
-                    _, x0, y0, x1, y1 = self._chars[i]
-                    p.drawRect(QRect(
-                        int(x0), int(y0),
-                        max(1, int(x1 - x0)),
-                        max(1, int(y1 - y0))
-                    ))
+        # Find hits first, so a selection dragged over one still reads as the
+        # selection rather than being washed out by the highlight.
+        self._paint_find(p)
 
+        self._paint_selection(p)
         self._paint_guides(p)
         p.end()
 
     # ── Hilfsfunktionen ──────────────────────────────────────────────────────
+
+    def _paint_selection(self, p):
+        if self._sel_start < 0 or self._sel_end < 0 or not self._chars:
+            return
+        lo = min(self._sel_start, self._sel_end)
+        hi = max(self._sel_start, self._sel_end)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(QColor(66, 135, 245, 80)))
+        for i in range(lo, hi + 1):
+            if i < len(self._chars):
+                _, x0, y0, x1, y1 = self._chars[i]
+                p.drawRect(QRect(int(x0), int(y0),
+                                 max(1, int(x1 - x0)),
+                                 max(1, int(y1 - y0))))
 
     def _char_at(self, pt):
         """Gibt Index des Zeichens zurück das den Punkt enthält, sonst -1."""

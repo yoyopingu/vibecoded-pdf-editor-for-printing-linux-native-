@@ -53,13 +53,12 @@ _EN: dict[str, str] = {
     "Allgemein": "General",
     "Sprache": "Language",
     "Hilfe": "Help",
-    "Über CopyShop PDF Suite": "About CopyShop PDF Suite",
+    "Über {p0}": "About {p0}",
     "Fehlerprotokoll anzeigen": "Show error log",
 
     # ── Absturzbericht ────────────────────────────────────────────────────────
-    "Fehler in CopyShop PDF Suite": "Error in CopyShop PDF Suite",
-    "CopyShop PDF Suite wurde unerwartet beendet":
-        "CopyShop PDF Suite closed unexpectedly",
+    "Fehler in {p0}": "Error in {p0}",
+    "{p0} wurde unerwartet beendet": "{p0} closed unexpectedly",
     "Es ist ein unerwarteter Fehler {p0} aufgetreten.":
         "An unexpected error occurred {p0}.",
     "in der Anwendung": "in the application",
@@ -469,10 +468,13 @@ _EN: dict[str, str] = {
     "Benannte Profile nutzen die passende .icc-Datei aus ~/.local/share/copyshop_pdf_suite/icc/ — fehlt sie, wird generisch konvertiert.":
         "Named profiles use the matching .icc file from ~/.local/share/copyshop_pdf_suite/icc/ — if it is missing, a generic conversion is used.",
     "Rand oben": "Top margin",
+    "Rand unten": "Bottom margin",
     "unten": "bottom",
     "Rand links": "Left margin",
+    "Rand rechts": "Right margin",
     "rechts": "right",
     "Abstand H": "Gap H",
+    "Abstand V": "Gap V",
     "V": "V",
     "Quellseiten in Originalgröße (100 %)": "Source pages at original size (100%)",
     "Seiten werden nicht verkleinert. Das Ausgabeformat muss groß "
@@ -577,7 +579,7 @@ _EN: dict[str, str] = {
     "Datei nicht gefunden": "File not found",
     "Die Datei existiert nicht mehr:\n{p0}": "This file no longer exists:\n{p0}",
     "Format nicht unterstuetzt": "Format not supported",
-    'CopyShop kann "{p0}" nicht oeffnen.': 'CopyShop cannot open "{p0}".',
+    '{p0} kann "{p1}" nicht oeffnen.': '{p0} cannot open "{p1}".',
     "Datei konnte nicht geoeffnet werden": "Could not open file",
     "Ergebnis konnte nicht geoeffnet werden": "Could not open result",
     "{p0}\n\n{p1}": "{p0}\n\n{p1}",
@@ -1373,6 +1375,8 @@ _EN: dict[str, str] = {
     "uebersprungen": "skipped",
 
     # ── About dialog ──────────────────────────────────────────────────────────
+    "PDF-Werkzeug für Copyshop und Druckvorstufe":
+        "PDF tool for copy shops and prepress",
     "Professionelles PDF-Werkzeug für Copyshops und Druckvorstufe.":
         "Professional PDF tool for copy shops and print pre-press.",
     "Entwickelt mit Python · PyQt6 · pypdfium2 · pikepdf · pypdf":
@@ -1438,4 +1442,79 @@ _EN: dict[str, str] = {
     "✓  Ghostscript verfuegbar": "✓  Ghostscript available",
     "✗  Ghostscript fehlt  →  sudo pacman -S ghostscript":
         "✗  Ghostscript missing  →  sudo pacman -S ghostscript",
+
+    # ── Layout view (staging) ────────────────────────────────────────────────
+    "Layout": "Layout",
+    "Anordnung": "Arrangement",
+    "Marken": "Marks",
+    "Inhalt": "Content",
+    "Ausgabe": "Output",
+    "BETA": "BETA",
+    "Modus": "Mode",
+    "Raster": "Grid",
+    "Broschüre · Sattelheftung": "Booklet · saddle stitch",
+    "Broschüre": "Booklet",
+    "Quelle": "Source",
+    "Blattformat": "Sheet format",
+    "Endformat": "Trim size",
+    "Schnittmarken": "Cut marks",
+    "Inhalt einpassen": "Fit content",
+    "Proportionen behalten": "Keep proportions",
+    "Jede Seite wiederholt": "Each page repeated",
+    "Ausführen": "Run",
+    "Keine": "None",
+    "Alle auswaehlen": "Select all",
+    "Auswahl aufheben": "Deselect",
+    "Wie Quellseite × Anordnung  (automatisch)":
+        "Like source page × arrangement  (automatic)",
+    "— Wie Seite —": "— As page —",
+    "Nichts aktiv — Ausführen ändert nichts.":
+        "Nothing switched on — Run changes nothing.",
+    "Nichts aktiv — bitte zuerst eine Stufe einschalten.":
+        "Nothing switched on — turn a stage on first.",
+    "Layout speichern als": "Save layout as",
+    "Layout läuft …": "Layout running …",
+    "Zuschneiden / Skalieren …": "Cropping / scaling …",
+    "Anordnen …": "Arranging …",
+    "Marken setzen …": "Adding marks …",
+    "zugeschnitten": "cropped",
+    "angeordnet": "arranged",
+    "markiert": "marked",
+    "Fertig — {p0}.": "Done — {p0}.",
+    "Ohne Anordnung: Marken für dieses Endformat, mittig auf der Seite. Mit Anordnung: an den Rändern der Slots.":
+        "Without Arrangement: marks for this trim size, centred on the page. With it: at the slot edges.",
+    "Aus: nur die in „Seiten verwalten“ ausgewählten Seiten.":
+        "Off: only the pages picked in “Seiten verwalten”.",
+
+    # ── Document row, status bar and navigation rail ─────────────────────────
+    "Bearbeiten": "Edit",
+    "Rückgängig": "Undo",
+    "Wiederholen": "Redo",
+    "Am Originalpfad speichern": "Save to the original path",
+    "Zuletzt gespeichert {p0}": "Last saved {p0}",
+    "Verkleinern": "Zoom out",
+    "Vergrössern": "Zoom in",
+    "Ganze Seite": "Fit page",
+    "Vorherige Seite": "Previous page",
+    "Nächste Seite": "Next page",
+
+    # ── Find and the preflight light ─────────────────────────────────────────
+    "Im Dokument suchen": "Find in document",
+    "Im Dokument suchen…": "Find in the document…",
+    "Vorheriger Treffer": "Previous match",
+    "Nächster Treffer": "Next match",
+    "Suche schliessen": "Close the search",
+    "Suche läuft…": "Searching…",
+    "Keine Treffer": "No matches",
+    "Druckvorstufe …": "Prepress …",
+    "Druckvorstufe OK": "Prepress OK",
+    "1 Hinweis": "1 note",
+    "{p0} Hinweise": "{p0} notes",
+    "Keine Hinweise.": "No notes.",
+    "Vollständige Prüfung öffnen…": "Open the full check…",
+
+    # ── Continuous scrolling ─────────────────────────────────────────────────
+    "Seiten fortlaufend scrollen": "Scroll pages continuously",
+    "Aus: eine Seite auf einmal, wie bisher.\nEin: die Seiten laufen untereinander durch, mit Abstand dazwischen.":
+        "Off: one page at a time, as before.\nOn: the pages run on below each other, with a gap between them.",
 }

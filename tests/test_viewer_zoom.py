@@ -774,3 +774,359 @@ def test_a_render_that_fails_is_retried_and_never_leaves_the_page_blank():
     finally:
         vp.deleteLater(); _app.processEvents()
     return "recovers from one failure, and shows the placeholder after two"
+
+
+def test_continuous_scroll_moves_without_rebuilding_scale():
+    """Continuous mode must keep one display scale across the strip.
+
+    The scale used to be recomputed from the current page's width on every
+    paint. Scrolling onto a wider or narrower sheet rebuilt the whole strip
+    under the pointer and jumped the scroll position — the hitch that made
+    continuous scrolling feel broken on mixed-size documents.
+    """
+    src = os.path.join(_TMP, "cont_mixed.pdf")
+    if not os.path.exists(src):
+        from reportlab.lib.pagesizes import A4 as _A4
+        c = canvas.Canvas(src, pagesize=_A4)
+        for pw, ph in ((_A4[0], _A4[1]), (700.0, 500.0), (_A4[0], _A4[1]),
+                       (400.0, 600.0), (_A4[0], _A4[1])):
+            c.setPageSize((pw, ph))
+            c.setFont("Helvetica", 36)
+            c.drawString(40, ph / 2, f"{int(pw)}x{int(ph)}")
+            c.showPage()
+        c.save()
+
+    vp, sv = _open_single_view(src, 900, 700)
+    try:
+        sv.set_continuous(True)
+        sv._render()
+        assert _settle(vp, lambda: bool(sv._strip) and len(sv._view._sheets) > 0,
+                       tries=400), "strip never painted"
+        scale0 = sv._display_scale(sv._zoom)
+        assert scale0 and scale0 > 0
+
+        # Scroll deep enough to change the current page several times.
+        positions = []
+        for _ in range(40):
+            sv.scroll_by(180, animate=False)
+            _spin(2)
+            positions.append((sv._current, sv._doc_scroll,
+                              sv._display_scale(sv._zoom)))
+            if sv._doc_scroll >= sv._max_scroll() - 1:
+                break
+
+        scales = {round(s, 6) for _c, _y, s in positions if s}
+        assert len(scales) == 1, \
+            f"display scale changed while scrolling: {sorted(scales)}"
+        assert any(c > 0 for c, _y, _s in positions), \
+            "never left page 1 while scrolling the strip"
+        # Scroll position must advance monotonically (no jumps backward from a
+        # strip rebuild mid-gesture).
+        ys = [y for _c, y, _s in positions]
+        for a, b in zip(ys, ys[1:]):
+            assert b + 0.5 >= a, \
+                f"scroll jumped backward from {a:.1f} to {b:.1f}"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "one scale, forward-only scroll through mixed pages"
+
+
+def test_continuous_wheel_eases_and_touchpad_does_not_lag():
+    """A wheel notch eases; a pixel delta is applied at once.
+
+    Easing a touchpad (which already sends smooth deltas) was the lag. A notch
+    that jumped the full distance in one frame was the jolt. A detent mouse
+    wheel is eased even when the platform sets a pixel delta alongside the
+    angle — on some compositors that pixel delta's size and sign are not to be
+    trusted, and following it made the wheel jump instead of scroll.
+    """
+    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtGui import QWheelEvent
+    from PyQt6.QtCore import Qt as _Qt
+
+    src = os.path.join(_TMP, "cont_wheel.pdf")
+    if not os.path.exists(src):
+        c = canvas.Canvas(src, pagesize=A4)
+        for i in range(8):
+            c.setFont("Helvetica", 48)
+            c.drawString(80, 700, f"PAGE {i + 1}")
+            c.showPage()
+        c.save()
+
+    vp, sv = _open_single_view(src, 900, 700)
+    try:
+        sv.set_continuous(True)
+        sv._render()
+        assert _settle(vp, lambda: bool(sv._strip), tries=300)
+
+        def wheel(angle, pixel=0):
+            sv.wheelEvent(QWheelEvent(
+                QPointF(400, 300), QPointF(400, 300),
+                QPoint(0, pixel), QPoint(0, angle),
+                _Qt.MouseButton.NoButton,
+                _Qt.KeyboardModifier.NoModifier,
+                _Qt.ScrollPhase.NoScrollPhase, False))
+
+        # Notch: goal moves, position eases toward it over frames.
+        before = sv._doc_scroll
+        wheel(-120)
+        assert sv._scroll_goal > before, "wheel notch did not move the goal"
+        mid = sv._doc_scroll
+        assert mid < sv._scroll_goal or abs(mid - sv._scroll_goal) < 1, \
+            "notch jumped straight to the goal instead of easing"
+        _spin(30)
+        assert abs(sv._doc_scroll - sv._scroll_goal) < 1.0, \
+            "eased scroll never settled on the goal"
+
+        # Wheel up must come back down the strip, detents only.
+        down = sv._doc_scroll
+        assert down > 0, "fixture did not scroll down first"
+        for _ in range(20):
+            wheel(120)
+            _spin(2)
+        _spin(30)
+        assert sv._doc_scroll < 1.0, \
+            f"wheel-up never returned to the top (at {sv._doc_scroll:.1f})"
+
+        # A detent with a pixel delta alongside (some compositors) is eased
+        # like a detent, not followed as pixels.
+        sv._jump_scroll(0); _spin(2)
+        wheel(-120, pixel=-120)
+        assert sv._scroll_goal > 0, "detent with pixel delta did not scroll"
+        _spin(30)
+
+        # Touchpad: small deltas, no detent — applied immediately, no animator.
+        sv._scroll_anim.stop()
+        sv._doc_scroll = sv._scroll_goal = 0.0
+        sv.scroll_by(48, animate=False)
+        assert not sv._scroll_anim.isActive(), \
+            "touchpad path left the animator running"
+        assert abs(sv._doc_scroll - 48) < 0.5, \
+            f"immediate scroll landed at {sv._doc_scroll}, not 48"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "notch eases (pixel delta or not), up returns, pixel scroll is immediate"
+
+
+def test_continuous_mode_opens_painted_and_fit_to_the_page():
+    """Two startup requirements of the continuous strip.
+
+    With the setting already on, the preview used to open blank: strip page
+    renders were submitted before the layout gave the view its final size, so
+    the finished render landed in a different cache bucket than the view read,
+    the in-flight key was never released, and nothing asked again or repainted
+    until the user scrolled or zoomed.
+
+    And "fit" is the whole page, not the width: the strip is measured against
+    one reference page, so at zoom 1.0 that page — and every page the same
+    shape — is entirely on screen, the same fit the paged view starts at.
+    """
+    from tools.viewer.panel import PageViewerPanel
+    from tools.render.caches import _FullPageCache
+    from tools.shell.settings import AppSettings
+
+    src = os.path.join(_TMP, "cont_startup.pdf")
+    if not os.path.exists(src):
+        c = canvas.Canvas(src, pagesize=A4)
+        for i in range(6):
+            c.setFont("Helvetica", 48)
+            c.drawString(80, 700, f"PAGE {i + 1}")
+            c.showPage()
+        c.save()
+
+    AppSettings.get().set_continuous_scroll(True)
+    _FullPageCache.invalidate()
+    vp = PageViewerPanel(); vp.resize(1000, 760); vp.show()
+    try:
+        vp.open_file(src)
+        sv = vp.tabs.currentWidget().single
+        assert sv._continuous, "the saved preference did not reach the tab"
+        # No scrolling, no zooming: the strip paints by itself.
+        assert _settle(vp, lambda: len(sv._view._sheets) > 0
+                       and all(s[0] is not None for s in sv._view._sheets),
+                       tries=400), \
+            "continuous preview stayed blank without user interaction"
+
+        w_px, h_px = sv._strip[0][2], sv._strip[0][3]
+        vw, vh = sv._view.width(), sv._view.height()
+        assert w_px <= vw + 2 and h_px <= vh + 2, \
+            f"page is {w_px}x{h_px} in a {vw}x{vh} view — not fitted whole"
+    finally:
+        AppSettings.get().set_continuous_scroll(False)
+        vp.deleteLater(); _app.processEvents()
+    return "paints by itself, and the page is fitted whole"
+
+
+def test_continuous_fit_shows_no_sliver_of_the_next_page():
+    """Ctrl+0 at a page boundary: the fitted page, and nothing of the next.
+
+    The fit used to leave 16 px of slack under a height-fitted sheet while the
+    gutter between sheets was 14 px, so 2 px of the next sheet poked into the
+    bottom of the frame — reading as a hairline artefact rather than a page.
+    The gutter is now the fit's bottom margin, so a fitted sheet plus its
+    gutter is exactly the viewport; and the strip carries a gutter of
+    breathing room above the first sheet and below the last, so neither opens
+    glued to an edge.
+    """
+    src = os.path.join(_TMP, "cont_fit_sliver.pdf")
+    if not os.path.exists(src):
+        c = canvas.Canvas(src, pagesize=A4)
+        for i in range(6):
+            c.setFont("Helvetica", 48)
+            c.drawString(80, 700, f"PAGE {i + 1}")
+            c.showPage()
+        c.save()
+
+    # Portrait A4 in a taller-than-wide viewport: the fit is height-limited,
+    # which is the case that left the sliver.
+    vp, sv = _open_single_view(src, 900, 700)
+    try:
+        sv.set_continuous(True)
+        sv._render()
+        assert _settle(vp, lambda: bool(sv._strip), tries=300)
+
+        # Breathing room at both ends of the strip.
+        assert sv._strip[0][1] == sv.GAP_PX, "no room above the first sheet"
+        last = sv._strip[-1]
+        assert sv._strip_h == last[1] + last[3] + sv.GAP_PX, \
+            "no room below the last sheet"
+
+        # At the very top of the document, page 1 fitted: page 2 stays off
+        # screen below it.
+        assert sv._strip_top_of(1) >= sv._view.height() - 0.5, \
+            "page 2 pokes into the frame below a fitted page 1"
+
+        # Ctrl+0 from mid-scroll, then a boundary as a jump lands on one:
+        # the sheet after the current one starts at or below the viewport.
+        sv.scroll_by(500, animate=False); _spin(3)
+        sv._zoom_fit(); _spin(10)
+        sv._jump_scroll(sv._strip_top_of(sv._current)); _spin(3)
+        avail_h = sv._view.height()
+        assert sv._strip_top_of(sv._current) == sv._doc_scroll
+        if sv._current + 1 < len(sv._strip):
+            nxt = sv._strip_top_of(sv._current + 1) - sv._doc_scroll
+            assert nxt >= avail_h - 0.5, \
+                f"the next sheet starts {nxt - avail_h:.1f}px inside the frame"
+
+        # And the fitted page itself is still whole.
+        scale = sv._display_scale(sv._zoom)
+        rw, rh = sv._cont_ref
+        assert rw * scale <= sv._view.width() + 2, "Ctrl+0 overflows the width"
+        assert rh * scale <= avail_h + 2, "Ctrl+0 overflows the height"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "a fitted page fills the frame; the next sheet stays off screen"
+
+
+def test_continuous_ctrl0_and_ctrl1():
+    """Ctrl+0 fits the reference page whole; Ctrl+1 is the physical size.
+
+    Ctrl+1 used to compute its zoom from the paged fit formula, which in
+    continuous mode describes a different fit than the strip is laid out with,
+    so the shortcut zoomed to the wrong size. Both now go through
+    _display_scale, the one arithmetic the strip actually uses.
+    """
+    from PyQt6.QtGui import QKeyEvent
+    from PyQt6.QtCore import Qt as _Qt
+
+    src = os.path.join(_TMP, "cont_zoom_keys.pdf")
+    if not os.path.exists(src):
+        c = canvas.Canvas(src, pagesize=A4)
+        for i in range(4):
+            c.setFont("Helvetica", 48)
+            c.drawString(80, 700, f"PAGE {i + 1}")
+            c.showPage()
+        c.save()
+
+    vp, sv = _open_single_view(src, 1000, 760)
+    try:
+        sv.set_continuous(True)
+        sv._render()
+        assert _settle(vp, lambda: bool(sv._strip), tries=300)
+
+        def key(k):
+            sv.keyPressEvent(QKeyEvent(
+                QKeyEvent.Type.KeyPress, k,
+                _Qt.KeyboardModifier.ControlModifier))
+
+        sv.scroll_by(400, animate=False); _spin(3)
+        key(_Qt.Key.Key_0); _spin(10)
+        assert abs(sv._zoom - 1.0) < 1e-6, "Ctrl+0 did not reset the zoom"
+        scale = sv._display_scale(sv._zoom)
+        rw, rh = sv._cont_ref
+        assert rw * scale <= sv._view.width() + 2, "Ctrl+0 did not fit the width"
+        assert rh * scale <= sv._view.height() + 2, "Ctrl+0 did not fit the height"
+
+        key(_Qt.Key.Key_1); _spin(10)
+        got = sv._display_scale(sv._zoom)
+        scr = _app.primaryScreen()
+        want = scr.physicalDotsPerInchX() / 72.0
+        assert abs(got - want) / want < 0.02, \
+            f"Ctrl+1 landed at {got:.4f} px/pt, wanted {want:.4f}"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "Ctrl+0 fits the page whole, Ctrl+1 is the physical size"
+
+
+def test_the_rail_drag_scrolls_smoothly_in_continuous_mode():
+    """Dragging the rail thumb follows the pointer, page by fraction.
+
+    The track answered a drag with page numbers, so the view jumped a page at
+    a time and the thumb moved in chunks. In continuous mode it now reports
+    the position along the strip, and the thumb mirrors the exact scroll
+    position instead of snapping to the current page.
+    """
+    from PyQt6.QtCore import QPointF as _QPF, QEvent as _QE, Qt as _Qt
+    from PyQt6.QtGui import QMouseEvent
+
+    src = os.path.join(_TMP, "cont_rail.pdf")
+    if not os.path.exists(src):
+        c = canvas.Canvas(src, pagesize=A4)
+        for i in range(10):
+            c.setFont("Helvetica", 48)
+            c.drawString(80, 700, f"PAGE {i + 1}")
+            c.showPage()
+        c.save()
+
+    vp, sv = _open_single_view(src, 900, 700)
+    try:
+        sv.set_continuous(True)
+        sv._render()
+        assert _settle(vp, lambda: bool(sv._strip) and sv._strip_h > 0,
+                       tries=300)
+        assert sv._max_scroll() > 0, "fixture does not scroll"
+
+        track = sv._track
+        assert track._scroll_mode, "the track did not switch to scroll mode"
+
+        def press(y):
+            track.mousePressEvent(QMouseEvent(
+                _QE.Type.MouseButtonPress, _QPF(6, y), _QPF(6, y),
+                _Qt.MouseButton.LeftButton, _Qt.MouseButton.LeftButton,
+                _Qt.KeyboardModifier.NoModifier))
+
+        def move(y):
+            track.mouseMoveEvent(QMouseEvent(
+                _QE.Type.MouseMove, _QPF(6, y), _QPF(6, y),
+                _Qt.MouseButton.NoButton, _Qt.MouseButton.LeftButton,
+                _Qt.KeyboardModifier.NoModifier))
+
+        h = track.height()
+        seen = []
+        for frac in (0.2, 0.3, 0.4, 0.5, 0.55):
+            press(h * frac)
+            move(h * frac)
+            _spin(2)
+            seen.append(sv._doc_scroll)
+        assert all(b > a for a, b in zip(seen, seen[1:])), \
+            f"the drag moved in chunks or backwards: {[round(s,1) for s in seen]}"
+        # Distinct positions for distinct drag fractions — not page snaps.
+        assert len({round(s, 1) for s in seen}) == len(seen), \
+            "dragging produced page snaps, not a proportional scroll"
+        # The thumb follows the scroll, not the page.
+        expect = seen[-1] / sv._max_scroll()
+        assert abs(track._scroll_frac - expect) < 0.01, \
+            "the thumb does not mirror the scroll position"
+    finally:
+        vp.deleteLater(); _app.processEvents()
+    return "the drag is proportional and the thumb follows the scroll"

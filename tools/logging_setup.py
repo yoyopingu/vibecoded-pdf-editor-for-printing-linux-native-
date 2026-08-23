@@ -32,6 +32,7 @@ import tempfile
 import threading
 import time
 import traceback
+from tools.branding import versioned
 
 _LOG_NAME   = "copyshop.log"
 _CRASH_NAME = "copyshop-crash.log"
@@ -247,13 +248,13 @@ def install():
     _install_crash_handler()
     atexit.register(_close_crash_file)
 
-    logging.info("--- CopyShop PDF Suite starting (pid %s, python %s) ---",
+    logging.info(f"--- {versioned()} starting (pid %s, python %s) ---",
                  os.getpid(), sys.version.split()[0])
     # A session with a start line and no exit line is one that died without
     # getting the chance to write anything — which is the thing worth knowing
     # when someone reports that the app "just closed".
     atexit.register(lambda: logging.info(
-        "--- CopyShop PDF Suite exiting cleanly (pid %s) ---", os.getpid()))
+        f"--- {versioned()} exiting cleanly (pid %s) ---", os.getpid()))
 
 
 def install_qt_message_handler():
