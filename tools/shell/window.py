@@ -3,7 +3,7 @@ MainWindow: the sidebar, and what it switches between — the viewer and the
 tool panels.
 """
 import sys, os
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox, QPushButton
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox, QPushButton, QScrollArea
 from PyQt6.QtCore import Qt, pyqtSignal
 from tools.i18n import tr, set_language, get_language
 from tools.branding import APP_NAME, APP_TAGLINE, app_title, versioned
@@ -24,6 +24,7 @@ from tools.shell.protokoll import ProtokollWindow, notify
 from tools.shell.statusbar import StatusBar
 from tools.shell.style import apply_theme_globally
 from tools.shell.titlebar import NavBtn, TitleBar
+from tools.shell.tools_toggle import ToolsToggle
 
 
 # The tool list, grouped by what each tool acts on. Layout is not in it:
@@ -107,55 +108,121 @@ class ViewSwitch(QWidget):
 
 
 class SidebarHost:
-    """One sidebar slot, three tenants — one entry point.
+    """One sidebar slot, three tenants — one entry point, one scroll surface.
 
     The 224px tool column is a slot, not just a tool list: the list by default,
     ManagePanel's operations in manage mode, Layout's staging sections in the
-    layout view, and nothing (the list just steps aside) for the merge preview.
-    Today those three behaviours arrived through three ad-hoc protocols — a
-    hide/show pair, a mount/unmount pair, and a direct call from _switch — that
-    all reached for the same widgets. This class owns the slot and folds them
-    into a single `mount(view, widget)`.
+    layout view, and nothing for the merge preview. Today those three behaviours
+    arrived through three ad-hoc protocols — a hide/show pair, a mount/unmount
+    pair, and a direct call from _switch — that all reached for the same widgets
+    and left no room for the concept's Werkzeuge toggle. This class owns the
+    slot and folds them into a single `mount(view, widget)`.
 
     `view` is the requesting view's token:
-        "tool_list"  — the default (restores the list, unmounts anything extra),
+        "tool_list"  — the default / preview (the list, always open),
         "manage"     — ManagePanel's operations (widget mounted),
         "layout"     — the layout view's staging controls (widget mounted),
         "merge"      — the merge preview (no replacement; the list steps aside).
+
+    The slot is the concept's single scroll surface (`.toolscroll`): a
+    Werkzeuge toggle (shown only in manage/layout) above one QScrollArea whose
+    content holds either the list, the mounted widget, or the mounted widget
+    with the list APPENDED below it — never a second, nested scroll of its own.
     """
+
     def __init__(self, slot, tool_list):
         self._slot = slot
-        self._lay = slot.layout()
         self._tool_list = tool_list
         self._extra = None
+        self._view = None
+        self._open = False
+        self._guard = False
+
+        lay = slot.layout()
+
+        # The Werkzeuge toggle. It sits above the scroll surface and is visible
+        # only in manage/layout — MainWindow's mount() calls decide that by view.
+        self._toggle = ToolsToggle()
+        self._toggle_box = QWidget()
+        tbh = QHBoxLayout(self._toggle_box)
+        tbh.setContentsMargins(6, 4, 6, 8)
+        tbh.setSpacing(0)
+        tbh.addWidget(self._toggle)
+        self._toggle_box.setVisible(False)
+        lay.addWidget(self._toggle_box)
+        self._toggle.toggled.connect(self._on_toggle)
+
+        # One scroll surface for the list and whatever is mounted beneath it.
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._content = QWidget()
+        self._content.setObjectName("toolscroll")
+        clay = QVBoxLayout(self._content)
+        clay.setContentsMargins(0, 0, 0, 8)
+        clay.setSpacing(0)
+        self._scroll.setWidget(self._content)
+        lay.addWidget(self._scroll, 1)
+
+        self._sync()
 
     def mount(self, view, widget=None):
-        if view == "merge":
-            self._detach()
-            self._tool_list.setVisible(False)
-        elif view == "tool_list":
-            self._detach()
-            self._tool_list.setVisible(True)
-        else:  # "manage", "layout"
-            self._detach()
-            if widget is not None:
-                self._tool_list.setVisible(False)
-                self._extra = widget
-                self._lay.addWidget(widget)
-                widget.show()
+        """Mount `view` (and its optional `widget`), resetting the toggle.
+
+        A view change always resets the Werkzeuge toggle — the concept's
+        `setView()` sets `toolsOpen = false`, so the list is never carried open
+        across a switch."""
+        self._view = view
+        self._extra = widget
+        self._set_open(False)
+        self._sync()
 
     def unmount(self):
         """Back to the default: whatever is mounted is detached, the tool list
         returns."""
         self.mount("tool_list")
 
-    def _detach(self):
-        """Remove whatever extra widget is mounted, without touching the list's
-        visibility (the caller decides that)."""
-        if self._extra is not None:
-            self._lay.removeWidget(self._extra)
-            self._extra.setParent(None)
-            self._extra = None
+    def _on_toggle(self, checked):
+        if self._guard:
+            return
+        self._open = checked
+        self._sync()
+
+    def _set_open(self, on):
+        self._guard = True
+        try:
+            self._toggle.setChecked(on)
+        finally:
+            self._guard = False
+        self._open = bool(on)
+
+    def _sync(self):
+        """Re-derive what the column shows from the current view and toggle.
+
+        The content layout is rebuilt from scratch each time — it holds at most
+        two widgets (the mounted content and, when the toggle is open, the tool
+        list appended after it), so clearing and re-adding is the whole of it.
+        """
+        clay = self._content.layout()
+        while clay.count():
+            it = clay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.hide()
+
+        view = self._view
+        self._toggle_box.setVisible(view in ("manage", "layout"))
+        list_visible = (view in ("tool_list", "preview")
+                        or (self._open and view in ("manage", "layout")))
+
+        if view in ("manage", "layout") and self._extra is not None:
+            clay.addWidget(self._extra)
+            self._extra.show()
+        if list_visible:
+            clay.addWidget(self._tool_list)
+            self._tool_list.show()
 
 
 class MainWindow(QMainWindow):
@@ -349,7 +416,6 @@ class MainWindow(QMainWindow):
         pm_btn.clicked.connect(lambda c, x=idx: self._switch(x))
         tl.addWidget(pm_btn); self._btns.append(pm_btn)
         self._stack.addWidget(PluginManagerPanel())
-        slot_lay.addWidget(self._tool_list)
         sb.addWidget(self._sidebar_slot, 1)
         self._sidebar_host = SidebarHost(self._sidebar_slot, self._tool_list)
 

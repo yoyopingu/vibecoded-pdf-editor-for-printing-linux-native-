@@ -143,6 +143,7 @@ _EN: dict[str, str] = {
     # ── Sidebar ───────────────────────────────────────────────────────────────
     "Seiten-Viewer": "Page Viewer",
     "WERKZEUGE": "TOOLS",
+    "Werkzeuge": "Tools",
     "PLUGINS": "PLUGINS",
     "v3.0  —  open source": "v3.0  —  open source",
 
