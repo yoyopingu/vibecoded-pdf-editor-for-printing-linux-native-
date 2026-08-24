@@ -511,3 +511,55 @@ def test_rail_page_count_label_updates_when_pages_are_added_or_deleted():
     finally:
         tab.deleteLater(); _app.processEvents()
     return "rail count label updates on add and delete"
+
+
+def test_tools_toggle_resets_on_mount_and_appends_the_list_when_open():
+    """Phase 4.2: in manage/layout the Werkzeuge list is hidden behind the
+    ToolsToggle and only APPENDS to the sidebar's single scroll surface when
+    that toggle is open. A view switch is just another mount(), and every
+    mount() resets the toggle to closed so the list is never carried open
+    across a switch. (docs/gui-refactor-plan.md lines 113-114, 198-201 and
+    the SidebarHost.mount docstring in tools/shell/window.py.)"""
+    from PyQt6.QtWidgets import QWidget, QVBoxLayout
+    from tools.shell.window import SidebarHost
+
+    slot = QWidget(); lay = QVBoxLayout(slot)
+    tool_list = QWidget(); tool_list.setObjectName("toolList")
+    lay.addWidget(tool_list)
+
+    host = SidebarHost(slot, tool_list)
+    extra = QWidget(); extra.setObjectName("extra")  # ManagePanel / layout controls
+
+    def _content_widgets():
+        # The ordered children of the single scroll surface.
+        clay = host._content.layout()
+        return [clay.itemAt(i).widget() for i in range(clay.count())]
+
+    try:
+        # Into manage: toggle resets to closed, list stays out of the scroll.
+        host.mount("manage", extra)
+        assert host._open is False, "toggle must reset to closed on mount"
+        assert host._toggle.isChecked() is False, "toggle button must read closed"
+        assert _content_widgets() == [extra], \
+            "tool list must not append while the toggle is off"
+
+        # User opens Werkzeuge: list APPENDS behind the mounted widget.
+        host._toggle.setChecked(True)      # fires toggled -> _on_toggle synchronously
+        assert host._open is True and host._toggle.isChecked() is True
+        assert _content_widgets() == [extra, tool_list], \
+            "tool list must append AFTER the mounted widget, not before it"
+
+        # A view switch is another mount(): the toggle must reset again,
+        # and with it the list must be dropped from the scroll surface.
+        host.mount("layout", extra)
+        assert host._open is False, "toggle must reset on the next mount"
+        assert host._toggle.isChecked() is False
+        assert _content_widgets() == [extra], "list must drop on view switch"
+
+        # And re-entering manage still keeps it closed.
+        host.mount("manage", extra)
+        assert host._open is False
+        assert _content_widgets() == [extra], "list must not survive the switch"
+    finally:
+        host = None
+        slot.deleteLater(); _app.processEvents()
