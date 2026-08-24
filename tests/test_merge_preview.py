@@ -450,24 +450,23 @@ def test_merge_preview_hides_the_app_sidebar():
     from tools.viewer.merge import MergeOrderWidget
     vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
     shown = []
-    vp.hide_sidebar = lambda: shown.append(False)
-    vp.show_sidebar = lambda: shown.append(True)
+    vp.mount_sidebar = lambda view, widget=None: shown.append(view)
 
     vp.show_merge_tab([FX["normal"], FX["single"]])
     _spin(20, 0.01)
     assert isinstance(vp.tabs.currentWidget(), MergeOrderWidget)
-    assert shown and shown[-1] is False, f"sidebar not hidden ({shown})"
+    assert shown and shown[-1] == "merge", f"sidebar not hidden ({shown})"
 
     vp.tabs.currentWidget()._do_cancel()
     _spin(20, 0.01)
-    assert shown[-1] is True, f"sidebar not restored after cancel ({shown})"
+    assert shown[-1] == "tool_list", f"sidebar not restored after cancel ({shown})"
 
     # …and it stays away only for that tab
     vp.open_file(FX["normal"]); _spin(30, 0.01)
     vp.show_merge_tab([FX["single"], FX["framed"]]); _spin(20, 0.01)
-    assert shown[-1] is False, "sidebar not hidden for a second preview"
+    assert shown[-1] == "merge", "sidebar not hidden for a second preview"
     vp.tabs.setCurrentIndex(0); _spin(20, 0.01)
-    assert shown[-1] is True, "sidebar not restored when switching to a PDF tab"
+    assert shown[-1] == "tool_list", "sidebar not restored when switching to a PDF tab"
     vp.deleteLater()
 
 

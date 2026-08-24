@@ -106,6 +106,58 @@ class ViewSwitch(QWidget):
             b.setChecked(i == which)
 
 
+class SidebarHost:
+    """One sidebar slot, three tenants — one entry point.
+
+    The 224px tool column is a slot, not just a tool list: the list by default,
+    ManagePanel's operations in manage mode, Layout's staging sections in the
+    layout view, and nothing (the list just steps aside) for the merge preview.
+    Today those three behaviours arrived through three ad-hoc protocols — a
+    hide/show pair, a mount/unmount pair, and a direct call from _switch — that
+    all reached for the same widgets. This class owns the slot and folds them
+    into a single `mount(view, widget)`.
+
+    `view` is the requesting view's token:
+        "tool_list"  — the default (restores the list, unmounts anything extra),
+        "manage"     — ManagePanel's operations (widget mounted),
+        "layout"     — the layout view's staging controls (widget mounted),
+        "merge"      — the merge preview (no replacement; the list steps aside).
+    """
+    def __init__(self, slot, tool_list):
+        self._slot = slot
+        self._lay = slot.layout()
+        self._tool_list = tool_list
+        self._extra = None
+
+    def mount(self, view, widget=None):
+        if view == "merge":
+            self._detach()
+            self._tool_list.setVisible(False)
+        elif view == "tool_list":
+            self._detach()
+            self._tool_list.setVisible(True)
+        else:  # "manage", "layout"
+            self._detach()
+            if widget is not None:
+                self._tool_list.setVisible(False)
+                self._extra = widget
+                self._lay.addWidget(widget)
+                widget.show()
+
+    def unmount(self):
+        """Back to the default: whatever is mounted is detached, the tool list
+        returns."""
+        self.mount("tool_list")
+
+    def _detach(self):
+        """Remove whatever extra widget is mounted, without touching the list's
+        visibility (the caller decides that)."""
+        if self._extra is not None:
+            self._lay.removeWidget(self._extra)
+            self._extra.setParent(None)
+            self._extra = None
+
+
 class MainWindow(QMainWindow):
     def __init__(self, open_file=None, open_files=None):
         super().__init__()
@@ -266,7 +318,6 @@ class MainWindow(QMainWindow):
         # mounts ManagePanel's operations here and Layout mounts its staging
         # sections here, in place of the tool list — one column, same width,
         # a different job depending on the view, exactly as the concept has it.
-        self._sidebar_extra = None
         self._sidebar_slot = QWidget()
         self._sidebar_slot.setObjectName("sidebarSlot")
         slot_lay = QVBoxLayout(self._sidebar_slot)
@@ -300,6 +351,7 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(PluginManagerPanel())
         slot_lay.addWidget(self._tool_list)
         sb.addWidget(self._sidebar_slot, 1)
+        self._sidebar_host = SidebarHost(self._sidebar_slot, self._tool_list)
 
         # Plugins
         plugins = discover_plugins()
@@ -336,7 +388,6 @@ class MainWindow(QMainWindow):
         sb.addWidget(beta)
 
         root.addWidget(sidebar)
-        self._sidebar = sidebar   # keep reference for manage-mode hide/show
 
         # ── Hauptbereich ─────────────────────────────────────────────────────
         main_col = QVBoxLayout()
@@ -351,19 +402,14 @@ class MainWindow(QMainWindow):
         # check; the viewer knows it wants the panel, not where the panel is.
         self.viewer.show_tool_panel = self._show_tool_panel
 
-        # Wire the tool list's hide/show into the page viewer. The merge
-        # preview brings its own sidebar and just needs the list out of the
-        # way — no replacement content of its own — so it keeps this plain
-        # pair rather than the mount/unmount below.
-        self.viewer.hide_sidebar = lambda: self._tool_list.setVisible(False)
-        self.viewer.show_sidebar = lambda: self._tool_list.setVisible(True)
-
-        # "Seiten verwalten" mounts ManagePanel's operations into the same
-        # slot Layout's staging sections use below — one column, swapped
-        # content, per the concept.
-        self.viewer.mount_sidebar_widget   = self._mount_sidebar_widget
-        self.viewer.unmount_sidebar_widget = self._unmount_sidebar_widget
-        self.viewer.sync_view_switch       = self._sync_view_switch
+        # Wire the shared sidebar slot into the page viewer. One entry point —
+        # SidebarHost.mount(view, widget) — replaces the three protocols that
+        # used to converge here (hide/show, mount/unmount, and _switch's own
+        # direct call). "Seiten verwalten" mounts ManagePanel's operations,
+        # Layout mounts its staging sections, and the merge preview just asks
+        # the tool list to step aside.
+        self.viewer.mount_sidebar = self._sidebar_host.mount
+        self.viewer.sync_view_switch = self._sync_view_switch
 
         # Phase 3.1: the doc row (tabs + doc actions) belongs at the window
         # level, above (sidebar | body). The PageViewerPanel controller owns
@@ -455,25 +501,6 @@ class MainWindow(QMainWindow):
             return tr("Vorschau zeigt Zuschneiden + Anordnung — Ausführen wendet beide an.")
         return ""
 
-    def _mount_sidebar_widget(self, widget):
-        """Show `widget` in the tool column instead of the tool list — what
-        "Seiten verwalten" does with ManagePanel's operations, and what
-        _switch() below does with Layout's staging sections."""
-        self._unmount_sidebar_widget()
-        self._tool_list.setVisible(False)
-        self._sidebar_extra = widget
-        self._sidebar_slot.layout().addWidget(widget)
-        widget.show()
-
-    def _unmount_sidebar_widget(self):
-        """Undo _mount_sidebar_widget(): detach whatever is mounted and bring
-        the tool list back. Safe to call when nothing is mounted."""
-        if self._sidebar_extra is not None:
-            self._sidebar_slot.layout().removeWidget(self._sidebar_extra)
-            self._sidebar_extra.setParent(None)
-            self._sidebar_extra = None
-        self._tool_list.setVisible(True)
-
     def _show_tool_panel(self, label):
         """Bring a tool panel forward by the name it carries in the sidebar."""
         for i, (name, _cls) in enumerate(TOOLS):
@@ -493,9 +520,9 @@ class MainWindow(QMainWindow):
         # verwalten" then mounts ManagePanel over that on its own, via the
         # viewer's enter/exit-manage calls.
         if idx == 1:
-            self._mount_sidebar_widget(self._layout_panel.controls_widget)
+            self._sidebar_host.mount("layout", self._layout_panel.controls_widget)
         else:
-            self._unmount_sidebar_widget()
+            self._sidebar_host.mount("tool_list")
         self._sync_view_switch()
 
     def _sync_view_switch(self):

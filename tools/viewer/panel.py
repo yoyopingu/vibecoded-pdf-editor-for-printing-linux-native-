@@ -278,11 +278,8 @@ class PageViewerPanel(QWidget):
         self.switch_to_viewer   = None   # lambda: main._switch(0)
         self.get_main_stack_idx = None   # lambda: main._stack.currentIndex()
         self.restore_main_idx   = None   # lambda idx: main._switch(idx)
-        self.hide_sidebar       = None   # lambda: sidebar.setVisible(False)
-        self.show_sidebar       = None   # lambda: sidebar.setVisible(True)
-        self.mount_sidebar_widget   = None   # lambda w: mounts w in the tool column
-        self.unmount_sidebar_widget = None   # lambda: restores the tool list there
-        self.sync_view_switch       = None   # lambda: reread which of the 3 views is current
+        self.mount_sidebar   = None   # SidebarHost.mount(view, widget=None)
+        self.sync_view_switch = None  # lambda: reread which of the 3 views is current
         self.show_status            = None   # lambda msg: window-level status bar
         self._pre_manage_idx    = None   # gespeicherter Stack-Index vor Manage-Modus
         self._pf_job      = None
@@ -732,8 +729,8 @@ class PageViewerPanel(QWidget):
         panel.show()
         # Remember which tab owns this layout so _exit can detach correctly
         self._manage_tab = self._current()
-        if self.mount_sidebar_widget:
-            self.mount_sidebar_widget(panel)
+        if self.mount_sidebar:
+            self.mount_sidebar("manage", panel)
 
     def _exit_manage_layout(self):
         """Detach ManagePanel from the tool column and give it back."""
@@ -745,8 +742,8 @@ class PageViewerPanel(QWidget):
             tab._manage_panel.setParent(tab)
             tab._manage_panel.hide()
         self._manage_tab = None
-        if self.unmount_sidebar_widget:
-            self.unmount_sidebar_widget()
+        if self.mount_sidebar:
+            self.mount_sidebar("tool_list")
 
     def _current(self):
         w = self.tabs.currentWidget()
@@ -1223,6 +1220,6 @@ class PageViewerPanel(QWidget):
         does for the page manager."""
         w = self.tabs.currentWidget()
         if isinstance(w, MergeOrderWidget):
-            if self.hide_sidebar: self.hide_sidebar()
+            if self.mount_sidebar: self.mount_sidebar("merge")
         elif self._manage_tab is None:   # manage mode owns it there
-            if self.show_sidebar: self.show_sidebar()
+            if self.mount_sidebar: self.mount_sidebar("tool_list")
