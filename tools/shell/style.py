@@ -16,10 +16,18 @@ def _build_style(dark: bool) -> str:
     values that _THEME_COLOURS held and a third dark blue away from the module
     constants above them. The short local names are kept — they appear a few
     hundred times in the sheet below, and `{_BG}` reads better than a lookup.
+
+    The rules follow docs/gui-concept.html: neutral chrome with 1px lines,
+    blue only for selection/active/primary, fields on SURFACE_3, buttons and
+    inset wells on SURFACE_2, hovers one surface-step up, tabs rounded on the
+    right with the active one carrying a top accent bar.
     """
     c = shell_colours("dark" if dark else "light")
     _BG    = c["BG"];           _PANEL   = c["PANEL"];      _TEXT  = c["TEXT"]
     _DIM   = c["DIM"];          _HOVER   = c["HOVER"];      _LINE  = c["LINE"]
+    _FAINT = c["FAINT"]
+    _S2    = c["SURFACE_2"];    _S3      = c["SURFACE_3"]
+    _LSTRONG = c["LINE_STRONG"]
     _IB    = c["INPUT_BG"];     _IBD     = c["INPUT_BORDER"]
     _LB    = c["LIST_BORDER"]
     _SEL   = c["SELECTION"];    _LHOV    = c["LIST_HOVER"]
@@ -37,7 +45,10 @@ def _build_style(dark: bool) -> str:
     # Spelled out as rgba(): Qt reads a 9-character "#rrggbbaa" as "#aarrggbb"
     # and would silently take the alpha byte for the red channel.
     _r, _g, _b = (int(_ACC[1:][i:i+2], 16) for i in (0, 2, 4))
-    _ACC_DIM = f"rgba({_r},{_g},{_b},0.35)"     # nav hover marker
+    # The concept's --accent-soft: the ground a selected nav item or an active
+    # stage sits on. Dark needs more of it than light to read against its
+    # surface.
+    _ACC_SOFT = f"rgba({_r},{_g},{_b},{0.16 if dark else 0.12})"
 
     return f"""
 * {{
@@ -58,8 +69,7 @@ QLabel#formLabel {{
     qproperty-wordWrap: true;
 }}
 QLabel#sectionLabel {{
-    color: {_ACC}; font-size: 9px; font-weight: bold; letter-spacing: 3px;
-    text-transform: uppercase;
+    color: {_FAINT}; font-size: 10px; font-weight: bold; letter-spacing: 2px;
 }}
 QLabel#currentFileLabel {{ color: {_TEXT}; font-size: 12px; }}
 QWidget#currentFileBar {{
@@ -70,7 +80,7 @@ QWidget#currentFileBar {{
 /* ── Title bar ──────────────────────────────────────────── */
 QWidget#titleBar {{
     background: {_SB_LOGO};
-    border-bottom: 2px solid {_LINE};
+    border-bottom: 1px solid {_LINE};
 }}
 QLabel#titleBarLabel {{
     color: {_TEXT}; font-size: 13px; font-weight: bold;
@@ -81,23 +91,23 @@ QMenuBar#titleMenuBar {{
     font-size: 13px; border: none;
 }}
 QMenuBar#titleMenuBar::item {{
-    background: transparent; padding: 5px 12px; border-radius: 5px;
+    background: transparent; padding: 5px 12px; border-radius: 6px;
 }}
 QMenuBar#titleMenuBar::item:selected {{
     background: {_HOVER};
 }}
 QMenu {{
-    background: {_PANEL}; color: {_TEXT};
-    border: 1px solid {_LINE};
-    border-radius: 6px;
-    padding: 4px 0;
+    background: {_S2}; color: {_TEXT};
+    border: 1px solid {_LSTRONG};
+    border-radius: 8px;
+    padding: 5px;
 }}
-QMenu::item {{ padding: 6px 28px 6px 18px; border-radius: 3px; }}
-QMenu::item:selected {{ background: {_HOVER}; }}
+QMenu::item {{ padding: 6px 26px 6px 14px; border-radius: 5px; }}
+QMenu::item:selected {{ background: {_S3}; }}
 QMenu::separator {{ height: 1px; background: {_LINE}; margin: 4px 10px; }}
 QPushButton#titleBarBtn {{
     background: transparent; color: {_DIM};
-    border: none; border-radius: 0;
+    border: none; border-radius: 7px;
     font-size: 14px; min-width: 42px;
 }}
 QPushButton#titleBarBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
@@ -123,9 +133,9 @@ QWidget#sidebarLogo {{ background: {_SB_LOGO}; }}
    it rather than beside it — the indent is what says "contained by". */
 QPushButton#navBtn {{
     background: transparent; color: {_NB_TEXT};
-    border: none; border-left: 4px solid transparent;
-    padding: 5px 14px 5px 24px; text-align: left;
-    font-size: 12px; border-radius: 0; min-height: 26px;
+    border: none; border-left: 3px solid transparent;
+    padding: 5px 14px 5px 21px; text-align: left;
+    font-size: 12px; border-radius: 7px; min-height: 26px;
 }}
 /* The tool-list group headings — FARBE, INHALT, AUSGABE. Their own name, not
    the shared #sectionLabel: that one is 9 px with 3 px of letter-spacing, which
@@ -134,16 +144,15 @@ QPushButton#navBtn {{
    The rule above closes the group off from the one before it; the heading then
    belongs to what follows it, which is the whole point of a heading. */
 QLabel#navGroup {{
-    color: {_ACC}; font-size: 11px; font-weight: bold; letter-spacing: 1px;
+    color: {_FAINT}; font-size: 10px; font-weight: bold; letter-spacing: 1px;
     border-top: 1px solid {_LINE};
 }}
 QPushButton#navBtn:hover {{
     background: {_NB_HOV}; color: {_NB_ACT_TEXT};
-    border-left: 4px solid {_ACC_DIM};
 }}
 QPushButton#navBtn[active="true"] {{
-    background: {_NB_HOV}; color: {_NB_ACT_TEXT};
-    border-left: 4px solid {_ACC}; font-weight: bold;
+    background: {_ACC_SOFT}; color: {_NB_ACT_TEXT};
+    border-left: 3px solid {_ACC}; font-weight: bold;
 }}
 /* The three views, as one segmented control at the top of the sidebar.
    One rectangle holding three segments — the border and the ground belong to
@@ -152,18 +161,19 @@ QPushButton#navBtn[active="true"] {{
 QWidget#viewSwitch {{
     background: {_VB_BG};
     border: 1px solid {_LINE};
-    border-radius: 8px;
+    border-radius: 9px;
 }}
 QPushButton#viewSeg {{
     background: transparent; color: {_NB_TEXT};
     border: none; border-radius: 6px;
     padding: 6px 1px; font-size: 10px; min-height: 26px;
 }}
-QPushButton#viewSeg:hover {{ background: {_VB_HOV}; color: {_NB_ACT_TEXT}; }}
-/* No bold on the checked segment: the accent fill already marks it, and the
-   extra width pushed "Seiten verwalten" past the 224 px column and clipped it. */
+QPushButton#viewSeg:hover {{ color: {_NB_ACT_TEXT}; }}
+/* No accent fill on the checked segment — the raised surface says it, and the
+   extra width of a bold label pushed "Seiten verwalten" past the 224 px column
+   and clipped it. */
 QPushButton#viewSeg:checked {{
-    background: {_ACC}; color: {_ON_ACC};
+    background: {_S3}; color: {_TEXT}; font-weight: bold;
 }}
 QLabel#betaChip {{
     color: {_ACC}; font-family: 'JetBrains Mono','DejaVu Sans Mono',monospace;
@@ -193,28 +203,28 @@ QPushButton#actionBtn:hover {{ background: {_ACC_HOV}; }}
 QPushButton#actionBtn:pressed {{ background: {_ACC_PRS}; }}
 QPushButton#actionBtn:disabled {{ background: {_BTN_DIS}; color: {_BTN_DIS_T}; }}
 QPushButton#secondaryBtn {{
-    background: {_IB}; color: {_TEXT};
-    border: 1px solid {_IBD}; border-radius: 6px;
+    background: {_S2}; color: {_TEXT};
+    border: 1px solid {_LINE}; border-radius: 7px;
     padding: 6px 14px; min-height: 28px;
 }}
 /* Small square icon buttons (the zoom −/+/⟳ above a preview). They are fixed to
    22×22, where secondaryBtn's padding pushes the glyph clean out of the box —
    they rendered as three empty rectangles. */
 QPushButton#iconBtn {{
-    background: {_IB}; color: {_TEXT};
-    border: 1px solid {_IBD}; border-radius: 4px;
+    background: transparent; color: {_DIM};
+    border: none; border-radius: 7px;
     padding: 0px; min-height: 0px; min-width: 0px;
     font-size: 13px;
 }}
-QPushButton#iconBtn:hover {{ background: {_HOVER}; border-color: {_ACC}; }}
+QPushButton#iconBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
 QPushButton#iconBtn:pressed {{ background: {_SEL}; }}
-QPushButton#secondaryBtn:hover {{ background: {_HOVER}; border-color: {_ACC}; }}
+QPushButton#secondaryBtn:hover {{ background: {_S3}; border-color: {_ACC}; }}
 QPushButton#secondaryBtn:pressed {{ background: {_SEL}; }}
 
 /* ── Input fields ───────────────────────────────────────── */
 QLineEdit {{
-    background: {_IB}; color: {_TEXT};
-    border: 1px solid {_IBD}; border-radius: 5px;
+    background: {_S3}; color: {_TEXT};
+    border: 1px solid {_LINE}; border-radius: 7px;
     padding: 5px 10px; min-height: 28px;
     selection-background-color: {_SEL};
 }}
@@ -227,8 +237,8 @@ QLineEdit:focus {{
    made every popup exactly one row too short — a two-option dropdown had to be
    scrolled to reach the second option. */
 QComboBox {{
-    background: {_IB}; color: {_TEXT};
-    border: 1px solid {_IBD}; border-radius: 5px;
+    background: {_S3}; color: {_TEXT};
+    border: 1px solid {_LINE}; border-radius: 7px;
     padding: 0px 10px; min-height: 38px;
     selection-background-color: {_SEL};
 }}
@@ -240,9 +250,9 @@ QComboBox:focus {{
    every combo box looking like a plain text field, with nothing to show it can
    be opened. Without the rule the style draws its own arrow. */
 QComboBox QAbstractItemView {{
-    background: {_IB}; color: {_TEXT};
+    background: {_S3}; color: {_TEXT};
     selection-background-color: {_SEL};
-    border: 1px solid {_IBD};
+    border: 1px solid {_LINE};
     border-radius: 5px;
     padding: 4px;
     outline: none;
@@ -261,8 +271,8 @@ QComboBox QAbstractItemView::item:selected {{ background: {_SEL}; color: {_TEXT}
    up/down sub-controls and rendered them as two blank slivers with no arrows.
    Colours + an explicit button width keep the theme AND the real arrows. */
 QSpinBox, QDoubleSpinBox {{
-    background: {_IB}; color: {_TEXT};
-    border: 1px solid {_IBD}; border-radius: 5px;
+    background: {_S3}; color: {_TEXT};
+    border: 1px solid {_LINE}; border-radius: 7px;
     padding-left: 10px; min-height: 36px;
     selection-background-color: {_SEL};
 }}
@@ -276,13 +286,13 @@ QSpinBox::down-button, QDoubleSpinBox::down-button {{ width: 20px; }}
 
 /* ── Lists & views ──────────────────────────────────────── */
 QListWidget, QListView, QTreeView, QTableView {{
-    background: {_IB}; color: {_TEXT};
-    border: 1px solid {_LB}; border-radius: 6px;
+    background: {_S2}; color: {_TEXT};
+    border: 1px solid {_LB}; border-radius: 8px;
     padding: 3px; outline: none;
     alternate-background-color: {_LHOV};
 }}
 QListWidget::item, QListView::item, QTreeView::item, QTableView::item {{
-    padding: 4px 4px; border-radius: 3px;
+    padding: 4px 4px; border-radius: 5px;
     background: transparent; color: {_TEXT};
 }}
 QListWidget::item:alternate, QListView::item:alternate,
@@ -292,14 +302,14 @@ QTreeView::item:alternate, QTableView::item:alternate {{
 QListWidget::item:selected, QListView::item:selected,
 QTreeView::item:selected, QTableView::item:selected {{
     background: {_SEL}; color: {_TEXT};
-    border-radius: 3px;
+    border-radius: 5px;
 }}
 QListWidget::item:hover, QListView::item:hover,
 QTreeView::item:hover, QTableView::item:hover {{
     background: {_LHOV}; color: {_TEXT};
 }}
 QHeaderView::section {{
-    background: {_IB}; color: {_DIM};
+    background: {_S2}; color: {_DIM};
     border: none; border-bottom: 1px solid {_LB};
     padding: 5px 8px; font-size: 11px; font-weight: bold;
     letter-spacing: 1px;
@@ -307,8 +317,8 @@ QHeaderView::section {{
 
 /* ── Text areas ─────────────────────────────────────────── */
 QTextEdit, QPlainTextEdit {{
-    background: {_IB}; color: {_TEXT};
-    border: 1px solid {_LB}; border-radius: 6px;
+    background: {_S2}; color: {_TEXT};
+    border: 1px solid {_LB}; border-radius: 8px;
     font-family: 'JetBrains Mono','Cascadia Code','DejaVu Sans Mono',monospace;
     font-size: 12px; padding: 6px;
     selection-background-color: {_SEL};
@@ -321,7 +331,7 @@ QTextEdit, QPlainTextEdit {{
 QCheckBox {{ color: {_TEXT}; spacing: 8px; background: transparent; }}
 QCheckBox::indicator {{
     width: 16px; height: 16px; border-radius: 4px;
-    border: 1px solid {_IBD}; background: {_IB};
+    border: 1px solid {_LSTRONG}; background: {_S3};
 }}
 QCheckBox::indicator:hover {{ border-color: {_ACC}; }}
 QCheckBox::indicator:checked {{
@@ -330,7 +340,7 @@ QCheckBox::indicator:checked {{
 QRadioButton {{ color: {_TEXT}; spacing: 8px; background: transparent; }}
 QRadioButton::indicator {{
     width: 15px; height: 15px; border-radius: 8px;
-    border: 1px solid {_IBD}; background: {_IB};
+    border: 1px solid {_LSTRONG}; background: {_S3};
 }}
 QRadioButton::indicator:hover {{ border-color: {_ACC}; }}
 QRadioButton::indicator:checked {{ background: {_ACC}; border: 2px solid {_ACC}; }}
@@ -338,7 +348,7 @@ QRadioButton::indicator:checked {{ background: {_ACC}; border: 2px solid {_ACC};
 /* ── Group boxes ────────────────────────────────────────── */
 QGroupBox {{
     background: {_GB};
-    border: 1px solid {_IBD}; border-radius: 8px;
+    border: 1px solid {_LINE}; border-radius: 9px;
     margin-top: 22px; padding: 10px 8px 8px 8px;
 }}
 QGroupBox::title {{
@@ -346,7 +356,7 @@ QGroupBox::title {{
     subcontrol-position: top left;
     left: 12px; top: 5px;
     padding: 0 6px;
-    color: {_ACC}; font-size: 9px; font-weight: bold;
+    color: {_FAINT}; font-size: 10px; font-weight: bold;
     letter-spacing: 2px;
 }}
 
@@ -375,7 +385,7 @@ QSlider::groove:horizontal {{
 QSlider::handle:horizontal {{
     background: {_ACC}; width: 14px; height: 14px;
     border-radius: 7px; margin: -5px 0;
-    border: 2px solid {_IB};
+    border: 2px solid {_S3};
 }}
 QSlider::sub-page:horizontal {{ background: {_ACC}; border-radius: 2px; }}
 
@@ -388,57 +398,107 @@ QFrame#separator {{ background: {_LINE}; max-height: 1px; min-height: 1px; }}
    the strip between them fell through to the window background, so the band
    stopped dead after the last tab. Painting the QTabWidget itself fills that
    gap; the pane below covers everything else. */
+/* Concept tab shape: rectangular, rounded on the right only, a 3 px gap between
+   neighbours and none before the first. The active one is the raised surface
+   with a 2 px accent bar along its top — the bar is a transparent border on
+   every tab, so activating one moves nothing. */
 QTabWidget {{ background: {_TAB_B}; }}
 QTabWidget::pane {{
     border: none;
-    border-top: 1px solid {_LINE};
     background: {_TAB_P};
 }}
 QTabBar {{
     background: {_TAB_B};
     border-bottom: 1px solid {_LINE};
+    min-height: 44px; max-height: 44px;
 }}
 QTabBar::tab {{
     background: {_TAB_B}; color: {_DIM};
-    padding: 8px 16px; border: none;
-    border-right: 1px solid {_LINE};
-    min-width: 90px; font-size: 12px;
+    padding: 0px 10px 0px 16px;
+    border: none;
+    border-top: 2px solid transparent;
+    border-top-left-radius: 0px;
+    border-top-right-radius: 9px;
+    border-bottom-left-radius: 0px;
+    border-bottom-right-radius: 9px;
+    margin-left: 3px;
+    min-width: 90px; font-size: 12.5px;
+    min-height: 42px;
 }}
+QTabBar::tab:first {{ margin-left: 0; }}
+QTabBar::tab:hover:!selected {{ background: {_S2}; color: {_TEXT}; }}
 QTabBar::tab:selected {{
-    background: {_TAB_P}; color: {_TEXT};
-    font-weight: bold;
-    border-bottom: 3px solid {_ACC};
+    background: {_S2}; color: {_TEXT};
+    font-weight: 600;
+    border-top: 2px solid {_ACC};
 }}
-QTabBar::tab:hover:!selected {{ background: {_HOVER}; color: {_TEXT}; }}
-QTabBar::close-button {{ subcontrol-position: right; }}
+QTabBar::close-button {{
+    subcontrol-position: right;
+    width: 20px; height: 20px;
+    border-radius: 5px;
+    background: transparent;
+    margin-left: 4px;
+}}
+QTabBar::close-button:hover {{ background: {_S3}; }}
+QTabBar::close-button:pressed {{ background: {_S3}; }}
 
 /* ── The document row ───────────────────────────────────── */
 /* The tab bar IS the row: the actions ride in its right-hand corner, so one
    40 px strip carries what used to take a 46 px button bar above a tab strip. */
 QWidget#docActions {{ background: {_TAB_B}; }}
 QPushButton#docBtn {{
-    background: transparent; color: {_TEXT};
-    border: 1px solid transparent; border-radius: 5px;
-    padding: 3px 10px; font-size: 12px;
+    background: {_S2}; color: {_TEXT};
+    border: 1px solid {_LINE}; border-radius: 7px;
+    padding: 0 13px; font-size: 12.5px; min-height: 30px;
 }}
-QPushButton#docBtn:hover {{ background: {_HOVER}; border-color: {_ACC_DIM}; }}
-QPushButton#docBtn:pressed {{ background: {_SEL}; }}
-QPushButton#docBtn:disabled {{ color: {_BTN_DIS_T}; background: transparent; }}
+QPushButton#docBtn:hover {{ background: {_S3}; border-color: {_ACC}; }}
+QPushButton#docBtn:pressed {{ background: {_S3}; }}
+QPushButton#docBtn:disabled {{ color: {_BTN_DIS_T}; background: transparent; border-color: transparent; }}
 /* No arrow of our own: the label already ends in one, and Qt's indicator would
    sit a second caret beside it. */
 QPushButton#docBtn::menu-indicator {{ image: none; width: 0; }}
+/* The Bearbeiten button is icon-only (docIconBtn) but still opens a menu; Qt
+   would draw its own caret over the pencil otherwise. */
+QPushButton#docIconBtn::menu-indicator {{ image: none; width: 0; }}
 QPushButton#docIconBtn {{
-    background: transparent; color: {_TEXT};
-    border: 1px solid transparent; border-radius: 5px;
+    background: transparent; color: {_DIM};
+    border: none; border-radius: 7px;
     padding: 0; font-size: 14px;
 }}
-QPushButton#docIconBtn:hover {{ background: {_HOVER}; border-color: {_ACC_DIM}; }}
-QPushButton#docIconBtn:pressed {{ background: {_SEL}; }}
+QPushButton#docIconBtn:hover {{ background: {_S3}; color: {_TEXT}; }}
+QPushButton#docIconBtn:pressed {{ background: {_S3}; color: {_TEXT}; }}
 QPushButton#docIconBtn:disabled {{ color: {_BTN_DIS_T}; background: transparent; }}
 QLineEdit#findEdit {{
-    min-height: 22px; font-size: 12px; padding: 2px 8px;
-    border: 1px solid {_ACC};
+    min-height: 28px; font-size: 12px; padding: 0 9px;
+    border: 1px solid {_LINE}; border-radius: 7px;
+    background: {_S2};
 }}
+
+/* ── Status bar (window level) ──────────────────────────── */
+/* One bar under every view. The readings report; the centre message is the
+   app's mouth and opens the Protokoll when clicked; the right end holds the
+   ruler switch and the zoomer pill. */
+QWidget#statusBar {{
+    background: {_SB};
+    border-top: 1px solid {_LINE};
+}}
+QLabel#sbReading {{ color: {_DIM}; font-size: 12px; background: transparent; }}
+QLabel#sbSep {{ color: {_FAINT}; background: transparent; }}
+QLabel#sbMsg {{
+    color: {_DIM}; font-size: 12px; background: transparent;
+    border-radius: 6px; padding: 0 14px;
+}}
+QLabel#sbMsg:hover {{ background: {_HOVER}; color: {_TEXT}; }}
+QWidget#sbZoomer {{
+    background: {_S2}; border: 1px solid {_LINE}; border-radius: 7px;
+}}
+QLabel#sbZoomVal {{ color: {_DIM}; font-size: 11px; background: transparent;
+    font-variant-numeric: tabular-nums; }}
+QWidget#sbZoomDiv {{ background: {_LINE}; }}
+/* The zoomer's buttons and the ruler switch share the icon-button look; the
+   ruler is the only checkable one, and checked means the accent-soft ground
+   every other active control sits on. */
+QPushButton#iconBtn:checked {{ background: {_ACC_SOFT}; }}
 """
 
 

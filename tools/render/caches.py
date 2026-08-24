@@ -341,6 +341,27 @@ class _FullPageCache(_ByteBoundedCache):
         return best
 
     @classmethod
+    def get_any(cls, path, pidx, rot):
+        """Any cached full-page render for this page, whatever viewport bucket
+        it was made for. Returns the full entry, or None.
+
+        The bucket an entry lands in comes from the viewport size at render
+        time. That size can move a few pixels while the layout settles — or
+        when the chrome changes — and if it crosses a 50 px bucket boundary
+        the render ends up in the bucket *next to* the one the view now reads
+        from. The exact-bucket lookup then misses although the page really is
+        rendered. This is the fallback that finds it, to reuse as a stand-in;
+        it must only ever return the *same* page, so it is what keeps a page
+        turn from picking up the page before it.
+        """
+        rev = _revision(path)
+        with cls._lock:
+            for (p, pi, r, _aw, _ah), (entry_rev, _nbytes, entry) in cls._store.items():
+                if p == path and pi == pidx and r == rot and entry_rev == rev:
+                    return entry
+        return None
+
+    @classmethod
     def get_dims(cls, path, pidx, rot):
         """Return (page_w_pt, page_h_pt) from any cached entry for this page.
         Returns (0, 0) if not cached yet."""

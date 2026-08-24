@@ -14,13 +14,14 @@ import uuid
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QFrame,
-    QAbstractItemView, QPlainTextEdit, QScrollArea, QApplication,
+    QAbstractItemView, QScrollArea, QApplication,
     QSizePolicy, QComboBox
 )
 from PyQt6.QtCore import Qt, QEvent
 from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
 from tools.pdf_access import is_locked
+from tools.shell.protokoll import LogAdapter
 from tools.theme      import _TV
 from tools.snapshots  import ensure_view_snapshot
 
@@ -185,21 +186,6 @@ class FileDropList(QListWidget):
             item = self.takeItem(r); self.insertItem(r+1, item); self.setCurrentRow(r+1)
 
 
-class LogBox(QPlainTextEdit):
-    def __init__(self, placeholder="Log...", parent=None):
-        super().__init__(parent)
-        self.setReadOnly(True)
-        self.setMaximumHeight(110)
-        self.setMinimumHeight(50)
-        self.setPlaceholderText(placeholder)
-
-    def log(self, msg: str, error=False):
-        self.appendPlainText(("ERR  " if error else "OK   ") + msg)
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
-
-    def clear_log(self): self.clear()
-
-
 class BasePanel(QWidget):
     TITLE    = "Tool"
     SUBTITLE = ""
@@ -252,9 +238,8 @@ class BasePanel(QWidget):
         root.addStretch()
         root.addWidget(make_separator())
 
-        # Log
-        self.log = LogBox(tr("Log..."))
-        root.addWidget(self.log)
+        # Log — a routing adapter, not a widget: see tools/shell/protokoll.py.
+        self.log = LogAdapter()
 
         # Action row
         btn_row = QHBoxLayout()
@@ -304,9 +289,7 @@ class BasePanel(QWidget):
         lay.addStretch()
         lay.addWidget(make_separator())
 
-        self.log = LogBox(tr("Log..."))
-        self.log.setMaximumHeight(80)   # compact in the sidebar
-        lay.addWidget(self.log)
+        self.log = LogAdapter()
 
         btn_row = QHBoxLayout(); btn_row.setSpacing(8)
         self.build_action_row(btn_row)
@@ -478,7 +461,7 @@ class BasePanel(QWidget):
         try:
             msg = self._run_action()
             if msg is not None:
-                self.log.log(msg or "Fertig.")
+                self.log.log(msg or "Fertig.", hold=True)
         except (ValueError, RuntimeError) as e:
             # Intentional, user-facing errors (no PDF, encrypted, bad input …):
             # show just the message, not a scary traceback.

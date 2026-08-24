@@ -60,7 +60,9 @@ _EN: dict[str, str] = {
     "Beim nächsten Start": "On next start",
     "Hilfe": "Help",
     "Über {p0}": "About {p0}",
-    "Fehlerprotokoll anzeigen": "Show error log",
+    "Logs anzeigen": "Show logs",
+    "Protokoll": "Log",
+    "Leeren": "Clear",
 
     # ── Absturzbericht ────────────────────────────────────────────────────────
     "Fehler in {p0}": "Error in {p0}",
@@ -207,6 +209,8 @@ _EN: dict[str, str] = {
         "Check ICC profiles and convert to CMYK.",
     "Seiten für den Druck anordnen":
         "Arrange pages for printing",
+    "Vorschau zeigt Zuschneiden + Anordnung — Ausführen wendet beide an.":
+        "Preview shows crop + arrangement — Run applies both.",
     "Mehrere Seiten auf groessere Boegen anordnen.":
         "Arrange multiple pages on larger sheets.",
 
@@ -224,6 +228,8 @@ _EN: dict[str, str] = {
 
     # ── Manage panel ──────────────────────────────────────────────────────────
     "Seiten verwalten": "Manage Pages",
+    "Seiten auswählen — Aktionen links, Entf zum Löschen.":
+        "Select pages — actions on the left, Del to delete.",
     "Auswahl  (z.B. 1, 3, 5-8)": "Selection  (e.g. 1, 3, 5–8)",
     "z.B. 1, 3, 5-8, 12  →  Enter": "e.g. 1, 3, 5–8, 12  →  Enter",
     "ANSICHT": "VIEW",
@@ -1517,6 +1523,10 @@ _EN: dict[str, str] = {
     "1 Hinweis": "1 note",
     "{p0} Hinweise": "{p0} notes",
     "Keine Hinweise.": "No notes.",
+    "farbig": "colour",
+    "Farbige Seiten / Graustufen-Seiten im Dokument":
+        "Coloured pages / grayscale pages in the document",
+    "Protokoll öffnen": "Open log",
     "Vollständige Prüfung öffnen…": "Open the full check…",
 
     # ── Continuous scrolling ─────────────────────────────────────────────────

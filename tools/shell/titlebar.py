@@ -126,8 +126,8 @@ class TitleBar(QWidget):
 
         # Hilfe
         menu_help = mb.addMenu(tr("Hilfe"))
-        act_log = QAction(tr("Fehlerprotokoll anzeigen"), self)
-        act_log.triggered.connect(self._win._show_log_folder)
+        act_log = QAction(tr("Logs anzeigen"), self)
+        act_log.triggered.connect(self._win._show_protokoll)
         menu_help.addAction(act_log)
         menu_help.addSeparator()
         act_about = QAction(tr("Über {p0}").format(p0=APP_NAME), self)

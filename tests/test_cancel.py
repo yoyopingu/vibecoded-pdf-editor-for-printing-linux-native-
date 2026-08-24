@@ -155,7 +155,7 @@ def test_stopping_an_export_writes_nothing_and_leaves_no_ghostscript():
     panel.save_pdf = lambda *a, **k: out
     panel.open_result = lambda *a, **k: None
     logged = []
-    panel.log.log = lambda m, error=False: logged.append(str(m))
+    panel.log.log = lambda m, error=False, **k: logged.append(str(m))
     try:
         assert not panel.stop_btn.isVisibleTo(panel), "Stop shows when idle"
         panel._safe_run()

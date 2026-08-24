@@ -257,7 +257,7 @@ class PdfTab(PdfTabBase):
             return
         n = len(self.model.order)
         self.single._tot_lbl.setText(str(n))
-        self.single._pages_lbl.setText(tr('{p0} Seiten').format(p0=n))
+        self.single.publish_colour_counts()
 
     def _exit_manage(self):
         if self._manage_rail is not None:

@@ -34,6 +34,18 @@ class AppState(QObject):
     status_message      = pyqtSignal(str)           # Statuszeile aktualisieren
     current_page_changed = pyqtSignal(int)          # aktuell angezeigte Seite gewechselt (0-basiert)
 
+    # Status bus: the window-level status bar (tools/shell/statusbar.py)
+    # listens, the active view publishes. The values are deliberately not
+    # stored here — each tab owns its own readings, so the active one has to
+    # re-publish them whenever the tab or the view switches.
+    zoom_changed         = pyqtSignal(int)          # Zoom-Anzeige der aktiven Ansicht, in %
+    page_metrics_changed = pyqtSignal(str)          # Format/Masse der gezeigten Seite
+    colorspace_changed   = pyqtSignal(str)          # Farbprofil der gezeigten Seite ("" = unbekannt)
+    preflight_changed    = pyqtSignal(str, list)    # Druckvorstufen-Zustand + Hinweise
+    colour_counts_changed = pyqtSignal(object)      # (farbig, grau) der aktiven Ansicht, oder None
+    ruler_changed        = pyqtSignal(bool)          # Lineale sichtbar (auch via Strg+R)
+    app_message_requested = pyqtSignal(str, bool)    # Centre message: (text, hold) — via notify()
+
     _instance = None
 
     def __init__(self):

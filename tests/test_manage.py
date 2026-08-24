@@ -9,7 +9,6 @@ from tools.app_state import AppState
 import pypdfium2 as pdfium
 import tools.app as MAIN
 from tests.support import FX, _TMP, _app, _open, _page_labels, _settle, _spin
-from tools.i18n import tr
 
 
 def _pdfium_dims(path, index=0):
@@ -497,7 +496,6 @@ def test_rail_page_count_label_updates_when_pages_are_added_or_deleted():
     try:
         tab.resize(900, 700); tab.show(); _spin(5)
         assert tab.single._tot_lbl.text() == "6"
-        assert tab.single._pages_lbl.text() == tr('{p0} Seiten').format(p0=6)
 
         tab._enter_manage()
         _spin(3)
@@ -505,13 +503,11 @@ def test_rail_page_count_label_updates_when_pages_are_added_or_deleted():
         panel.grid.delete_selected()
         _spin(3)
         assert tab.single._tot_lbl.text() == "5"
-        assert tab.single._pages_lbl.text() == tr('{p0} Seiten').format(p0=5)
 
         panel.grid.model.deselect_all()
         panel._insert_blank()
         _spin(3)
         assert tab.single._tot_lbl.text() == "6"
-        assert tab.single._pages_lbl.text() == tr('{p0} Seiten').format(p0=6)
     finally:
         tab.deleteLater(); _app.processEvents()
     return "rail count label updates on add and delete"

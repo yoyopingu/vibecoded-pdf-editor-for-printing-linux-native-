@@ -197,7 +197,7 @@ class PdfxPanel(BasePanel):
         if dropped:
             lines.append(tr("Aufgeloeste Ebenen (nicht in der Ausgabe): {p0}")
                          .format(p0=", ".join(dropped)))
-        self.log.log("\n".join(lines))
+        self.log.log("\n".join(lines), hold=True)
         self.open_result(out, tr("PDF/X exportiert"))
 
 

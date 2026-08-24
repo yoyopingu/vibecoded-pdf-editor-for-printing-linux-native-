@@ -471,5 +471,5 @@ class NUpPanel(BasePanel):
 
     def _nup_done(self, result):
         out_path, summary = result
-        self.log.log(summary)
+        self.log.log(summary, hold=True)
         self.open_result(out_path, "N-Up")

@@ -61,7 +61,7 @@ class CompressPanel(BasePanel):
         out, size_before, size_after = result
         ratio = (1 - size_after / size_before) * 100 if size_before else 0
         self.log.log(tr('Fertig. {p0} → {p1}  ({p2:+.1f}%)').format(
-            p0=_fmt(size_before), p1=_fmt(size_after), p2=ratio))
+            p0=_fmt(size_before), p1=_fmt(size_after), p2=ratio), hold=True)
         self.open_result(out, "Komprimiert")
 
 

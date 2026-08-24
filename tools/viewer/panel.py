@@ -7,13 +7,16 @@ dropped, and the parsed document behind them is released. A loaded page of a
 large PDF is hundreds of megabytes, so a tab that is gone must not keep one.
 """
 import os, shutil, atexit, logging
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFileDialog, QApplication, QLineEdit, QMenu
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent, QTimer
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+                             QTabBar, QStackedWidget, QFileDialog,
+                             QApplication, QLineEdit, QMenu)
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent, QTimer, QSize
 from PyQt6.QtGui import QKeySequence, QShortcut
-from tools.app_state import AppState
+from tools.app_state import AppState, theme_color
 from tools.branding import APP_NAME
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache, _set_active
+from tools.shell.icons import icon
 from tools.render.document_cache import release
 from tools.viewer.empty_state import EmptyStateWidget
 from tools.viewer.merge import MergeOrderWidget
@@ -49,6 +52,65 @@ class _ElidedLabel(QLabel):
     def _elide(self):
         super().setText(self.fontMetrics().elidedText(
             self._full, Qt.TextElideMode.ElideRight, max(0, self.width() - 2)))
+
+
+class _TabHost(QObject):
+    """QTabWidget surface that's actually a QTabBar + QStackedWidget.
+
+    The doc row (concept .docbar) is the QTabBar at the top of the window — not
+    the bottom of a QTabWidget that owns the body — so the tab pages live in a
+    separate QStackedWidget beside the sidebar. This proxy mirrors the small
+    surface every caller reaches (`panel.tabs.X` for count/widget/currentIndex/
+    addTab/removeTab/setTabText/...) so the structural lift is invisible to
+    open_flow, find, _ViewerKeyFilter and every test that drives `vp.tabs`."""
+
+    currentChanged = pyqtSignal(int)
+
+    def __init__(self, bar, pages, parent=None):
+        super().__init__(parent)
+        self._bar = bar
+        self._pages = pages
+        bar.currentChanged.connect(self._on_current_changed)
+
+    def _on_current_changed(self, idx):
+        self.currentChanged.emit(idx)
+        if 0 <= idx < self._pages.count():
+            self._pages.setCurrentIndex(idx)
+
+    # surface -----------------------------------------------------------------
+
+    def count(self): return self._bar.count()
+    def currentIndex(self): return self._bar.currentIndex()
+    def setCurrentIndex(self, i): self._bar.setCurrentIndex(i)
+    def currentWidget(self): return self._pages.currentWidget()
+    def widget(self, i): return self._pages.widget(i)
+    def indexOf(self, w): return self._pages.indexOf(w)
+    def addTab(self, w, label):
+        self._pages.addWidget(w)
+        idx = self._bar.addTab(label)
+        # Make the new widget current in the same stance the caller would
+        # expect of QTabWidget: the tab they just added is the active page.
+        self._pages.setCurrentIndex(idx)
+        self._bar.setTabData(idx, w)
+        return idx
+    def removeTab(self, i):
+        w = self._pages.widget(i)
+        # Pages first: `_on_tab_changed` runs synchronously from currentChanged
+        # below, and `_sync_sidebar` looks at `_pages.currentWidget()`. If the
+        # bar removes the tab first, the page is still in the stack and
+        # _on_tab_changed misreads it as the current merge/PdfTab.
+        if i < self._pages.count():
+            self._pages.removeWidget(w)
+        self._bar.removeTab(i)
+    def setTabText(self, i, t): self._bar.setTabText(i, t)
+    def tabText(self, i): return self._bar.tabText(i)
+    def setMovable(self, b): self._bar.setMovable(b)
+    def setTabsClosable(self, b): self._bar.setTabsClosable(b)
+    def setExpanding(self, b): self._bar.setExpanding(b)
+    def tabCloseRequested(self): return self._bar.tabCloseRequested
+    def tabBar(self): return self._bar
+    def isVisible(self): return self._bar.isVisible()
+    def setVisible(self, b): self._bar.setVisible(b)
 
 
 class _ViewerKeyFilter(QObject):
@@ -221,6 +283,7 @@ class PageViewerPanel(QWidget):
         self.mount_sidebar_widget   = None   # lambda w: mounts w in the tool column
         self.unmount_sidebar_widget = None   # lambda: restores the tool list there
         self.sync_view_switch       = None   # lambda: reread which of the 3 views is current
+        self.show_status            = None   # lambda msg: window-level status bar
         self._pre_manage_idx    = None   # gespeicherter Stack-Index vor Manage-Modus
         self._pf_job      = None
         self._setup_ui()
@@ -310,6 +373,11 @@ class PageViewerPanel(QWidget):
         self.tabs.setCurrentIndex(nxt)
 
     def _setup_ui(self):
+        # The panel owns its body (page area + empty state). It does NOT own
+        # layout placement of its doc_row; MainWindow mounts that in the
+        # window-level column above (sidebar | this_panel). Tests that drive
+        # PageViewerPanel directly still resize this widget to see the body,
+        # which is what they need to verify empty-state behaviour.
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -324,43 +392,82 @@ class PageViewerPanel(QWidget):
         _register_themed(self)
 
         # ── Dokumentleiste ───────────────────────────────────────────────────
-        # One row where there were two: a 46 px bar of buttons above a tab strip
-        # is 76 px of chrome saying the same thing twice — the bar named the open
-        # file, and so did its tab. The tab bar *is* the row now, and the actions
-        # ride in its corner. Everything that acts on the open document lives
-        # here; the window's own menus stay in the title bar.
-        self.tabs = QTabWidget()
-        self.tabs.setTabPosition(QTabWidget.TabPosition.North)
-        self.tabs.setTabsClosable(True)
-        self.tabs.setMovable(True)
-        self.tabs.tabCloseRequested.connect(self._close_tab)
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-        self.tabs.setCornerWidget(self._build_doc_actions(),
-                                  Qt.Corner.TopRightCorner)
+        # Phase 3.1: the doc row is a window-level strip above (sidebar | stack).
+        # The bar (QTabBar) lives in `doc_row`; the rendered tab pages live in
+        # `_pages` (a QStackedWidget) inside the body row, beside the sidebar.
+        # Every caller reaches `panel.tabs.X` — the _TabHost proxy mirrors the
+        # QTabWidget surface they used to touch.
+        self._bar = QTabBar()
+        self._bar.setMovable(True)
+        self._bar.setTabsClosable(True)
+        self._bar.setExpanding(False)
+        self._bar.setDrawBase(False)
+        # The bar stays hidden until a tab is opened; the empty state occupies
+        # the body instead. Phase 3.1 mirrors the pre-3.1 contract
+        # (`vp.tabs.isVisible()` was False before any open).
+        self._bar.setVisible(False)
+        self._bar.tabCloseRequested.connect(self._close_tab)
+        # The bar's currentChanged connects again below — *after* the proxy
+        # _TabHost is built — so the proxy handler runs FIRST and updates
+        # `_pages.currentWidget(...)` before `_on_tab_changed` reads it.
 
-        # Body: just the tabs. ManagePanel used to share this row with them
-        # behind a QSplitter of its own; it now mounts into the app's 224px
-        # tool column instead (see MainWindow._mount_sidebar_widget), so the
-        # tabs keep the full body width in every mode.
+        self._pages = QStackedWidget()
+        self._pages.setVisible(False)
+        # When the proxy writes `_pages.setCurrentIndex` from inside the bar's
+        # currentChanged slot, the stack emits its OWN currentChanged — and
+        # that fires `_pages.stackChanged` after the bar's slot has already
+        # read `_pages.currentWidget()` and called `_sync_sidebar`. The view
+        # is then stale until Qt's event loop pumps. Connect the bar's
+        # currentChanged through `_pages.setCurrentWidgetAfter()` so the
+        # stack's currentWidget reflects the bar's intent by the time
+        # `_on_tab_changed` runs.
+        self.tabs = _TabHost(self._bar, self._pages, parent=self)
+        # Connect AFTER the proxy so the page area is current by the time
+        # `_on_tab_changed` reads it (it then runs `_sync_sidebar` against
+        # the right widget).
+        self._bar.currentChanged.connect(self._on_tab_changed)
+
+        # Doc row host. The window's top-level layout adds this ABOVE the body.
+        # Its size is fixed so the titlebar/docbar/body/statusstack rhythm holds
+        # whether a tab is open or not.
+        self.doc_row = QWidget()
+        self.doc_row.setObjectName("docRow")
+        dr_lay = QHBoxLayout(self.doc_row)
+        dr_lay.setContentsMargins(0, 0, 0, 0)
+        dr_lay.setSpacing(0)
+        dr_lay.addWidget(self._bar, 1)
+        # The doc actions sit at the right end of the same row, exactly where
+        # they lived in the cornerWidget of the old QTabWidget.
+        self._doc_actions = self._build_doc_actions()
+        dr_lay.addWidget(self._doc_actions, 0)
+
+        # Keep the doc row in this widget's layout by default. MainWindow will
+        # reparent it via setParent(), but tests that drive PageViewerPanel
+        # directly get a working tab strip without needing MainWindow.
+        layout.addWidget(self.doc_row, 0)
+
+        # Body row: the tab pages, beside the sidebar.
         self._body = QWidget()
         self._body_layout = QHBoxLayout(self._body)
         self._body_layout.setContentsMargins(0, 0, 0, 0)
         self._body_layout.setSpacing(0)
-        self._body_layout.addWidget(self.tabs, 1)
-        layout.addWidget(self._body, 1)
+        self._body_layout.addWidget(self._pages, 1)
 
-        # Before the first file, the tab strip is an empty sliver saying
-        # nothing — this fills the same space with a drop target, the two ways
-        # to start, and up to four recently opened files. Swapped for the tabs
-        # rather than layered under them, so it takes the tab strip's own
-        # open/find/save row with it; the empty state supplies its own
-        # "Datei öffnen…" for that.
+        # Before the first file, the page area is an empty sliver saying
+        # nothing — fills it with a drop target, the two ways to start, and
+        # up to four recently opened files. Swapped for the pages rather than
+        # layered under them.
         self._empty_state = EmptyStateWidget()
         self._empty_state.open_requested.connect(self._open_via_dialog)
         self._empty_state.merge_requested.connect(self._merge_via_dialog)
         self._empty_state.file_chosen.connect(self.open_file)
         self._empty_state.files_dropped.connect(self._open_dropped)
         self._body_layout.addWidget(self._empty_state, 1)
+
+        # Body is part of the panel's own layout so a direct test/sizing of
+        # PageViewerPanel shows it. MainWindow places it BESIDE the sidebar
+        # in the body row of the central column.
+        layout.addWidget(self._body, 1)
         self._sync_empty_state()
 
         self._merge = MergeFlow(self)
@@ -385,8 +492,8 @@ class PageViewerPanel(QWidget):
         w = QWidget()
         w.setObjectName("docActions")
         lay = QHBoxLayout(w)
-        lay.setContentsMargins(6, 0, 8, 0)
-        lay.setSpacing(4)
+        lay.setContentsMargins(4, 0, 10, 0)
+        lay.setSpacing(6)
 
         def act(text, tip, slot, shortcut="", icon=False, obj="docBtn"):
             b = QPushButton(text)
@@ -394,9 +501,9 @@ class PageViewerPanel(QWidget):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setToolTip(tip + (f"  ({shortcut})" if shortcut else ""))
             if icon:
-                b.setFixedSize(26, 24)
+                b.setFixedSize(30, 30)
             else:
-                b.setMinimumHeight(24)
+                b.setMinimumHeight(30)
             if slot is not None:
                 b.clicked.connect(slot)
             lay.addWidget(b)
@@ -415,8 +522,15 @@ class PageViewerPanel(QWidget):
                             "Strg+O", icon=True)
 
         self._find = FindBar(self, act)
+        # The find box sits in the doc row too, between the search icon and
+        # Bearbeiten, so it expands inline rather than swallowing a separate
+        # row. Phase 3.1: the doc row is no longer a cornerWidget of a single
+        # QTabWidget — we add the find box directly to its layout.
+        lay.addWidget(self._find.box)
 
-        self._edit_btn = act(tr("Bearbeiten") + " ▾", tr("Bearbeiten"), None)
+        self._edit_btn = act("", tr("Bearbeiten"), None, icon=True)
+        self._edit_btn.setIcon(icon("edit", colour=theme_color("DIM"), size=16))
+        self._edit_btn.setIconSize(QSize(16, 16))
         menu = QMenu(self._edit_btn)
         self._act_undo = menu.addAction(tr("Rückgängig"))
         self._act_undo.setShortcut(QKeySequence("Ctrl+Z"))
@@ -449,20 +563,19 @@ class PageViewerPanel(QWidget):
         # apply_theme_globally replaces before this runs — Qt re-polishes for a
         # new sheet by itself.
         self._find.retheme()
+        # The Bearbeiten glyph is stroked in the live theme's DIM, so it has to
+        # be re-drawn on a theme switch like every other drawn icon.
+        self._edit_btn.setIcon(icon("edit", colour=theme_color("DIM"), size=16))
 
     def _on_status(self, msg):
-        """Whatever the app has to say goes on the status bar of the page being
-        looked at. It went nowhere at all: this was an empty method whose
-        comment claimed the message appeared in the page view's info bar, and
-        every AppState.status_message — including "Gespeichert: …" — was
-        discarded.
-
-        With no document there is no status bar, so the row's own label takes
-        it: a conversion running before any tab exists still has to be able to
-        say so."""
+        """Whatever the app has to say goes through the window's status bar
+        (a `show_status` callback MainWindow injects). With no document there is
+        no page to describe, so the doc row's own label carries it — a conversion
+        running before any tab exists still has to be able to say so."""
         tab = self._current()
+        if self.show_status is not None:
+            self.show_status(msg or "")
         if tab is not None:
-            tab.single.show_status(msg or "")
             self._viewer_info.setText("")
         else:
             self._viewer_info.setText(msg or "")
@@ -529,7 +642,6 @@ class PageViewerPanel(QWidget):
 
     def _on_tab_dirty(self, tab):
         self._sync_tab_label(tab)
-        tab.single.set_saved_at(tab.saved_at())
         if tab is self._current():
             self._update_toolbar()
 
@@ -832,26 +944,32 @@ class PageViewerPanel(QWidget):
             self.show_merge_tab(paths)
 
     def _reveal_tabs(self):
-        """Make the tab strip visible before a new tab's content is built.
+        """Make the page area + tab strip visible before a new tab's content
+        is built.
 
         Must run before PdfTab(...)/MergeOrderWidget(...) construction, not
         only afterwards from _sync_empty_state() reacting to currentChanged:
         a page view built while an ancestor is still hidden skips its first
         render, and nothing later asks it to try again — the render stays
-        armed on a page nobody is looking at until the next zoom or turn."""
-        if not self.tabs.isVisible():
+        armed on a page nobody is looking at until the next zoom or turn.
+
+        Phase 3.1: tabs live in their own doc_row. Both the bar and the page
+        area swap with the empty state."""
+        if not self._pages.isVisible():
             self._empty_state.setVisible(False)
-            self.tabs.setVisible(True)
+            self._pages.setVisible(True)
+            self._bar.setVisible(True)
 
     def _sync_empty_state(self):
-        """Swap the tab strip for the empty state, or back, whenever the count
+        """Swap the page area for the empty state, or back, whenever the count
         of open tabs crosses zero in either direction. The reverse direction
-        (tabs → empty) is always safe here; the forward one goes through
+        (pages → empty) is always safe here; the forward one goes through
         _reveal_tabs() instead, called before the new tab exists rather than
         after — see there for why the order matters."""
         empty = self.tabs.count() == 0
         if empty:
-            self.tabs.setVisible(False)
+            self._pages.setVisible(False)
+            self._bar.setVisible(False)
             self._empty_state.setVisible(True)
             from tools.shell.settings import AppSettings
             self._empty_state.set_recent(AppSettings.get().recent_files())

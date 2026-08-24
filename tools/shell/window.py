@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from tools.i18n import tr, set_language, get_language
 from tools.branding import APP_NAME, APP_TAGLINE, app_title, versioned
 from tools.viewer.panel import PageViewerPanel
+from tools.viewer.tab import PdfTab
 from tools.plugin_manager import PluginManagerPanel, discover_plugins
 from tools.panels.colour_profile import ColourProfilePanel
 from tools.panels.compress import CompressPanel
@@ -19,6 +20,8 @@ from tools.panels.page_numbers import PageNumbersPanel
 from tools.panels.pdfx import PdfxPanel
 from tools.panels.preflight import PreflightPanel
 from tools.shell.settings import AppearanceDialog, GeneralDialog, PerformanceDialog, PrepressDialog
+from tools.shell.protokoll import ProtokollWindow, notify
+from tools.shell.statusbar import StatusBar
 from tools.shell.style import apply_theme_globally
 from tools.shell.titlebar import NavBtn, TitleBar
 
@@ -110,6 +113,7 @@ class MainWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setMinimumSize(1000, 640)
         self.resize(1280, 760)
+        self._protokoll = None   # the Protokoll window, built on first open
         self._build()
         # The startup file is opened here, synchronously, on purpose. Deferring
         # it into the event loop spends the loop's first turn blocked on the
@@ -361,7 +365,95 @@ class MainWindow(QMainWindow):
         self.viewer.unmount_sidebar_widget = self._unmount_sidebar_widget
         self.viewer.sync_view_switch       = self._sync_view_switch
 
+        # Phase 3.1: the doc row (tabs + doc actions) belongs at the window
+        # level, above (sidebar | body). The PageViewerPanel controller owns
+        # the data + QTabBar + body (page area + empty state); MainWindow
+        # only mounts doc_row in the central column between titlebar and the
+        # sidebar|stacked row. The viewer itself sits in the stack as before;
+        # its own body is rendered next to the sidebar.
+        outer.insertWidget(1, self.viewer.doc_row)
+
+        # ── Statusleiste (Fenster-Ebene, eine für alle Ansichten) ─────────────
+        # Phase 2.4: the per-tab #infoBar is gone. One StatusBar under the body
+        # carries the readings, the transient message and the ruler/zoom remote;
+        # every view publishes on the bus and this bar reads it — it never
+        # reaches down into a specific view. The zoom/ruler/preflight slots are
+        # routed to the ACTIVE view of the ACTIVE tab.
+        self._status_bar = StatusBar()
+        self._status_bar.zoom_out_requested.connect(
+            lambda: self._active_view_do("_zoom_out"))
+        self._status_bar.zoom_in_requested.connect(
+            lambda: self._active_view_do("_zoom_in"))
+        self._status_bar.zoom_fit_requested.connect(
+            lambda: self._active_view_do("_zoom_fit"))
+        self._status_bar.ruler_toggled.connect(self._on_status_ruler_toggled)
+        self._status_bar.preflight_requested.connect(
+            lambda: self._active_view_do("_show_preflight"))
+        # Phase 2.5: clicking the centre message opens the Protokoll window.
+        self._status_bar.message_clicked.connect(self._show_protokoll)
+        outer.addWidget(self._status_bar)
+
+        # The viewer's transient status messages reach the bar through the bus:
+        # notify() both logs them and publishes them for the bar to show.
+        self.viewer.show_status = lambda msg: notify(msg)
+        # Re-sync the bar's readings whenever the active tab or view changes.
+        self.viewer.tabs.currentChanged.connect(self._resync_statusbar)
+
         self._switch(0)
+
+    def _active_view_do(self, method):
+        """Call `method` on the active tab's single-page view. The StatusBar is a
+        remote control; the view owns the state."""
+        tab = self.viewer._current()
+        if tab is None:
+            return
+        fn = getattr(tab.single, method, None)
+        if fn is not None:
+            fn()
+
+    def _on_status_ruler_toggled(self, on):
+        tab = self.viewer._current()
+        if tab is not None:
+            tab.single._set_rulers_visible(bool(on))
+
+    def _resync_statusbar(self, *_args):
+        """The bar has no memory of its own: whoever is active now re-publishes
+        its readings, and the default message follows the current view.
+
+        Resolved through the tab bar's index rather than the page stack's
+        currentWidget: this runs synchronously from the bar's currentChanged,
+        before the proxy has made the new page current."""
+        tab = self._active_tab()
+        if tab is not None:
+            tab.single.publish_status()
+            self._status_bar.set_rulers_checked(tab.single._rulers_on)
+        self._status_bar.set_default_message(self._view_default_message(tab))
+        # A held tool result must not outlive the tool that produced it: the
+        # view switch / back button is the tool exit, so the default returns
+        # here even though set_default_message above honours the held flag.
+        self._status_bar.clear_message()
+
+    def _active_tab(self):
+        idx = self.viewer.tabs.currentIndex()
+        if 0 <= idx < self.viewer.tabs.count():
+            w = self.viewer.tabs.widget(idx)
+            if isinstance(w, PdfTab):
+                return w
+        return None
+
+    def _view_default_message(self, tab=None):
+        """What the centre message falls back to for the current view (concept
+        `msgs`, docs/gui-concept.html). Empty means "nothing to say yet"."""
+        if tab is None:
+            tab = self._active_tab()
+        idx = self._stack.currentIndex()
+        if idx == 0:
+            if tab is not None and tab.in_manage_mode():
+                return tr("Seiten auswählen — Aktionen links, Entf zum Löschen.")
+            return ""
+        if idx == 1:
+            return tr("Vorschau zeigt Zuschneiden + Anordnung — Ausführen wendet beide an.")
+        return ""
 
     def _mount_sidebar_widget(self, widget):
         """Show `widget` in the tool column instead of the tool list — what
@@ -423,6 +515,7 @@ class MainWindow(QMainWindow):
         else:
             which = -1          # a tool panel: none of the three is current
         self._view_switch.set_current(which)
+        self._resync_statusbar()
 
     def _pick_view(self, which: int):
         """A click on the segmented control."""
@@ -462,15 +555,19 @@ class MainWindow(QMainWindow):
             else:
                 self._open_multi(paths)
 
-    def _show_log_folder(self):
-        """Open the folder holding the log and the native-crash file.
+    def _show_protokoll(self):
+        """Open the Protokoll window — the session's log of every message.
 
-        The app is normally started from the desktop entry, so stderr is
-        discarded and this is the only way to reach the record of a failure
-        without knowing the XDG path by heart.
+        One window, built lazily and reused. Both entry points land here: the
+        Hilfe ▸ "Logs anzeigen" menu item and a click on the status bar's
+        centre line (decision 2).
         """
-        from tools.shell.crash_report import open_log_folder
-        open_log_folder(self)
+        if self._protokoll is None:
+            self._protokoll = ProtokollWindow(self)
+        self._protokoll.refresh()
+        self._protokoll.show()
+        self._protokoll.raise_()
+        self._protokoll.activateWindow()
 
     def _show_about(self):
         QMessageBox.about(

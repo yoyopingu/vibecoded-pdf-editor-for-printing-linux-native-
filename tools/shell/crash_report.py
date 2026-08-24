@@ -75,7 +75,7 @@ def open_log_folder(parent=None):
     """
     if QDesktopServices.openUrl(QUrl.fromLocalFile(log_dir())):
         return
-    QMessageBox.information(parent, tr("Fehlerprotokoll anzeigen"),
+    QMessageBox.information(parent, tr("Logs anzeigen"),
                             f"{log_path()}\n{crash_log_path()}")
 
 
@@ -192,7 +192,7 @@ def _show(title, headline, cause, detail, parent=None):
         box.setDetailedText(detail)
         copy_btn = box.addButton(tr("Bericht kopieren"),
                                  QMessageBox.ButtonRole.ActionRole)
-        log_btn  = box.addButton(tr("Fehlerprotokoll anzeigen"),
+        log_btn  = box.addButton(tr("Logs anzeigen"),
                                  QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Close)
         box.setDefaultButton(QMessageBox.StandardButton.Close)

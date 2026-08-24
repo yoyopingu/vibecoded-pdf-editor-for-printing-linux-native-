@@ -378,3 +378,30 @@ def test_special_cases_are_reported_rather_than_dumped():
     finally:
         os.chmod(ro_dir, 0o700)
     return f"{len(TOOLS)} tools, both cases reported as messages"
+
+
+def test_notify_reaches_the_status_bar_and_held_messages_survive_a_view_switch():
+    """The one notify() funnel must write to the session log *and* publish to
+    the bar, and a held message must outlive set_default_message (the view
+    switch) until it is explicitly cleared — decision 2's held-flag fix."""
+    from tools.shell.protokoll import notify, clear_log, log_store
+    from tools.shell.statusbar import StatusBar
+
+    clear_log()
+    bar = StatusBar()          # subscribes to app_message_requested itself
+
+    notify("Seite 1 wird konvertiert", "INFO")
+    assert log_store and log_store[-1][1:] == ("INFO", "Seite 1 wird konvertiert"), \
+        log_store[-1]
+    assert bar._msg._full == "Seite 1 wird konvertiert", bar._msg._full
+
+    notify("Fertig.", "OK", hold=True)
+    assert bar._msg._full == "Fertig.", bar._msg._full
+    bar.set_default_message("Vorschau zeigt Zuschneiden + Anordnung.")
+    assert bar._msg._full == "Fertig.", \
+        "a held result was clobbered by the view default"
+    bar.clear_message()
+    assert bar._msg._full == "Vorschau zeigt Zuschneiden + Anordnung.", \
+        bar._msg._full
+    bar.deleteLater(); _app.processEvents()
+    return "notify logs, publishes, and holds until cleared"

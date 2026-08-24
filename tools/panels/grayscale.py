@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap
 from tools.app_state import AppState
 from tools.panels.base import BasePanel, make_label, make_separator
-from tools.colorspace import is_grey_only, page_colorspaces, scan_document
+from tools.colorspace import is_grey_only, page_colorspaces, scan_document, set_pixel_counts
 from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,
                                run_chunked, unlink)
 from tools.i18n import tr
@@ -769,6 +769,21 @@ class GrayscalePanel(BasePanel):
         self.log.clear_log()
         self.log.log(f"{len(self._grey_pages)} {tr('Seite(n) werden konvertiert')}, "
                      f"{len(self._page_data)-len(self._grey_pages)} {tr('bleiben unveraendert')}")
+        self._publish_counts()
+
+    def _publish_counts(self):
+        """Feed the window status bar's colour/greyscale counter with the pixel
+        verdicts (decision 5): recorded against the file's revision so any
+        later re-publish keeps them, and emitted now when this file is the
+        one actually open — a scan finishing after a tab switch must not put
+        the old tab's numbers on the new tab's bar."""
+        if not self._page_data or not self._scanned_path:
+            return
+        n = len(self._page_data)
+        grey = len(self._grey_pages)
+        set_pixel_counts(self._scanned_path, n - grey, grey)
+        if AppState.get().current_pdf == self._scanned_path:
+            AppState.get().colour_counts_changed.emit((n - grey, grey))
 
     def _build_preview(self, n_pages):
         container = QWidget()
@@ -1020,9 +1035,10 @@ class GrayscalePanel(BasePanel):
         hists, already_grey = result
         self._page_data[:] = hists
         self._already_grey = already_grey
+        self._scanned_path = src        # before _reclassify: it publishes the
+                                        # verdicts keyed to this path
         self._set_card_cursors()        # now that it is known which are fixed
         self._reclassify()              # which paints the borders itself
-        self._scanned_path = src
         if then is not None:
             # Next event-loop turn, not straight away: the job's `finished`
             # signal is already queued behind us, and it re-enables the run
@@ -1105,7 +1121,7 @@ class GrayscalePanel(BasePanel):
 
     def _grey_done(self, result):
         out_path, msg = result
-        self.log.log(msg)
+        self.log.log(msg, hold=True)
         self.open_result(out_path, "Graustufen")
 
 

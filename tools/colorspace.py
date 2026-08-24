@@ -465,3 +465,51 @@ def describe(names):
     if has_gray(names):
         return "Grayscale"
     return "—"
+
+
+# The greyscale tool's pixel-accurate page counts for a file it has analysed,
+# keyed (path, revision) — the override for count_grey_pages's structure
+# verdicts. Measured pixels beat declared spaces; a revision change drops the
+# override, because the new bytes have not been pixel-scanned.
+_pixel_counts: "dict" = {}
+
+
+def set_pixel_counts(pdf_path, colour, grey):
+    """Record the greyscale tool's verdict for `pdf_path` as it is right now."""
+    _pixel_counts[(pdf_path, document_revision(pdf_path))] = (int(colour),
+                                                              int(grey))
+
+
+def pixel_counts(pdf_path):
+    """The recorded pixel verdict for this exact revision, or None."""
+    rev = document_revision(pdf_path)
+    stale = [k for k in _pixel_counts if k[0] == pdf_path and k[1] != rev]
+    for k in stale:
+        del _pixel_counts[k]
+    return _pixel_counts.get((pdf_path, rev))
+
+
+def count_grey_pages(pages):
+    """(colour, grey, unknown) over a tab's pages, each a (path, page_index).
+
+    The structure scan's verdicts, from the cache the viewer's background scan
+    fills: `unknown` counts the pages not read yet, so a caller can decline to
+    show partial numbers rather than understate the colour count — which is
+    billing information. A document that is one file the greyscale tool has
+    pixel-scanned answers with those counts instead (decision 5).
+    """
+    paths = {p for p, _ in pages}
+    if len(paths) == 1:
+        override = pixel_counts(next(iter(paths)))
+        if override is not None:
+            return override[0], override[1], 0
+    colour = grey = unknown = 0
+    for path, orig in pages:
+        names = cached_page_colorspaces(path, orig)
+        if names is None:
+            unknown += 1
+        elif is_grey_only(names):
+            grey += 1
+        else:
+            colour += 1
+    return colour, grey, unknown

@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QPushButton, QLabel, QFrame, QApplication,
                              QSizePolicy)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect, QPoint
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QPixmap, QCursor
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
@@ -34,7 +34,9 @@ from tools.viewer.tab_base import owning_tab
 from tools.viewer.rail import _NavRailColumn, _PageField, _PageTrack
 import tools.viewer.strip as strip
 from tools.viewer.color_label import ColourSpaceLabel
-from tools.theme import _PREV_BTN, _TV, _register_themed
+from tools.app_state import AppState
+from tools.colorspace import count_grey_pages
+from tools.theme import _TV, _register_themed
 
 
 # How far the user may zoom in. Was 8x, which existed because the page was
@@ -100,8 +102,10 @@ class SinglePageView(QWidget):
         self._region_task    = None
         self._region_signals = _RegionSignals()
         self._region_signals.ready.connect(self._on_region_ready)
-        # Colour-space label and the background work behind it
-        self._color = ColourSpaceLabel(self._color_source)
+        # Colour-space label and the background work behind it. The scan's
+        # completion is also when the page counter re-aggregates.
+        self._color = ColourSpaceLabel(
+            self._color_source, on_scan_complete=self.publish_colour_counts)
         # Which page and rotation _page_w_pt/_page_h_pt currently describe
         self._dims_key = None
         self._dims_rot = None
@@ -130,6 +134,14 @@ class SinglePageView(QWidget):
         # 20 mm into the sheet through a zoom, a scroll and a page turn.
         self._guides: dict = {}
         self._rulers_on = False
+        # The last readings this view published on the status bus. Kept so a
+        # tab or view switch can re-publish them without waiting for a render
+        # (see publish_status) — the bar keeps no memory of its own.
+        self._metrics = ""
+        self._phys_pct = None
+        # Preflight: "unknown" until a check has run.
+        self._pf_state = "unknown"
+        self._pf_issues = []
         # Search hits for the whole document, and which one is being looked at.
         # Held in page points — the same space the guides use — so a zoom or a
         # scroll moves them with the sheet instead of leaving them behind at
@@ -244,111 +256,6 @@ class SinglePageView(QWidget):
 
         main.addWidget(self._nav_side)
         layout.addLayout(main, 1)
-
-        # ── Statusleiste ─────────────────────────────────────────────────────
-        # What the document *is*, on the left; how it is being drawn, on the
-        # right. Nothing here is a command except the switches at the right end
-        # — the readings report, they do not act.
-        self._seps = []
-        self._info_bar = QWidget()
-        self._info_bar.setObjectName("infoBar")
-        self._info_bar.setFixedHeight(30)
-        il = QHBoxLayout(self._info_bar)
-        il.setContentsMargins(12, 0, 10, 0)
-        il.setSpacing(0)
-
-        # How long the document is. It was only ever on the rail, at the far
-        # right — so the bar opened with two readings and a stretch, and read
-        # as an empty strip with the zoom controls pushed to the far end.
-        self._pages_lbl = QLabel("")
-        self._pages_lbl.setObjectName("dimLabel")
-        il.addWidget(self._pages_lbl)
-
-        self._add_sep(il)
-
-        self._size_lbl = QLabel(tr("Masse: —"))
-        self._size_lbl.setObjectName("dimLabel")
-        il.addWidget(self._size_lbl)
-
-        self._add_sep(il)
-
-        il.addWidget(self._color.widget)
-
-        self._add_sep(il)
-
-        # ── Druckvorstufen-Licht ─────────────────────────────────────────────
-        # One indicator for the whole preflight, where a single font check used
-        # to sit. Green when the document could go on a press, amber for what is
-        # worth knowing first. Click it for the list.
-        self._pf_btn = QPushButton("")
-        self._pf_btn.setObjectName("pfLight")
-        self._pf_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._pf_btn.setFlat(True)
-        self._pf_btn.clicked.connect(self._show_preflight)
-        self._pf_state  = "unknown"
-        self._pf_issues = []
-        il.addWidget(self._pf_btn)
-        self.set_preflight("unknown")
-
-        # Whatever the app last had to say — a save, a failed render, the number
-        # of pages a tool wrote. These used to go nowhere at all: the viewer's
-        # status slot was an empty method whose comment claimed they appeared
-        # here, and they were discarded.
-        #
-        # It sits at the end of the readings rather than between two stretches:
-        # centred, a message that is blank almost always left a gap the width of
-        # the window with a reading marooned at either end.
-        self._status_sep = self._add_sep(il)
-        self._status_lbl = QLabel("")
-        self._status_lbl.setObjectName("dimLabel")
-        il.addWidget(self._status_lbl)
-        self._status_timer = QTimer()
-        self._status_timer.setSingleShot(True)
-        self._status_timer.timeout.connect(self._clear_status)
-        self._clear_status()
-
-        il.addStretch()
-
-        # When the document was last written. Blank until it has been: "never
-        # saved" and "saved a moment ago" are different states and the bar
-        # should not blur them.
-        self._saved_lbl = QLabel("")
-        self._saved_lbl.setObjectName("dimLabel")
-        il.addWidget(self._saved_lbl)
-
-        self._add_sep(il)
-
-        # Lineale — Strg+R schaltet sie ebenfalls um, aber ein Kuerzel allein
-        # findet niemand, der nicht weiss, dass es die Lineale gibt.
-        self._ruler_btn = QPushButton("⊞")
-        self._ruler_btn.setCheckable(True)
-        self._ruler_btn.setFixedSize(*_PREV_BTN)
-        self._ruler_btn.setToolTip(tr("Lineale und Hilfslinien") + "  (Strg+R)")
-        self._ruler_btn.clicked.connect(lambda on: self._set_rulers_visible(on))
-        il.addWidget(self._ruler_btn)
-
-        self._add_sep(il)
-
-        # Zoom-Steuerung
-        self._zoom_btns = []
-        for txt, tip, fn in [("−",   tr("Verkleinern"),  self._zoom_out),
-                             ("fit", tr("Ganze Seite"),  self._zoom_fit),
-                             ("+",   tr("Vergrössern"),  self._zoom_in)]:
-            zb = QPushButton(txt)
-            zb.setFixedSize(*_PREV_BTN)
-            zb.setToolTip(tip)
-            zb.clicked.connect(fn)
-            il.addWidget(zb)
-            self._zoom_btns.append(zb)
-
-        self._zoom_lbl = QLabel("100%")
-        self._zoom_lbl.setObjectName("dimLabel")
-        self._zoom_lbl.setFixedWidth(46)
-        self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignRight
-                                    | Qt.AlignmentFlag.AlignVCenter)
-        il.addWidget(self._zoom_lbl)
-
-        layout.addWidget(self._info_bar)
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._apply_theme()
@@ -717,67 +624,13 @@ class SinglePageView(QWidget):
                 self._render_continuous(ds, self._view.width(),
                                         self._view.height())
 
-    def _add_sep(self, layout):
-        """A hairline between two readings, so the bar reads as fields rather
-        than as a sentence.
-
-        The gap comes from the layout, not from the frame's own margins: the
-        rule is one pixel wide and a stylesheet margin has nothing to take room
-        from, so the readings ran together with no line between them at all."""
-        layout.addSpacing(11)
-        f = QFrame()
-        f.setFrameShape(QFrame.Shape.VLine)
-        f.setFixedWidth(1)
-        f.setStyleSheet(f"color:{_TV['border']};")
-        layout.addWidget(f)
-        layout.addSpacing(11)
-        self._seps.append(f)
-        return f
-
-    def _clear_status(self):
-        """Blank the transient message, and take its separator with it — a rule
-        with nothing after it reads as a reading that failed to load."""
-        self._status_lbl.setText("")
-        self._status_lbl.setVisible(False)
-        self._status_sep.setVisible(False)
-
-    def show_status(self, message, ms=6000):
-        """Put a message on the status bar for a few seconds."""
-        self._status_timer.stop()
-        if not message:
-            self._clear_status()
-            return
-        self._status_lbl.setText(message)
-        self._status_lbl.setVisible(True)
-        self._status_sep.setVisible(True)
-        self._status_timer.start(ms)
-
     # ── the preflight light ──────────────────────────────────────────────────
 
     def set_preflight(self, state, issues=()):
         """state: "unknown" | "running" | "ok" | "warn"."""
         self._pf_state  = state
         self._pf_issues = list(issues)
-        t = _TV
-        label, colour = {
-            "running": (tr("Druckvorstufe …"), t['dim']),
-            "ok":      ("● " + tr("Druckvorstufe OK"), t['ok']),
-        }.get(state, ("", t['dim']))
-        if state == "warn":
-            # tr() has no plural machinery, so the branch is here rather than a
-            # "1 Hinweis(e)" that is wrong in both directions.
-            n = len(self._pf_issues)
-            label  = "● " + (tr("1 Hinweis") if n == 1
-                             else tr('{p0} Hinweise').format(p0=n))
-            colour = t['warn']
-        self._pf_btn.setText(label)
-        self._pf_btn.setVisible(bool(label))
-        self._pf_btn.setStyleSheet(
-            f"QPushButton#pfLight{{color:{colour};border:none;background:transparent;"
-            f"font-size:12px;padding:0 2px;text-align:left;}}")
-        self._pf_btn.setToolTip(
-            "\n".join(self._pf_issues) if self._pf_issues
-            else tr("Druckvorstufenprüfung"))
+        AppState.get().preflight_changed.emit(state, list(issues))
 
     def _show_preflight(self):
         """The findings, and the way through to the full check."""
@@ -796,18 +649,36 @@ class SinglePageView(QWidget):
         act.setEnabled(opener is not None)
         if opener is not None:
             act.triggered.connect(lambda: opener())
-        menu.exec(self._pf_btn.mapToGlobal(
-            self._pf_btn.rect().topLeft()) - QPoint(0, menu.sizeHint().height()))
+        menu.exec(QCursor.pos() - QPoint(0, menu.sizeHint().height()))
 
-    def set_saved_at(self, when):
-        """Show when the document was last written, or nothing if never."""
-        if not when:
-            self._saved_lbl.setText("")
+    def publish_colour_counts(self):
+        """The colour/greyscale counter for the status bar (decision 5): the
+        structure scan's verdict over every page of the tab, with the
+        greyscale tool's pixel verdict standing in where it has run. Nothing
+        until every page is known — half a count reads as a whole one, and
+        the colour side of it is what a job gets billed by."""
+        if self.model is None:
+            AppState.get().colour_counts_changed.emit(None)
             return
-        import time
-        self._saved_lbl.setText(
-            tr('Zuletzt gespeichert {p0}').format(
-                p0=time.strftime("%H:%M", time.localtime(when))))
+        pages = [self.model.page_source(uid, self.pdf_path)
+                 for uid in self.model.order]
+        colour, grey, unknown = count_grey_pages(pages)
+        AppState.get().colour_counts_changed.emit(
+            None if unknown else (colour, grey))
+
+    def publish_status(self):
+        """Re-publish every reading this view owns, so the window status bar
+        reflects it when this tab or view becomes active. The bar keeps no
+        memory of its own: the active view says again what it already knows."""
+        bus = AppState.get()
+        bus.zoom_changed.emit(
+            self._phys_pct if self._phys_pct is not None
+            else int(self._zoom * 100))
+        bus.page_metrics_changed.emit(self._metrics or "")
+        self._color.republish()
+        self.set_preflight(self._pf_state, self._pf_issues)
+        self.publish_colour_counts()
+        bus.ruler_changed.emit(self._rulers_on)
 
     def _apply_theme(self):
         t = _TV
@@ -827,18 +698,6 @@ class SinglePageView(QWidget):
                f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}")
         for b in self._nav_btns:
             b.setStyleSheet(_nb)
-        self._info_bar.setStyleSheet(
-            f"QWidget#infoBar{{background:{t['sidebar_bg']};border-top:1px solid {t['border']};}}")
-        _zb = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
-               f"border:1px solid {t['btn_brd']};border-radius:5px;font-size:12px;padding:0;}}"
-               f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}"
-               f"QPushButton:checked{{background:{t['sel_bg']};border-color:{t['acc']};}}")
-        for zb in self._zoom_btns:
-            zb.setStyleSheet(_zb)
-        self._ruler_btn.setStyleSheet(_zb)
-        for f in getattr(self, "_seps", ()):
-            f.setStyleSheet(f"color:{t['border']};")
-        self.set_preflight(self._pf_state, self._pf_issues)
 
     # ── Zoom-Methoden ─────────────────────────────────────────────────────────
 
@@ -1235,10 +1094,9 @@ class SinglePageView(QWidget):
         self._rulers_on = bool(on)
         for w in (self._ruler_top, self._ruler_left, self._ruler_corner):
             w.setVisible(self._rulers_on)
-        # Ctrl+R and the button are two ways to the same switch; the button has
-        # to show the state even when the shortcut was what changed it.
-        if self._ruler_btn.isChecked() != self._rulers_on:
-            self._ruler_btn.setChecked(self._rulers_on)
+        # Ctrl+R and the status-bar switch are two ways to the same state; the
+        # bar has to show it even when the shortcut was what changed it.
+        AppState.get().ruler_changed.emit(self._rulers_on)
         if self._rulers_on:
             self._sync_rulers()
         # The bars take 22 px of width and of height away from the page, or
@@ -1659,7 +1517,7 @@ class SinglePageView(QWidget):
         off_x = int(max(0.0, (avail_w - pm.width())  / 2.0) - self._scroll_x)
         off_y = int(max(0.0, (avail_h - pm.height()) / 2.0) - self._scroll_y)
         self._view.set_page(pm, [], off_x, off_y)
-        self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
+        AppState.get().zoom_changed.emit(int(self._zoom * 100))
 
     def load(self, pdf_path, model):
         # Cancel any in-flight pre-render tasks from previous file
@@ -1685,7 +1543,7 @@ class SinglePageView(QWidget):
         self._scroll_y = 0.0
         n = len(model.order)
         self._tot_lbl.setText(str(n))
-        self._pages_lbl.setText(tr('{p0} Seiten').format(p0=n))
+        self.publish_colour_counts()
         self._nav_show(n, 1)
         self._prerender_aim = None   # a new file: re-aim even at the same index
         QTimer.singleShot(0, self._render)
@@ -1785,6 +1643,14 @@ class SinglePageView(QWidget):
             start = max(0, end - window)
 
         for pos in range(start, end):
+            # The page on screen is the direct render path's, not a speculative
+            # neighbour. Warming it here races that path: fired a moment before
+            # the direct render lands, it renders at a stale zoom and then drops
+            # that finer-than-asked image into the shared cache bucket the view
+            # reads from — so the next zoom finds a "good enough" entry and
+            # shows it as final instead of flagged provisional.
+            if pos == cur:
+                continue
             uid = order[pos]
             src_path, orig = self.model.page_source(uid, self.pdf_path)
             rot            = self.model.get_rotation(uid)
@@ -1799,7 +1665,7 @@ class SinglePageView(QWidget):
         if self.model:
             n = len(self.model.order)
             self._tot_lbl.setText(str(n))
-            self._pages_lbl.setText(tr('{p0} Seiten').format(p0=n))
+            self.publish_colour_counts()
             self._current = min(self._current, max(0, n - 1))
             self._nav_show(n, self._current + 1)
             self._strip_key = None
@@ -1893,6 +1759,15 @@ class SinglePageView(QWidget):
         # Whether that resize is the finished article or only a stand-in is
         # _good_enough()'s call: shrinking is, enlarging is not.
         cached = _FullPageCache.get(src_path, orig, rot, avail_w, avail_h)
+        if cached is None:
+            # The viewport size a page was rendered under can drift a few
+            # pixels while the layout settles — or when the chrome changes —
+            # and cross a 50 px cache-bucket boundary on the way. The exact
+            # bucket then reads empty although the page itself is rendered,
+            # one bucket over. Having that render land in the view as a
+            # stand-in (and queueing the exact one if it is coarser) is far
+            # better than missing turn it into a blank sheet.
+            cached = _FullPageCache.get_any(src_path, orig, rot)
         if cached is not None:
             img, page_w_pt, page_h_pt, cached_scale, raw_chars = cached
             # Compute how much we need to scale the cached image for this zoom
@@ -2003,11 +1878,13 @@ class SinglePageView(QWidget):
         _render_queue.submit(task, 0)   # P0: active page
 
     def _apply_zoom_labels(self, pm, page_w_pt, page_h_pt):
-        """Update size + physical zoom % labels from a rendered QPixmap."""
+        """Update the size and physical zoom % readings from a rendered QPixmap."""
         if page_w_pt > 0 and page_h_pt > 0:
             mm_w = page_w_pt / 72 * 25.4
             mm_h = page_h_pt / 72 * 25.4
-            self._size_lbl.setText(tr('Masse: {p0:.0f} × {p1:.0f} mm').format(p0=mm_w, p1=mm_h))
+            metrics = tr('Masse: {p0:.0f} × {p1:.0f} mm').format(p0=mm_w, p1=mm_h)
+            self._metrics = metrics
+            AppState.get().page_metrics_changed.emit(metrics)
             try:
                 win = self.window().windowHandle()
                 screen = (win.screen() if win and win.screen()
@@ -2019,15 +1896,15 @@ class SinglePageView(QWidget):
                 displayed_w_in = pm.width() * dpr / phys_dpi
                 actual_w_in    = page_w_pt / 72.0
                 phys_pct       = round(displayed_w_in / actual_w_in * 100)
-                self._zoom_lbl.setText(f"{phys_pct}%")
+                AppState.get().zoom_changed.emit(phys_pct)
                 self._phys_pct  = phys_pct
                 self._phys_base = phys_pct
             except Exception:
                 logging.debug("single_page: could not compute the physical "
                               "zoom percentage", exc_info=True)
-                self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
+                AppState.get().zoom_changed.emit(int(self._zoom * 100))
         else:
-            self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
+            AppState.get().zoom_changed.emit(int(self._zoom * 100))
 
     def _on_page_ready(self, gen, image, off_x, off_y,
                        page_w_pt, page_h_pt, scale, raw_chars,

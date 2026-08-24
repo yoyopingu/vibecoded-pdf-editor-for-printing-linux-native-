@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
 from tools.i18n import get_language, tr
 from tools.multi_open import classify
 from tools.shell.style import app_icon
-from tools.theme import PAPER, _TV, _register_themed
+from tools.theme import PAPER, PAPER_LINE, PAPER_LINE2, _TV, _register_themed
 
 MAX_RECENT = 4
 
@@ -38,13 +38,13 @@ def _page_glyph() -> QPixmap:
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(QPen(QColor("#c8ccd2"), 1))
+    p.setPen(QPen(QColor(PAPER_LINE), 1))
     p.setBrush(QColor(PAPER))
     p.drawRoundedRect(1, 1, 58, 76, 3, 3)
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#c2cad6"))
+    p.setBrush(QColor(PAPER_LINE2))
     p.drawRect(9, 11, 42, 6)
-    p.setBrush(QColor("#dde3ea"))
+    p.setBrush(QColor(PAPER_LINE))
     for y in (25, 33, 41, 49):
         p.drawRect(9, y, 42, 3)
     p.end()

@@ -17,4 +17,5 @@ venv/
 
 __pycache__
 AGENTS.md
+PLAN.md
 .opencode/

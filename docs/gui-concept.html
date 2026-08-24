@@ -1,0 +1,1689 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Folio — GUI-Konzept</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   FOLIO · GUI-KONZEPT
+   Eine Palette · ein Chrome für alle drei Ansichten · sichtbare Grenzen.
+   Dunkel und hell laufen über dieselben Variablen. Blau ist nur noch
+   Auswahl / Aktiv / Primär — das Chrome selbst ist neutral.
+   ═══════════════════════════════════════════════════════════════════ */
+:root{
+  --bg:#0f1115;
+  --surface:#15181e;
+  --surface-2:#1b2028;
+  --surface-3:#222834;
+  --canvas:#0b0d11;
+  --line:#272e3a;
+  --line-strong:#343d4d;
+  --text:#e8ebf2;
+  --dim:#949cad;
+  --faint:#667080;
+  --accent:#4d8df5;
+  --accent-hover:#6ba1f8;
+  --accent-soft:rgba(77,141,245,.16);
+  --ok:#4caf7d;
+  --warn:#e9a23b;
+  --err:#e05b5b;
+  --paper:#ffffff;
+  --paper-line:#c9cedb;
+  --paper-line2:#aab3c6;
+  --paper-ink:#2a2f3a;
+  --shadow-lg:0 24px 64px -16px rgba(0,0,0,.65);
+  --shadow-md:0 10px 28px -8px rgba(0,0,0,.5);
+  --shadow-sm:0 3px 10px -2px rgba(0,0,0,.4);
+  --rail-track:#0a0c10;
+  color-scheme:dark;
+}
+html[data-theme="light"]{
+  --bg:#e7ebf1;
+  --surface:#f6f8fa;
+  --surface-2:#edeff4;
+  --surface-3:#ffffff;
+  --canvas:#dbe1e9;
+  --line:#d0d6e0;
+  --line-strong:#b9c2d0;
+  --text:#1a2029;
+  --dim:#5c6675;
+  --faint:#8b95a5;
+  --accent:#1f6feb;
+  --accent-hover:#1a5fd0;
+  --accent-soft:rgba(31,111,235,.12);
+  --ok:#1e8a57;
+  --warn:#b87309;
+  --err:#c23a3a;
+  --paper-line:#c9cedb;
+  --paper-line2:#aab3c6;
+  --paper-ink:#2a2f3a;
+  --shadow-lg:0 24px 64px -20px rgba(30,40,60,.35);
+  --shadow-md:0 10px 28px -10px rgba(30,40,60,.28);
+  --shadow-sm:0 3px 10px -4px rgba(30,40,60,.22);
+  --rail-track:#c6ccd6;
+  color-scheme:light;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{min-height:100%}
+body{
+  font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px;line-height:1.45;color:var(--text);
+  background:
+    radial-gradient(1200px 700px at 20% -10%,rgba(77,141,245,.07),transparent 60%),
+    radial-gradient(900px 600px at 100% 110%,rgba(77,141,245,.05),transparent 60%),
+    #090b0e;
+  display:flex;flex-direction:column;align-items:center;
+  padding:26px 20px 60px;gap:16px;
+}
+svg.ic{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round;flex:none}
+svg.ic.sm{width:13px;height:13px}
+svg.ic.lg{width:18px;height:18px}
+
+/* ── Demo-Kopf über dem Fenster (nicht Teil der App) ──────────────────── */
+.demo-bar{width:min(1340px,100%);display:flex;align-items:center;gap:14px;
+  color:#8892a4;font-size:12.5px;flex-wrap:wrap}
+.demo-bar b{color:#c7cede;font-weight:600}
+.demo-bar .note{color:#667080}
+.demo-bar .spacer{flex:1}
+.demo-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;
+  color:#8892a4;padding:6px 13px;border-radius:8px;border:1px solid #232a36;
+  background:#12151b;transition:all .15s}
+.demo-toggle:hover{color:#c7cede;border-color:#2e3745}
+.demo-toggle.on{color:#4d8df5;border-color:rgba(77,141,245,.4);background:rgba(77,141,245,.08)}
+.demo-toggle .dot{width:7px;height:7px;border-radius:50%;background:#2e3745}
+.demo-toggle.on .dot{background:#4d8df5}
+
+/* ══ Das Fenster ════════════════════════════════════════════════════════ */
+.window{width:min(1340px,100%);height:860px;min-height:680px;
+  background:var(--bg);border-radius:12px;overflow:hidden;
+  border:1px solid #000;box-shadow:var(--shadow-lg);
+  display:flex;flex-direction:column;position:relative}
+
+/* ── Titelleiste ──────────────────────────────────────────────────────── */
+.titlebar{height:46px;flex:none;background:var(--surface);
+  border-bottom:1px solid var(--line);
+  display:flex;align-items:center;padding-left:14px;gap:4px;user-select:none}
+.wordmark{display:flex;align-items:center;gap:10px;margin-right:16px}
+.wordmark .mark{width:23px;height:23px;border-radius:6px;flex:none;
+  background:linear-gradient(135deg,#4d8df5,#3a6fd8);
+  display:grid;place-items:center;box-shadow:0 2px 8px rgba(77,141,245,.4)}
+.wordmark .mark svg{width:12px;height:12px;stroke:#fff;stroke-width:2}
+.wordmark .name{font-weight:700;font-size:13.5px}
+.menu{display:flex;gap:2px}
+.menu button{font:inherit;color:var(--dim);background:none;border:0;
+  padding:6px 11px;border-radius:7px;cursor:pointer}
+.menu button:hover{background:var(--surface-3);color:var(--text)}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:2px}
+.tb-btn{width:30px;height:30px;display:grid;place-items:center;border:0;
+  background:none;color:var(--dim);border-radius:7px;cursor:pointer}
+.tb-btn:hover{background:var(--surface-3);color:var(--text)}
+.tb-btn.theme{margin-right:8px}
+.win-btn{width:46px;height:46px;border-radius:0}
+.win-btn.close:hover{background:#c0392b;color:#fff}
+
+/* ── Rumpf ────────────────────────────────────────────────────────────── */
+.body{flex:1;display:flex;min-height:0}
+.sidebar{width:244px;flex:none;background:var(--surface);
+  border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+
+.seg{margin:10px 10px 6px;padding:3px;gap:2px;background:var(--surface-2);
+  border:1px solid var(--line);border-radius:9px;display:flex;flex:none}
+.seg button{flex:1;font:inherit;font-size:11.5px;color:var(--dim);background:none;
+  border:0;border-radius:6px;padding:7px 2px;cursor:pointer;white-space:nowrap;
+  transition:background .12s,color .12s}
+.seg button:hover{color:var(--text)}
+.seg button.on{background:var(--surface-3);color:var(--text);font-weight:600;
+  box-shadow:var(--shadow-sm)}
+
+.toolist{display:none;padding:0 8px}
+.navgroup{font-size:10.5px;font-weight:650;letter-spacing:.08em;color:var(--faint);
+  text-transform:uppercase;padding:16px 10px 6px;border-top:1px solid var(--line);
+  margin-top:8px}
+.navgroup:first-child{border-top:0;margin-top:2px}
+.navitem{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:7px;
+  color:var(--dim);cursor:pointer;border:0;background:none;font:inherit;
+  font-size:12.5px;text-align:left;width:100%;position:relative;
+  transition:background .12s,color .12s}
+.navitem:hover{background:var(--surface-3);color:var(--text)}
+.navitem.on{background:var(--accent-soft);color:var(--text);font-weight:600}
+.navitem.on::before{content:"";position:absolute;left:0;top:7px;bottom:7px;
+  width:2.5px;border-radius:2px;background:var(--accent)}
+.navitem .ic{color:var(--faint)}
+.navitem.on .ic,.navitem:hover .ic{color:var(--accent)}
+
+.sidefoot{flex:none;border-top:1px solid var(--line);padding:10px 16px;
+  display:flex;align-items:center;justify-content:space-between}
+.sidefoot .beta{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--faint)}
+.sidefoot .hint{color:var(--faint);font-size:11px}
+
+.sidepane{display:none;padding:4px 10px 14px}
+.toolist.show,.sidepane.show{display:block}
+
+/* ── Hauptbereich ─────────────────────────────────────────────────────── */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+
+/* Dokumentleiste — bleibt in ALLEN Ansichten sichtbar */
+.docbar{height:44px;flex:none;background:var(--surface);
+  border-bottom:1px solid var(--line);display:flex;align-items:stretch;padding-left:0}
+.tab{display:flex;align-items:center;gap:8px;padding:0 10px 0 16px;font-size:12.5px;
+  color:var(--dim);cursor:pointer;border:0;background:none;position:relative;
+  border-radius:0 9px 9px 0;align-self:stretch;transition:background .12s,color .12s}
+.tab + .tab{margin-left:3px}
+.tab:hover{background:var(--surface-2);color:var(--text)}
+.tab.on{background:var(--surface-2);color:var(--text);font-weight:600;
+  box-shadow:inset 0 2px 0 var(--accent)}
+.tab .dirty{width:7px;height:7px;border-radius:50%;background:var(--warn);flex:none}
+.tab .x{opacity:0;width:20px;height:20px;display:grid;place-items:center;border-radius:5px}
+.tab:hover .x{opacity:.7}
+.tab .x:hover{background:var(--surface-3);opacity:1}
+.newtab{width:30px;align-self:center;height:30px;margin-left:4px;display:grid;
+  place-items:center;border:0;background:none;color:var(--dim);border-radius:7px;cursor:pointer}
+.newtab:hover{background:var(--surface-3);color:var(--text)}
+.doc-actions{margin-left:auto;display:flex;align-items:center;gap:6px;padding-right:10px}
+.findfield{display:flex;align-items:center;gap:7px;width:190px;height:28px;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:7px;
+  padding:0 9px;color:var(--faint)}
+.findfield input{flex:1;border:0;background:none;font:inherit;font-size:12px;
+  color:var(--text);outline:none;min-width:0}
+.findfield input::placeholder{color:var(--faint)}
+.findfield:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.findwrap{width:0;overflow:hidden;transition:width .18s ease;display:flex}
+.findwrap.open{width:196px}
+.findwrap .findfield{width:190px;margin-right:6px}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 13px;
+  border-radius:7px;border:1px solid var(--line);background:var(--surface-2);
+  color:var(--text);font:inherit;font-size:12.5px;cursor:pointer;white-space:nowrap;
+  transition:background .12s,border-color .12s}
+.btn:hover{background:var(--surface-3);border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:transparent;color:#fff;font-weight:600;
+  height:32px}
+.btn.primary:hover{background:var(--accent-hover)}
+.icon-btn{width:28px;height:28px;display:grid;place-items:center;border:0;border-radius:7px;
+  background:none;color:var(--dim);cursor:pointer}
+.icon-btn:hover{background:var(--surface-3);color:var(--text)}
+
+/* Liste-Buttons (Seiten verwalten) — Icon + Label + Shortcut rechts */
+.listbtn{display:flex;align-items:center;gap:9px;width:100%;height:31px;padding:0 10px;
+  border-radius:7px;border:1px solid transparent;background:none;color:var(--text);
+  font:inherit;font-size:12.5px;cursor:pointer;text-align:left;
+  transition:background .12s,border-color .12s}
+.listbtn:hover{background:var(--surface-3);border-color:var(--line)}
+.listbtn .ic{color:var(--faint)}
+.listbtn:hover .ic{color:var(--accent)}
+.listbtn kbd{margin-left:auto;font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:10.5px;color:var(--faint)}
+.btnpair{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.btnpair button{flex:1;font:inherit;font-size:12px;color:var(--dim);border:0;
+  background:var(--surface-2);height:29px;cursor:pointer}
+.btnpair button+button{border-left:1px solid var(--line)}
+.btnpair button:hover{background:var(--surface-3);color:var(--text)}
+
+/* Felder */
+.field{display:flex;align-items:center;gap:7px;height:30px;border-radius:7px;
+  border:1px solid var(--line);background:var(--surface-3);padding:0 10px;color:var(--text)}
+.field input{flex:1;border:0;background:none;font:inherit;font-size:12.5px;color:var(--text);
+  outline:none;min-width:0}
+.field input::placeholder{color:var(--faint)}
+.field:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.selwrap{position:relative;display:flex;align-items:center;height:30px}
+.selwrap select{appearance:none;-webkit-appearance:none;width:100%;height:100%;
+  border-radius:7px;border:1px solid var(--line);background:var(--surface-3);
+  color:var(--text);font:inherit;font-size:12.5px;padding:0 26px 0 10px;cursor:pointer;outline:none}
+.selwrap select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.selwrap .chev{position:absolute;right:8px;pointer-events:none;color:var(--faint)}
+.numwrap{display:flex;align-items:center;height:30px;border-radius:7px;
+  border:1px solid var(--line);background:var(--surface-3);padding:0 9px;gap:4px}
+.numwrap input{width:38px;border:0;background:none;font:inherit;font-size:12.5px;
+  color:var(--text);outline:none;text-align:right}
+.numwrap .unit{color:var(--faint);font-size:11px}
+.numwrap:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.checkrow{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--text);
+  cursor:pointer;user-select:none;padding:2px 0}
+.cbox{width:15px;height:15px;border-radius:4px;border:1px solid var(--line-strong);
+  background:var(--surface-3);display:grid;place-items:center;flex:none;
+  transition:all .12s}
+.cbox svg{width:10px;height:10px;stroke:#fff;stroke-width:2.4;opacity:0}
+.checkrow input{display:none}
+.checkrow input:checked+.cbox{background:var(--accent);border-color:var(--accent)}
+.checkrow input:checked+.cbox svg{opacity:1}
+
+/* Views */
+.view{flex:1;display:none;min-height:0}
+.view.show{display:flex;animation:fadein .18s ease}
+@keyframes fadein{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+
+/* ── Vorschau ─────────────────────────────────────────────────────────── */
+.v-preview{flex:1;min-width:0}
+.canvas{flex:1;background:var(--canvas);display:grid;place-items:center;
+  overflow:auto;position:relative}
+.zoombox{zoom:var(--z,1)}
+.page{width:400px;aspect-ratio:210/297;background:var(--paper);border-radius:2px;
+  box-shadow:var(--shadow-md);padding:44px 42px;color:var(--paper-ink);position:relative}
+.p-brand{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:#3a4252;margin-bottom:4px}
+.p-sub{font-size:9px;color:#7b8494;margin-bottom:26px}
+.p-title{font-size:19px;font-weight:700;margin-bottom:6px}
+.p-meta{font-size:10px;color:#7b8494;margin-bottom:24px}
+.p-lines{height:236px;
+  background-image:repeating-linear-gradient(to bottom,transparent 0 10px,var(--paper-line) 10px 11px)}
+.p-lines.vary{mask-image:linear-gradient(to bottom,#000 78%,transparent 96%)}
+.p-total{margin-top:22px;display:flex;justify-content:space-between;align-items:baseline;
+  border-top:1.5px solid var(--paper-line2);padding-top:10px}
+.p-total .lbl{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#7b8494}
+.p-total .val{font-size:16px;font-weight:700}
+.p-foot{position:absolute;bottom:20px;left:42px;right:42px;display:flex;
+  justify-content:space-between;font-size:8.5px;color:#9aa2b2}
+
+/* Navigationsschiene */
+.rail{width:46px;flex:none;background:var(--surface);border-left:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;padding:10px 0 12px;gap:8px}
+.rail-btn{width:30px;height:26px;display:grid;place-items:center;border:0;border-radius:7px;
+  background:none;color:var(--dim);cursor:pointer}
+.rail-btn:hover{background:var(--surface-3);color:var(--text)}
+.track{flex:1;width:8px;background:var(--rail-track);border-radius:4px;position:relative;
+  border:1px solid var(--line)}
+.track .thumb{position:absolute;left:-1px;right:-1px;height:52px;border-radius:4px;
+  background:var(--accent);opacity:.9;box-shadow:0 0 10px rgba(77,141,245,.35);top:34%}
+.rail-num{font-size:13px;font-weight:700;cursor:pointer;padding:2px 6px;border-radius:5px}
+.rail-num:hover{background:var(--surface-3)}
+.rail-sep{width:16px;height:1px;background:var(--line)}
+.rail-tot{font-size:10.5px;color:var(--faint)}
+
+/* ── Statusleiste (alle Ansichten) ────────────────────────────────────── */
+.statusbar{height:38px;flex:none;background:var(--surface);border-top:1px solid var(--line);
+  display:flex;align-items:center;gap:0;padding:0 10px 0 14px}
+.readings{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:12px;
+  white-space:nowrap;overflow:hidden}
+.readings b{color:var(--text);font-weight:600}
+.readings i{font-style:normal;color:var(--faint)}
+.pf{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px;
+  border-radius:11px;border:0;background:none;color:var(--ok);font:inherit;font-size:12px;
+  cursor:pointer}
+.pf .pf-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 6px var(--ok)}
+.pf:hover{background:rgba(76,175,125,.12)}
+.sb-msg{flex:1;text-align:center;color:var(--dim);font-size:12px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;padding:0 14px;cursor:pointer;
+  border-radius:6px;transition:background .12s,color .12s;user-select:none}
+.sb-msg:hover{background:var(--surface-3);color:var(--text)}
+.sb-right{display:flex;align-items:center;gap:8px}
+.zoomer{display:flex;align-items:center;height:28px;border:1px solid var(--line);
+  border-radius:7px;background:var(--surface-2);overflow:hidden}
+.zoomer button{width:28px;height:100%;display:grid;place-items:center;border:0;
+  background:none;color:var(--dim);cursor:pointer}
+.zoomer button:hover{background:var(--surface-3);color:var(--text)}
+.zoomer .zval{width:46px;text-align:center;font-size:11.5px;color:var(--dim);
+  font-variant-numeric:tabular-nums}
+.zoomer .div{width:1px;height:14px;background:var(--line)}
+
+/* ── Seiten verwalten ─────────────────────────────────────────────────── */
+.v-manage{flex:1;min-width:0}
+.manage-toolbar{height:42px;flex:none;display:flex;align-items:center;gap:10px;
+  padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line)}
+.tooltoggle{display:none;align-items:center;gap:9px;margin:0 10px 4px;padding:7px 11px;
+  border-radius:8px;border:1px solid var(--line);background:var(--surface-2);color:var(--text);
+  font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;flex:none;
+  transition:border-color .12s}
+.tooltoggle:hover{border-color:var(--line-strong)}
+.tooltoggle .ic:first-child{color:var(--accent)}
+.tooltoggle .chev{margin-left:auto;color:var(--faint);transition:transform .15s}
+.tooltoggle.open .chev{transform:rotate(180deg)}
+.toolscroll{flex:1;overflow-y:auto;min-height:0;padding:2px 0 8px}
+.toolscroll::-webkit-scrollbar{width:8px}
+.toolscroll::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px}
+.tp-side .frow{grid-template-columns:78px 1fr}
+.manage-toolbar .title{font-size:12.5px;font-weight:600}
+.manage-toolbar .count{color:var(--faint);font-size:12px}
+.manage-toolbar .spacer{flex:1}
+.manage-toolbar .grp{display:flex;align-items:center;gap:2px;padding:2px;
+  border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
+.manage-toolbar .grp button{width:28px;height:26px;display:grid;place-items:center;
+  border:0;border-radius:6px;background:none;color:var(--dim);cursor:pointer}
+.manage-toolbar .grp button:hover{background:var(--surface-3);color:var(--text)}
+.manage-toolbar .grp button:disabled{opacity:.35;cursor:default}
+.gridwrap{flex:1;background:var(--canvas);overflow:auto;display:grid;
+  place-items:center;padding:34px 34px 26px}
+.grid{display:grid;grid-template-columns:repeat(3,152px);gap:26px 26px}
+.card{border-radius:9px;cursor:pointer;position:relative;
+  border:1px solid transparent;padding:0;background:none;transition:transform .12s}
+.card:hover{transform:translateY(-2px)}
+.card .well{border-radius:8px;border:1px solid var(--line-strong);background:var(--paper);
+  overflow:hidden;box-shadow:var(--shadow-sm);aspect-ratio:210/297;position:relative}
+.card figcaption{margin-top:7px;text-align:center;font-size:11px;color:var(--faint);
+  font-variant-numeric:tabular-nums}
+.card.sel .well{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent),
+  var(--shadow-md)}
+.card.sel figcaption{color:var(--accent);font-weight:700}
+.card.sel::after{content:"";position:absolute;top:-7px;right:-7px;width:20px;height:20px;
+  border-radius:50%;background:var(--accent);display:grid;place-items:center;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5 6.5 11.5 12.5 4.5'/%3E%3C/svg%3E");
+  background-size:11px;background-position:center;background-repeat:no-repeat}
+.tpage{position:absolute;inset:8% 9% 11% 9%;
+  background-image:repeating-linear-gradient(to bottom,transparent 0 9px,var(--paper-line) 9px 10px)}
+.tpage::before{content:"";display:block;height:16px;margin-bottom:10px;
+  background:#3a4252;border-radius:1px;opacity:.85}
+.tpage.t2::before{background:#4d8df5;opacity:.35}
+
+/* Auswahl-Eingabe + Abschnitte in der Seitenspalte */
+.sec{font-size:10.5px;font-weight:650;letter-spacing:.08em;color:var(--faint);
+  text-transform:uppercase;padding:14px 10px 6px;border-top:1px solid var(--line);margin-top:10px}
+.sec:first-child{border-top:0;margin-top:4px;padding-top:8px}
+.rowline{display:flex;align-items:center;gap:8px;margin:5px 0}
+.rowline .grow{flex:1}
+.rowline .lbl{width:64px;font-size:11.5px;color:var(--dim);flex:none}
+.sideback{margin:14px 0 6px}
+
+/* ── Layout-Ansicht ───────────────────────────────────────────────────── */
+.v-layout{flex:1;min-width:0}
+.opts{width:308px;flex:none;background:var(--surface-2);border-right:1px solid var(--line);
+  overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:14px}
+.opts::-webkit-scrollbar{width:8px}
+.opts::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px}
+.optcard{background:var(--surface-3);border:1px solid var(--line);border-radius:10px;
+  padding:13px 14px;box-shadow:var(--shadow-sm)}
+.optcard .head{display:flex;align-items:center;gap:9px;margin-bottom:11px}
+.optcard .head .ic{color:var(--accent)}
+.optcard .head .t{font-size:12.5px;font-weight:650}
+.optcard .head .sub{margin-left:auto;font-size:10.5px;color:var(--faint)}
+.frow{display:grid;grid-template-columns:64px 1fr;align-items:center;gap:8px;margin:6px 0}
+.frow .lbl{font-size:11.5px;color:var(--dim)}
+.frow2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.frow2 .cell{display:flex;align-items:center;gap:7px}
+.frow2 .cell .k{font-size:11px;color:var(--faint);width:38px;flex:none}
+.marggrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:4px 0 2px}
+.marggrid .cell{display:flex;align-items:center;gap:7px}
+.marggrid .k{font-size:11px;color:var(--faint);width:40px;flex:none}
+.sheetwrap{flex:1;background:var(--canvas);display:grid;place-items:center;
+  overflow:auto;position:relative}
+.sheetcol{display:flex;flex-direction:column;align-items:center;gap:14px;padding:36px 30px}
+.sheetgrp{display:flex;flex-direction:column;align-items:center;gap:8px}
+.sheet{width:560px;aspect-ratio:297/210;background:var(--paper);border-radius:2px;
+  box-shadow:var(--shadow-md);position:relative}
+.lslot{position:absolute;border:1px dashed var(--line-strong);border-radius:1px}
+.lslot .tpage{position:absolute;inset:7% 8% 9% 8%}
+.cmk{position:absolute;width:14px;height:14px}
+.cmk::before{content:"";position:absolute;width:11px;height:1px;background:var(--paper-ink)}
+.cmk::after{content:"";position:absolute;width:1px;height:11px;background:var(--paper-ink)}
+.cmk.h::before{right:0}
+.cmk.v::after{bottom:0}
+.sheet-cap{font-size:11.5px;color:var(--faint)}
+.stage{display:flex;align-items:center;gap:11px;width:100%;text-align:left;border:1px solid var(--line);
+  background:var(--surface-2);border-radius:10px;padding:10px 12px;cursor:pointer;
+  font:inherit;color:var(--text);position:relative;transition:all .13s;margin-top:8px}
+.stage:hover{border-color:var(--line-strong)}
+.stage.on{background:var(--accent-soft);border-color:var(--accent)}
+.stage .ic{color:var(--faint)}
+.stage.on .ic{color:var(--accent)}
+.stage .st-name{font-size:12.5px;font-weight:600}
+.stage .st-desc{font-size:10.5px;color:var(--faint);margin-top:1px}
+.switch{margin-left:auto;width:30px;height:17px;border-radius:9px;background:var(--line-strong);
+  position:relative;flex:none;transition:background .15s}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;
+  border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.35)}
+.stage.on .switch{background:var(--accent)}
+.stage.on .switch::after{left:15px}
+.runrow{display:flex;gap:8px;margin-top:14px}
+.runrow .btn{flex:1;justify-content:center}
+
+/* ── Anmerkungen ──────────────────────────────────────────────────────── */
+.ann-target{position:relative}
+body.ann .ann-target{outline:1.5px dashed rgba(77,141,245,.6);outline-offset:3px;
+  border-radius:4px}
+.ann-dot{display:none;position:absolute;top:-10px;right:-10px;width:19px;height:19px;
+  border-radius:50%;background:#4d8df5;color:#fff;font-size:10.5px;font-weight:700;
+  place-items:center;z-index:40;box-shadow:0 2px 8px rgba(0,0,0,.5);pointer-events:none}
+body.ann .ann-dot{display:grid}
+
+/* ── Notizen unter dem Fenster ────────────────────────────────────────── */
+.notes{width:min(1340px,100%);background:#11141a;border:1px solid #232a36;
+  border-radius:12px;padding:22px 26px;color:#949cad}
+.notes h2{font-size:13px;font-weight:650;color:#c7cede;letter-spacing:.02em;margin-bottom:12px}
+.notes ol{display:grid;grid-template-columns:1fr 1fr;gap:8px 34px;list-style:none;counter-reset:n}
+.notes li{counter-increment:n;display:flex;gap:10px;font-size:12.5px;line-height:1.5}
+.notes li::before{content:counter(n);flex:none;width:19px;height:19px;border-radius:50%;
+  background:rgba(77,141,245,.14);color:#4d8df5;font-size:10.5px;font-weight:700;
+  display:grid;place-items:center;margin-top:1px}
+.notes b{color:#c7cede;font-weight:600}
+
+/* ── Dateien öffnen (Mehrfachauswahl) ─────────────────────────────────── */
+.v-merge{flex:1;min-width:0}
+.mergebar{height:42px;flex:none;display:flex;align-items:center;gap:10px;
+  padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line)}
+.mergebar .title{font-size:12.5px;font-weight:600}
+.mergebar .count{color:var(--faint);font-size:12px}
+.mergebar .spacer{flex:1}
+.mgridwrap{flex:1;background:var(--canvas);overflow:auto;display:grid;
+  place-items:center;padding:34px 34px 26px}
+.mgrid{display:grid;grid-template-columns:repeat(3,178px);gap:24px}
+.mcard{border-radius:9px;cursor:pointer;position:relative;border:1px solid transparent;
+  padding:0;background:none;transition:transform .12s}
+.mcard:hover{transform:translateY(-2px)}
+.mcard .mwell{border-radius:8px;border:1px solid var(--line-strong);background:var(--surface-2);
+  overflow:hidden;box-shadow:var(--shadow-sm);padding:14px 14px 12px;display:grid;place-items:center}
+.mcard .mfirst{width:104px;aspect-ratio:210/297;background:var(--paper);border-radius:2px;
+  border:1px solid var(--paper-line2);padding:12px 11px;display:flex;flex-direction:column;gap:7px}
+.mcard .mf-head{height:13px;border-radius:1.5px;background:#3a4252;opacity:.85;flex:none}
+.mcard .mf-lines{flex:1;
+  background-image:repeating-linear-gradient(to bottom,transparent 0 7px,var(--paper-line) 7px 8px)}
+.mcard figcaption{margin-top:7px;text-align:left}
+.mcard .mname{font-size:11.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-weight:600}
+.mcard .mmeta{font-size:10.5px;color:var(--faint);margin-top:1px}
+.mcard.sel .mwell{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent),var(--shadow-md)}
+.mcard.sel::after{content:"";position:absolute;top:-7px;right:-7px;width:20px;height:20px;
+  border-radius:50%;background:var(--accent);display:grid;place-items:center;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5 6.5 11.5 12.5 4.5'/%3E%3C/svg%3E");
+  background-size:11px;background-position:center;background-repeat:no-repeat}
+.mcard .ord{position:absolute;top:6px;left:6px;width:19px;height:19px;border-radius:6px;
+  background:var(--surface-3);border:1px solid var(--line-strong);color:var(--dim);
+  font-size:10.5px;font-weight:700;display:grid;place-items:center;z-index:2}
+.mcard.sel .ord{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* ── Druckdialog (Modal) ──────────────────────────────────────────────── */
+.modal{display:none;position:absolute;inset:0;background:rgba(5,7,10,.55);backdrop-filter:blur(2px);
+  z-index:50;place-items:center}
+.modal.open{display:grid}
+.dialog{width:880px;max-width:94%;max-height:92%;background:var(--bg);border-radius:12px;
+  border:1px solid var(--line-strong);box-shadow:var(--shadow-lg);
+  display:flex;flex-direction:column;overflow:hidden;
+  animation:dlg .16s ease}
+@keyframes dlg{from{opacity:0;transform:scale(.97) translateY(6px)}to{opacity:1;transform:none}}
+.dlg-title{height:42px;flex:none;display:flex;align-items:center;gap:9px;padding:0 16px;
+  background:var(--surface);border-bottom:1px solid var(--line);font-size:13px;font-weight:650}
+.dlg-title .ic{color:var(--accent)}
+.dlg-title .x{margin-left:auto}
+.dlg-body{flex:1;display:flex;min-height:0}
+.dlg-preview{width:340px;flex:none;background:var(--canvas);border-right:1px solid var(--line);
+  display:grid;place-items:center;padding:22px;position:relative}
+.dlg-preview .page{width:250px;box-shadow:var(--shadow-md)}
+.dlg-preview .pv-cap{position:absolute;bottom:10px;left:0;right:0;text-align:center;
+  font-size:11px;color:var(--faint)}
+.dlg-form{flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:14px}
+.dlg-form::-webkit-scrollbar{width:8px}
+.dlg-form::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px}
+.dlg-form .sec{border-top:0;margin-top:0;padding-top:0}
+.dlg-2col{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px}
+.dlg-2col .frow{margin:0}
+.dlg-2col .frow .lbl{width:auto}
+.dlg-radios{display:flex;gap:8px;flex-wrap:wrap}
+.radiopill{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 12px;
+  border-radius:7px;border:1px solid var(--line);background:var(--surface-3);cursor:pointer;
+  font:inherit;font-size:12.5px;color:var(--text)}
+.radiopill:hover{border-color:var(--line-strong)}
+.radiopill.on{border-color:var(--accent);background:var(--accent-soft)}
+.radiopill .dot{width:13px;height:13px;border-radius:50%;border:1.5px solid var(--line-strong);
+  background:none;display:grid;place-items:center;flex:none}
+.radiopill.on .dot{border-color:var(--accent)}
+.radiopill.on .dot::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.radiopill .pill-in{display:none;align-items:center;gap:3px}
+.radiopill.on .pill-in{display:inline-flex}
+.radiopill .pill-in input{width:64px;height:22px;border:0;border-radius:5px;background:var(--surface);
+  font:inherit;font-size:12px;color:var(--text);outline:none;text-align:center;padding:0 4px}
+.radiopill .pill-in input:focus{box-shadow:0 0 0 2px var(--accent-soft)}
+.radiopill .pill-in .unit{font-size:11px;color:var(--faint)}
+.dlg-foot{flex:none;display:flex;align-items:center;gap:8px;padding:10px 18px;
+  background:var(--surface);border-top:1px solid var(--line)}
+.dlg-foot .note{font-size:11px;color:var(--faint)}
+.dlg-status{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+.dlg-status .st{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--dim)}
+.dlg-status .st-dot{width:6px;height:6px;border-radius:50%;flex:none}
+.dlg-status .st.ok .st-dot{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.dlg-status .st.ok{color:var(--ok)}
+.dlg-status .st.warn .st-dot{background:var(--warn);box-shadow:0 0 6px var(--warn)}
+.dlg-status .st.warn{color:var(--warn)}
+
+/* ── Datei-Auswahl-Dialog (Mehrfachauswahl) ───────────────────────────── */
+.fm-body{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.fm-crumb{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--faint);
+  padding:2px 4px 8px;border-bottom:1px solid var(--line);margin-bottom:4px}
+.fm-crumb b{color:var(--dim);font-weight:600}
+.fm-row{display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:8px;
+  cursor:pointer;user-select:none}
+.fm-row:hover{background:var(--surface-3)}
+.fm-row .fsize{margin-left:auto;font-size:11px;color:var(--faint);
+  font-variant-numeric:tabular-nums}
+.fm-row .ic{color:var(--accent)}
+.fm-row input{display:none}
+.fm-row input:checked+.cbox{background:var(--accent);border-color:var(--accent)}
+.fm-row input:checked+.cbox svg{opacity:1}
+
+/* ── Protokoll-Fenster ────────────────────────────────────────────────── */
+.log-body{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;
+  gap:1px;min-height:220px}
+.log-body::-webkit-scrollbar{width:8px}
+.log-body::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px}
+.log-row{display:flex;gap:12px;align-items:baseline;padding:4px 9px;border-radius:6px;
+  font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px}
+.log-row:hover{background:var(--surface-3)}
+.log-row .t{color:var(--faint);flex:none;font-variant-numeric:tabular-nums}
+.log-row .lv{flex:none;width:32px;font-weight:700;font-size:10px;letter-spacing:.06em}
+.log-row.info .lv{color:var(--accent)}
+.log-row.ok .lv{color:var(--ok)}
+.log-row.err .lv{color:var(--err)}
+.log-row .m{color:var(--dim);word-break:break-word}
+.log-empty{color:var(--faint);font-size:12px;text-align:center;padding:30px 0}
+
+@media (max-width:1100px){
+  .grid{grid-template-columns:repeat(3,120px)}
+  .opts{width:270px}
+  .notes ol{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ Icon-Sprite (ein gezeichnetes Set statt Text-Glyphen) ═════════ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-doc" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13"/><path d="M6 8.5h4M6 11h4"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></symbol>
+    <symbol id="i-print" viewBox="0 0 16 16"><path d="M4.5 6V1.5h7V6"/><rect x="2" y="6" width="12" height="6" rx="1.5"/><path d="M4.5 11h7v3.5h-7z"/></symbol>
+    <symbol id="i-save" viewBox="0 0 16 16"><path d="M8 1.5v8"/><path d="m4.5 6 3.5 3.5L11.5 6"/><path d="M2 11v2a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 14 13v-2"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 16 16"><path d="M9.5 2.5 13.5 6.5 5.5 14.5H1.5v-4z"/><path d="m8 4 4 4"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 16 16"><path d="M3 8h10"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 16 16"><path d="M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3"/><rect x="5.5" y="5.5" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 16 16"><path d="m4 10 4-4 4 4"/></symbol>
+    <symbol id="i-next" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
+    <symbol id="i-min" viewBox="0 0 16 16"><path d="M3 12h10"/></symbol>
+    <symbol id="i-max" viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 16 16"><path d="M13.5 9.5A6 6 0 0 1 6.5 2.5a6 6 0 1 0 7 7z"/></symbol>
+    <symbol id="i-rotl" viewBox="0 0 16 16"><path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 2v3h3"/></symbol>
+    <symbol id="i-rotr" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 2v3h-3"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.7 7v4M9.3 7v4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></symbol>
+    <symbol id="i-paste" viewBox="0 0 16 16"><rect x="4.5" y="2.5" width="7" height="11" rx="1.5"/><path d="M6.5 2.5V1.5h3v1"/><path d="M7 8.5h2M7 11h2"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 16 16"><path d="M3.5 7H11a3.5 3.5 0 0 1 0 7H8"/><path d="M6.5 4 3.5 7l3 3"/></symbol>
+    <symbol id="i-scissors" viewBox="0 0 16 16"><circle cx="4" cy="12.5" r="2"/><circle cx="4" cy="3.5" r="2"/><path d="M5.7 4.7 13 13M5.7 11.3 13 3"/></symbol>
+    <symbol id="i-fileplus" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13"/><path d="M8 8v4M6 10h4"/></symbol>
+    <symbol id="i-files" viewBox="0 0 16 16"><path d="M5.5 1.5H11l2 2v8"/><path d="M3 5.5h5.5L11 8v6.5H3z"/></symbol>
+    <symbol id="i-split" viewBox="0 0 16 16"><path d="M2 8h4M10 8h4"/><path d="M8 2v3M8 11v3M6 5l2-3 2 3M6 11l2 3 2-3"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-crop" viewBox="0 0 16 16"><path d="M5 1v10h10"/><path d="M1 5h10v10"/></symbol>
+    <symbol id="i-marks" viewBox="0 0 16 16"><path d="M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3"/><path d="M8 5v6M5 8h6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 16 16"><path d="m8 1.5 6.5 3.5L8 8.5 1.5 5z"/><path d="m2.5 8.5 5.5 3 5.5-3"/><path d="m2.5 11.5 5.5 3 5.5-3"/></symbol>
+    <symbol id="i-drop" viewBox="0 0 16 16"><path d="M8 1.5s4.5 5 4.5 8a4.5 4.5 0 0 1-9 0c0-3 4.5-8 4.5-8z"/></symbol>
+    <symbol id="i-num" viewBox="0 0 16 16"><path d="M4.5 3.5 7 2v10"/><path d="M10 3.5h3.5L10.5 8h3"/></symbol>
+    <symbol id="i-form" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M5 6h6M5 9h4"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 16 16"><path d="M8 1.5 13.5 3.5V8c0 3.5-2.5 5.5-5.5 6.5C5 13.5 2.5 11.5 2.5 8V3.5z"/><path d="m5.8 7.8 1.6 1.6 3-3.2"/></symbol>
+    <symbol id="i-export" viewBox="0 0 16 16"><path d="M8 10V2M5 5l3-3 3 3"/><path d="M2.5 10.5v2a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-2"/></symbol>
+    <symbol id="i-zip" viewBox="0 0 16 16"><path d="M8 1.5v3M8 14.5v-3M1.5 8h3M14.5 8h-3"/><rect x="5.5" y="5.5" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-puzzle" viewBox="0 0 16 16"><path d="M5.5 2.5a1.5 1.5 0 0 1 3 0c0 .5-.5 1-.5 1.5h4v4c.5 0 1-.5 1.5-.5a1.5 1.5 0 0 1 0 3c-.5 0-1-.5-1.5-.5v4h-4c0-.5.5-1 .5-1.5a1.5 1.5 0 0 0-3 0c0 .5.5 1 .5 1.5h-4v-11h4c-.5 0-1-.5-1-.5z" transform="translate(0 0)"/></symbol>
+    <symbol id="i-ruler" viewBox="0 0 16 16"><rect x="1.5" y="5" width="13" height="6" rx="1" transform="rotate(-45 8 8)"/><path d="M6 6.5 7 7.5M8 4.5l1 1M10 6.5l1 1"/></symbol>
+    <symbol id="i-select" viewBox="0 0 16 16"><path d="M3 2.5 13 8.5l-4.5.8L5.5 13z"/></symbol>
+  </defs>
+</svg>
+
+<!-- ═══ Demo-Kopf (gehört nicht zur App) ═════════════════════════════ -->
+<header class="demo-bar">
+  <b>Folio — GUI-Konzept</b>
+  <span class="note">Interaktiv: Ansicht umschalten · Thema wechseln · Zoomen · Stufen schalten · Werkzeug starten (Fortschritt in der Statusleiste) · „+“ → Dateimanager → Mehrfachauswahl · „Drucken“ öffnet den Dialog · Statusmeldung anklicken → Protokoll</span>
+  <span class="spacer"></span>
+  <button class="demo-toggle" id="annToggle"><span class="dot"></span>Anmerkungen anzeigen</button>
+</header>
+
+<!-- ═══ Das Fenster ═════════════════════════════════════════════════ -->
+<div class="window">
+
+  <!-- Titelleiste -->
+  <div class="titlebar">
+    <div class="wordmark">
+      <span class="mark"><svg class="ic"><use href="#i-doc"/></svg></span>
+      <span class="name">Folio</span>
+    </div>
+    <nav class="menu">
+      <button>Datei</button>
+      <button>Einstellungen</button>
+      <button>Hilfe</button>
+    </nav>
+    <div class="tb-right">
+      <button class="tb-btn theme" id="themeToggle" title="Thema wechseln">
+        <svg class="ic" id="themeIcon"><use href="#i-sun"/></svg>
+      </button>
+      <button class="tb-btn win-btn"><svg class="ic"><use href="#i-min"/></svg></button>
+      <button class="tb-btn win-btn"><svg class="ic"><use href="#i-max"/></svg></button>
+      <button class="tb-btn win-btn close"><svg class="ic"><use href="#i-close"/></svg></button>
+    </div>
+  </div>
+
+  <!-- Dokumentleiste — volle Fensterbreite, bleibt in jeder Ansicht sichtbar -->
+  <div class="docbar ann-target">
+    <span class="ann-dot">1</span>
+    <button class="tab on">
+      <svg class="ic sm"><use href="#i-doc"/></svg>
+      kunde_rechnung_2026.pdf
+      <span class="dirty" title="Ungespeicherte Änderungen"></span>
+      <span class="x"><svg class="ic sm"><use href="#i-close"/></svg></span>
+    </button>
+    <button class="tab">
+      <svg class="ic sm"><use href="#i-doc"/></svg>
+      briefkopf_a5.pdf
+      <span class="x"><svg class="ic sm"><use href="#i-close"/></svg></span>
+    </button>
+        <button class="newtab" id="newtabBtn" title="Datei öffnen (Strg+O)"><svg class="ic"><use href="#i-plus"/></svg></button>
+    <div class="doc-actions">
+      <button class="icon-btn ann-target" id="findToggle" title="Suchen (Strg+F)">
+        <span class="ann-dot">12</span>
+        <svg class="ic sm"><use href="#i-search"/></svg>
+      </button>
+      <div class="findwrap" id="findWrap">
+        <div class="findfield">
+          <svg class="ic sm"><use href="#i-search"/></svg>
+          <input placeholder="Suchen (Strg+F)" id="findInput">
+        </div>
+      </div>
+      <button class="icon-btn" title="Bearbeiten (Werkzeuge)"><svg class="ic sm"><use href="#i-edit"/></svg></button>
+      <button class="btn"><svg class="ic sm"><use href="#i-save"/></svg>Speichern</button>
+      <button class="btn" id="printBtn"><svg class="ic sm"><use href="#i-print"/></svg>Drucken</button>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <!-- ── Sidebar: eine Fläche, ein Inhalt pro Ansicht ─────────────── -->
+    <aside class="sidebar ann-target">
+      <span class="ann-dot">2</span>
+      <div class="seg" id="viewSeg">
+        <button data-view="preview" class="on">Vorschau</button>
+        <button data-view="manage">Seiten verwalten</button>
+        <button data-view="layout">Layout</button>
+      </div>
+
+      <!-- Werkzeug-Umschalter (nur „Seiten verwalten“ / „Layout“) -->
+      <button class="tooltoggle" id="toolToggle">
+        <svg class="ic sm"><use href="#i-grid"/></svg>Werkzeuge
+        <svg class="ic sm chev"><use href="#i-chev"/></svg>
+      </button>
+
+      <div class="toolscroll">
+      <!-- Werkzeugliste · morpht zum Einstellungspanel des Werkzeugs -->
+      <nav class="toolist show ann-target" id="paneTools">
+        <span class="ann-dot">10</span>
+        <div id="toolList"></div>
+        <div id="toolPanel" style="display:none"></div>
+      </nav>
+
+      <!-- Seitenoperationen (nur „Seiten verwalten“) -->
+      <div class="sidepane" id="paneManage">
+        <div class="sec" style="display:flex;align-items:baseline;justify-content:space-between">Auswahl
+          <span style="font-size:11px;letter-spacing:0;text-transform:none;font-weight:400" id="manageCount">2 von 6 Seiten</span></div>
+        <div class="rowline">
+          <div class="field grow"><svg class="ic sm" style="color:var(--faint)"><use href="#i-select"/></svg>
+            <input id="selField" placeholder="z. B. 1, 3, 5–8" value="2, 3"></div>
+        </div>
+        <div class="rowline" style="margin-top:7px">
+          <div class="btnpair grow">
+            <button id="selAll">Alle</button>
+            <button id="selNone">Keine</button>
+          </div>
+        </div>
+
+        <div class="sec">Ansicht</div>
+        <div class="rowline">
+          <div class="manage-toolbar grp" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:2px">
+            <button title="Thumbnails verkleinern (Strg+−)"><svg class="ic sm"><use href="#i-minus"/></svg></button>
+            <button title="Thumbnails vergrößern (Strg++)"><svg class="ic sm"><use href="#i-plus"/></svg></button>
+            <button title="Zoom zurücksetzen (Strg+0)"><svg class="ic sm"><use href="#i-fit"/></svg></button>
+          </div>
+          <div class="manage-toolbar grp" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:2px;margin-left:6px">
+            <button title="Auswahl 90° gegen den Uhrzeigersinn"><svg class="ic sm"><use href="#i-rotl"/></svg></button>
+            <button title="Auswahl 90° im Uhrzeigersinn"><svg class="ic sm"><use href="#i-rotr"/></svg></button>
+          </div>
+        </div>
+
+        <div class="sec">Operationen</div>
+        <button class="listbtn ann-target"><span class="ann-dot">8</span><svg class="ic sm"><use href="#i-trash"/></svg>Löschen<kbd>Entf</kbd></button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-copy"/></svg>Kopieren<kbd>Strg+C</kbd></button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-paste"/></svg>Einfügen<kbd>Strg+V</kbd></button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-undo"/></svg>Rückgängig<kbd>Strg+Z</kbd></button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-scissors"/></svg>Extrahieren …</button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-fileplus"/></svg>Als neuen Tab öffnen</button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-plus"/></svg>Leere Seite einfügen</button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-files"/></svg>Aus Datei(en) einfügen …</button>
+
+        <div class="sec">Trennen</div>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-save"/></svg>Auswahl als Datei speichern</button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-split"/></svg>Jede Seite als Datei</button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-split"/></svg>Alle N Seiten …</button>
+
+        <button class="btn sideback" id="backPreview" style="justify-content:center">
+          <svg class="ic sm" style="transform:rotate(90deg)"><use href="#i-prev"/></svg>Zur Einzelansicht<kbd style="margin-left:8px">Esc</kbd></button>
+      </div>
+
+      <!-- Druckstufen (nur „Layout“) -->
+      <div class="sidepane" id="paneLayout">
+        <div class="sec" style="border-top:0;margin-top:4px;padding-top:8px">Druckstufen</div>
+        <button class="stage on ann-target" data-stage="crop"><span class="ann-dot">9</span>
+          <svg class="ic"><use href="#i-crop"/></svg>
+          <span><span class="st-name">Zuschneiden / Skalieren</span>
+            <span class="st-desc" style="display:block">Format · Ränder · Skalierung</span></span>
+          <span class="switch"></span>
+        </button>
+        <button class="stage on" data-stage="arr">
+          <svg class="ic"><use href="#i-grid"/></svg>
+          <span><span class="st-name">Anordnung</span>
+            <span class="st-desc" style="display:block">Raster · Broschüre · Blattformat</span></span>
+          <span class="switch"></span>
+        </button>
+        <button class="stage" data-stage="marks">
+          <svg class="ic"><use href="#i-marks"/></svg>
+          <span><span class="st-name">Marken</span>
+            <span class="st-desc" style="display:block">Schnittmarken · Endformat</span></span>
+          <span class="switch"></span>
+        </button>
+        <div class="runrow">
+          <button class="btn primary" id="runBtn"><svg class="ic sm"><use href="#i-check"/></svg>Ausführen</button>
+          <button class="btn" id="stopBtn" style="display:none;width:56px;justify-content:center">Stopp</button>
+        </div>
+        <p style="font-size:11px;color:var(--faint);margin-top:12px;line-height:1.5">
+          Die Vorschau zeigt alle eingeschalteten Stufen zusammen; <i>Ausführen</i>
+          wendet sie in einem Durchgang an.</p>
+      </div>
+      </div>
+
+      <!-- Datei-Auswahl (nur „Dateien öffnen“) -->
+      <div class="sidepane" id="paneMerge">
+        <div class="sec" style="display:flex;align-items:baseline;justify-content:space-between">Auswahl
+          <span style="font-size:11px;letter-spacing:0;text-transform:none;font-weight:400" id="mergeSelCount">2 von 3 Dateien</span></div>
+        <div class="rowline">
+          <div class="field grow"><svg class="ic sm" style="color:var(--faint)"><use href="#i-select"/></svg>
+            <input placeholder="z. B. 1, 3, 5–8" value="1, 3"></div>
+        </div>
+        <div class="rowline" style="margin-top:7px">
+          <div class="btnpair grow">
+            <button id="mSelAll">Alle</button>
+            <button id="mSelNone">Keine</button>
+          </div>
+        </div>
+
+        <div class="sec">Ansicht</div>
+        <div class="rowline">
+          <div class="manage-toolbar grp" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:2px">
+            <button title="Thumbnails verkleinern (Strg+−)"><svg class="ic sm"><use href="#i-minus"/></svg></button>
+            <button title="Thumbnails vergrößern (Strg++)"><svg class="ic sm"><use href="#i-plus"/></svg></button>
+            <button title="Zoom zurücksetzen (Strg+0)"><svg class="ic sm"><use href="#i-fit"/></svg></button>
+          </div>
+        </div>
+
+        <div class="sec">Reihenfolge</div>
+        <button class="listbtn"><svg class="ic sm" style="transform:rotate(180deg)"><use href="#i-chev"/></svg>Hoch</button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-chev"/></svg>Runter</button>
+
+        <div class="sec">Operationen</div>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-trash"/></svg>Entfernen<kbd>Entf</kbd></button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-copy"/></svg>Kopieren<kbd>Strg+C</kbd></button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-paste"/></svg>Einfügen<kbd>Strg+V</kbd></button>
+        <button class="listbtn"><svg class="ic sm"><use href="#i-undo"/></svg>Rückgängig<kbd>Strg+Z</kbd></button>
+
+        <div class="sec">Öffnen</div>
+        <button class="btn primary" id="doMerge" style="width:100%;justify-content:center">
+          <svg class="ic sm"><use href="#i-files"/></svg>Zusammenführen</button>
+        <button class="btn" id="doSingle" style="width:100%;justify-content:center;margin-top:8px">
+          <svg class="ic sm"><use href="#i-doc"/></svg>Einzeln öffnen</button>
+      </div>
+
+      <div class="sidefoot">
+        <span class="beta">BETA</span>
+      </div>
+    </aside>
+
+    <!-- ── Hauptbereich ─────────────────────────────────────────────── -->
+    <div class="main">
+
+      <!-- ═══ Ansicht 1 · Vorschau ═══════════════════════════════════ -->
+      <section class="view v-preview show" id="view-preview">
+        <div class="v-preview">
+          <div class="canvas">
+            <div class="zoombox" data-zoomable>
+              <article class="page">
+                <div class="p-brand">Rechnung R-2026-0148</div>
+                <div class="p-sub">Kopie Müller GmbH · Bahnhofstraße 12 · 30159 Hannover</div>
+                <div class="p-title">Seite 3 von 6</div>
+                <div class="p-meta">Leistungszeitraum 01.07.–31.07.2026 · Zahlungsziel 14 Tage</div>
+                <div class="p-lines"></div>
+                <div class="p-total">
+                  <span class="lbl">Gesamtbetrag</span>
+                  <span class="val">1.284,50 €</span>
+                </div>
+                <div class="p-foot"><span>Steuernummer 26/815/00421</span><span>Blatt 3</span></div>
+              </article>
+            </div>
+          </div>
+        </div>
+        <!-- Navigationsschiene -->
+        <div class="rail ann-target">
+          <span class="ann-dot">6</span>
+          <button class="rail-btn" title="Vorherige Seite"><svg class="ic"><use href="#i-prev"/></svg></button>
+          <div class="track"><div class="thumb"></div></div>
+          <button class="rail-btn" title="Nächste Seite"><svg class="ic"><use href="#i-next"/></svg></button>
+          <div class="rail-num" title="Gehe zu Seite (Strg+G)">3</div>
+          <div class="rail-sep"></div>
+          <div class="rail-tot">6</div>
+        </div>
+      </section>
+
+      <!-- ═══ Ansicht 2 · Seiten verwalten ═══════════════════════════ -->
+      <section class="view v-manage" id="view-manage">
+        <div class="gridwrap">
+          <div class="grid" id="thumbGrid">
+            <figure class="card"><div class="well"><div class="tpage"></div></div><figcaption>1</figcaption></figure>
+            <figure class="card sel"><div class="well"><div class="tpage t2"></div></div><figcaption>2</figcaption></figure>
+            <figure class="card sel"><div class="well"><div class="tpage"></div></div><figcaption>3</figcaption></figure>
+            <figure class="card"><div class="well"><div class="tpage"></div></div><figcaption>4</figcaption></figure>
+            <figure class="card"><div class="well"><div class="tpage t2"></div></div><figcaption>5</figcaption></figure>
+            <figure class="card"><div class="well"><div class="tpage"></div></div><figcaption>6</figcaption></figure>
+          </div>
+        </div>
+        <!-- Dieselbe Navigationsschiene wie in der Vorschau -->
+        <div class="rail">
+          <button class="rail-btn" title="Vorherige Seite"><svg class="ic"><use href="#i-prev"/></svg></button>
+          <div class="track"><div class="thumb" style="top:8%"></div></div>
+          <button class="rail-btn" title="Nächste Seite"><svg class="ic"><use href="#i-next"/></svg></button>
+          <div class="rail-num" title="Gehe zu Seite (Strg+G)">1</div>
+          <div class="rail-sep"></div>
+          <div class="rail-tot">6</div>
+        </div>
+      </section>
+
+      <!-- ═══ Ansicht 3 · Layout ═════════════════════════════════════ -->
+      <section class="view v-layout" id="view-layout">
+        <div class="v-layout" style="display:flex;flex:1;min-height:0">
+          <!-- Optionen der eingeschalteten Stufen -->
+          <div class="opts ann-target" id="optsCol">
+            <span class="ann-dot">9</span>
+            <div class="optcard" data-opts="crop">
+              <div class="head">
+                <svg class="ic"><use href="#i-crop"/></svg>
+                <span class="t">Zuschneiden / Skalieren</span>
+                <span class="sub">auf alle Seiten</span>
+              </div>
+              <div class="frow"><span class="lbl">Format</span>
+                <div class="selwrap"><select><option>— Kein —</option><option>A4 (210×297 mm)</option><option>A5 (148×210 mm)</option></select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+              </div>
+              <div class="marggrid">
+                <div class="cell"><span class="k">Oben</span><div class="numwrap"><input value="0.0"><span class="unit">mm</span></div></div>
+                <div class="cell"><span class="k">Unten</span><div class="numwrap"><input value="0.0"><span class="unit">mm</span></div></div>
+                <div class="cell"><span class="k">Links</span><div class="numwrap"><input value="0.0"><span class="unit">mm</span></div></div>
+                <div class="cell"><span class="k">Rechts</span><div class="numwrap"><input value="0.0"><span class="unit">mm</span></div></div>
+              </div>
+              <div class="frow"><span class="lbl">Skalierung</span>
+                <div class="numwrap" style="flex:1"><input value="100.0"><span class="unit">%</span></div>
+              </div>
+              <label class="checkrow"><input type="checkbox" checked><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>Inhalt einpassen</label>
+              <label class="checkrow"><input type="checkbox" checked><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>Proportionen behalten</label>
+            </div>
+            <div class="optcard" data-opts="arr">
+              <div class="head">
+                <svg class="ic"><use href="#i-grid"/></svg>
+                <span class="t">Anordnung</span>
+                <span class="sub">alle Seiten der Reihe nach</span>
+              </div>
+              <div class="frow"><span class="lbl">Modus</span>
+                <div class="selwrap"><select><option>Raster</option><option>Broschüre · Sattelheftung</option></select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+              </div>
+              <div class="frow"><span class="lbl">Raster</span>
+                <div class="frow2">
+                  <div class="cell"><div class="numwrap" style="flex:1"><input value="2"></div></div>
+                  <div class="cell"><span style="color:var(--faint)">×</span><div class="numwrap" style="flex:1"><input value="1"></div></div>
+                </div>
+              </div>
+              <div class="frow"><span class="lbl">Blattformat</span>
+                <div class="selwrap"><select><option>Wie Quellseite × Anordnung (automatisch)</option><option>A3 (297×420 mm)</option></select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+              </div>
+              <div class="marggrid">
+                <div class="cell"><span class="k">Rand O</span><div class="numwrap"><input value="5.0"><span class="unit">mm</span></div></div>
+                <div class="cell"><span class="k">Rand U</span><div class="numwrap"><input value="5.0"><span class="unit">mm</span></div></div>
+                <div class="cell"><span class="k">Rand L</span><div class="numwrap"><input value="5.0"><span class="unit">mm</span></div></div>
+                <div class="cell"><span class="k">Rand R</span><div class="numwrap"><input value="5.0"><span class="unit">mm</span></div></div>
+                <div class="cell"><span class="k">Abst. H</span><div class="numwrap"><input value="3.0"><span class="unit">mm</span></div></div>
+                <div class="cell"><span class="k">Abst. V</span><div class="numwrap"><input value="3.0"><span class="unit">mm</span></div></div>
+              </div>
+              <label class="checkrow"><input type="checkbox" checked><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>Beide Abstände gleich</label>
+            </div>
+            <div class="optcard" data-opts="marks" style="display:none">
+              <div class="head">
+                <svg class="ic"><use href="#i-marks"/></svg>
+                <span class="t">Marken</span>
+                <span class="sub">— wie Seite —</span>
+              </div>
+              <label class="checkrow"><input type="checkbox" checked><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>Schnittmarken</label>
+              <div class="frow"><span class="lbl">Endformat</span>
+                <div class="selwrap"><select><option>— Wie Seite —</option><option>A4 (210×297 mm)</option></select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Vorschau der Bögen — scrollbar, die Schiene treibt sie -->
+          <div class="sheetwrap" id="sheetWrap">
+            <div class="sheetcol">
+              <div class="sheetgrp">
+                <div class="zoombox" data-zoomable>
+                  <div class="sheet">
+                    <div class="lslot" style="left:4.5%;top:5%;width:43%;height:90%"><div class="tpage"></div></div>
+                    <div class="lslot" style="right:4.5%;top:5%;width:43%;height:90%"><div class="tpage t2"></div></div>
+                  </div>
+                </div>
+                <div class="sheet-cap">Bogen 1 · Seiten 1–2</div>
+              </div>
+              <div class="sheetgrp">
+                <div class="zoombox" data-zoomable>
+                  <div class="sheet">
+                    <div class="lslot" style="left:4.5%;top:5%;width:43%;height:90%"><div class="tpage t2"></div></div>
+                    <div class="lslot" style="right:4.5%;top:5%;width:43%;height:90%"><div class="tpage"></div></div>
+                  </div>
+                </div>
+                <div class="sheet-cap">Bogen 2 · Seiten 3–4</div>
+              </div>
+              <div class="sheetgrp">
+                <div class="zoombox" data-zoomable>
+                  <div class="sheet">
+                    <div class="lslot" style="left:4.5%;top:5%;width:43%;height:90%"><div class="tpage"></div></div>
+                    <div class="lslot" style="right:4.5%;top:5%;width:43%;height:90%"><div class="tpage"></div></div>
+                  </div>
+                </div>
+                <div class="sheet-cap">Bogen 3 · Seiten 5–6</div>
+              </div>
+              <div class="sheet-cap" id="sheetCap">297 × 210 mm · Raster 2×1 = 2 Slots · Schnittmarken aus</div>
+            </div>
+          </div>
+
+          <!-- Dieselbe Navigationsschiene wie in der Vorschau -->
+          <div class="rail">
+            <button class="rail-btn" data-lrail="prev" title="Vorheriger Bogen"><svg class="ic"><use href="#i-prev"/></svg></button>
+            <div class="track"><div class="thumb" id="lrailThumb"></div></div>
+            <button class="rail-btn" data-lrail="next" title="Nächster Bogen"><svg class="ic"><use href="#i-next"/></svg></button>
+            <div class="rail-num" id="lrailNum" title="Gehe zu Seite (Strg+G)">1</div>
+            <div class="rail-sep"></div>
+            <div class="rail-tot">6</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ Ansicht 4 · Dateien öffnen (Mehrfachauswahl) ═══════════ -->
+      <section class="view v-merge" id="view-merge">
+        <div class="v-merge">
+          <div class="mergebar">
+            <span class="title">Dateien öffnen</span>
+            <span class="count" id="mergeCount">3 Dateien · 14 Seiten</span>
+            <span class="spacer"></span>
+            <span style="font-size:11px;color:var(--faint)">Ziehen zum Sortieren · Strg+Klick: einzeln</span>
+          </div>
+          <div class="mgridwrap">
+            <div class="grid" id="mergeGrid" style="grid-template-columns:repeat(3,178px)">
+              <figure class="mcard sel"><span class="ord">1</span><div class="mwell">
+                <div class="mfirst"><div class="mf-head"></div><div class="mf-lines"></div></div>
+              </div><figcaption><div class="mname">kunde_rechnung_2026.pdf</div><div class="mmeta">6 Seiten · A4</div></figcaption></figure>
+              <figure class="mcard"><span class="ord">2</span><div class="mwell">
+                <div class="mfirst"><div class="mf-head"></div><div class="mf-lines"></div></div>
+              </div><figcaption><div class="mname">briefkopf_a5.pdf</div><div class="mmeta">2 Seiten · A5</div></figcaption></figure>
+              <figure class="mcard sel"><span class="ord">3</span><div class="mwell">
+                <div class="mfirst"><div class="mf-head"></div><div class="mf-lines"></div></div>
+              </div><figcaption><div class="mname">wartung_protokoll_q3.pdf</div><div class="mmeta">6 Seiten · A4</div></figcaption></figure>
+            </div>
+          </div>
+        </div>
+        <!-- Dieselbe Navigationsschiene wie in der Vorschau -->
+        <div class="rail">
+          <button class="rail-btn" title="Vorherige Seite"><svg class="ic"><use href="#i-prev"/></svg></button>
+          <div class="track"><div class="thumb" style="top:8%"></div></div>
+          <button class="rail-btn" title="Nächste Seite"><svg class="ic"><use href="#i-next"/></svg></button>
+          <div class="rail-num" title="Gehe zu Seite (Strg+G)">1</div>
+          <div class="rail-sep"></div>
+          <div class="rail-tot">14</div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ═══ Statusleiste — volle Breite, eine für alle Ansichten ═══════ -->
+  <footer class="statusbar ann-target">
+    <span class="ann-dot">4</span>
+    <div class="readings" id="readings">
+      <span>A4 · 210×297 mm</span><i>·</i>
+      <span>sRGB</span><i>·</i>
+      <span title="Farbige Seiten / Graustufen-Seiten im Dokument"><b>4</b> farbig · <b>2</b> Graustufen</span>
+      <button class="pf" title="Druckvorstufenprüfung öffnen">
+        <span class="pf-dot"></span>Preflight OK
+      </button>
+    </div>
+    <div class="sb-msg" id="sbMsg" title="Protokoll öffnen">Gespeichert: kunde_rechnung_2026.pdf</div>
+    <div class="sb-right">
+      <button class="icon-btn" title="Lineale und Hilfslinien (Strg+R)"><svg class="ic"><use href="#i-ruler"/></svg></button>
+      <div class="zoomer ann-target">
+        <span class="ann-dot">5</span>
+        <button data-z="out" title="Verkleinern"><svg class="ic sm"><use href="#i-minus"/></svg></button>
+        <span class="zval">100 %</span>
+        <button data-z="in" title="Vergrößern"><svg class="ic sm"><use href="#i-plus"/></svg></button>
+        <span class="div"></span>
+        <button data-z="fit" title="Ganze Seite (Strg+0)"><svg class="ic sm"><use href="#i-fit"/></svg></button>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ═══ Datei öffnen — Dateimanager (Modal) ══════════════════════ -->
+  <div class="modal" id="fmModal">
+    <div class="dialog" style="width:620px">
+      <div class="dlg-title">
+        <svg class="ic"><use href="#i-files"/></svg>Dateien öffnen
+        <button class="icon-btn x" id="fmClose"><svg class="ic sm"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="fm-body" id="fmBody">
+        <div class="fm-crumb">
+          <svg class="ic sm"><use href="#i-files"/></svg><b>Home</b>▸ Workplace ▸ pdf_editor
+          <span style="margin-left:auto">Mehrfachauswahl möglich</span>
+        </div>
+        <label class="fm-row"><input type="checkbox" checked class="fm-cb"><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>
+          <svg class="ic sm"><use href="#i-doc"/></svg>kunde_rechnung_2026.pdf<span class="fsize">6 Seiten · 412 KB</span></label>
+        <label class="fm-row"><input type="checkbox" class="fm-cb"><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>
+          <svg class="ic sm"><use href="#i-doc"/></svg>briefkopf_a5.pdf<span class="fsize">2 Seiten · 88 KB</span></label>
+        <label class="fm-row"><input type="checkbox" checked class="fm-cb"><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>
+          <svg class="ic sm"><use href="#i-doc"/></svg>wartung_protokoll_q3.pdf<span class="fsize">6 Seiten · 397 KB</span></label>
+        <label class="fm-row"><input type="checkbox" class="fm-cb"><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>
+          <svg class="ic sm"><use href="#i-doc"/></svg>angebot_entwurf.pdf<span class="fsize">3 Seiten · 156 KB</span></label>
+      </div>
+      <div class="dlg-foot">
+        <span class="note" id="fmNote">2 Dateien ausgewählt</span>
+        <button class="btn" id="fmCancel">Abbrechen</button>
+        <button class="btn primary" id="fmOpen"><svg class="ic sm"><use href="#i-check"/></svg>Öffnen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Protokoll (Modal) — alle App-Meldungen, scrollbar ═══════ -->
+  <div class="modal" id="logModal">
+    <div class="dialog" style="width:660px">
+      <div class="dlg-title">
+        <svg class="ic"><use href="#i-form"/></svg>Protokoll
+        <button class="icon-btn x" id="logClose"><svg class="ic sm"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="log-body" id="logBody"></div>
+      <div class="dlg-foot">
+        <span class="note" id="logNote">0 Einträge</span>
+        <button class="btn" id="logClear">Leeren</button>
+        <button class="btn primary" id="logDone">Schließen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Druckdialog (Modal über allem) ═══════════════════════════ -->
+  <div class="modal" id="printModal">
+    <div class="dialog">
+      <div class="dlg-title">
+        <svg class="ic"><use href="#i-print"/></svg>Drucken — kunde_rechnung_2026.pdf
+        <button class="icon-btn x" id="dlgClose"><svg class="ic sm"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="dlg-body">
+        <div class="dlg-preview">
+          <article class="page" style="padding:34px 32px">
+            <div class="p-brand" style="font-size:9px">Rechnung R-2026-0148</div>
+            <div class="p-title" style="font-size:15px;margin-top:14px">Seite 1 von 6</div>
+            <div class="p-lines" style="height:280px"></div>
+            <div class="p-foot"><span>Steuernummer 26/815/00421</span><span>Blatt 1</span></div>
+          </article>
+          <div class="pv-cap" id="pvCap">Seite 1 von 6 · Angepasst · A4 Hochformat</div>
+        </div>
+        <div class="dlg-form">
+          <div style="display:flex;align-items:center;margin:2px 0 0">
+            <div class="selwrap" style="width:300px"><select id="dlgPrinter">
+              <option>Kyocera ECOSYS M5526cdn (Copyshop)</option>
+              <option>HP LaserJet 400 M401dn</option>
+              <option>In Datei drucken (PDF)</option>
+            </select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+            <label class="checkrow" style="flex:none;margin-left:12px"><input type="checkbox" id="bitmapCheck"><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>Bitmap</label>
+            <div class="selwrap" id="dpiWrap" style="display:none;width:104px;margin-left:7px">
+              <select id="dpiSel"><option>600 dpi</option><option>300 dpi</option><option>1200 dpi</option><option>2400 dpi</option></select>
+              <svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+          </div>
+
+          <div class="sec">Seiten</div>
+          <div class="dlg-radios" id="dlgPages">
+            <label class="radiopill on"><span class="dot"></span>Alle (1–6)</label>
+            <label class="radiopill"><span class="dot"></span>Aktuelle (3)</label>
+            <label class="radiopill"><span class="dot"></span>Bereich
+              <span class="pill-in"><input value="2–3" title="Aus „Seiten verwalten“ übernommen"></span></label>
+          </div>
+
+          <div class="sec">Seitenhandhabung</div>
+          <div class="frow"><span class="lbl" style="width:84px">Skalierung</span>
+            <div class="dlg-radios" style="flex:1">
+              <label class="radiopill on"><span class="dot"></span>Anpassen</label>
+              <label class="radiopill"><span class="dot"></span>Verkleinern</label>
+              <label class="radiopill"><span class="dot"></span>Feste Größe
+                <span class="pill-in"><input value="100" style="width:40px;text-align:right"><span class="unit">%</span></span></label>
+            </div>
+          </div>
+          <div class="dlg-2col">
+            <div class="frow"><span class="lbl">Papier</span>
+              <div class="selwrap" style="flex:1"><select><option>A4</option><option>A3</option><option>A5</option><option>Letter</option></select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+            </div>
+            <div class="frow"><span class="lbl">Fach</span>
+              <div class="selwrap" style="flex:1"><select><option>Drucker-Standard</option><option>Fach 1 · Universal</option><option>Fach 2 · Briefpapier</option></select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+            </div>
+          </div>
+          <div class="dlg-2col">
+            <div class="frow"><span class="lbl">Kopien</span>
+              <div class="numwrap" style="flex:1"><input value="1"></div>
+            </div>
+            <div class="frow"><span class="lbl">Farbe</span>
+              <div class="selwrap" style="flex:1"><select><option>Farbe</option><option>Graustufen</option><option>Drucker-Standard</option></select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+            </div>
+          </div>
+
+          <div class="dlg-2col">
+            <div class="frow"><span class="lbl">Ausrichtung</span>
+              <div class="selwrap" style="flex:1"><select><option>Automatisch</option><option>Hochformat</option><option>Querformat</option></select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>
+            </div>
+            <div class="frow"><span class="lbl">&nbsp;</span><span></span></div>
+          </div>
+
+          <div class="sec">Beidseitig</div>
+          <label class="checkrow" style="margin-bottom:7px"><input type="checkbox" id="duplexCheck" checked><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>Beidseitig drucken (Duplex)</label>
+          <div class="dlg-radios" id="duplexOpts" style="margin-left:22px">
+            <label class="radiopill on"><span class="dot"></span>Wendung: lange Seite (Buch)</label>
+            <label class="radiopill"><span class="dot"></span>Wendung: kurze Seite (Notizblock)</label>
+          </div>
+          <label class="checkrow" style="margin-top:10px"><input type="checkbox" checked><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>Sortieren (1,2,3 / 1,2,3)</label>
+        </div>
+      </div>
+      <div class="dlg-foot" style="flex-direction:row;flex-wrap:wrap;gap:6px 0">
+        <div class="dlg-status">
+          <span class="st ok"><span class="st-dot"></span>Drucker bereit · Tonerschwarz 78 %</span>
+          <span class="st warn"><span class="st-dot"></span>Fach 2 leer — Briefpapier nicht eingelegt</span>
+          <span class="st warn"><span class="st-dot"></span>Seite 4: Bild mit 142 dpi unter 150 dpi</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+          <span class="note">6 Seiten · 1 Kopie · Farbe · beidseitig</span>
+          <button class="btn" id="dlgCancel">Abbrechen</button>
+          <button class="btn primary" id="dlgPrint"><svg class="ic sm"><use href="#i-print"/></svg>Drucken</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Notizen ═════════════════════════════════════════════════════ -->
+<section class="notes">
+  <h2>Was dieses Konzept gegenüber dem heutigen Stand ändert</h2>
+  <ol>
+    <li><b>Ein Chrome, drei Ansichten.</b> Titelleiste, Dokumentleiste und Statusleiste bleiben in allen drei Ansichten stehen — die Dokumentleiste spannt sich jetzt über die volle Fensterbreite über alle Regionen und gibt den Tabs mehr Raum; Tabs sind rechteckig und nur rechts gerundet. Heute verschwindet die Tab-Leiste in „Layout“ und in allen Tool-Panels, und man sieht nicht mehr, welche Datei offen ist.</li>
+    <li><b>Eine Palette.</b> Neutrale Flächen (Surface / Surface-2 / Canvas) ersetzen die zwei heutigen Farbwelten mit vier Blautönen in einer Ansicht (Sidebar #0e2d58, Info-Leiste #0f3460, Tab-Fläche #1c2340, Fenster #151520). Blau bleibt nur Bedeutung: Auswahl, aktiv, primär.</li>
+    <li><b>Sichtbare Grenzen.</b> Jede Region trägt eine 1-px-Linie; der Canvas ist dunkler als das Chrome, damit weißes Papier anschlägt. Heute ist der Übergang Sidebar↔Canvas praktisch unsichtbar, und in der Layout-Ansicht klafft eine 4-px-Naht zwischen zwei Flächen.</li>
+    <li><b>Eine Statusleiste.</b> Format, Farbraum und Preflight stehen in jeder Ansicht zur Verfügung; Meldung mittig, Zoom rechts. Der Seitenzähler sitzt unten in der Navigationsschiene — wie in der heutigen App — statt in der Statusleiste. Heute landen Meldungen je nach Ansicht in der Info-Leiste, in einem 10-px-Label der Seitenverwaltung oder in einer Monospace-LogBox.</li>
+    <li><b>Eine Zoom-Kontrolle.</b> Dieselben Glyphen am selben Ort (unten rechts). Heute gibt es drei Zoom-UIs: unten rechts in der Vorschau, oben in der Seitenspalte, oben rechts über der Werkzeugvorschau.</li>
+    <li><b>Navigationsschiene überall.</b> Track, Daumen, Seitenzahl und Seitenzähler sitzen in allen drei Ansichten auf derselben Schiene am rechten Rand — dieselbe Schiene treibt Vorschau, Seitenraster und Bogen. Auf neutraler Fläche mit klarer Grenze.</li>
+    <li><b>Karten statt Kacheln.</b> Thumbnails mit 8-px-Radius, Grenze und Schatten; Auswahl ist ein Akzentring mit Häkchen statt einer Farbflutung, die das Bild fast zuschüttet. Das Raster liegt auf der Canvas-Farbe, nicht auf der Fensterfarbe.</li>
+    <li><b>Shortcuts aus dem Labeltext.</b> Tastenkürzel stehen als dimme Mono-Angabe rechts neben der Aktion statt mitten im Buttontext („Löschen&nbsp;&nbsp;(Entf)“); Tooltips behalten sie zusätzlich.</li>
+    <li><b>Druckstufen als Schalterkarten.</b> Die Layout-Stufen sind Karten mit Switch in der Seitenspalte; die zugehörigen Optionen erscheinen als Karten in der Spalte daneben — statt einer Checkbox in einer Spalte und einem unbeschriftet wirkenden Felderblock in der anderen.</li>
+    <li><b>Werkzeuge hinter einem Umschalter.</b> In „Seiten verwalten“ und „Layout“ steckt die Werkzeugliste hinter der Werkzeuge-Taste über der Seitenspalte — ein Klick hängt die Liste an das Ende der Seitenspalte an (eine Scrollfläche, kein eigenes Rollfeld), ein weiterer Klick klappt sie zu. In der Vorschau steht die Liste immer offen in der Seitenspalte.</li>
+    <li><b>Werkzeug-Leiste morpht.</b> Wählt man ein Werkzeug, wird die gesamte Seitenspalte zum Einstellungspanel dieses Werkzeugs — „‹ Werkzeuge“ führt zurück zur Liste. Jedes Werkzeug hat sein eigenes Panel, keins öffnet ein Extra-Fenster — und zwar in allen drei Ansichten identisch.</li>
+    <li><b>Kein Protokollkasten, aber ein Protokoll.</b> Ein laufendes Werkzeug meldet sich mit einer einzigen Zeile in der Statusleiste, die sich in-place aktualisiert („Graustufen: Seite 3 / 6 …“); das Endergebnis bleibt bis zur nächsten Meldung stehen und verschwindet, sobald das Werkzeug verlassen wird — dann steht wieder die Standardmeldung der Ansicht. Die Stopp-Taste erscheint nur während des Laufs neben der Werkzeug-Taste. Die Meldungszeile selbst ist klickbar und öffnet das Protokoll-Fenster: alle App-Meldungen mit Zeitstempel und Schwere (INFO / OK / ERR), scrollbar — auch die einzelnen Fortschrittszeilen, die die Statusleiste nur kurz zeigt. Die heutigen LogBoxen der Werkzeug-Panels entfallen damit.</li>
+    <li><b>Suche auf Abruf.</b> Das Suchfeld erscheint erst, nachdem die Lupe (bzw. Strg+F) gedrückt wurde, und lässt sich mit Esc wieder einklappen — die Dokumentleiste bleibt unbelastet.</li>
+    <li><b>Icon-Sprache.</b> Ein gezeichnetes SVG-Set (gleiche Strichstärke, gleiche Größe) ersetzt Glyphen-Zeichen (▲ ▼ ─ □ ✕ ⟳ ⊞ ◀), deren Aussehen von der Systemschrift der Maschine abhängt.</li>
+    <li><b>Dateien öffnen im selben Chrome.</b> Die Mehrfachauswahl erscheint als vierte Ansicht im selben Fenster: Datei-Karten mit Ordungsnummer, Mini-Seitenstreifen und Metadaten; Auswahl, Reihenfolge und Operationen in der Seitenspalte; dieselbe Navigationsschiene zählt alle 14 Seiten. „Zusammenführen“ bzw. „Einzeln öffnen“ führt zurück in die Vorschau — statt eines eigenen Fensters mit eigener Palette.</li>
+    <li><b>Druckdialog als Modal.</b> Der Druckdialog liegt als Modal über dem Fenster — links die Live-Vorschau der ersten Seite, rechts die gleichen Abschnitte wie heute (Drucker, Seiten, Seitenhandhabung, Ausgabe) mit Radiopills statt Qt-Radiofeldern. Fußleiste zeigt die Auftragszusammenfassung; Drucken/Abbrechen schließen den Dialog.</li>
+  </ol>
+</section>
+
+<script>
+(function(){
+  "use strict";
+  var $  = function(s){ return document.querySelector(s); };
+  var $$ = function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); };
+
+  /* ── Ansicht umschalten ─────────────────────────────────────────── */
+  var msgs  = {
+    preview: "Gespeichert: kunde_rechnung_2026.pdf",
+    manage:  "2 Seiten ausgewählt — Aktionen links, oder Entf zum Löschen.",
+    layout:  "Vorschau zeigt Zuschneiden + Anordnung — Ausführen wendet beide an.",
+    merge:   "3 Dateien geladen — Reihenfolge festlegen, dann zusammenführen."
+  };
+  var zooms = { preview: 1, manage: 1, layout: 1 };
+  var current = "preview";
+  var toolsOpen = false;
+
+  function closeToolPanel(){
+    simStop();
+    $("#toolPanel").style.display = "none";
+    $("#toolList").style.display = "block";
+    $$(".sidepane").forEach(function(p){ p.classList.remove("show"); });
+    $("#paneManage").classList.toggle("show", current === "manage");
+    $("#paneMerge").classList.toggle("show", current === "merge");
+    $("#paneLayout").classList.toggle("show", current === "layout");
+    $("#sbMsg").textContent = msgs[current];
+  }
+
+  function syncTools(){
+    var pt = $("#paneTools");
+    pt.classList.toggle("show", current === "preview" || toolsOpen);
+    $("#toolToggle").style.display = current === "preview" || current === "merge" ? "none" : "flex";
+    $("#toolToggle").classList.toggle("open", toolsOpen);
+    $("#paneMerge").classList.toggle("show", current === "merge");
+  }
+
+  function setView(v){
+    current = v;
+    toolsOpen = false;
+    simStop();
+    closeToolPanel();
+    $$("#viewSeg button").forEach(function(b){ b.classList.toggle("on", b.dataset.view === v); });
+    $$(".view").forEach(function(s){ s.classList.toggle("show", s.id === "view-" + v); });
+    syncTools();
+    $("#sbMsg").textContent = msgs[v] || msgs.preview;
+    setZoom(zooms[v] || 1);
+  }
+  $$("#viewSeg button").forEach(function(b){ b.addEventListener("click", function(){ setView(b.dataset.view); }); });
+  $("#backPreview").addEventListener("click", function(){ setView("preview"); });
+
+  /* ── Thema ──────────────────────────────────────────────────────── */
+  var html = document.documentElement, tIcon = $("#themeIcon");
+  $("#themeToggle").addEventListener("click", function(){
+    var light = html.dataset.theme === "light";
+    html.dataset.theme = light ? "dark" : "light";
+    tIcon.innerHTML = '<use href="#' + (light ? "i-sun" : "i-moon") + '"/>';
+  });
+
+  /* ── Zoom (pro Ansicht) ─────────────────────────────────────────── */
+  function setZoom(z){
+    z = Math.max(0.7, Math.min(2.0, z));
+    zooms[current] = z;
+    $$("#view-" + current + " [data-zoomable]").forEach(function(box){ box.style.zoom = z; });
+    var zval = $(".zoomer .zval");
+    if (zval) zval.textContent = Math.round(z * 100) + " %";
+  }
+  $$(".zoomer button").forEach(function(b){
+    b.addEventListener("click", function(){
+      var z = zooms[current];
+      if (b.dataset.z === "in")  setZoom(z * 1.2);
+      if (b.dataset.z === "out") setZoom(z / 1.2);
+      if (b.dataset.z === "fit") setZoom(1);
+    });
+  });
+
+  /* ── Thumbnails: Auswahl ────────────────────────────────────────── */
+  function syncSel(){
+    var sel = $$("#thumbGrid .card.sel").length;
+    $("#manageCount").textContent = sel + " von 6 Seiten ausgewählt";
+    $("#selField").value = $$("#thumbGrid .card.sel").map(function(c, i){
+      return c.querySelector("figcaption").textContent;
+    }).join(", ");
+  }
+  $$("#thumbGrid .card").forEach(function(c){
+    c.addEventListener("click", function(ev){
+      if (!(ev.ctrlKey || ev.metaKey)) $$("#thumbGrid .card.sel").forEach(function(x){ x.classList.remove("sel"); });
+      c.classList.toggle("sel");
+      syncSel();
+    });
+  });
+  $("#selAll").addEventListener("click", function(){
+    $$("#thumbGrid .card").forEach(function(c){ c.classList.add("sel"); }); syncSel();
+  });
+  $("#selNone").addEventListener("click", function(){
+    $$("#thumbGrid .card").forEach(function(c){ c.classList.remove("sel"); }); syncSel();
+  });
+  $("#selField").addEventListener("change", function(){
+    var want = this.value.split(",").map(function(s){ return s.trim(); }).filter(Boolean);
+    $$("#thumbGrid .card").forEach(function(c){
+      c.classList.toggle("sel", want.indexOf(c.querySelector("figcaption").textContent) !== -1);
+    });
+    syncSel();
+  });
+
+  /* ── Layout: Stufen schalten ────────────────────────────────────── */
+  $$(".stage").forEach(function(st){
+    st.addEventListener("click", function(){
+      st.classList.toggle("on");
+      var k = st.dataset.stage;
+      var card = $('[data-opts="' + k + '"]');
+      if (card) card.style.display = st.classList.contains("on") ? "" : "none";
+      var marks = $(".stage[data-stage='marks']").classList.contains("on");
+      $("#sheetCap").textContent = "297 × 210 mm · Raster 2×1 = 2 Slots · Schnittmarken " + (marks ? "an" : "aus");
+    });
+  });
+
+  /* ── Layout: Schiene treibt die Bogen-Spalte ────────────────────── */
+  var sheetWrap = $("#sheetWrap");
+  var lThumb = $("#lrailThumb"), lNum = $("#lrailNum");
+  function layoutRail(){
+    var max = sheetWrap.scrollHeight - sheetWrap.clientHeight;
+    var p = max > 0 ? sheetWrap.scrollTop / max : 0;
+    lThumb.style.top = "calc(" + (p * 100) + "% - " + Math.round(p * 52) + "px)";
+    var sheets = $$("#view-layout .sheetgrp");
+    var idx = Math.min(sheets.length - 1, Math.round(p * (sheets.length - 1)));
+    lNum.textContent = idx * 2 + 1;
+  }
+  sheetWrap.addEventListener("scroll", layoutRail);
+  $$("[data-lrail]").forEach(function(b){
+    b.addEventListener("click", function(){
+      var grp = $$("#view-layout .sheetgrp")[0];
+      var step = grp ? grp.offsetHeight + 14 : 400;
+      sheetWrap.scrollTop += (b.dataset.lrail === "next" ? step : -step);
+    });
+  });
+
+  /* ── Layout: Ausführen / Stopp ──────────────────────────────────── */
+  var runBtn = $("#runBtn"), stopBtn = $("#stopBtn"), runTimer = null;
+  function runDone(){
+    runBtn.disabled = false; stopBtn.style.display = "none"; runTimer = null;
+    notify("Ausführen beendet — 6 Seiten auf 3 Bögen.", "ok");
+  }
+  runBtn.addEventListener("click", function(){
+    runBtn.disabled = true; stopBtn.style.display = "";
+    notify("Ausführen … Bogen 1 von 3 …");
+    runTimer = setTimeout(runDone, 2600);
+  });
+  stopBtn.addEventListener("click", function(){
+    if (runTimer){ clearTimeout(runTimer); }
+    runBtn.disabled = false; stopBtn.style.display = "none";
+    notify("Gestoppt — keine Änderungen angewendet.", "err");
+  });
+
+  /* ── Werkzeuge: Liste, Morphing, Dropbar ────────────────────────── */
+  var TOOLS = [
+    { id:"gray", icon:"i-drop", group:"Farbe", name:"Graustufen", apply:"Konvertieren",
+      fields:[
+        { t:"sel", l:"Modus", opts:["Luminanz","Helligkeit bewahren","Nur Bilder"] },
+        { t:"num", l:"Schwellwert", v:"50", u:"%" },
+        { t:"chk", l:"Auch Vektorfarben" } ] },
+    { id:"cmyk", icon:"i-layers", group:"Farbe", name:"Farbprofil / CMYK", apply:"Konvertieren",
+      fields:[
+        { t:"sel", l:"Quelle", opts:["Eingebettet / sRGB","Adobe RGB (1998)"] },
+        { t:"sel", l:"Ziel", opts:["FOGRA51 · PSO Coated v3","FOGRA52 · PSO Uncoated v3"] },
+        { t:"sel", l:"Wiedergabe", opts:["Relativ farbmetrisch","Absolut farbmetrisch","Perzeptiv"] },
+        { t:"chk", l:"Eingebettete Profile überschreiben", on:true } ] },
+    { id:"pagenum", icon:"i-num", group:"Inhalt", name:"Seitenzahlen", apply:"Einfügen",
+      fields:[
+        { t:"sel", l:"Position", opts:["Unten mittig","Unten rechts","Oben rechts"] },
+        { t:"num", l:"Erste Seite", v:"1" },
+        { t:"sel", l:"Format", opts:["1","Seite 1","1 / 6","1 von 6"] },
+        { t:"sel", l:"Bereich", opts:["Alle Seiten","Ohne erste","Nur gerade"] } ] },
+    { id:"forms", icon:"i-form", group:"Inhalt", name:"Formulare / Reduzieren", apply:"Anwenden",
+      fields:[
+        { t:"chk", l:"Felder reduzieren", on:true },
+        { t:"chk", l:"Erscheinungsbilder erzeugen" },
+        { t:"sel", l:"Bereich", opts:["Alle Seiten","Aktuelle Seite"] } ] },
+    { id:"ocr", icon:"i-eye", group:"Inhalt", name:"OCR — Texterkennung", apply:"Erkennen",
+      fields:[
+        { t:"sel", l:"Sprache", opts:["Deutsch","Englisch","Deutsch + Englisch"] },
+        { t:"num", l:"Auflösung", v:"300", u:"dpi" },
+        { t:"sel", l:"Textebene", opts:["Unsichtbar (durchsuchbar)","Ersetzend"] } ] },
+    { id:"preflight", icon:"i-shield", group:"Ausgabe", name:"Druckvorstufenprüfung", apply:"Prüfen",
+      fields:[
+        { t:"sel", l:"Profil", opts:["Copyshop-Standard","Digitaldruck","Offset"] },
+        { t:"chk", l:"Nur Fehler anzeigen" },
+        { t:"chk", l:"Eingebettete Schriften prüfen", on:true } ] },
+    { id:"pdfx", icon:"i-export", group:"Ausgabe", name:"PDF/X-Export", apply:"Exportieren …",
+      fields:[
+        { t:"sel", l:"Standard", opts:["PDF/X-1a","PDF/X-3","PDF/X-4"] },
+        { t:"sel", l:"Zielfarbraum", opts:["FOGRA51 · PSO Coated v3"] },
+        { t:"chk", l:"Bei Abweichung konvertieren", on:true } ] },
+    { id:"compress", icon:"i-zip", group:"Ausgabe", name:"Komprimieren", apply:"Komprimieren",
+      fields:[
+        { t:"sel", l:"Bildqualität", opts:["Hoch","Mittel","Niedrig"] },
+        { t:"num", l:"Neu abtasten über", v:"300", u:"dpi" },
+        { t:"chk", l:"Metadaten entfernen" } ] },
+    { id:"plugins", icon:"i-puzzle", group:"Erweiterungen", name:"Plugin-Manager", apply:"Aktualisieren",
+      fields:[
+        { t:"sel", l:"Quelle", opts:["Installiert","Verfügbar"] },
+        { t:"chk", l:"Nur aktive" } ] }
+  ];
+  function toolById(id){ for (var i = 0; i < TOOLS.length; i++) if (TOOLS[i].id === id) return TOOLS[i]; }
+
+  function fieldHTML(f, bar){
+    if (f.t === "sel"){
+      var opts = f.opts.map(function(o){ return "<option>" + o + "</option>"; }).join("");
+      return '<div class="selwrap" style="' + (bar ? "width:158px" : "flex:1") +
+             '"><select>' + opts + '</select><svg class="ic sm chev"><use href="#i-chev"/></svg></div>';
+    }
+    if (f.t === "num"){
+      return '<div class="numwrap"><input value="' + f.v + '">' +
+             (f.u ? '<span class="unit">' + f.u + '</span>' : "") + '</div>';
+    }
+    return '<label class="checkrow"><input type="checkbox"' + (f.on ? " checked" : "") +
+           '><span class="cbox"><svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg></span>' +
+           f.l + '</label>';
+  }
+
+  function renderToolList(){
+    var h = "", g = "";
+    TOOLS.forEach(function(t){
+      if (t.group !== g){ h += '<div class="navgroup">' + t.group + '</div>'; g = t.group; }
+      h += '<button class="navitem" data-tool="' + t.id + '"><svg class="ic sm"><use href="#' +
+           t.icon + '"/></svg>' + t.name + '</button>';
+    });
+    return h;
+  }
+
+  function renderSidePanel(t){
+    var h = '<div class="sideback" style="margin-top:12px">' +
+            '<button class="btn" data-back="side" style="width:100%;justify-content:center">' +
+            '<svg class="ic sm" style="transform:rotate(-90deg)"><use href="#i-prev"/></svg>Werkzeuge</button></div>' +
+            '<div class="sec" style="border-top:0;margin-top:4px;padding-top:8px">' + t.name + '</div><div class="tp-side">';
+    t.fields.forEach(function(f){
+      if (f.t === "chk") h += '<div style="margin:7px 0 3px">' + fieldHTML(f) + '</div>';
+      else h += '<div class="frow"><span class="lbl">' + f.l + '</span>' + fieldHTML(f) + '</div>';
+    });
+    h += '</div><div class="runrow">' +
+         '<button class="btn primary" data-run="side">' + (t.apply || "Anwenden") + '</button>' +
+         '<button class="btn" data-stop="side" style="flex:none;width:56px;display:none;justify-content:center">Stopp</button></div>';
+    return h;
+  }
+
+  $("#toolList").innerHTML = renderToolList();
+
+  document.addEventListener("click", function(ev){
+    var tb = ev.target.closest("[data-tool]");
+    if (tb){
+      var t = toolById(tb.dataset.tool);
+      $("#toolList").style.display = "none";
+      $$(".sidepane").forEach(function(p){ p.classList.remove("show"); });
+      var tpS = $("#toolPanel");
+      tpS.innerHTML = renderSidePanel(t);
+      tpS.style.display = "block";
+      return;
+    }
+    var back = ev.target.closest("[data-back]");
+    if (back){
+      closeToolPanel();
+      return;
+    }
+  });
+
+  /* ── Werkzeug-Umschalter (Seiten verwalten / Layout) ────────────── */
+  $("#toolToggle").addEventListener("click", function(){
+    toolsOpen = !toolsOpen;
+    closeToolPanel();
+    syncTools();
+  });
+
+  /* ── Werkzeug-Lauf: Fortschritt als eine Zeile in der Statusleiste.
+        Kein Protokollkasten: die Meldung aktualisiert sich in-place
+        („… Seite 3 / 6 …“), das Endergebnis bleibt bis zur nächsten
+        Meldung stehen, Stopp steht nur während des Laufs bereit. ──── */
+  var simTimer = null;
+  function simStop(){
+    if (simTimer){ clearInterval(simTimer); simTimer = null; }
+    var r = $("#toolPanel [data-run]"), s = $("#toolPanel [data-stop]");
+    if (r) r.disabled = false;
+    if (s) s.style.display = "none";
+  }
+  document.addEventListener("click", function(ev){
+    var r = ev.target.closest("[data-run]");
+    if (r && !simTimer){
+      var nameEl = $("#toolPanel .sec");
+      var name = nameEl ? nameEl.textContent : "Werkzeug";
+      var pages = 6, i = 0;
+      r.disabled = true;
+      var s = $("#toolPanel [data-stop]");
+      if (s) s.style.display = "";
+      notify(name + ": Seite 1 / " + pages + " …");
+      simTimer = setInterval(function(){
+        i++;
+        if (i >= pages){
+          simStop();
+          notify("Fertig — 2 Seiten bereits Graustufen, 4 konvertiert.", "ok");
+        } else {
+          notify(name + ": Seite " + (i + 1) + " / " + pages + " …");
+        }
+      }, 600);
+      return;
+    }
+    var st = ev.target.closest("[data-stop]");
+    if (st){
+      simStop();
+      notify("Gestoppt — keine Änderungen angewendet.", "err");
+    }
+  });
+
+  /* ── Suche: erst auf Zuruf sichtbar ────────────────────────────── */
+  var findWrap = $("#findWrap");
+  $("#findToggle").addEventListener("click", function(){
+    if (findWrap.classList.toggle("open")) $("#findInput").focus();
+  });
+  $("#findInput").addEventListener("keydown", function(e){
+    if (e.key === "Escape"){ findWrap.classList.remove("open"); $("#findToggle").focus(); }
+  });
+
+  /* ── Protokoll: die Statusmeldung ist klickbar und öffnet das
+        Fenster mit allen App-Meldungen (auch die Zeilen, die die
+        Statusleiste nur kurz zeigt). Meldungen, die ein Werkzeug
+        betreffen, verschwinden aus der Statusleiste, sobald das
+        Werkzeug verlassen wird — im Protokoll bleiben sie. ────────── */
+  var LOG = [];
+  function _clock(d){
+    d = d || new Date();
+    var p = function(n){ return ("0" + n).slice(-2); };
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+  function logAdd(msg, lv, when){
+    var e = { t: when || _clock(), lv: lv || "info", m: msg };
+    LOG.push(e);
+    var empty = $("#logBody .log-empty");
+    if (empty) empty.remove();
+    var row = document.createElement("div");
+    row.className = "log-row " + e.lv;
+    var t = document.createElement("span"); t.className = "t"; t.textContent = e.t;
+    var l = document.createElement("span"); l.className = "lv"; l.textContent = e.lv.toUpperCase();
+    var m = document.createElement("span"); m.className = "m"; m.textContent = e.m;
+    row.appendChild(t); row.appendChild(l); row.appendChild(m);
+    var b = $("#logBody");
+    b.appendChild(row);
+    b.scrollTop = b.scrollHeight;
+    $("#logNote").textContent = LOG.length + (LOG.length === 1 ? " Eintrag" : " Einträge");
+  }
+  function notify(msg, lv){
+    $("#sbMsg").textContent = msg;
+    logAdd(msg, lv);
+  }
+  var logModal = $("#logModal");
+  $("#sbMsg").addEventListener("click", function(){ logModal.classList.add("open"); });
+  function logCloseFn(){ logModal.classList.remove("open"); }
+  $("#logClose").addEventListener("click", logCloseFn);
+  $("#logDone").addEventListener("click", logCloseFn);
+  logModal.addEventListener("click", function(ev){ if (ev.target === logModal) logCloseFn(); });
+  $("#logClear").addEventListener("click", function(){
+    LOG.length = 0;
+    $("#logBody").innerHTML = '<div class="log-empty">Keine Einträge.</div>';
+    $("#logNote").textContent = "0 Einträge";
+  });
+  $("#logBody").innerHTML = '<div class="log-empty">Keine Einträge.</div>';
+  logAdd("Datei geöffnet: kunde_rechnung_2026.pdf", "info", "09:14:02");
+  logAdd("Preflight: 6 Seiten geprüft — keine Fehler", "ok", "09:14:05");
+  logAdd("Gespeichert: kunde_rechnung_2026.pdf", "ok", "09:31:47");
+  logAdd("Seite 4: Bild mit 142 dpi unter 150 dpi", "err", "09:32:11");
+  logAdd("Druckauftrag gesendet — Kyocera ECOSYS M5526cdn · 6 Seiten", "ok", "09:32:12");
+
+  /* ── Dateien öffnen: Dateimanager zuerst ───────────────────────── */
+  var fmModal = $("#fmModal");
+  $("#newtabBtn").addEventListener("click", function(){ fmModal.classList.add("open"); });
+  function fmCloseFn(){ fmModal.classList.remove("open"); }
+  $("#fmClose").addEventListener("click", fmCloseFn);
+  $("#fmCancel").addEventListener("click", fmCloseFn);
+  fmModal.addEventListener("click", function(ev){ if (ev.target === fmModal) fmCloseFn(); });
+  function fmSync(){
+    var n = $$("#fmBody .fm-cb:checked").length;
+    $("#fmNote").textContent = n === 0 ? "Keine Datei ausgewählt" : n + (n === 1 ? " Datei" : " Dateien") + " ausgewählt";
+  }
+  $$("#fmBody .fm-row").forEach(function(r){
+    r.addEventListener("click", function(ev){
+      if (ev.target.tagName === "INPUT") return;
+      var cb = r.querySelector("input");
+      cb.checked = !cb.checked; fmSync();
+    });
+  });
+  $$("#fmBody .fm-cb").forEach(function(cb){ cb.addEventListener("change", fmSync); });
+  $("#fmOpen").addEventListener("click", function(){
+    fmCloseFn();
+    setView("merge");
+  });
+
+  /* ── Dateien öffnen (Mehrfachauswahl) ──────────────────────────── */
+  function mergeSel(){
+    var sel = $$("#mergeGrid .mcard.sel").length;
+    $("#mergeSelCount").textContent = sel + " von 3 Dateien";
+  }
+  $$("#mergeGrid .mcard").forEach(function(c){
+    c.addEventListener("click", function(ev){
+      if (!(ev.ctrlKey || ev.metaKey)) $$("#mergeGrid .mcard.sel").forEach(function(x){ x.classList.remove("sel"); });
+      c.classList.toggle("sel");
+      mergeSel();
+    });
+  });
+  $("#doMerge").addEventListener("click", function(){
+    setView("preview");
+    notify("Zusammengeführt: 14 Seiten aus 3 Dateien — kunde_rechnung_2026.pdf.", "ok");
+  });
+  $("#doSingle").addEventListener("click", function(){ setView("preview"); });
+
+  /* ── Druckdialog ───────────────────────────────────────────────── */
+  var printModal = $("#printModal");
+  $("#printBtn").addEventListener("click", function(){ printModal.classList.add("open"); });
+  $("#dlgClose").addEventListener("click", closeModal);
+  $("#dlgCancel").addEventListener("click", closeModal);
+  printModal.addEventListener("click", function(ev){ if (ev.target === printModal) closeModal(); });
+  function closeModal(){ printModal.classList.remove("open"); }
+  $("#dlgPrint").addEventListener("click", function(){
+    closeModal();
+    notify("Druckauftrag gesendet — Kyocera ECOSYS M5526cdn · 6 Seiten.", "ok");
+  });
+  $$(".radiopill").forEach(function(p){
+    p.addEventListener("click", function(ev){
+      if (ev.target.tagName === "INPUT") return;
+      p.parentElement.querySelectorAll(".radiopill").forEach(function(x){ x.classList.remove("on"); });
+      p.classList.add("on");
+    });
+  });
+  $("#duplexCheck").addEventListener("change", function(){
+    $("#duplexOpts").style.display = this.checked ? "flex" : "none";
+  });
+  $("#bitmapCheck").addEventListener("change", function(){
+    $("#dpiWrap").style.display = this.checked ? "flex" : "none";
+  });
+  /* ── Tabs (Deko) ────────────────────────────────────────────────── */
+  $$(".tab").forEach(function(t){
+    t.addEventListener("click", function(){
+      $$(".tab").forEach(function(x){ x.classList.remove("on"); });
+      t.classList.add("on");
+    });
+  });
+
+  /* ── Anmerkungen ────────────────────────────────────────────────── */
+  $("#annToggle").addEventListener("click", function(){
+    document.body.classList.toggle("ann");
+    this.classList.toggle("on");
+  });
+
+  syncSel();
+  syncTools();
+})();
+</script>
+</body>
+</html>

@@ -23,35 +23,36 @@ def _at_mm(sv, axis, millimetres):
 def test_ctrl_r_shows_the_rulers():
     """Acrobat's shortcut, and Acrobat's default: off until asked for.
 
-    The info-bar button is the same switch, and has to show the state even
-    when the shortcut was what flipped it — otherwise a pressed-looking button
-    turns the rulers *off*."""
+    The status-bar switch is the same toggle, reached now through the bus
+    (ruler_changed) rather than a button in a per-tab info bar, and has to
+    show the state even when the shortcut was what flipped it — otherwise a
+    pressed-looking switch turns the rulers *off*."""
     vp, sv = _open_single_view(FX["normal"], 900, 700)
     try:
         assert not sv._ruler_top.isVisible(), "the rulers started out on"
-        assert not sv._ruler_btn.isChecked()
+        assert not sv._rulers_on
         press = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_R,
                           Qt.KeyboardModifier.ControlModifier, "r")
         sv.keyPressEvent(press)
         _spin(10)
         assert sv._ruler_top.isVisible() and sv._ruler_left.isVisible(), \
             "Ctrl+R did not show both rulers"
-        assert sv._ruler_btn.isChecked(), "the button did not follow the shortcut"
+        assert sv._rulers_on, "the state did not follow the shortcut"
 
         sv.keyPressEvent(press)
         _spin(10)
         assert not sv._ruler_top.isVisible(), "Ctrl+R did not hide them again"
-        assert not sv._ruler_btn.isChecked()
+        assert not sv._rulers_on
 
-        sv._ruler_btn.click()
+        sv.toggle_rulers()
         _spin(10)
-        assert sv._ruler_top.isVisible(), "the button did not show the rulers"
-        sv._ruler_btn.click()
+        assert sv._ruler_top.isVisible(), "the toggle did not show the rulers"
+        sv.toggle_rulers()
         _spin(10)
-        assert not sv._ruler_top.isVisible(), "the button did not hide them"
+        assert not sv._ruler_top.isVisible(), "the toggle did not hide them"
     finally:
         vp.deleteLater(); _app.processEvents()
-    return "off, on, off — by shortcut and by button, staying in step"
+    return "off, on, off — by shortcut and by toggle, staying in step"
 
 
 def test_a_guide_stays_where_it_was_put_on_the_page():

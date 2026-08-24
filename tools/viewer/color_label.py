@@ -10,6 +10,7 @@ runs once per file revision so page turns are free after the first.
 from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QLabel
 
+from tools.app_state import AppState
 from tools.colorspace import (cached_page_colorspaces, describe,
                               document_revision, page_colorspaces,
                               scan_document)
@@ -21,17 +22,33 @@ class ColourSpaceLabel(QObject):
 
     ``resolver`` is called on each update and returns ``(src_path, orig)``
     for the page to describe, or None when there is nothing to describe.
+
+    Every answer is also published on the status bus
+    (``AppState.colorspace_changed``) as the bare profile name — the
+    window-level status bar shows just "sRGB", while the per-tab label it
+    drives here keeps its "Farbprofil: …" prefix.
     """
 
-    def __init__(self, resolver, parent=None):
+    def __init__(self, resolver, parent=None, on_scan_complete=None):
         super().__init__(parent)
         self._resolver = resolver
+        self._on_scan_complete = on_scan_complete
         self._pending  = None
         self._job      = None
         self._scan_job = None
         self._scanned: set = set()
+        self._profile  = ""
         self.widget = QLabel(tr("Farbprofil: —"))
         self.widget.setObjectName("dimLabel")
+
+    @staticmethod
+    def _publish(value):
+        AppState.get().colorspace_changed.emit(value)
+
+    def republish(self):
+        """Re-emit the profile this label is showing — used when the tab or
+        view that owns it becomes active, so the status bar re-reads it."""
+        self._publish(self._profile)
 
     def update(self):
         try:
@@ -40,7 +57,9 @@ class ColourSpaceLabel(QObject):
                 return
             src_path, orig = where
         except Exception:
+            self._profile = ""
             self.widget.setText(tr("Farbprofil: —"))
+            self._publish("")
             return
 
         # Read the whole file once, in the background, rather than a page at a
@@ -52,8 +71,10 @@ class ColourSpaceLabel(QObject):
         if known is not None:
             # Nothing is outstanding, and the label now describes this page.
             self._pending = None
-            self.widget.setText(
-                tr('Farbprofil: {p0}').format(p0=describe(known)))
+            profile = describe(known)
+            self._profile = profile
+            self.widget.setText(tr('Farbprofil: {p0}').format(p0=profile))
+            self._publish(profile)
             return
 
         # The page this answer will belong to. By the time it comes back the
@@ -74,7 +95,9 @@ class ColourSpaceLabel(QObject):
         # every page passed on the way to it, and the renders waited with it.
         self._cancel()
         self._pending = want
+        self._profile = ""
         self.widget.setText(tr("Farbprofil: …"))
+        self._publish("")
         from tools.jobs import submit
         job = submit(lambda job: page_colorspaces(src_path, orig),
                      owner=self, name="colorspace",
@@ -98,8 +121,11 @@ class ColourSpaceLabel(QObject):
         if self._pending != want:
             return                      # the user has moved on
         try:
+            profile = describe(names)
+            self._profile = profile
             self.widget.setText(
-                tr('Farbprofil: {p0}').format(p0=describe(names)))
+                tr('Farbprofil: {p0}').format(p0=profile))
+            self._publish(profile)
         except RuntimeError:
             pass                        # the view is being torn down
 
@@ -143,3 +169,11 @@ class ColourSpaceLabel(QObject):
             # several files, and remembering only the last would have the two
             # re-scanning each other away every time the user crossed the join.
             self._scanned.add(revision)
+        if self._on_scan_complete is not None:
+            # The page counter re-aggregates over the whole tab once the scan
+            # has filled the cache — complete or not, the pages it did read are
+            # in, and the counter's own unknown-gate decides what to show.
+            try:
+                self._on_scan_complete()
+            except RuntimeError:
+                pass                    # the view is being torn down

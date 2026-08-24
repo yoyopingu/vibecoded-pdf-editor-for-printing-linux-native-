@@ -1157,3 +1157,91 @@ def test_the_greyscale_sidebar_opens_the_width_it_asks_for():
     finally:
         p.deleteLater(); nup.deleteLater(); _app.processEvents()
     return f"opens at {_SIDEBAR_W} px like its siblings, and stays there"
+
+
+def test_the_page_counter_counts_structure_and_pixel_verdicts():
+    """The status bar's colour/greyscale counter (decision 5): the structure
+    scan's verdict while that is all there is, the greyscale tool's pixel
+    verdict once it has run — a faint tint declares /DeviceRGB but prints
+    grey, and only the tool's scan knows that — and a rewrite of the file
+    drops the override, because the new bytes were never pixel-scanned."""
+    from tools.colorspace import (count_grey_pages, pixel_counts,
+                                  scan_document, set_pixel_counts)
+    src = _grey_fixture()
+    scan_document(src)
+    assert count_grey_pages([(src, i) for i in range(4)]) == (3, 1, 0), \
+        "structure: three pages declare RGB, one declares gray"
+    assert pixel_counts(src) is None
+    set_pixel_counts(src, 2, 2)
+    assert count_grey_pages([(src, i) for i in range(4)]) == (2, 2, 0), \
+        "the pixel verdict must override the structure verdict"
+
+    with open(src, "ab") as f:
+        f.write(b" ")
+    assert pixel_counts(src) is None, "the override survived a rewrite"
+    assert count_grey_pages([(src, i) for i in range(4)]) == (0, 0, 4), \
+        "the rewritten revision must read as unknown, not as the old verdict"
+
+
+def test_the_page_counter_waits_until_every_page_is_known():
+    """A tab drawing pages from several files answers only once every page
+    has been read. Half a count reads as a whole one, and the colour side of
+    it is what a job gets billed by."""
+    from tools.colorspace import count_grey_pages, scan_document
+    scanned = _grey_fixture()
+    scan_document(scanned)
+    fresh = os.path.join(_TMP, "counter_other.pdf")
+    c = canvas.Canvas(fresh, pagesize=A4)
+    c.setFillGray(0); c.drawString(60, 700, "GREY"); c.showPage()
+    c.save()
+    assert count_grey_pages([(scanned, 0), (fresh, 0)]) == (0, 1, 1)
+    scan_document(fresh)
+    assert count_grey_pages([(scanned, 0), (fresh, 0)]) == (0, 2, 0)
+
+
+def test_the_greyscale_tool_publishes_its_pixel_verdicts():
+    """Running the tool's scan puts its numbers on the status bus and records
+    them for the file's revision, so the counter keeps them across later
+    re-publishes (tab switches) until the file changes."""
+    from tools.app_state import AppState
+    from tools.colorspace import pixel_counts
+    src = _grey_fixture()
+    _open(src)
+    p = GrayscalePanel(); _sync_async(p); p.log.log = lambda *a, **k: None
+    p.mode_single.setChecked(True); p.thr.setValue(20)
+    got = []
+    bus = AppState.get()
+    bus.colour_counts_changed.connect(got.append)
+    try:
+        p._scan()
+    finally:
+        bus.colour_counts_changed.disconnect(got.append)
+    assert (2, 2) in got, f"the bus saw {got}"
+    assert pixel_counts(src) == (2, 2)
+
+
+def test_the_status_bar_shows_the_counter_from_the_bus():
+    """The bar's counter is bus-driven: emit, and the reading appears; emit
+    None, and it goes — taking its dot with it (see the readings test)."""
+    from tools.app_state import AppState
+    from tools.shell.statusbar import StatusBar
+    sb = StatusBar(); sb.resize(1200, 38); sb.show(); _app.processEvents()
+    bus = AppState.get()
+    try:
+        bus.page_metrics_changed.emit("A4 · 210×297 mm")
+        bus.colorspace_changed.emit("sRGB")
+        bus.colour_counts_changed.emit((4, 2))
+        txt = sb._counts_lbl.text()
+        assert "4" in txt and "2" in txt and "Graustufen" in txt, txt
+        # three readings → two dots between them
+        assert sb._counts_lbl.isVisibleTo(sb)
+        assert all(s.isVisibleTo(sb) for s in sb._seps)
+        # the counter alone carries no dot: with it gone, the dot between the
+        # colourspace reading and nothing at all goes too
+        bus.colour_counts_changed.emit(None)
+        assert sb._counts_lbl.text() == ""
+        assert not sb._counts_lbl.isVisibleTo(sb)
+        assert not sb._seps[1].isVisibleTo(sb)
+        assert sb._seps[0].isVisibleTo(sb)
+    finally:
+        sb.hide(); sb.deleteLater(); _app.processEvents()

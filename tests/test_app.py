@@ -254,20 +254,22 @@ def test_light_theme_reaches_every_colour_source():
     old = _app.styleSheet()
     try:
         MAIN.apply_theme_globally("light")
-        assert _as.THEME["BG"] == "#edf1f7", f"THEME not switched: {_as.THEME['BG']}"
-        from tools.theme import _TV
-        assert _TV["viewer_bg"] == "#e8edf3"
+        from tools.theme import _TV, shell_colours, viewer_colours
+        assert _as.THEME["BG"] == shell_colours("light")["BG"], \
+            f"THEME not switched: {_as.THEME['BG']}"
+        assert _TV["viewer_bg"] == viewer_colours("light")["viewer_bg"]
         # the greyscale preview follows a *runtime* switch as well
         _open(FX["normal"])
         g = GrayscalePanel(); g.resize(900, 600); g.show()
         g._build_preview(3)
         _app.processEvents()
         light_css = g._preview_box.styleSheet()
-        assert "#e8edf3" in light_css, light_css
+        assert viewer_colours("light")["viewer_bg"] in light_css, light_css
         MAIN.apply_theme_globally("dark")
         _app.processEvents()
         dark_css = g._preview_box.styleSheet()
-        assert dark_css != light_css and "#111827" in dark_css, dark_css
+        assert dark_css != light_css \
+            and viewer_colours("dark")["viewer_bg"] in dark_css, dark_css
         g.hide()
     finally:
         MAIN.apply_theme_globally("dark")

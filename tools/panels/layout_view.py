@@ -29,7 +29,8 @@ from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QWidget, QLabel,
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 
-from tools.panels.base import BasePanel, CurrentFileBar, LogBox, ToolScrollArea
+from tools.panels.base import BasePanel, CurrentFileBar, ToolScrollArea
+from tools.shell.protokoll import LogAdapter
 from tools.app_state import AppState
 from tools.i18n import tr
 from tools.render.caches import _ThumbnailCache
@@ -161,9 +162,7 @@ class LayoutPanel(BasePanel):
 
         lay.addStretch()
 
-        self.log = LogBox(tr("Log..."))
-        self.log.setMaximumHeight(60)
-        lay.addWidget(self.log)
+        self.log = LogAdapter()
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
@@ -1002,5 +1001,5 @@ class LayoutPanel(BasePanel):
 
     def _done(self, result):
         out_path, steps = result
-        self.log.log(tr('Fertig — {p0}.').format(p0=steps))
+        self.log.log(tr('Fertig — {p0}.').format(p0=steps), hold=True)
         self.open_result(out_path, tr("Layout"))
