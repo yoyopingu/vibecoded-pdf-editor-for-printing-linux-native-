@@ -66,7 +66,7 @@ def main():
     # crashed — or any version from before this existed — left behind. Both
     # are safe: a snapshot is a cache, and ensure_view_snapshot writes another
     # if the one it wanted has gone.
-    from tools._base import discard_all_snapshots, sweep_orphan_snapshots
+    from tools.snapshots import discard_all_snapshots, sweep_orphan_snapshots
     sweep_orphan_snapshots()
     app.aboutToQuit.connect(discard_all_snapshots)
 

@@ -621,7 +621,7 @@ class PrintDialog(QDialog):
         about which page "Aktuelle Seite" means."""
         parent = owning_tab(self.parent())
         if parent is not None and getattr(parent, "single", None) is not None:
-            pos = parent.single._current
+            pos = parent.single.current_page
             if 0 <= pos < len(self.model.order):
                 return pos
         return None

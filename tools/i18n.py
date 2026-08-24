@@ -52,6 +52,12 @@ _EN: dict[str, str] = {
     "Darstellung": "Appearance",
     "Allgemein": "General",
     "Sprache": "Language",
+    "Sprache ändern": "Change language",
+    "Die Änderung der Sprache wird erst nach einem Neustart wirksam.":
+        "The language change takes effect after a restart.",
+    "App jetzt neu starten?": "Restart the app now?",
+    "Jetzt neu starten": "Restart now",
+    "Beim nächsten Start": "On next start",
     "Hilfe": "Help",
     "Über {p0}": "About {p0}",
     "Fehlerprotokoll anzeigen": "Show error log",

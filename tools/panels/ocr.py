@@ -5,7 +5,7 @@ tesseract's own PDF renderer where it is not.
 import os, subprocess, shutil
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox
-from tools._base import BasePanel, make_label
+from tools.panels.base import BasePanel, make_label
 from tools.i18n import get_language, tr
 from tools.panels._shared import row
 from tools.render.document_cache import open_document as _open_pdf

@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoub
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from tools.app_state import AppState
-from tools._base import BasePanel
+from tools.panels.base import BasePanel
 from tools.i18n import tr
 from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, _mat_mul, _display_matrix, PreviewPane
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream

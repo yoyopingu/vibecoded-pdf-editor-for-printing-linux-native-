@@ -9,6 +9,7 @@ from tools.app_state import AppState
 import pypdfium2 as pdfium
 import tools.app as MAIN
 from tests.support import FX, _TMP, _app, _open, _page_labels, _settle, _spin
+from tools.i18n import tr
 
 
 def _pdfium_dims(path, index=0):
@@ -24,7 +25,7 @@ def test_rotation_reaches_the_tools():
     Three of them read AppState.current_pdf — the file on disk — instead of the
     flattened view, so they measured and previewed the page in its original
     orientation and produced a crop for the wrong side."""
-    from tools._base import ensure_view_snapshot
+    from tools.snapshots import ensure_view_snapshot
     from tools.panels.crop_resize import CropResizePanel
     from tools.panels.nup import NUpPanel
     tab, panel = _manage(3, "rot_tools.pdf")
@@ -123,14 +124,20 @@ def test_char_boxes_follow_a_rotated_page():
     assert 0 <= x0 < x1 <= H and 0 <= y0 < y1 <= W, "270° box left the image"
 
 
+_MANAGE_BUILT = {}
+
+
 def _manage(n_pages=6, name="mgr.pdf"):
     """A PdfTab with its page manager built, wired into AppState."""
     from tools.viewer.tab import PdfTab
-    src = os.path.join(_TMP, name)
-    c = canvas.Canvas(src, pagesize=A4)
-    for i in range(n_pages):
-        c.setFont("Helvetica", 80); c.drawCentredString(300, 400, f"P{i+1}"); c.showPage()
-    c.save()
+    src = _MANAGE_BUILT.get((name, n_pages))
+    if src is None or not os.path.exists(src):
+        src = os.path.join(_TMP, name)
+        c = canvas.Canvas(src, pagesize=A4)
+        for i in range(n_pages):
+            c.setFont("Helvetica", 80); c.drawCentredString(300, 400, f"P{i+1}"); c.showPage()
+        c.save()
+        _MANAGE_BUILT[(name, n_pages)] = src
     tab = PdfTab(src)
     st = AppState.get(); st.open_pdf(tab.pdf_path); st.page_model = tab.model
     tab._build_manage_once()
@@ -154,7 +161,7 @@ def test_manage_open_as_tab_copies_or_moves():
     what the removed "Nach Bereichen..." split was for, only driven by picking
     pages instead of typing ranges into a prompt."""
     from PyQt6.QtWidgets import QMessageBox
-    from tools._base import ensure_view_snapshot
+    from tools.snapshots import ensure_view_snapshot
     tab, mp = _manage(6, "mgr_tab.pdf")
     opened = []
     AppState.get().open_result = lambda p, t="": opened.append(p)
@@ -188,7 +195,7 @@ def test_manage_inserts_several_files_at_once():
     """"Aus Datei(en) einfuegen..." replaced the separate merge button, so it has
     to accept more than one file and insert them after the selection."""
     from PyQt6.QtWidgets import QFileDialog
-    from tools._base import ensure_view_snapshot
+    from tools.snapshots import ensure_view_snapshot
     extras = []
     for tag, n in (("X", 2), ("Y", 1)):
         p = os.path.join(_TMP, f"ins_{tag}.pdf")
@@ -240,8 +247,8 @@ def test_a_snapshot_is_never_flattened_twice():
     every value on every call. It is a set now, which only stays correct if the
     two structures are updated together — so this also asserts they agree after
     a snapshot is superseded."""
-    import tools._base as B
-    from tools._base import ensure_view_snapshot
+    import tools.snapshots as B
+    from tools.snapshots import ensure_view_snapshot
     from tools.viewer.model import PageModel
 
     st = _open(FX["normal"])
@@ -316,8 +323,8 @@ def test_closing_a_tab_takes_its_flattened_copy_with_it():
     customer's file sitting in /tmp long after the job went out.
     """
     import glob, os, shutil
-    import tools._base as B
-    from tools._base import ensure_view_snapshot
+    import tools.snapshots as B
+    from tools.snapshots import ensure_view_snapshot
     from tools.viewer.model import PageModel
 
     def on_disk():
@@ -346,8 +353,8 @@ def test_quitting_and_restarting_leave_no_flattened_copies_behind():
     and what a run that crashed left behind goes at the next start. A snapshot
     is only ever a cache, so removing one costs a rewrite at worst."""
     import glob, os, shutil
-    import tools._base as B
-    from tools._base import ensure_view_snapshot
+    import tools.snapshots as B
+    from tools.snapshots import ensure_view_snapshot
     from tools.viewer.model import PageModel
 
     def ours():
@@ -390,7 +397,7 @@ def test_a_tool_says_the_file_vanished_rather_than_that_none_is_open():
     That is the one instruction which cannot help, and it describes a
     different problem than the one the operator has."""
     import os, shutil
-    from tools._base import BasePanel
+    from tools.panels.base import BasePanel
     from tools.panels.crop_resize import CropResizePanel
 
     drive = os.path.join(_TMP, "removable"); os.makedirs(drive, exist_ok=True)
@@ -417,3 +424,94 @@ def test_a_tool_says_the_file_vanished_rather_than_that_none_is_open():
     assert "auffindbar" in info or "no longer" in info, \
         f"the preview still says the wrong thing: {info!r}"
     return "names the file that went missing, and says what happened to it"
+
+
+def test_the_shared_rail_drives_the_page_manager():
+    """The preview's navigation rail keeps working over "Seiten verwalten".
+
+    The rail used to vanish with the preview and the grid grew a plain
+    QScrollBar of its own — two scrollbars answering one question, the good one
+    gone. Now the rail stays put, the grid's scrollbar is gone, and the rail
+    drives whichever view is showing: dragging it scrolls the grid, the grid's
+    scroll moves the thumb, and leaving manage mode hands it back to the
+    preview.
+    """
+    from PyQt6.QtWidgets import QScrollArea
+    from PyQt6.QtCore import Qt as _Qt
+
+    tab, panel = _manage(8, "mgr_rail.pdf")
+    try:
+        tab.resize(900, 700); tab.show(); _spin(5)
+        assert not tab.single.rail_delegate, \
+            "the rail is spoken for before manage mode is even entered"
+        page_before = tab.single._current + 1
+
+        tab._enter_manage()
+        _spin(5)
+        assert tab.single.rail_delegate is tab._manage_rail, \
+            "manage mode did not take over the rail"
+        bar = tab._manage_rail._bar()
+        assert isinstance(tab._manage_widget, QScrollArea)
+        assert tab._manage_widget.verticalScrollBarPolicy() == \
+            _Qt.ScrollBarPolicy.ScrollBarAlwaysOff, \
+            "the grid still shows its own scrollbar beside the shared rail"
+
+        # Entering manage starts where the preview was: the current page's
+        # card is in view.
+        cards = panel.grid.cards()
+        want = cards[page_before - 1].y()
+        assert abs(bar.value() - max(0, want - 8)) <= 1, \
+            f"grid opened at {bar.value()}, card at {want}"
+
+        # Dragging the rail scrolls the grid proportionally.
+        tab.single._track.position_dragged.emit(1.0)
+        _spin(2)
+        assert bar.value() == bar.maximum(), \
+            "dragging the rail to the end did not scroll the grid to the end"
+
+        # And scrolling the grid moves the thumb back.
+        bar.setValue(0); _spin(2)
+        assert tab.single._track._scroll_frac == 0.0, \
+            f"thumb did not follow the grid: {tab.single._track._scroll_frac}"
+        assert tab._manage_rail.page() == 1, "rail does not report page 1 at the top"
+
+        # Leaving manage hands the rail back to the preview, working as before.
+        tab._exit_manage()
+        _spin(3)
+        assert tab.single.rail_delegate is None, "manage kept the delegate"
+        assert tab.single._track._scroll_mode == tab.single._continuous, \
+            "rail was left in the wrong mode for the preview"
+        assert tab.in_manage_mode() is False
+    finally:
+        tab.deleteLater(); _app.processEvents()
+    return "one rail over both views: drag, follow, and hand-back all work"
+
+
+def test_rail_page_count_label_updates_when_pages_are_added_or_deleted():
+    """The total page count under the rail must follow add/delete in manage mode.
+
+    The label used to be written only on file open and on leaving manage mode,
+    so adding or removing pages inside "Seiten verwalten" left it stale.
+    """
+    tab, panel = _manage(6, "mgr_count.pdf")
+    try:
+        tab.resize(900, 700); tab.show(); _spin(5)
+        assert tab.single._tot_lbl.text() == "6"
+        assert tab.single._pages_lbl.text() == tr('{p0} Seiten').format(p0=6)
+
+        tab._enter_manage()
+        _spin(3)
+        panel.grid.model.selected = {panel.grid.model.order[0]}
+        panel.grid.delete_selected()
+        _spin(3)
+        assert tab.single._tot_lbl.text() == "5"
+        assert tab.single._pages_lbl.text() == tr('{p0} Seiten').format(p0=5)
+
+        panel.grid.model.deselect_all()
+        panel._insert_blank()
+        _spin(3)
+        assert tab.single._tot_lbl.text() == "6"
+        assert tab.single._pages_lbl.text() == tr('{p0} Seiten').format(p0=6)
+    finally:
+        tab.deleteLater(); _app.processEvents()
+    return "rail count label updates on add and delete"

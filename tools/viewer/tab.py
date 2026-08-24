@@ -7,8 +7,8 @@ its children, and each child walks back up the parent chain to ask which tab
 owns it, so the tab imports them at call time and they import the tab normally.
 """
 import os, logging, tempfile
-from PyQt6.QtWidgets import QVBoxLayout, QFrame, QScrollArea, QStackedWidget
-from PyQt6.QtCore import pyqtSignal, QTimer
+from PyQt6.QtWidgets import QHBoxLayout, QFrame, QScrollArea, QStackedWidget
+from PyQt6.QtCore import pyqtSignal, QTimer, Qt
 from tools.app_state import AppState
 from tools.i18n import tr
 from tools.pdf_access import is_locked
@@ -19,6 +19,90 @@ from tools.viewer.manage import ManagePanel
 from tools.viewer.page_grid import PageGrid
 from tools.viewer.single_page import SinglePageView
 from tools.viewer.tab_base import PdfTabBase
+
+
+class _GridRail:
+    """Drives the shared navigation rail while the page manager is showing.
+
+    Same rail, other view: the thumb maps onto the grid's scroll range, the
+    arrows step it, a picked page brings that card into view, and every grid
+    scroll pushes the position back to the rail. Without this the page manager
+    lost the scrollbar entirely — its own was a plain QScrollBar next to a rail
+    that vanished with the preview.
+    """
+
+    def __init__(self, tab, grid, scroll):
+        self.tab   = tab
+        self.grid  = grid
+        self.scroll = scroll
+
+    def _bar(self):
+        return self.scroll.verticalScrollBar()
+
+    def rail_prev(self):
+        self._nudge(-1)
+
+    def rail_next(self):
+        self._nudge(1)
+
+    def _nudge(self, direction):
+        bar = self._bar()
+        step = max(60, int(self.scroll.viewport().height() * 0.85))
+        bar.setValue(bar.value() + direction * step)
+
+    def rail_wheel(self, dy_px):
+        bar = self._bar()
+        bar.setValue(bar.value() + int(dy_px))
+
+    def rail_go_to(self, page):
+        cards = self.grid.cards()
+        if not cards:
+            return
+        i = max(0, min(int(page) - 1, len(cards) - 1))
+        self._bar().setValue(max(0, int(cards[i].y()) - 8))
+
+    def rail_drag_to(self, frac):
+        bar = self._bar()
+        bar.setValue(round(float(frac) * bar.maximum()))
+
+    def rail_prompt_goto(self):
+        n = self.tab.page_count()
+        if n <= 0:
+            return
+        from PyQt6.QtWidgets import QInputDialog
+        page, ok = QInputDialog.getInt(
+            self.tab, tr("Gehe zu Seite"),
+            tr('Seite (1 – {p0}):').format(p0=n),
+            self.page(), 1, n)
+        if ok:
+            self.rail_go_to(page)
+
+    def page(self):
+        """The page the rail reports for the current scroll position.
+
+        Derived from the scroll fraction rather than from which card sits
+        under the viewport's middle: the grid lays cards out in rows of
+        several, so a mid-line rule answers "the second row's leftmost card"
+        even at the very top of the document. The cells are uniform, so the
+        fraction maps onto page order directly — top is page 1, bottom is the
+        last page."""
+        cards = self.grid.cards()
+        n = len(cards)
+        if n <= 1:
+            return max(1, n)
+        bar = self._bar()
+        vmax = bar.maximum()
+        frac = (bar.value() / vmax) if vmax > 0 else 0.0
+        return max(1, min(n, int(round(frac * (n - 1))) + 1))
+
+    def sync(self):
+        """Scrollbar position → rail thumb and page number."""
+        bar = self._bar()
+        vmax = bar.maximum()
+        frac = (bar.value() / vmax) if vmax > 0 else 0.0
+        single = self.tab.single
+        single.nav_set_document(len(self.grid.cards()), self.page())
+        single.nav_set_fraction(frac)
 
 
 class PdfTab(PdfTabBase):
@@ -50,11 +134,12 @@ class PdfTab(PdfTabBase):
 
     def _setup(self):
         self._stack = QStackedWidget()
-        layout = QVBoxLayout(self)
+        # The navigation rail lives beside BOTH views rather than inside the
+        # single-page one: the page manager shares it (see _enter_manage), so
+        # switching layouts must not take the scrollbar away.
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-
-        layout.addWidget(self._stack, 1)
 
         # Einzelansicht
         self.single = SinglePageView()
@@ -62,6 +147,11 @@ class PdfTab(PdfTabBase):
         self._stack.addWidget(self.single)
         self._manage_widget = None
         self._manage_panel  = None
+        self._manage_rail   = None
+
+        rail = self.single.take_nav_rail()
+        layout.addWidget(self._stack, 1)
+        layout.addWidget(rail)
 
     def cancel_render_work(self):
         """Stop everything this tab has on the render queue.
@@ -121,17 +211,24 @@ class PdfTab(PdfTabBase):
         grid_scroll = QScrollArea()
         grid_scroll.setWidgetResizable(True)
         grid_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # The shared rail is this view's scrollbar; a second one beside it
+        # would be a rival answer to the same question. Wheel scrolling still
+        # reaches the grid directly.
+        grid_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         grid_scroll.setWidget(grid)
 
         panel = ManagePanel(self.model, self.pdf_path, grid, parent=self, tab=self)
         panel.hide()
         panel.closed.connect(self._exit_manage)
         grid.order_changed.connect(self.changed.emit)
+        grid.order_changed.connect(self._sync_rail_count)
         grid.order_changed.connect(panel.update_info)
         grid.selection_changed.connect(panel.update_info)
 
         self._manage_panel = panel
         self._manage_widget = grid_scroll
+        self._manage_rail = _GridRail(self, grid, grid_scroll)
         self._stack.addWidget(grid_scroll)
 
     def _enter_manage(self, on_exit=None):
@@ -139,21 +236,54 @@ class PdfTab(PdfTabBase):
         self._build_manage_once()
         self._manage_panel.show()
         self._stack.setCurrentWidget(self._manage_widget)
+        # The shared rail now drives the grid: same scrollbar, other view.
+        self.single.rail_delegate = self._manage_rail
+        # The thumb becomes a true scrollbar over the grid regardless of the
+        # preview's page-flip mode.
+        self.single.nav_scroll_mode(True)
+        bar = self._manage_rail._bar()
+        bar.valueChanged.connect(self._rail_sync_from_grid)
+        # Start where the preview was: bring the current page's card into view.
+        self._manage_rail.rail_go_to(self.single.current_page + 1)
+        self._rail_sync_from_grid()
+
+    def _rail_sync_from_grid(self, *_args):
+        if self.in_manage_mode() and self._manage_rail is not None:
+            self._manage_rail.sync()
+
+    def _sync_rail_count(self):
+        """Update the rail's total-page label and the status bar after add/delete."""
+        if self.model is None:
+            return
+        n = len(self.model.order)
+        self.single._tot_lbl.setText(str(n))
+        self.single._pages_lbl.setText(tr('{p0} Seiten').format(p0=n))
 
     def _exit_manage(self):
+        if self._manage_rail is not None:
+            try:
+                self._manage_rail._bar().valueChanged.disconnect(
+                    self._rail_sync_from_grid)
+            except TypeError:
+                pass      # never connected, or already torn down
+        self.single.rail_delegate = None
+        self.single.nav_scroll_mode(self.single._continuous)
         self._stack.setCurrentWidget(self.single)
         # Restore sidebar / layout via callback
         cb = getattr(self, '_on_manage_exit', None)
         if cb:
             cb()
             self._on_manage_exit = None
-        # Jump to the last selected page
+        # Jump to the last selected page. go_to, not a bare _current write:
+        # in continuous mode the render recomputes the page from the scroll
+        # position, so writing _current was silently ignored there — and in
+        # paged mode it kept the previous page's scroll offset.
+        self.single.refresh()
         if self.model and self.model.selected:
             last_pos = max(
                 pos for pos, uid in enumerate(self.model.order)
                 if uid in self.model.selected)
-            self.single._current = last_pos
-        self.single.refresh()
+            self.single.go_to(last_pos + 1)
         self.single._view.setFocus()
         self.changed.emit()
 

@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QTextEdit, QFileDialog, QGroupBox
 )
 from PyQt6.QtCore import Qt
-from tools._base import BasePanel, make_label
+from tools.panels.base import BasePanel, make_label
 from tools.i18n import tr
 
 PLUGIN_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "plugins")

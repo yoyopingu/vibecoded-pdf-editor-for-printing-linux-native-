@@ -5,7 +5,7 @@ press, and report it rather than changing anything.
 import os, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox, QTextEdit
-from tools._base import BasePanel, make_label
+from tools.panels.base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels._shared import _paper_sizes_pt, row
 from tools.panels._colour import _colour_histogram, _hist_stats

@@ -113,16 +113,16 @@ class TitleBar(QWidget):
 
         # Sprache submenu
         menu_lang = menu_settings.addMenu(tr("Sprache"))
-        act_de = QAction(tr("Deutsch"), self)
-        act_de.setCheckable(True)
-        act_de.setChecked(get_language() == "de")
-        act_de.triggered.connect(lambda: self._win._set_language("de"))
-        menu_lang.addAction(act_de)
-        act_en = QAction(tr("English"), self)
-        act_en.setCheckable(True)
-        act_en.setChecked(get_language() == "en")
-        act_en.triggered.connect(lambda: self._win._set_language("en"))
-        menu_lang.addAction(act_en)
+        self._act_de = QAction(tr("Deutsch"), self)
+        self._act_de.setCheckable(True)
+        self._act_de.setChecked(get_language() == "de")
+        self._act_de.triggered.connect(lambda: self._win._set_language("de"))
+        menu_lang.addAction(self._act_de)
+        self._act_en = QAction(tr("English"), self)
+        self._act_en.setCheckable(True)
+        self._act_en.setChecked(get_language() == "en")
+        self._act_en.triggered.connect(lambda: self._win._set_language("en"))
+        menu_lang.addAction(self._act_en)
 
         # Hilfe
         menu_help = mb.addMenu(tr("Hilfe"))
@@ -135,6 +135,12 @@ class TitleBar(QWidget):
         menu_help.addAction(act_about)
 
         return mb
+
+    def refresh_language_checks(self):
+        """Sync the language menu checkmarks with the persisted language."""
+        lang = get_language()
+        self._act_de.setChecked(lang == "de")
+        self._act_en.setChecked(lang == "en")
 
     def _toggle_max(self):
         if self._win.isMaximized():

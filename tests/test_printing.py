@@ -8,7 +8,7 @@ from reportlab.lib.pagesizes import A4
 import pypdfium2 as pdfium
 from tools.jobs import null_progress
 from tools.panels._colour import _colour_histogram, _hist_stats
-from tests.support import FX, _TMP, _app, _open, _page_labels, _spin
+from tests.support import FX, _TMP, _app, _open, _page_labels, _settle, _spin
 
 
 _LIVE = []          # the (tab, dialog) this handed out last
@@ -58,14 +58,26 @@ def _print_dialog(n_pages=10, name="print_src.pdf"):
     from tools.printing.dialog import PrintDialog
     _dispose_live()
     src = os.path.join(_TMP, name)
-    c = canvas.Canvas(src, pagesize=A4)
-    for i in range(n_pages):
-        c.setFont("Helvetica", 90); c.drawCentredString(300, 400, f"P{i+1}"); c.showPage()
-    c.save()
+    if not os.path.exists(src) or _pdf_page_count(src) != n_pages:
+        c = canvas.Canvas(src, pagesize=A4)
+        for i in range(n_pages):
+            c.setFont("Helvetica", 90); c.drawCentredString(300, 400, f"P{i+1}"); c.showPage()
+        c.save()
     tab = PdfTab(src)
     made = (tab, PrintDialog(tab.pdf_path, tab.model, tab))
     _LIVE.append(made)
     return made
+
+
+_PDF_PAGE_COUNT = {}
+
+
+def _pdf_page_count(path):
+    n = _PDF_PAGE_COUNT.get(path)
+    if n is None:
+        n = len(PdfReader(path).pages)
+        _PDF_PAGE_COUNT[path] = n
+    return n
 
 
 def test_print_spools_exactly_what_was_asked_for():
@@ -1140,10 +1152,7 @@ def test_a_file_the_print_path_redraws_says_so_before_it_is_printed():
 
     tab = PdfTab(src); dlg = PrintDialog(src, tab.model, tab)
     try:
-        for _ in range(250):
-            _app.processEvents(); time.sleep(0.02)
-            if dlg.status_lbl.text():
-                break
+        _settle(dlg, lambda: bool(dlg.status_lbl.text()), tries=300)
         assert dlg._print_differs, \
             "the print path redraws this page and the check did not notice"
         said = dlg.status_lbl.text()
@@ -1170,8 +1179,7 @@ def test_a_file_with_nothing_to_warn_about_stays_quiet():
 
     tab = PdfTab(src); dlg = PrintDialog(src, tab.model, tab)
     try:
-        for _ in range(150):
-            _app.processEvents(); time.sleep(0.02)
+        _spin(60)
         assert dlg._unembedded == [], dlg._unembedded
         assert not dlg._print_differs, "a blank page was said to redraw"
         assert dlg.status_lbl.text() == "", \

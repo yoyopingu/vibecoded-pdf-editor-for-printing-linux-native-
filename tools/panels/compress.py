@@ -4,7 +4,7 @@ came back damaged.
 """
 import os, shutil
 from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox
-from tools._base import BasePanel, make_label
+from tools.panels.base import BasePanel, make_label
 from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,
                                require_ghostscript, run_chunked, unlink)
 from tools.i18n import tr

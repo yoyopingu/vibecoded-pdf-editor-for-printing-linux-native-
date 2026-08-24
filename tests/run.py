@@ -3,6 +3,7 @@
 CopyShop regression suite — runs without pytest.
 
     python3 tests/run.py               everything, one process per module
+    python3 tests/run.py quick         the fast subset (~45 s), one process per module
     python3 tests/run.py zoom render   only these, in this process
     python3 tests/run.py --one-process everything in a single process
 
@@ -39,16 +40,27 @@ from tests import support        # noqa: E402  — bootstraps Qt and the fixture
 HERE = pathlib.Path(__file__).parent
 
 
+# The fast subset for the dev loop: every layer a small change can reach,
+# none of the Ghostscript / CUPS / subprocess-spawning heavies. Measured
+# ~45 s against ~3 m 40 s for the full run. The full run stays the answer
+# before calling anything done — see AGENTS.md.
+PRESETS = {
+    "quick": ["test_hygiene", "test_cancel", "test_render", "test_manage",
+              "test_viewer_zoom", "test_rulers", "test_app", "test_empty_state"],
+}
+
+
 def modules(patterns):
     for f in sorted(HERE.glob("test_*.py")):
         if not patterns or any(p in f.stem for p in patterns):
             yield importlib.import_module(f"tests.{f.stem}")
 
 
-def isolated():
+def isolated(mods=None):
     """One child process per module. Returns the exit code."""
     import subprocess
-    mods = sorted(f.stem for f in HERE.glob("test_*.py"))
+    if mods is None:
+        mods = sorted(f.stem for f in HERE.glob("test_*.py"))
     passed = failed = crashed = 0
     for stem in mods:
         r = subprocess.run([sys.executable, "-u", __file__, stem],
@@ -93,7 +105,13 @@ def main(patterns):
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
+    raw = sys.argv[1:]
+    args = [a for a in raw if a != "--one-process"]
+    # A preset expands to its modules; several modules then run one process
+    # each, the same way the full run does, rather than through main().
+    stems = list(dict.fromkeys(s for a in args for s in PRESETS.get(a, [a])))
     if not args:
         raise SystemExit(isolated())
-    main([a for a in args if a != "--one-process"])
+    if stems != args and "--one-process" not in raw:
+        raise SystemExit(isolated(stems))
+    main(stems)

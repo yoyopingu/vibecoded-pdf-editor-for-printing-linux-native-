@@ -8,12 +8,20 @@ from tools.render.caches import _ThumbnailCache
 from tests.support import FX, _TMP, _app, _open_single_view, _settle, _spin
 
 
+_CACHE_FIXTURE_BUILT = {}
+
+
 def _cache_fixture(tmp, name, n_pages, label):
+    key = (tmp, name, n_pages, label)
+    p = _CACHE_FIXTURE_BUILT.get(key)
+    if p is not None and os.path.exists(p):
+        return p
     p = os.path.join(tmp, name)
     c = canvas.Canvas(p, pagesize=A4)
     for i in range(n_pages):
         c.setFont("Helvetica", 40); c.drawCentredString(300, 400, f"{label}{i}"); c.showPage()
     c.save()
+    _CACHE_FIXTURE_BUILT[key] = p
     return p
 
 

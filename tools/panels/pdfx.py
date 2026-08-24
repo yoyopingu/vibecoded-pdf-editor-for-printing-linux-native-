@@ -61,7 +61,7 @@ import shutil
 
 from PyQt6.QtWidgets import QPushButton
 
-from tools._base import BasePanel, make_label
+from tools.panels.base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels import _images
 from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,

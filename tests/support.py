@@ -136,20 +136,29 @@ def _make_fixtures():
     # an image for Image→PDF
     img = os.path.join(_TMP, "img.png")
     Image.new("RGB", (400, 600), (40, 90, 160)).save(img)
-    # booklet: 32 pages, each a unique flat grey so a half of an imposed sheet
-    # identifies the source page it came from, plus a black bar along the bottom
-    # edge so a lost /Rotate is visible as the bar landing on the wrong side.
+    # booklet32 is built on first access, not here. It is 32 pages of reportlab
+    # work consumed only by test_tools_nup and test_render; building it eagerly
+    # cost the other eighteen modules a second or two for nothing. The dict
+    # below has __missing__ wired to _build_booklet32 so the existing
+    # FX["booklet32"] lookup continues to work, and the build happens exactly
+    # once per process.
+    return {"normal": p, "single": s, "color": col, "encrypted": enc,
+            "restricted": restricted, "image": img,
+            "framed": fr, "framed_cropbox": box, "framed_rot90": rot, "mixed": mix}
+
+
+def _build_booklet32():
+    W, H = A4
     bk = os.path.join(_TMP, "booklet32.pdf")
+    if os.path.exists(bk):
+        return bk
     c = canvas.Canvas(bk, pagesize=A4)
     for i in range(32):
         c.setFillGray(_BK_GREY(i)); c.rect(0, 0, W, H, fill=1, stroke=0)
         c.setFillGray(0.0);         c.rect(0, 0, W, H * 0.05, fill=1, stroke=0)
         c.showPage()
     c.save()
-    return {"normal": p, "single": s, "color": col, "encrypted": enc,
-            "restricted": restricted, "image": img,
-            "framed": fr, "framed_cropbox": box, "framed_rot90": rot, "mixed": mix,
-            "booklet32": bk}
+    return bk
 
 
 def _BK_GREY(i):
@@ -279,4 +288,21 @@ def _page_labels(path):
 
 
 # Built once, at import: see the module docstring.
-FX = _make_fixtures()
+class _LazyFX(dict):
+    """FX with one fixture built on demand rather than at import.
+
+    ``booklet32`` is 32 pages of reportlab work consumed by exactly two modules
+    (test_tools_nup, test_render). Building it eagerly cost the other eighteen
+    modules a second or two for nothing. The dict subclass keeps the existing
+    ``FX["booklet32"]`` lookup working; the build happens on first access and
+    is cached for the rest of the process.
+    """
+    def __missing__(self, key):
+        if key != "booklet32":
+            raise KeyError(key)
+        path = _build_booklet32()
+        self[key] = path
+        return path
+
+
+FX = _LazyFX(_make_fixtures())

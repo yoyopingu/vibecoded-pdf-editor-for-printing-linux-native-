@@ -748,7 +748,7 @@ def test_running_greyscale_without_scanning_first_still_works():
     p._run_action()
 
     import time
-    end = time.time() + 90
+    end = time.time() + 20
     while time.time() < end and not opened:
         _app.processEvents(); time.sleep(0.005)
 
@@ -771,7 +771,7 @@ def test_a_document_with_nothing_to_convert_says_so():
     p._run_action()
 
     import time
-    end = time.time() + 60
+    end = time.time() + 15
     while time.time() < end and not any("Keine Seiten" in m for m in logged):
         _app.processEvents(); time.sleep(0.005)
     assert any("Keine Seiten" in m for m in logged), \
@@ -829,9 +829,9 @@ def test_the_viewer_reads_a_long_document_s_colour_spaces_once():
             _app.processEvents()
         _spin(20)
         assert sv._current == 20, f"the viewer is on page {sv._current + 1}"
-        assert "Farbprofil" in sv._color_lbl.text()
-        assert "…" not in sv._color_lbl.text(), \
-            f"still waiting on page 21: {sv._color_lbl.text()!r}"
+        assert "Farbprofil" in sv._color.widget.text()
+        assert "…" not in sv._color.widget.text(), \
+            f"still waiting on page 21: {sv._color.widget.text()!r}"
         turning = len(opens) - after_open
     finally:
         pikepdf.open = real_open
@@ -1007,7 +1007,7 @@ def test_a_page_turn_stops_the_read_started_for_the_page_before_it():
     page passed on the way to it. The renders queued behind them too.
     """
     import threading
-    import tools.viewer.single_page as SP
+    import tools.viewer.color_label as SP
     from tests.support import _open_single_view, _settle
     from tools.colorspace import _cache
     from tools.jobs import active_jobs

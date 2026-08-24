@@ -9,7 +9,7 @@ from reportlab.lib.pagesizes import A4
 from PIL import Image
 from tools.jobs import null_progress
 from tools.app_state import AppState
-from tools._base import BasePanel
+from tools.panels.base import BasePanel
 import pypdfium2 as pdfium
 from tools.panels.colour_profile import ColourProfilePanel
 from tools.panels.compress import CompressPanel
@@ -20,7 +20,7 @@ from tools.panels.impose import ImposePanel
 from tools.panels.pdfx import PdfxPanel
 from tools.panels.nup import NUpPanel
 from tools.panels.page_numbers import PageNumbersPanel
-from tests.support import FX, _TMP, _app, _open, _pdfium_page_text, _sync_async
+from tests.support import FX, _TMP, _app, _open, _pdfium_page_text, _settle, _sync_async
 
 
 def test_panels_construct():
@@ -64,10 +64,7 @@ def test_run_async_base():
                 on_done=lambda r: res.update(done=r), on_progress=progs.append,
                 busy_label="x")
     assert p._async_running and not p.run_btn.isEnabled()
-    for _ in range(400):
-        _app.processEvents()
-        if "done" in res: break
-        time.sleep(0.005)
+    _settle(p, lambda: "done" in res, tries=300)
     assert res.get("done") == 42 and progs == ["a", "b"]
     assert not p._async_running and p.run_btn.isEnabled()
 

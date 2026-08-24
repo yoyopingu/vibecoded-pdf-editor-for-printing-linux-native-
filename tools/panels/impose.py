@@ -13,7 +13,7 @@ into a booklet. That is not a layout option, it is the whole tool, so there is
 nothing to choose a mode between.
 """
 from PyQt6.QtWidgets import QVBoxLayout, QGroupBox, QCheckBox
-from tools._base import BasePanel, make_label
+from tools.panels.base import BasePanel, make_label
 from tools.i18n import tr
 from tools.panels._shared import PaperFormatSelector, _visible_size
 from tools.panels._imposition import (_slot_placement, _flatten_annots,

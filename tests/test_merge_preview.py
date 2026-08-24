@@ -119,10 +119,9 @@ def test_merge_tab_end_to_end():
     w._grid.move_up(); w._grid.move_up()
     assert w._grid.get_paths()[0] == FX["framed"], "reorder did not stick"
     w._confirm()
-    for _ in range(500):
-        _app.processEvents(); time.sleep(0.02)
-        if vp.tabs.count() and not isinstance(vp.tabs.currentWidget(), MergeOrderWidget):
-            break
+    _settle(vp, lambda: vp.tabs.count()
+            and not isinstance(vp.tabs.currentWidget(), MergeOrderWidget),
+            tries=500)
     cur = vp.tabs.currentWidget()
     assert not isinstance(cur, MergeOrderWidget), "merge never completed"
     out = getattr(cur, "pdf_path", None)

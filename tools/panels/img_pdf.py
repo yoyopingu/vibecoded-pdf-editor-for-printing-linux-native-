@@ -3,7 +3,7 @@ Bild zu/von PDF — images into a PDF, and PDF pages back out as images.
 """
 import os
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QGroupBox
-from tools._base import BasePanel, FileDropList, make_label
+from tools.panels.base import BasePanel, FileDropList, make_label
 from tools.i18n import tr
 from tools.panels._shared import row
 

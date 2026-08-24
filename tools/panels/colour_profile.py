@@ -5,7 +5,7 @@ it to CMYK or sRGB through Ghostscript, checking the result before it ships.
 import logging
 import os, shutil
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QTextEdit
-from tools._base import BasePanel, make_label
+from tools.panels.base import BasePanel, make_label
 from tools.colorspace import document_colorspaces, has_cmyk, has_rgb
 from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,
                                require_ghostscript, run_chunked, unlink)

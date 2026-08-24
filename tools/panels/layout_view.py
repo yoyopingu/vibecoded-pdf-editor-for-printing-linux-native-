@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QWidget, QLabel,
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 
-from tools._base import BasePanel, CurrentFileBar, LogBox, ToolScrollArea
+from tools.panels.base import BasePanel, CurrentFileBar, LogBox, ToolScrollArea
 from tools.app_state import AppState
 from tools.i18n import tr
 from tools.render.caches import _ThumbnailCache

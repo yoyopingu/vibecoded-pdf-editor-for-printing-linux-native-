@@ -9,7 +9,7 @@ from tools.app_state import AppState
 import pypdfium2 as pdfium
 from tools.panels.impose import ImposePanel, _booklet_sides
 from tools.panels.nup import NUpPanel, _build_nup
-from tests.support import FX, MM, _BK_GREY, _TMP, _app, _ink_margins, _nup, _open, _sync_async
+from tests.support import FX, MM, _BK_GREY, _TMP, _app, _ink_margins, _nup, _open, _settle, _sync_async
 
 
 def _booklet_halves(path):
@@ -70,10 +70,7 @@ def test_nup_preview_differs_by_mode():
     nup.resize(900, 600); nup.show(); _app.processEvents()
     def h(mode):
         nup.src_combo.setCurrentIndex(mode)
-        for _ in range(600):
-            nup._pane.refresh(); _app.processEvents()
-            if "rendert" not in nup._preview_info.text(): break
-            time.sleep(0.005)
+        _settle(nup, lambda: "rendert" not in nup._preview_info.text(), tries=300)
         nup._pane.refresh(); _app.processEvents()
         pm = nup._preview.pixmap(); img = pm.toImage(); ptr = img.bits(); ptr.setsize(img.sizeInBytes())
         return hashlib.md5(bytes(ptr)).hexdigest()
@@ -228,7 +225,7 @@ def test_tools_see_the_page_manager():
     user saves; reading the file instead imposed the pre-edit document — and
     since "Leere Seite einfuegen" appends the blank to the end of the file, it
     surfaced as the back of the cover."""
-    from tools._base import ensure_view_snapshot
+    from tools.snapshots import ensure_view_snapshot
     from tools.viewer.tab import PdfTab
 
     # unedited document -> the original file, no copy

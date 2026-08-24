@@ -482,6 +482,11 @@ class PageGrid(QWidget):
             y += card.height() + GAP
         return tops
 
+    def cards(self):
+        """The card widgets, in display order — for callers that map a page
+        number onto the grid's geometry (the shared navigation rail)."""
+        return list(self._cards)
+
     def _relayout(self):
         if not self._cards:
             self.setMinimumHeight(200); return

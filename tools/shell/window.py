@@ -5,7 +5,7 @@ tool panels.
 import sys, os
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox, QPushButton
 from PyQt6.QtCore import Qt, pyqtSignal
-from tools.i18n import tr, set_language
+from tools.i18n import tr, set_language, get_language
 from tools.branding import APP_NAME, APP_TAGLINE, app_title, versioned
 from tools.viewer.panel import PageViewerPanel
 from tools.plugin_manager import PluginManagerPanel, discover_plugins
@@ -483,8 +483,29 @@ class MainWindow(QMainWindow):
         )
 
     def _set_language(self, lang: str):
-        set_language(lang)
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        if lang == get_language():
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(tr("Sprache ändern"))
+        box.setText(tr("Die Änderung der Sprache wird erst nach einem Neustart wirksam."))
+        box.setInformativeText(tr("App jetzt neu starten?"))
+        btn_now = box.addButton(tr("Jetzt neu starten"), QMessageBox.ButtonRole.AcceptRole)
+        btn_later = box.addButton(tr("Beim nächsten Start"), QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(btn_now)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_now:
+            set_language(lang)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        elif clicked is btn_later:
+            set_language(lang)
+        else:
+            # Cancel: the menu checkmark was flipped by the triggered action,
+            # so put it back to the language that is actually persisted.
+            pass
+        self._title_bar.refresh_language_checks()
 
     def _open_appearance(self):
         dlg = AppearanceDialog(self)

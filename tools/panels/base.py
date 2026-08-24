@@ -1,10 +1,10 @@
 """
 BasePanel v3
 ============
-- Liest aktuelle PDF aus AppState (kein eigener Datei-Dialog nötig)
+- Liest aktuelle PDF aus AppState (kein eigener Datei-Dialog noetig)
 - Scrollbar damit Inhalte nie abgeschnitten werden
 - Alles auf Main-Thread — keine Crashes
-- Ergebnisse werden automatisch in neuem Tab geöffnet
+- Ergebnisse werden automatisch in neuem Tab geoeffnet
 """
 import logging
 import os
@@ -22,164 +22,7 @@ from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
 from tools.pdf_access import is_locked
 from tools.theme      import _TV
-
-
-_VIEW_SNAPSHOTS: dict = {}     # model signature -> flattened temp PDF
-_SNAPSHOT_PATHS: set = set()   # the values above, for "is this path one of ours?"
-
-
-def _remember_snapshot(sig, path):
-    _VIEW_SNAPSHOTS[sig] = path
-    _SNAPSHOT_PATHS.add(path)
-
-
-def _forget_snapshot(sig):
-    """Drop one snapshot and return the file it pointed at, or None."""
-    path = _VIEW_SNAPSHOTS.pop(sig, None)
-    if path is not None:
-        _SNAPSHOT_PATHS.discard(path)
-    return path
-
-
-def snapshot_dir():
-    """Where the flattened copies live."""
-    return os.path.join(tempfile.gettempdir(), "copyshop_view")
-
-
-def discard_snapshots_for(base_path):
-    """Delete the flattened copies made of one document.
-
-    Called when its tab closes. Nothing used to: a snapshot was only ever
-    replaced, by the next snapshot of the same document, so closing a tab left
-    its copy behind and quitting left every copy behind. They are whole
-    documents — a customer's file, sitting in the temp directory of a shared
-    machine long after the job went out of the door — and on a counter that
-    opens a hundred files a day it is the largest thing this application
-    leaves lying around.
-    """
-    if not base_path:
-        return
-    for sig in [s for s in _VIEW_SNAPSHOTS if s[0] == base_path]:
-        stale = _forget_snapshot(sig)
-        if not stale:
-            continue
-        try:
-            os.remove(stale)
-        except OSError:
-            logging.debug("could not remove the view snapshot %s", stale,
-                          exc_info=True)
-
-
-def discard_all_snapshots():
-    """Delete every flattened copy this process made. For shutdown."""
-    for sig in list(_VIEW_SNAPSHOTS):
-        stale = _forget_snapshot(sig)
-        if not stale:
-            continue
-        try:
-            os.remove(stale)
-        except OSError:
-            logging.debug("could not remove the view snapshot %s", stale,
-                          exc_info=True)
-
-
-def sweep_orphan_snapshots():
-    """Remove flattened copies left behind by runs that did not get to clean up.
-
-    A crash, a kill, or any version of this application from before the two
-    functions above existed. Safe at startup because nothing of ours is on
-    disk yet, and because a snapshot is only ever a cache — ensure_view_snapshot
-    checks the file is still there and writes it again if it is not.
-    """
-    try:
-        for name in os.listdir(snapshot_dir()):
-            if not name.startswith("view_") or not name.endswith(".pdf"):
-                continue        # not ours; leave anything else alone
-            path = os.path.join(snapshot_dir(), name)
-            if path in _SNAPSHOT_PATHS:
-                continue        # this run is using it
-            try:
-                os.remove(path)
-            except OSError:
-                logging.debug("could not sweep %s", path, exc_info=True)
-    except FileNotFoundError:
-        pass                    # nothing has ever been written
-    except Exception:
-        logging.debug("could not sweep the view snapshots", exc_info=True)
-
-
-def _model_signature(model, base_path):
-    """Everything about a PageModel that changes the document a tool should see."""
-    return (base_path,
-            tuple(model.order),
-            tuple(sorted(model.src.items())),
-            tuple(sorted((u, r) for u, r in model.rotations.items() if r)),
-            tuple(sorted(model.foreign_src.items())))
-
-
-def ensure_view_snapshot(base_path: str) -> str:
-    """Path to a PDF that matches what "Seiten verwalten" is showing, writing
-    one first if there is not one already.
-
-    Named for the write, because there is one. The old name, displayed_pdf,
-    read like an accessor and hid that calling it can put a file in the
-    temp directory.
-
-    Tools used to process the file on disk, but the page manager keeps the page
-    order, the rotations, pages pulled in from other tabs and inserted blanks in
-    an in-memory PageModel — the file only catches up when the user saves. A
-    booklet built from a document whose pages had been reordered was therefore
-    imposed from the *old* order, and "Leere Seite einfuegen" (which appends the
-    blank to the end of the file and only records where it should appear) put
-    that blank on the back of the cover.
-
-    Returns `base_path` untouched when the model is a plain 1:1 view of the file
-    — the common case, so nothing is written — and otherwise a temp PDF
-    flattened into display order, cached per model state so repeated tool runs
-    reuse it. Same page-for-page result as PdfTab.save_to().
-    """
-    model = getattr(AppState.get(), "page_model", None)
-    if model is None or not getattr(model, "order", None) or not base_path:
-        return base_path
-    if base_path in _SNAPSHOT_PATHS:
-        return base_path       # already flattened — never apply the model twice
-    try:
-        sig = _model_signature(model, base_path)
-    except Exception:
-        return base_path                       # not a model we understand
-    cached = _VIEW_SNAPSHOTS.get(sig)
-    if cached and os.path.isfile(cached):
-        return cached
-    try:
-        from pypdf import PdfReader, PdfWriter
-        n_file = len(PdfReader(base_path, strict=False).pages)
-        # Identity view — the file already *is* what the user sees.
-        if (not any(model.rotations.values()) and not model.foreign_src
-                and [model.src.get(u) for u in model.order] == list(range(n_file))):
-            return base_path
-        readers = {}
-        def _rdr(p):
-            if p not in readers: readers[p] = PdfReader(p, strict=False)
-            return readers[p]
-        writer = PdfWriter()
-        for uid in model.order:
-            src_path, orig = model.page_source(uid, base_path)
-            page = _rdr(src_path).pages[orig]
-            rot  = model.get_rotation(uid)
-            if rot: page.rotate(rot)
-            writer.add_page(page)
-        tmp_dir = snapshot_dir()
-        os.makedirs(tmp_dir, exist_ok=True)
-        out = os.path.join(tmp_dir, f"view_{uuid.uuid4().hex[:8]}.pdf")
-        with open(out, "wb") as f:
-            writer.write(f)
-    except Exception:
-        return base_path        # never block a tool because the snapshot failed
-    # Drop the previous snapshot of the same file — one temp file per document,
-    # not one per edit.
-    discard_snapshots_for(base_path)
-    _remember_snapshot(sig, out)
-    return out
+from tools.snapshots  import ensure_view_snapshot
 
 
 class ToolScrollArea(QScrollArea):
@@ -252,7 +95,7 @@ class CurrentFileBar(QWidget):
         icon.setFixedWidth(30)
         layout.addWidget(icon)
 
-        self.file_label = QLabel(tr("Keine Datei geöffnet — öffne zuerst eine PDF im Page Viewer"))
+        self.file_label = QLabel(tr("Keine Datei geoeffnet — oeffne zuerst eine PDF im Page Viewer"))
         self.file_label.setObjectName("currentFileLabel")
         self.file_label.setWordWrap(False)
         # Don't let the (long) filename/placeholder dictate the width of the bar —
@@ -260,7 +103,7 @@ class CurrentFileBar(QWidget):
         self.file_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.file_label, 1)
 
-        # Update wenn sich die aktuelle PDF ändert
+        # Update wenn sich die aktuelle PDF aendert
         AppState.get().pdf_changed.connect(self._update)
         self._update(AppState.get().current_pdf)
 
@@ -269,7 +112,7 @@ class CurrentFileBar(QWidget):
             self.file_label.setText(os.path.basename(path))
             self.file_label.setObjectName("currentFileLabel")
         else:
-            self.file_label.setText(tr("Keine Datei geöffnet — öffne zuerst eine PDF im Page Viewer"))
+            self.file_label.setText(tr("Keine Datei geoeffnet — oeffne zuerst eine PDF im Page Viewer"))
             self.file_label.setObjectName("dimLabel")
         self.file_label.setStyleSheet("")  # let QSS handle colour
         self.file_label.style().unpolish(self.file_label)
@@ -305,11 +148,11 @@ class FileDropList(QListWidget):
             e.ignore()
 
     def dropEvent(self, e):
-        # Internes Drag & Drop — Qt übernimmt das Umsortieren
+        # Internes Drag & Drop — Qt uebernimmt das Umsortieren
         if e.source() is self:
             super().dropEvent(e)
             return
-        # Externe Dateien hinzufügen
+        # Externe Dateien hinzufuegen
         for url in e.mimeData().urls():
             path = url.toLocalFile()
             ext  = os.path.splitext(path)[1].lower()
@@ -360,8 +203,8 @@ class LogBox(QPlainTextEdit):
 class BasePanel(QWidget):
     TITLE    = "Tool"
     SUBTITLE = ""
-    # Beschriftung des Ausführen-Buttons (pro Tool überschreibbar)
-    RUN_LABEL = "  Ausführen"
+    # Beschriftung des Ausfuehren-Buttons (pro Tool ueberschreibbar)
+    RUN_LABEL = "  Ausfuehren"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -558,15 +401,15 @@ class BasePanel(QWidget):
         raise NotImplementedError
 
     def _enter_pressed(self):
-        """Enter-Taste führt immer das Tool aus. (Checkboxen toggelt man mit der
-        Leertaste — Enter eine Einstellung ändern zu lassen war verwirrend.)"""
+        """Enter-Taste fuehrt immer das Tool aus. (Checkboxen toggelt man mit der
+        Leertaste — Enter eine Einstellung aendern zu lassen war verwirrend.)"""
         self._safe_run()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def current_pdf(self) -> str:
         """Pfad der PDF, die das Tool verarbeiten soll — die Seiten so, wie der
-        Viewer sie zeigt (Reihenfolge, Drehung, eingefügte Seiten). Für den
+        Viewer sie zeigt (Reihenfolge, Drehung, eingefuegte Seiten). Fuer den
         Original-Dateinamen (Titelzeile, Ausgabename) AppState.current_pdf.
 
         Call this, not AppState.get().current_pdf, from anywhere that measures
@@ -577,12 +420,12 @@ class BasePanel(QWidget):
         return ensure_view_snapshot(AppState.get().current_pdf)
 
     def require_pdf(self) -> str:
-        """Gibt aktuellen PDF-Pfad zurück, wirft Fehler wenn keine offen."""
+        """Gibt aktuellen PDF-Pfad zurueck, wirft Fehler wenn keine offen."""
         path = AppState.get().current_pdf
         if not path:
             raise ValueError(tr(
-                "Keine PDF geöffnet.\n"
-                "Öffne zuerst eine PDF im Page Viewer (linke Seite)."))
+                "Keine PDF geoeffnet.\n"
+                "Oeffne zuerst eine PDF im Page Viewer (linke Seite)."))
         if not os.path.isfile(path):
             # A document *is* open — its file has gone from under it. Saying
             # "no PDF open" here sent the operator to open the file they
@@ -606,8 +449,8 @@ class BasePanel(QWidget):
         # that pikepdf and pdfium open without being asked for anything.
         if is_locked(path):
             raise ValueError(tr(
-                "Diese PDF ist passwortgeschützt.\n"
-                "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen."))
+                "Diese PDF ist passwortgeschuetzt.\n"
+                "Bitte zuerst entsperren (Passwort entfernen), dann erneut oeffnen."))
         # And a document with no pages in it, which every tool then failed at in
         # its own way — "Accessing nonexistent PDF page number" from one,
         # "Failed to load document (PDFium: Success)" from another.
@@ -624,7 +467,7 @@ class BasePanel(QWidget):
         return ensure_view_snapshot(path)
 
     def open_result(self, path: str, title: str = ""):
-        """Öffnet ein Ergebnis in einem neuen Tab."""
+        """Oeffnet ein Ergebnis in einem neuen Tab."""
         AppState.get().open_result(path, title)
 
     def _safe_run(self):
@@ -673,7 +516,7 @@ class BasePanel(QWidget):
         """
         job = getattr(self, "_async_job", None)
         if job is not None and not job.is_finished:
-            raise RuntimeError(tr("Vorgang läuft bereits — bitte warten."))
+            raise RuntimeError(tr("Vorgang laeuft bereits — bitte warten."))
 
         self._async_running = True
         prev_label = None
@@ -747,7 +590,7 @@ class BasePanel(QWidget):
         src = AppState.get().current_pdf
         stem = os.path.splitext(os.path.basename(src))[0] if src else "output"
         slug = caption.lower()
-        for ch in " äöüßàáâãèéêëìíîïòóôõùúûü./\\:()→":
+        for ch in " aeoeuessaaaaeeeeiiiioooouuuu./\\:()→":
             slug = slug.replace(ch, "_")
         slug = slug.strip("_")[:30]
         tmp_dir = os.path.join(tempfile.gettempdir(), "copyshop_output")
@@ -761,12 +604,12 @@ class BasePanel(QWidget):
         os.makedirs(tmp_dir, exist_ok=True)
         return tmp_dir
 
-    def pick_pdf(self, caption="PDF öffnen") -> str:
+    def pick_pdf(self, caption="PDF oeffnen") -> str:
         path, _ = QFileDialog.getOpenFileName(self, tr(caption), "", tr("PDF Dateien (*.pdf)"))
         return path or ""
 
     def pick_pdfs(self) -> list:
-        paths, _ = QFileDialog.getOpenFileNames(self, tr("PDFs öffnen"), "", tr("PDF Dateien (*.pdf)"))
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("PDFs oeffnen"), "", tr("PDF Dateien (*.pdf)"))
         return paths
 
     def pick_images(self) -> list:
@@ -775,5 +618,5 @@ class BasePanel(QWidget):
         from tools.multi_open import IMAGE_EXTS
         pattern = " ".join("*" + e for e in sorted(IMAGE_EXTS))
         paths, _ = QFileDialog.getOpenFileNames(
-            self, tr("Bilder öffnen"), "", tr("Bilder") + f" ({pattern})")
+            self, tr("Bilder oeffnen"), "", tr("Bilder") + f" ({pattern})")
         return paths

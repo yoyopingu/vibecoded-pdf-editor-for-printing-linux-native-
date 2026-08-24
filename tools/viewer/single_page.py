@@ -22,19 +22,19 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QPushButton, QLabel, QFrame, QApplication,
                              QSizePolicy)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect, QPoint
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
-from tools.colorspace import (cached_page_colorspaces, describe,
-                              document_revision, page_colorspaces,
-                              scan_document)
+from PyQt6.QtGui import QPixmap
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
-from tools.render.region import cached_page_size_pt, covers, page_px_size, page_size_pt, region_for_viewport, snap_scale
+from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
 from tools.viewer.rulers import RulerBar, RulerCorner
 from tools.viewer.tab_base import owning_tab
-from tools.theme import FIND, _PREV_BTN, _TV, _register_themed
+from tools.viewer.rail import _NavRailColumn, _PageField, _PageTrack
+import tools.viewer.strip as strip
+from tools.viewer.color_label import ColourSpaceLabel
+from tools.theme import _PREV_BTN, _TV, _register_themed
 
 
 # How far the user may zoom in. Was 8x, which existed because the page was
@@ -44,173 +44,6 @@ from tools.theme import FIND, _PREV_BTN, _TV, _register_themed
 # question of what is useful.
 MAX_ZOOM = 40.0
 MIN_ZOOM = 0.1
-
-
-class _PageField(QLabel):
-    """The page number at the foot of the rail. A label you can click.
-
-    A QLineEdit here would be 40 px of permanent input box for something read a
-    hundred times and typed into once; a label that answers a click with the
-    go-to prompt costs nothing and says the same thing."""
-    clicked = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__("1", parent)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-
-
-class _PageTrack(QWidget):
-    """The rail's track: one tick per page, and a thumb marking where you are.
-
-    Drawn rather than assembled from a QScrollBar because the two things that
-    make it useful are not a scroll bar's business — a tick per page, so the
-    length of the document is visible rather than implied, and later the marks
-    that say where a search found something.
-
-    The thumb sits *inside* the track and is squared off, 11 px in a 13 px
-    groove: it is the same object as the rail with a section filled in, not a
-    capsule laid on top of it.
-
-    Two modes. Paged (`picked`, a page number): the thumb snaps to the page
-    being shown and a drag picks pages. Continuous (`position_dragged`, a
-    0..1 fraction of the track): the thumb mirrors the exact scroll position
-    and a drag scrolls to the fraction under the pointer — a drag in a paged
-    rail jumps a page at a time, which in a document that flows reads as the
-    rail moving in chunks.
-    """
-    picked = pyqtSignal(int)              # a page, 1-based
-    position_dragged = pyqtSignal(float)  # 0..1 of the track, continuous mode
-
-    GROOVE   = 13
-    THUMB_IN = 1                      # inset each side, so 11 px of thumb
-    MIN_THUMB = 26
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._n       = 0
-        self._page    = 1
-        self._span    = 1             # pages visible at once; 1 until slice 4
-        self._hits    = []            # pages a search found something on
-        self._drag    = False
-        self._scroll_mode = False     # continuous: thumb tracks the scroll
-        self._scroll_frac = None      # 0..1 while _scroll_mode
-        self.setFixedWidth(self.GROOVE)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed,
-                           QSizePolicy.Policy.Expanding)
-
-    def set_document(self, n_pages, page=1):
-        n_pages = max(0, int(n_pages))
-        if (n_pages, page) == (self._n, self._page):
-            return
-        self._n    = n_pages
-        self._page = max(1, min(int(page), max(1, n_pages)))
-        self.update()
-
-    def set_scroll_mode(self, on):
-        """Continuous mode: the thumb follows the scroll position, not the page."""
-        on = bool(on)
-        if on == self._scroll_mode:
-            return
-        self._scroll_mode = on
-        if not on:
-            self._scroll_frac = None
-        self.update()
-
-    def set_scroll_position(self, frac):
-        """Where the viewport is along the strip, as a 0..1 fraction."""
-        frac = None if frac is None else min(1.0, max(0.0, float(frac)))
-        if self._scroll_mode and frac != self._scroll_frac:
-            self._scroll_frac = frac
-            self.update()
-
-    def set_hits(self, pages):
-        """Which pages a search found something on, so the rail can say where
-        the answers are before you scroll to them."""
-        pages = sorted(set(pages))
-        if pages != self._hits:
-            self._hits = pages
-            self.update()
-
-    def _thumb_rect(self):
-        h = self.height()
-        if self._n <= 0:
-            return None
-        frac = min(1.0, self._span / self._n)
-        th   = max(self.MIN_THUMB, int(h * frac))
-        # Where the thumb's *top* goes, so the last page puts it flush with the
-        # bottom rather than half off the end.
-        travel = max(0, h - th)
-        if self._scroll_mode and self._scroll_frac is not None:
-            pos = self._scroll_frac
-        else:
-            pos = 0 if self._n <= 1 else (self._page - 1) / (self._n - 1)
-        return QRect(self.THUMB_IN, int(travel * pos),
-                     self.GROOVE - 2 * self.THUMB_IN, th)
-
-    def _frac_at(self, y):
-        rect = self._thumb_rect()
-        th = rect.height() if rect else self.MIN_THUMB
-        travel = max(1, self.height() - th)
-        return min(1.0, max(0.0, (y - th / 2) / travel))
-
-    def _page_at(self, y):
-        pos = self._frac_at(y)
-        return int(round(pos * (self._n - 1))) + 1 if self._n > 1 else 1
-
-    def paintEvent(self, _e):
-        p = QPainter(self)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(_TV['track']))
-        p.drawRoundedRect(0, 0, self.GROOVE, self.height(), 3, 3)
-
-        # One tick per page — but only while they are far enough apart to read
-        # as ticks. On a 900-page document they would be a solid bar.
-        if self._n > 1:
-            step = self.height() / self._n
-            if step >= 4:
-                p.setPen(QPen(QColor(_TV['border']), 1))
-                for i in range(1, self._n):
-                    y = int(i * step)
-                    p.drawLine(2, y, self.GROOVE - 3, y)
-
-        # Search hits, before the thumb so the thumb is never hidden by one.
-        if self._hits and self._n > 0:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(*FIND["current"]))
-            h = self.height()
-            for page in self._hits:
-                y = int((page - 1) / max(1, self._n - 1) * max(0, h - 3))
-                p.drawRect(1, y, self.GROOVE - 2, 2)
-
-        rect = self._thumb_rect()
-        if rect is not None:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(_TV['acc']))
-            p.drawRoundedRect(rect, 2, 2)
-        p.end()
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and self._n > 0:
-            self._drag = True
-            if self._scroll_mode:
-                self.position_dragged.emit(self._frac_at(e.position().y()))
-            else:
-                self.picked.emit(self._page_at(e.position().y()))
-
-    def mouseMoveEvent(self, e):
-        if self._drag and self._n > 0:
-            if self._scroll_mode:
-                self.position_dragged.emit(self._frac_at(e.position().y()))
-            else:
-                self.picked.emit(self._page_at(e.position().y()))
-
-    def mouseReleaseEvent(self, _e):
-        self._drag = False
 
 
 class SinglePageView(QWidget):
@@ -267,13 +100,8 @@ class SinglePageView(QWidget):
         self._region_task    = None
         self._region_signals = _RegionSignals()
         self._region_signals.ready.connect(self._on_region_ready)
-        # Colour-space label: the page the label is out for (None when it
-        # already says the right thing), the job carrying that answer, and the
-        # file revisions whose pages have all been read.
-        self._cs_pending  = None
-        self._cs_job      = None
-        self._cs_scan_job = None
-        self._cs_scanned: set = set()
+        # Colour-space label and the background work behind it
+        self._color = ColourSpaceLabel(self._color_source)
         # Which page and rotation _page_w_pt/_page_h_pt currently describe
         self._dims_key = None
         self._dims_rot = None
@@ -319,6 +147,10 @@ class SinglePageView(QWidget):
         # page whole, and every other sheet shares its pixels-per-point so the
         # strip keeps one scale. Re-resolved on load, mode change and Ctrl+0.
         self._cont_ref = None      # (w_pt, h_pt)
+        # While the page manager is showing, the shared navigation rail drives
+        # the grid instead of this view; the delegate carries the rail's
+        # actions (see PdfTab._GridRail). None means "me" — preview mode.
+        self.rail_delegate = None
         self._setup()
         _register_themed(self)
 
@@ -376,8 +208,8 @@ class SinglePageView(QWidget):
         sl.setSpacing(4)
 
         self._nav_btns = []
-        for text, tip, fn in [("▲", tr("Vorherige Seite"), self.prev_page),
-                              ("▼", tr("Nächste Seite"),   self.next_page)]:
+        for text, tip, fn in [("▲", tr("Vorherige Seite"), self._rail_prev),
+                              ("▼", tr("Nächste Seite"),   self._rail_next)]:
             b = QPushButton(text)
             b.setFixedSize(22, 16)
             b.setToolTip(tip)
@@ -398,7 +230,7 @@ class SinglePageView(QWidget):
         self._num_lbl = _PageField()
         self._num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._num_lbl.setToolTip(tr("Gehe zu Seite") + "  (Strg+G)")
-        self._num_lbl.clicked.connect(self._go_to_dialog)
+        self._num_lbl.clicked.connect(self._rail_prompt_goto)
         sl.addWidget(self._num_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self._nav_sep = QFrame()
@@ -440,9 +272,7 @@ class SinglePageView(QWidget):
 
         self._add_sep(il)
 
-        self._color_lbl = QLabel(tr("Farbprofil: —"))
-        self._color_lbl.setObjectName("dimLabel")
-        il.addWidget(self._color_lbl)
+        il.addWidget(self._color.widget)
 
         self._add_sep(il)
 
@@ -625,57 +455,35 @@ class SinglePageView(QWidget):
         self._scroll_y   = 0.0
         self._cancel_strip_tasks()
         self._strip_pm.clear()
-        self._track.set_scroll_mode(on)
+        if self.rail_delegate is None:
+            self._track.set_scroll_mode(on)
+        else:
+            # The rail is showing the page manager right now; whoever handed
+            # the delegate over re-applies the mode when it hands the rail
+            # back.
+            pass
         if on:
             scale = self._display_scale(self._zoom) or 1.0
             self._build_strip(scale)
-            self._jump_scroll(self._strip_top_of(self._current))
+            # Leave scroll where load() placed it (0 on a fresh file); the
+            # clamp inside _render_continuous keeps it in range otherwise.
         self._view.clear()
         self._render()
 
     def _page_size_pts(self, uid):
-        """(w_pt, h_pt) of a page as displayed, or a safe A4 fallback."""
-        try:
-            src_path, orig = self.model.page_source(uid, self.pdf_path)
-            rot  = self.model.get_rotation(uid)
-            size = cached_page_size_pt(src_path, orig)
-            w_pt, h_pt = size if size else page_size_pt(src_path, orig)
-            if rot % 180 == 90:
-                w_pt, h_pt = h_pt, w_pt
-            return w_pt, h_pt
-        except Exception:
-            logging.debug("strip: page has no size", exc_info=True)
-            return (self._page_w_pt or 595.0), (self._page_h_pt or 842.0)
+        return strip.page_size_pts(
+            self.model, self.pdf_path, uid,
+            (self._page_w_pt or 595.0, self._page_h_pt or 842.0))
 
     def _ensure_cont_ref(self):
-        """The page the continuous fit is measured against, as (w_pt, h_pt).
-
-        Zoom 1.0 shows this page whole — that is what "fit" means everywhere
-        else in this view, and what a reader expects the strip to start at.
-        Every other sheet is laid out at the same pixels-per-point, so a
-        differently-sized page is not rescaled as it scrolls past and the
-        strip never changes shape under the pointer.
-
-        The page being read when the mode was entered is the reference; a new
-        document and Ctrl+0 re-resolve it.
-        """
-        if self._cont_ref is not None:
-            return self._cont_ref
-        if self.model is None or not self.model.order:
-            self._cont_ref = (595.0, 842.0)
-        else:
-            pos = max(0, min(self._current, len(self.model.order) - 1))
-            self._cont_ref = self._page_size_pts(self.model.order[pos])
+        if self._cont_ref is None:
+            self._cont_ref = strip.resolve_ref(
+                self.model, self.pdf_path, self._current, (595.0, 842.0))
         return self._cont_ref
 
     def _build_strip(self, scale):
-        """Where every page sits in the document strip, in display pixels.
-
-        Rebuilt only when the zoom, the page list or the window width changes.
-        The sizes are a box lookup per page and cached — measured at 27 ms cold
-        for a 500-page document and 0.2 ms warm — so the strip costs nothing to
-        keep accurate on a mixed-size document, which is the case this app
-        exists for and the one a uniform-height guess gets wrong."""
+        """Rebuilt only when the zoom, the page list or the window width
+        changes (see strip.build for the layout itself)."""
         if self.model is None:
             self._strip = []
             self._strip_h = 0.0
@@ -692,19 +500,9 @@ class SinglePageView(QWidget):
         old_scroll = self._doc_scroll
         old_goal = self._scroll_goal
         animating = abs(old_goal - old_scroll) > 1.0
-        strip, y = [], 0.0
-        # A gutter's worth of breathing room above the first sheet and below
-        # the last: without it the first page opens glued to the top edge of
-        # the view and the last page ends glued to the bottom.
-        y = float(self.GAP_PX)
-        for pos, uid in enumerate(self.model.order):
-            w_pt, h_pt = self._page_size_pts(uid)
-            w_px, h_px = page_px_size(w_pt, h_pt, scale, 0)
-            strip.append((pos, y, w_px, h_px))
-            y += h_px + self.GAP_PX
-        self._strip     = strip
-        # y ends one gutter past the last sheet: the trailing breathing room.
-        self._strip_h   = y if strip else 0.0
+        self._strip, self._strip_h = strip.build(
+            self.model, self.pdf_path, scale, self.GAP_PX,
+            (self._page_w_pt or 595.0, self._page_h_pt or 842.0))
         self._strip_key = key
         if old_h > 0 and self._strip_h > 0 and abs(self._strip_h - old_h) > 0.5:
             ratio = self._strip_h / old_h
@@ -715,21 +513,10 @@ class SinglePageView(QWidget):
                 self._scroll_goal = self._doc_scroll
 
     def _strip_top_of(self, pos):
-        for p, y, _w, _h in self._strip:
-            if p == pos:
-                return y
-        return 0.0
+        return strip.top_of(self._strip, pos)
 
     def _page_at_strip_y(self, y):
-        """The page the viewport is mostly looking at."""
-        best = 0
-        vh = float(self._view.height())
-        for pos, top, _w, h in self._strip:
-            if top + h * 0.5 <= y + vh * 0.5:
-                best = pos
-            else:
-                break
-        return best
+        return strip.page_at(self._strip, y, self._view.height())
 
     def _cancel_strip_tasks(self):
         for task in self._strip_tasks.values():
@@ -753,19 +540,7 @@ class SinglePageView(QWidget):
         self._strip_pending.discard(key)
 
     def _strip_cache_entry(self, src_path, orig, rot, avail_w, avail_h, w_px):
-        """Best full-page image for a strip sheet, or None.
-
-        Prefers the viewport-bucketed cache entry; falls back to any render of
-        the page at least as wide as the sheet, so a page already drawn in
-        single-page mode is not blank while the strip re-renders it."""
-        cached = _FullPageCache.get(src_path, orig, rot, avail_w, avail_h)
-        if cached is not None:
-            return cached
-        img = _FullPageCache.get_at_least(src_path, orig, rot, max(1, int(w_px)))
-        if img is None:
-            return None
-        pw, ph = _FullPageCache.get_dims(src_path, orig, rot)
-        return (img, pw or 0.0, ph or 0.0, 0.0, [])
+        return strip.cache_entry(src_path, orig, rot, avail_w, avail_h, w_px)
 
     def _pixmap_for_strip(self, src_path, orig, rot, img, w_px, h_px):
         """QPixmap of `img` drawn at the sheet size, cached across frames."""
@@ -817,14 +592,12 @@ class SinglePageView(QWidget):
             self._current = pos
             self._num_lbl.setText(str(pos + 1))
             self.page_changed.emit(pos + 1)
-            QTimer.singleShot(0, self._update_color_label)
+            QTimer.singleShot(0, self._color.update)
             if self._prerender_aim != self._current:
                 self._prerender_aim = self._current
                 self._prerender_timer.start(350)
-        self._sync_track_span()
-        self._track.set_document(len(self.model.order), pos + 1)
-        self._track.set_scroll_position(
-            self._doc_scroll / max_scroll if max_scroll > 0 else 0.0)
+        self._nav_show(len(self.model.order), pos + 1,
+                       self._doc_scroll / max_scroll if max_scroll > 0 else 0.0)
 
         sheets, chars = [], []
         needed = set()
@@ -895,25 +668,8 @@ class SinglePageView(QWidget):
 
     def _strip_render_zoom(self, display_scale, avail_w, avail_h, pad,
                            src_path, orig, rot, w_px, h_px):
-        """Zoom argument for _PageRenderTask so its fit-page scale matches
-        the continuous fit-width display scale for this sheet."""
-        pw, ph = 0.0, 0.0
-        size = cached_page_size_pt(src_path, orig)
-        if size is not None:
-            pw, ph = size
-            if rot % 180 == 90:
-                pw, ph = ph, pw
-        if pw <= 0 or ph <= 0:
-            # Infer from the sheet we already laid out.
-            if display_scale > 0 and w_px > 0:
-                pw = w_px / display_scale
-                ph = h_px / display_scale if h_px > 0 else pw
-            else:
-                return max(self._zoom, 1.0)
-        fit_page = min((avail_w - pad) / pw, (avail_h - pad) / ph)
-        if fit_page <= 0:
-            return max(self._zoom, 1.0)
-        return max(0.05, display_scale / fit_page)
+        return strip.render_zoom(display_scale, avail_w, avail_h, pad,
+                                 src_path, orig, rot, w_px, h_px, self._zoom)
 
     def _request_page(self, src_path, orig, rot, avail_w, avail_h, zoom=1.0):
         """Ask for a page the strip needs and has not got. The result lands in
@@ -1843,7 +1599,7 @@ class SinglePageView(QWidget):
         self._region_task   = None
         self._showing_provisional = False
         self._blit_region()
-        QTimer.singleShot(0, self._update_color_label)
+        QTimer.singleShot(0, self._color.update)
 
     def _render_preview(self, schedule_settle=True):
         """Schnelle Qt-Skalierung als Vorschau während Zoom-Debounce.
@@ -1930,11 +1686,25 @@ class SinglePageView(QWidget):
         n = len(model.order)
         self._tot_lbl.setText(str(n))
         self._pages_lbl.setText(tr('{p0} Seiten').format(p0=n))
-        self._track.set_document(n, 1)
+        self._nav_show(n, 1)
         self._prerender_aim = None   # a new file: re-aim even at the same index
         QTimer.singleShot(0, self._render)
         # Give the canvas focus so arrow keys work without needing a click first
         QTimer.singleShot(0, self._view.setFocus)
+
+    @property
+    def current_page(self):
+        """The page on screen, 0-based."""
+        return self._current
+
+    def cancel_prerenders(self):
+        """Cancel the speculative page renders. The pages already on screen
+        stay; this frees the render queue and cache slots for whoever the
+        user has switched to looking at."""
+        for task in list(self._prerender_tasks):
+            try: task.cancel()
+            except Exception: pass   # a task past its checkpoint stops on its own
+        self._prerender_tasks.clear()
 
     def stop_background_work(self):
         """Cancel every render this view has outstanding and stop it asking for
@@ -1943,10 +1713,7 @@ class SinglePageView(QWidget):
                       self._prerender_timer, self._scroll_anim):
             try: timer.stop()
             except RuntimeError: pass   # C++ timer already destroyed
-        for task in list(self._prerender_tasks):
-            try: task.cancel()
-            except Exception: pass   # a task past its checkpoint stops on its own
-        self._prerender_tasks.clear()
+        self.cancel_prerenders()
         self._cancel_strip_tasks()
         for name in ("_render_task", "_region_task"):
             task = getattr(self, name, None)
@@ -2034,7 +1801,7 @@ class SinglePageView(QWidget):
             self._tot_lbl.setText(str(n))
             self._pages_lbl.setText(tr('{p0} Seiten').format(p0=n))
             self._current = min(self._current, max(0, n - 1))
-            self._track.set_document(n, self._current + 1)
+            self._nav_show(n, self._current + 1)
             self._strip_key = None
             self._cont_ref = None
             self._cancel_strip_tasks()
@@ -2061,7 +1828,7 @@ class SinglePageView(QWidget):
 
         # Update page counter immediately
         self._num_lbl.setText(str(self._current + 1))
-        self._track.set_document(n, self._current + 1)
+        self._nav_show(n, self._current + 1)
         self.page_changed.emit(self._current + 1)
 
         # The page's dimensions have to be right *before* anything is computed
@@ -2090,7 +1857,7 @@ class SinglePageView(QWidget):
             # spend its own third of a second. Started here it overlaps, and
             # on the large pages where the scan is slow the render is slow
             # too, so the answer is usually there when the page appears.
-            self._update_color_label()
+            self._color.update()
 
         # ── Continuous: the whole strip, not one page ─────────────────────────
         if self._continuous:
@@ -2167,7 +1934,7 @@ class SinglePageView(QWidget):
             self._showing_provisional = not final
             self._view.set_page(pm, display_chars, off_x, off_y)
             self._apply_zoom_labels(pm, page_w_pt, page_h_pt)
-            QTimer.singleShot(0, self._update_color_label)
+            QTimer.singleShot(0, self._color.update)
             # Enlarged from a coarser render? Then this is a stand-in and the
             # page has to be rendered properly. Shrunk from a finer one? Then it
             # is already as good as a render and nothing more is needed.
@@ -2336,126 +2103,14 @@ class SinglePageView(QWidget):
                 and self._use_region_rendering(self._display_scale(self._zoom))):
             QTimer.singleShot(0, self._render)
 
-        QTimer.singleShot(0, self._update_color_label)
+        QTimer.singleShot(0, self._color.update)
 
-    def _update_color_label(self):
-        """Say which colour spaces the page uses, without stalling to find out.
-
-        Reading them means walking every content stream on the page — half a
-        second on a large one, and this runs after every render, on the GUI
-        thread. So: answer at once when it is already known, and otherwise ask
-        in the background and fill the label in when the answer arrives.
-        """
-        try:
-            if not self.model or not self.pdf_path:
-                return
-            uid = self.model.order[self._current]
-            src_path, orig = self.model.page_source(uid, self.pdf_path)
-        except Exception:
-            self._color_lbl.setText(tr("Farbprofil: —"))
-            return
-
-        # Read the whole file once, in the background, rather than a page at a
-        # time as the user turns them. Cheap to ask for again — it is a stat
-        # and two comparisons once the scan has been started.
-        self._scan_colour_spaces(src_path)
-
-        known = cached_page_colorspaces(src_path, orig)
-        if known is not None:
-            # Nothing is outstanding, and the label now describes this page.
-            self._cs_pending = None
-            self._color_lbl.setText(
-                tr('Farbprofil: {p0}').format(p0=describe(known)))
-            return
-
-        # The page this answer will belong to. By the time it comes back the
-        # user may have turned to another one, and a label from the page before
-        # is worse than no label.
-        want = (src_path, orig)
-        if self._cs_pending == want:
-            # Already asked for this page. Either the answer is still coming or
-            # it came back unreadable — which page_colorspaces does not cache,
-            # since "could not be read" is not an answer to remember — and
-            # either way this runs after every render, so asking again would
-            # mean re-reading an unreadable page for as long as it is on screen.
-            return
-        # Whatever was asked for the page before this one, nobody wants any
-        # more. Left running, a turn through a long document queued one full
-        # read of the file per page onto a pool with as many slots as there are
-        # cores — so the answer for the page actually on screen waited behind
-        # every page passed on the way to it, and the renders waited with it.
-        self._cancel_colour_job()
-        self._cs_pending = want
-        self._color_lbl.setText(tr("Farbprofil: …"))
-        from tools.jobs import submit
-        job = submit(lambda job: page_colorspaces(src_path, orig),
-                     owner=self, name="colorspace",
-                     on_done=lambda names: self._apply_color_label(want, names))
-        # Cleared on `finished` rather than on `done`, so a job that fails or is
-        # cancelled releases the slot too — otherwise one such job would leave
-        # the label convinced an answer was still coming and stop asking.
-        job.signals.finished.connect(lambda j=job: self._colour_job_finished(j))
-        self._cs_job = job
-
-    def _cancel_colour_job(self):
-        if self._cs_job is not None:
-            self._cs_job.cancel()
-            self._cs_job = None
-
-    def _colour_job_finished(self, job):
-        if self._cs_job is job:         # not one already replaced by a newer ask
-            self._cs_job = None
-
-    def _apply_color_label(self, want, names):
-        if self._cs_pending != want:
-            return                      # the user has moved on
-        try:
-            self._color_lbl.setText(
-                tr('Farbprofil: {p0}').format(p0=describe(names)))
-        except RuntimeError:
-            pass                        # the view is being torn down
-
-    def _scan_colour_spaces(self, src_path):
-        """Read every page's colour spaces once, so page turns are free.
-
-        The label used to read one page per turn, and reading a page means
-        opening the file: 83 ms of cross-reference parsing against 0.36 ms to
-        answer, on a 500-page document — and the 83 ms is the part that grows
-        with the page count. So a long file was slow to browse precisely
-        because it was long, and the whole document costs less than three of
-        those turns (see tools.colorspace.scan_document).
-
-        Once per file revision, and abandoned rather than finished if the user
-        closes the tab: the pages read before that are kept, since they cost
-        nothing to have.
-        """
-        revision = document_revision(src_path)
-        if revision in self._cs_scanned or self._cs_scan_job is not None:
-            return
-        from tools.jobs import submit
-
-        def scan(job):
-            return scan_document(src_path, should_stop=lambda: job.cancelled)
-
-        # Behind the page renders and behind the label's own page: this is work
-        # for the turns to come, and nothing on screen is waiting for it.
-        job = submit(scan, owner=self, name="colorspace-document", priority=-1,
-                     on_done=lambda result: self._colour_scan_done(revision, result))
-        job.signals.finished.connect(lambda j=job: self._colour_scan_finished(j))
-        self._cs_scan_job = job
-
-    def _colour_scan_finished(self, job):
-        if self._cs_scan_job is job:
-            self._cs_scan_job = None
-
-    def _colour_scan_done(self, revision, result):
-        _names, complete = result
-        if complete:
-            # A set, not one revision: a merged tab draws its pages from
-            # several files, and remembering only the last would have the two
-            # re-scanning each other away every time the user crossed the join.
-            self._cs_scanned.add(revision)
-
+    def _color_source(self):
+        """(src_path, orig) of the page on screen, for the colour label."""
+        if not self.model or not self.pdf_path:
+            return None
+        uid = self.model.order[self._current]
+        return self.model.page_source(uid, self.pdf_path)
 
     def next_page(self):
         if self._continuous:
@@ -2575,13 +2230,44 @@ class SinglePageView(QWidget):
         self._track._span = max(1, min(n, int(round(visible))))
 
     def _on_track_picked(self, page):
-        """The rail was dragged or clicked. It is a page slider today; when the
-        pages flow continuously it becomes a true scrollbar, and only this
-        method changes."""
+        """The rail was clicked in paged mode: jump to that page."""
+        self._rail_handler().rail_go_to(page)
+
+    def _on_track_dragged(self, frac):
+        """The rail was dragged: scroll to that fraction of the view."""
+        self._rail_handler().rail_drag_to(frac)
+
+    # ── the rail as a shared scrollbar ───────────────────────────────────────
+    #
+    # The page manager drives the same rail while it is showing (PdfTab hands
+    # over a delegate), so every rail action goes through the delegate when
+    # there is one and lands here when there is not. The same split applies to
+    # what the rail *shows*: while a delegate owns it, this view stops pushing
+    # position updates to it (_nav_show).
+
+    def _rail_handler(self):
+        return self.rail_delegate if self.rail_delegate is not None else self
+
+    def _rail_prev(self):
+        self._rail_handler().rail_prev()
+
+    def _rail_next(self):
+        self._rail_handler().rail_next()
+
+    def _rail_prompt_goto(self):
+        self._rail_handler().rail_prompt_goto()
+
+    def rail_prev(self):
+        self.prev_page()
+
+    def rail_next(self):
+        self.next_page()
+
+    def rail_go_to(self, page):
         if self.model and page != self._current + 1:
             self.go_to(page)
 
-    def _on_track_dragged(self, frac):
+    def rail_drag_to(self, frac):
         """The rail was dragged in continuous mode: scroll to that fraction of
         the strip, following the pointer directly — a drag that jumps a page at
         a time reads as the rail moving in chunks."""
@@ -2592,6 +2278,45 @@ class SinglePageView(QWidget):
         if scale is not None:
             self._render_continuous(scale, self._view.width(),
                                     self._view.height())
+
+    def rail_prompt_goto(self):
+        self._go_to_dialog()
+
+    def take_nav_rail(self):
+        """Hand the navigation rail to the caller's layout.
+
+        The page manager shares the rail (see PdfTab), so it has to live
+        outside this view's own layout while staying wired to it — signals do
+        not care about parentage, only the widget tree does. The returned
+        column forwards wheel events to whichever view the rail currently
+        drives.
+        """
+        col = _NavRailColumn(self)
+        lay = QVBoxLayout(col)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._nav_side)
+        return col
+
+    def nav_set_document(self, n_pages, page):
+        """Rail position from outside (the page manager's bridge)."""
+        self._track.set_document(n_pages, page)
+
+    def nav_set_fraction(self, frac):
+        """Rail thumb as a 0..1 fraction of the view, from outside."""
+        self._track.set_scroll_position(frac)
+
+    def nav_scroll_mode(self, on):
+        self._track.set_scroll_mode(on)
+
+    def _nav_show(self, n_pages, page, frac=None):
+        """Push position state to the rail — unless a delegate (the page
+        manager) currently owns it and decides what it shows."""
+        if self.rail_delegate is not None:
+            return
+        self._sync_track_span()
+        self._track.set_document(n_pages, page)
+        if frac is not None:
+            self._track.set_scroll_position(frac)
 
     def _go_to_dialog(self):
         """Ctrl+G / Ctrl+Shift+N: Go-to-page input (like Acrobat)."""

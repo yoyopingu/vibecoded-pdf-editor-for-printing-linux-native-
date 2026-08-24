@@ -8,7 +8,7 @@ large PDF is hundreds of megabytes, so a tab that is gone must not keep one.
 """
 import os, shutil, atexit, logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFileDialog, QApplication, QLineEdit, QMenu
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent, QTimer, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
 from tools.app_state import AppState
 from tools.branding import APP_NAME
@@ -17,9 +17,10 @@ from tools.render.caches import _FullPageCache, _ThumbnailCache, _set_active
 from tools.render.document_cache import release
 from tools.viewer.empty_state import EmptyStateWidget
 from tools.viewer.merge import MergeOrderWidget
+from tools.viewer.find import FindBar
+from tools.viewer.open_flow import MergeFlow
 from tools.viewer.tab import PdfTab
-from tools.shell.style import search_icon
-from tools.theme import _TV, _register_themed
+from tools.theme import _register_themed
 
 
 class _ElidedLabel(QLabel):
@@ -135,7 +136,7 @@ class _ViewerKeyFilter(QObject):
         # Escape closes the find field before it does anything else: the field
         # has the keyboard at that moment, and this is the one thing a person
         # expects Escape to do while typing in a search box.
-        if k == Qt.Key.Key_Escape and self._vp._find_box.isVisible():
+        if k == Qt.Key.Key_Escape and self._vp._find.box.isVisible():
             self._vp.set_find_visible(False)
             self._vp.focus_page_view()
             return True
@@ -221,12 +222,6 @@ class PageViewerPanel(QWidget):
         self.unmount_sidebar_widget = None   # lambda: restores the tool list there
         self.sync_view_switch       = None   # lambda: reread which of the 3 views is current
         self._pre_manage_idx    = None   # gespeicherter Stack-Index vor Manage-Modus
-        # The find state belongs to the panel rather than to a tab: the field is
-        # one field above all of them, and switching tabs abandons it.
-        self._find_job    = None
-        self._find_hits   = []
-        self._find_index  = -1
-        self._find_needle = ""
         self._pf_job      = None
         self._setup_ui()
         AppState.get().result_ready.connect(self._open_result_tab)
@@ -368,6 +363,7 @@ class PageViewerPanel(QWidget):
         self._body_layout.addWidget(self._empty_state, 1)
         self._sync_empty_state()
 
+        self._merge = MergeFlow(self)
         self._manage_tab         = None   # PdfTab whose panel is mounted
         self._toggle_in_progress = False  # reentrancy guard for _toggle_manage
 
@@ -418,40 +414,7 @@ class PageViewerPanel(QWidget):
         self._new_btn = act("+", tr("Datei öffnen"), lambda: self._open(),
                             "Strg+O", icon=True)
 
-        # An icon until it is used, then a field. 26 px at rest against 214 px
-        # in use: the tab strip keeps the difference for the nine tenths of the
-        # time nobody is searching.
-        self._find_box = QWidget()
-        self._find_box.setObjectName("findBox")
-        fl = QHBoxLayout(self._find_box)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(2)
-        self._find_edit = QLineEdit()
-        self._find_edit.setObjectName("findEdit")
-        self._find_edit.setPlaceholderText(tr("Im Dokument suchen…"))
-        self._find_edit.setFixedWidth(150)
-        self._find_edit.returnPressed.connect(self._find_entered)
-        fl.addWidget(self._find_edit)
-        self._find_count = QLabel("")
-        self._find_count.setObjectName("dimLabel")
-        self._find_count.setMinimumWidth(58)
-        fl.addWidget(self._find_count)
-        self._find_prev = act("▲", tr("Vorheriger Treffer"),
-                              lambda: self._step_find(-1), "Umschalt+F3", icon=True)
-        self._find_next = act("▼", tr("Nächster Treffer"),
-                              lambda: self._step_find(+1), "F3", icon=True)
-        self._find_close = act("✕", tr("Suche schliessen"),
-                               lambda: self.set_find_visible(False), icon=True)
-        for b in (self._find_prev, self._find_next, self._find_close):
-            b.setParent(self._find_box)
-            fl.addWidget(b)
-        lay.addWidget(self._find_box)
-        self._find_box.setVisible(False)
-
-        self._find_btn = act("", tr("Im Dokument suchen"),
-                             lambda: self.toggle_find(), "Strg+F", icon=True)
-        self._find_btn.setIcon(search_icon(_TV['text']))
-        self._find_btn.setIconSize(QSize(15, 15))
+        self._find = FindBar(self, act)
 
         self._edit_btn = act(tr("Bearbeiten") + " ▾", tr("Bearbeiten"), None)
         menu = QMenu(self._edit_btn)
@@ -485,7 +448,7 @@ class PageViewerPanel(QWidget):
         # The row is styled from the application stylesheet, which
         # apply_theme_globally replaces before this runs — Qt re-polishes for a
         # new sheet by itself.
-        self._find_btn.setIcon(search_icon(_TV['text']))
+        self._find.retheme()
 
     def _on_status(self, msg):
         """Whatever the app has to say goes on the status bar of the page being
@@ -594,7 +557,7 @@ class PageViewerPanel(QWidget):
         # the document as the page manager currently has it, which is what a
         # print or an export would produce.
         try:
-            from tools._base import ensure_view_snapshot
+            from tools.snapshots import ensure_view_snapshot
             src = ensure_view_snapshot(tab.pdf_path)
         except Exception:
             src = tab.pdf_path
@@ -622,111 +585,16 @@ class PageViewerPanel(QWidget):
                 w.single.set_continuous(on)
 
     def toggle_find(self):
-        """Strg+F — open the find bar, or close it if it is already open."""
-        if self._current() is None:
-            return
-        self.set_find_visible(not self._find_box.isVisible())
+        self._find.toggle()
 
     def set_find_visible(self, visible):
-        visible = bool(visible) and self._current() is not None
-        self._find_box.setVisible(visible)
-        self._find_btn.setVisible(not visible)
-        if visible:
-            self._find_edit.setFocus()
-            self._find_edit.selectAll()
-        else:
-            self._find_count.setText("")
-            self._clear_find()
-
-    def _find_entered(self):
-        """Enter in the field. The same term again means "find the next one",
-        which is what every other search field in the world does."""
-        text = self._find_edit.text().strip()
-        if not text:
-            return
-        if text == self._find_needle and self._find_hits:
-            self._step_find(+1)
-        else:
-            self._start_find(text)
-
-    def _cancel_find(self):
-        if self._find_job is not None:
-            self._find_job.cancel()
-            self._find_job = None
-
-    def _clear_find(self):
-        """Nothing is being searched for any more — take the marks off the
-        page. Every tab, not just the current one: a search run before a tab
-        switch has left its highlights on the other document."""
-        self._cancel_find()
-        self._find_hits   = []
-        self._find_index  = -1
-        self._find_needle = ""
-        for i in range(self.tabs.count()):
-            w = self.tabs.widget(i)
-            if isinstance(w, PdfTab):
-                w.single.clear_find_hits()
-
-    def _start_find(self, text):
-        tab = self._current()
-        if tab is None or not tab.model:
-            return
-        self._cancel_find()
-        self._find_needle = text
-        self._find_hits   = []
-        self._find_index  = -1
-        tab.single.clear_find_hits()
-        self._find_count.setText(tr("Suche läuft…"))
-
-        from tools.jobs import submit
-        from tools.viewer.search import find_all
-        model, path = tab.model, tab.pdf_path
-
-        def work(job):
-            def report(pos, total, _found):
-                job.signals.progress.emit(f"{pos + 1} / {total}")
-            return find_all(path, model, text,
-                            should_stop=lambda: job.cancelled, progress=report)
-
-        # Owned by the tab, so closing the document stops the search with it.
-        self._find_job = submit(
-            work, owner=tab, name="find",
-            on_progress=self._find_count.setText,
-            on_done=lambda hits, t=tab, q=text: self._find_done(t, q, hits))
-
-    def _find_done(self, tab, needle, hits):
-        self._find_job = None
-        if tab is not self._current() or needle != self._find_needle:
-            return                # moved on, to another tab or another word
-        self._find_hits = list(hits)
-        if not self._find_hits:
-            self._find_count.setText(tr("Keine Treffer"))
-            tab.single.clear_find_hits()
-            return
-        from tools.viewer.search import first_at_or_after
-        self._show_hit(first_at_or_after(self._find_hits, tab.single._current))
+        self._find.set_visible(visible)
 
     def _step_find(self, direction):
-        if not self._find_hits:
-            return
-        self._show_hit((self._find_index + direction) % len(self._find_hits))
+        self._find.step(direction)
 
-    def _show_hit(self, index):
-        """Go to one occurrence: mark it, turn to its page, and scroll it into
-        view if the page is larger than the window."""
-        tab = self._current()
-        if tab is None or not self._find_hits:
-            return
-        index = index % len(self._find_hits)
-        self._find_index = index
-        hit = self._find_hits[index]
-        if tab.single._current != hit.page:
-            tab.single.go_to(hit.page + 1)
-        tab.single.set_find_hits(self._find_hits, index)
-        if hit.boxes:
-            x0, y0, x1, y1 = hit.boxes[0]
-            tab.single.reveal_page_point((x0 + x1) / 2.0, (y0 + y1) / 2.0)
-        self._find_count.setText(f"{index + 1} / {len(self._find_hits)}")
+    def _clear_find(self):
+        self._find.clear()
 
     def _open_preflight_panel(self):
         """Switch to the Druckvorstufenprüfung panel, if the window has one."""
@@ -1038,7 +906,7 @@ class PageViewerPanel(QWidget):
             # counter that opens a hundred files a day left a hundred copies
             # of customer work behind it.
             try:
-                from tools._base import discard_snapshots_for
+                from tools.snapshots import discard_snapshots_for
                 discard_snapshots_for(w.pdf_path)
             except Exception:
                 logging.debug("close: removing the view snapshot failed",
@@ -1080,162 +948,7 @@ class PageViewerPanel(QWidget):
         self._toggle_manage()
 
     def show_merge_tab(self, file_paths):
-        """Preview for several picked files, shown as a tab in the same style as
-        the page manager: sort them, then either merge them into one document or
-        open them as separate tabs."""
-        import tempfile
-        file_paths = [p for p in file_paths if os.path.isfile(p)]
-        if not file_paths:
-            return
-        self._reveal_tabs()
-        logging.debug(f"show_merge_tab: {len(file_paths)} Dateien: {file_paths}")
-
-        # A repeat call with the same files is a double click or a re-sent open
-        # request, not a second job. Raise the tab that is already open instead
-        # of stacking an identical one behind it — that stack was how a fast
-        # click ended up merging twice at once.
-        for i in range(self.tabs.count()):
-            w = self.tabs.widget(i)
-            if isinstance(w, MergeOrderWidget) and w.source_paths == file_paths:
-                self.tabs.setCurrentIndex(i)
-                return
-
-        widget = MergeOrderWidget(file_paths)   # records file_paths as source_paths
-        # One conversion directory per tab. A single panel-wide one was wiped by
-        # whichever merge tab was cancelled first, taking the output another tab
-        # was still using with it.
-        widget.tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
-        idx = self.tabs.addTab(widget, tr("  📂  Dateien oeffnen  "))
-        self.tabs.setCurrentIndex(idx)
-        self._update_toolbar()
-        self._viewer_info.setText(tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
-
-        def _on_confirmed(paths):
-            logging.debug(f"_on_confirmed empfangen: {len(paths)} Dateien")
-            self._do_convert_and_merge(paths, widget)
-
-        def _on_separately(paths):
-            self._do_convert_and_open(paths, widget)
-
-        def _on_cancelled():
-            wi = self.tabs.indexOf(widget)
-            if wi >= 0:
-                self.tabs.removeTab(wi)
-            self._update_toolbar()
-            try: shutil.rmtree(widget.tmp_dir, ignore_errors=True)
-            except Exception: pass   # ignore_errors already handles the file-level failures
-
-        widget.merge_confirmed.connect(_on_confirmed)
-        widget.open_separately.connect(_on_separately)
-        widget.cancelled.connect(_on_cancelled)
-
-    def _start_conversion(self, file_paths, merge_widget, on_done):
-        """Convert the picked files to PDF in the merge tab's own temp dir and
-        hand the results to `on_done(pdfs, failures)`. Shared by merge and
-        open-separately.
-
-        The conversion is a plain function on a pool job now. It used to be a
-        QThread whose reference the panel had to keep alive by hand, in a set,
-        until QThread.finished said the thread had really stopped — get that
-        wrong and Qt aborts the process. tools/jobs.py owns the job instead, and
-        it is tied to the merge tab so closing the tab stops it.
-        """
-        from tools.jobs import submit
-        from tools.multi_open import convert_files
-        self._viewer_info.setText(tr("Konvertiere Dateien..."))
-        # Tab-Titel via Widget-Referenz setzen (sicher gegen Index-Shifts)
-        wi = self.tabs.indexOf(merge_widget)
-        if wi >= 0:
-            self.tabs.setTabText(wi, tr("  ⏳  Konvertiere...  "))
-
-        # A file that cannot be converted is dropped from the result, so
-        # convert_files hands back which ones and why — the user is told rather
-        # than left with a document quietly missing pages.
-        return submit(
-            lambda job: convert_files(file_paths, merge_widget.tmp_dir, job),
-            owner=merge_widget, name="convert-files",
-            on_progress=self._viewer_info.setText,
-            on_done=lambda result: on_done(result[0], result[1]))
-
-    def _report_conversion_failures(self, failures):
-        """Never let files vanish from a merge in silence."""
-        if not failures:
-            return
-        from PyQt6.QtWidgets import QMessageBox
-        detail = "\n".join(f"{os.path.basename(p)}  —  {m}" for p, m in failures)
-        logging.error("conversion failed:\n%s", detail)
-        AppState.get().status_message.emit(
-            tr('{p0} Datei(en) konnten nicht konvertiert werden').format(p0=len(failures)))
-        QMessageBox.warning(
-            self, tr("Nicht konvertierte Dateien"),
-            tr("Diese Dateien fehlen im Ergebnis:\n\n{p0}").format(p0=detail))
-
-    def _conversion_failed(self, merge_widget, failures=()):
-        """No file survived conversion — put the tab back the way it was so the
-        user can change the list and try again instead of being stuck."""
-        self._viewer_info.setText(tr("Fehler: Keine Dateien konvertiert"))
-        wi = self.tabs.indexOf(merge_widget)
-        if wi >= 0:
-            self.tabs.setTabText(wi, tr("  ✗  Fehler  "))
-        merge_widget.set_busy(False)
-        self._report_conversion_failures(failures)
-
-    def _do_convert_and_merge(self, file_paths, merge_widget):
-        """Konvertiert Dateien und fuegt sie zusammen."""
-        logging.debug(f"_do_convert_and_merge: {len(file_paths)} Dateien")
-
-        def _on_done(pdfs, failures):
-            valid = [p for p in pdfs if p]
-            if not valid:
-                self._conversion_failed(merge_widget, failures)
-                return
-            try:
-                from pypdf import PdfWriter, PdfReader
-                writer = PdfWriter()
-                for path in valid:
-                    for page in PdfReader(path, strict=False).pages:
-                        writer.add_page(page)
-                out = os.path.join(merge_widget.tmp_dir, "zusammengefuehrt.pdf")
-                with open(out, "wb") as f:
-                    writer.write(f)
-            except Exception as e:
-                logging.exception("merge failed")
-                self._viewer_info.setText(tr('Fehler: {p0}').format(p0=e))
-                merge_widget.set_busy(False)
-                return
-            wi = self.tabs.indexOf(merge_widget)
-            if wi >= 0:
-                self.tabs.removeTab(wi)
-            self._open_result_tab(out, tr("Zusammengefuehrt"))
-            self._update_toolbar()
-            self._report_conversion_failures(failures)
-
-        self._start_conversion(file_paths, merge_widget, _on_done)
-
-    def _do_convert_and_open(self, file_paths, merge_widget):
-        """"Einzeln oeffnen" — same conversion as the merge, but every file
-        becomes its own tab instead of one combined document."""
-        logging.debug(f"_do_convert_and_open: {len(file_paths)} Dateien")
-
-        def _on_done(pdfs, failures):
-            valid = [p for p in pdfs if p]
-            if not valid:
-                self._conversion_failed(merge_widget, failures)
-                return
-            wi = self.tabs.indexOf(merge_widget)
-            if wi >= 0:
-                self.tabs.removeTab(wi)
-            failures = list(failures)
-            for path in valid:
-                try:
-                    self._open(path)
-                except Exception as e:
-                    logging.exception("open failed: %s", path)
-                    failures.append((path, str(e)))
-            self._update_toolbar()
-            self._report_conversion_failures(failures)
-
-        self._start_conversion(file_paths, merge_widget, _on_done)
+        self._merge.show_merge_tab(file_paths)
 
     def _update_toolbar(self):
         """Bring the document row in line with the tab that is open.
@@ -1245,7 +958,7 @@ class PageViewerPanel(QWidget):
         unsaved changes."""
         tab = self._current()
         has_doc = isinstance(tab, PdfTab)
-        for w in (self._edit_btn, self._print_btn, self._find_btn):
+        for w in (self._edit_btn, self._print_btn, self._find.open_btn):
             w.setEnabled(has_doc)
         if not has_doc:
             self.set_find_visible(False)
@@ -1350,9 +1063,7 @@ class PageViewerPanel(QWidget):
         for i in range(self.tabs.count()):
             tab = self.tabs.widget(i)
             if isinstance(tab, PdfTab) and tab is not active_widget:
-                for t in list(tab.single._prerender_tasks):
-                    t.cancel()
-                tab.single._prerender_tasks.clear()
+                tab.single.cancel_prerenders()
                 # Its rendered pages stay. They used to be thrown away here,
                 # every page but the one it was showing, on the reasoning that
                 # "it can re-render quickly when the user switches back" — which
@@ -1372,10 +1083,10 @@ class PageViewerPanel(QWidget):
         self.set_find_visible(False)
         if isinstance(w, PdfTab):
             self._schedule_preflight()
-            _set_active(w.pdf_path, w.single._current)
+            _set_active(w.pdf_path, w.single.current_page)
             AppState.get().open_pdf(w.pdf_path)
             AppState.get().page_model   = w.model
-            AppState.get().current_page = w.single._current
+            AppState.get().current_page = w.single.current_page
             self._update_toolbar()
             self.focus_page_view()
         elif isinstance(w, MergeOrderWidget):

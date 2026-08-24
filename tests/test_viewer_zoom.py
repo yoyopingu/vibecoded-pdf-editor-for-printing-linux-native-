@@ -985,10 +985,11 @@ def test_continuous_fit_shows_no_sliver_of_the_next_page():
         sv._render()
         assert _settle(vp, lambda: bool(sv._strip), tries=300)
 
-        # Breathing room at both ends of the strip.
-        assert sv._strip[0][1] == sv.GAP_PX, "no room above the first sheet"
+        # Half a gutter of breathing room at both ends of the strip — which,
+        # at Ctrl+0 fit, is exactly what centring works out to.
+        assert sv._strip[0][1] == sv.GAP_PX / 2.0, "no room above the first sheet"
         last = sv._strip[-1]
-        assert sv._strip_h == last[1] + last[3] + sv.GAP_PX, \
+        assert sv._strip_h == last[1] + last[3] + sv.GAP_PX / 2.0, \
             "no room below the last sheet"
 
         # At the very top of the document, page 1 fitted: page 2 stays off

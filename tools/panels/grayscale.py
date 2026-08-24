@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGrou
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap
 from tools.app_state import AppState
-from tools._base import BasePanel, make_label, make_separator
+from tools.panels.base import BasePanel, make_label, make_separator
 from tools.colorspace import is_grey_only, page_colorspaces, scan_document
 from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,
                                run_chunked, unlink)

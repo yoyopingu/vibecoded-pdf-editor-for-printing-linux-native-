@@ -5,7 +5,7 @@ annotations with them, into the page content.
 import os, shutil, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QLineEdit, QGroupBox, QCheckBox, QScrollArea, QWidget, QFrame
-from tools._base import BasePanel
+from tools.panels.base import BasePanel
 from tools.i18n import tr
 from tools.panels._shared import row
 

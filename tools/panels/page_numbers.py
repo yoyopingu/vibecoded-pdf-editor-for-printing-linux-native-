@@ -3,7 +3,7 @@ Seitenzahlen — stamp page numbers onto the pages.
 """
 import io
 from PyQt6.QtWidgets import QVBoxLayout, QLineEdit, QSpinBox, QComboBox, QGroupBox
-from tools._base import BasePanel
+from tools.panels.base import BasePanel
 from tools.i18n import tr
 from tools.panels._shared import row
 
