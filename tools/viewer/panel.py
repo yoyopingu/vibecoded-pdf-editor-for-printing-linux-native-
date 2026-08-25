@@ -435,7 +435,23 @@ class PageViewerPanel(QWidget):
         dr_lay = QHBoxLayout(self.doc_row)
         dr_lay.setContentsMargins(0, 0, 0, 0)
         dr_lay.setSpacing(0)
-        dr_lay.addWidget(self._bar, 1)
+        # The tab bar takes its natural width (not stretched): the "+" must sit
+        # immediately to the right of the rightmost tab (concept .newtab), and a
+        # stretch keeps the doc actions at the far end of the same row.
+        dr_lay.addWidget(self._bar, 0)
+        # The "+" — multi-select open (Ctrl+O). It belongs beside the last tab,
+        # not at the far right with find/save/print (concept .newtab, gui-concept
+        # #942). Built here, outside _build_doc_actions, so it hugs the tab bar.
+        self._new_btn = QPushButton()
+        self._new_btn.setObjectName("newtabBtn")
+        self._new_btn.setIcon(icon("plus", colour=theme_color("DIM"), size=16))
+        self._new_btn.setIconSize(QSize(16, 16))
+        self._new_btn.setFixedSize(30, 30)
+        self._new_btn.setToolTip(tr("Datei öffnen") + "  (Strg+O)")
+        self._new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_btn.clicked.connect(self._open_multi_dialog)
+        dr_lay.addWidget(self._new_btn)
+        dr_lay.addStretch(1)
         # The doc actions sit at the right end of the same row, exactly where
         # they lived in the cornerWidget of the old QTabWidget.
         self._doc_actions = self._build_doc_actions()
@@ -528,9 +544,6 @@ class PageViewerPanel(QWidget):
         self._viewer_info.setObjectName("currentFileLabel")
         self._viewer_info.setMaximumWidth(260)
         lay.addWidget(self._viewer_info)
-
-        self._new_btn = act("+", tr("Datei öffnen"), self._open_multi_dialog,
-                            "Strg+O", icon=True)
 
         self._find = FindBar(self, act)
         # The find box sits in the doc row too, between the search icon and

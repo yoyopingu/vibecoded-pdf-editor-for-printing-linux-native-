@@ -77,10 +77,12 @@ def paint_card(widget, pixmap, caption, card_w, card_h, selected,
     p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
     # The well the thumbnail sits in, so a page that has not been rendered yet
-    # still reads as a page rather than as a hole.
+    # still reads as a page rather than as a hole. The stronger line separates
+    # each page from the canvas background (concept .card .well
+    # border:1px solid var(--line-strong)).
     x = CARD_MARGIN + 2
     y = CARD_MARGIN + 2
-    p.setPen(QPen(QColor(t['border']), 1))
+    p.setPen(QPen(QColor(t['line_strong']), 1))
     p.setBrush(QColor(t['card_bg']))
     p.drawRect(x, y, card_w - 1, card_h - 1)
 
@@ -125,7 +127,7 @@ def paint_file_card(widget, pixmap, name, meta, card_w, card_h, selected,
 
     x = CARD_MARGIN + 2
     y = CARD_MARGIN + 2
-    p.setPen(QPen(QColor(t['border']), 1))
+    p.setPen(QPen(QColor(t['line_strong']), 1))
     p.setBrush(QColor(t['card_bg']))
     p.drawRect(x, y, card_w - 1, card_h - 1)
 

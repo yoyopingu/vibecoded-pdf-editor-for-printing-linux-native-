@@ -53,20 +53,54 @@ class TitleBar(QWidget):
 
         layout.addStretch()
 
+        # The theme toggle — the concept's .tb-btn.theme, before the window
+        # buttons (gui-concept.html:648-651). It flips the app between the dark
+        # and light themes, persisted in AppSettings, and its icon shows what
+        # clicking it will switch TO (sun → light, moon → dark).
+        self._theme_btn = QPushButton()
+        self._theme_btn.setObjectName("themeBtn")
+        self._theme_btn.setToolTip(tr("Thema wechseln"))
+        self._theme_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._theme_btn.setFixedSize(42, 42)
+        self._theme_btn.clicked.connect(self._toggle_theme)
+        layout.addWidget(self._theme_btn)
+
         # Window controls
+        self._win_btns = []
         for name, tip, slot in [
             ("min",   "Minimieren",    window.showMinimized),
             ("max",   "Maximieren",    self._toggle_max),
             ("close", "Schließen",     window.close),
         ]:
             btn = QPushButton()
-            btn.setIcon(icon(name, colour=theme_color("DIM"), size=16))
-            btn.setIconSize(QSize(16, 16))
             btn.setObjectName("titleBarBtn")
             btn.setToolTip(tr(tip))
             btn.setFixedSize(42, 42)
             btn.clicked.connect(slot)
             layout.addWidget(btn)
+            self._win_btns.append((btn, name))
+        self._sync_theme_icons()
+
+    def _toggle_theme(self):
+        """Flip the persisted theme and push it everywhere (stylesheets, viewer
+        palette, every registered panel). The toggle's own icon follows."""
+        from tools.shell.settings import AppSettings
+        s = AppSettings.get()
+        new = "light" if s.theme() == "dark" else "dark"
+        s.set_theme(new)
+        self._win._apply_theme(new)
+
+    def _sync_theme_icons(self):
+        """Re-draw every drawn icon in the title bar for the live theme."""
+        from tools.shell.settings import AppSettings
+        cur = AppSettings.get().theme()
+        # Dark chrome shows the sun (click for light), light shows the moon.
+        self._theme_btn.setIcon(icon(
+            "sun" if cur == "dark" else "moon", colour=theme_color("DIM"), size=16))
+        self._theme_btn.setIconSize(QSize(16, 16))
+        for btn, name in self._win_btns:
+            btn.setIcon(icon(name, colour=theme_color("DIM"), size=16))
+            btn.setIconSize(QSize(16, 16))
 
     def _build_menu(self):
         from PyQt6.QtWidgets import QMenuBar

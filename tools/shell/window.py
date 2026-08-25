@@ -110,9 +110,13 @@ class ViewSwitch(QWidget):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(lambda _c, x=i: self.picked.emit(x))
-            # Sized to its own label, as the concept has it: equal thirds would
-            # spend on "Layout" the width "Seiten verwalten" needs.
-            lay.addWidget(b, b.fontMetrics().horizontalAdvance(b.text()))
+            # A modest, fixed font, set in code: the QSS font-size rule does not
+            # override the application font on these buttons, so without this the
+            # labels render at 13px and "Seiten verwalten" outgrows the 244px
+            # sidebar. Sized to its own label so the longest one never truncates.
+            f = b.font(); f.setPixelSize(11); b.setFont(f)
+            b.setMinimumWidth(b.fontMetrics().horizontalAdvance(b.text()) + 12)
+            lay.addWidget(b)
             self._segs.append(b)
         self.set_current(VIEW_PREVIEW)
 
@@ -354,7 +358,7 @@ class MainWindow(QMainWindow):
         # ── Seitenleiste ─────────────────────────────────────────────────────
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(224)
+        sidebar.setFixedWidth(244)
         self._sidebar = sidebar
         sb = QVBoxLayout(sidebar)
         sb.setContentsMargins(0, 6, 0, 0)
@@ -665,7 +669,7 @@ class MainWindow(QMainWindow):
         # to fit the tool so its fields are not clipped, and give it back to
         # the narrow list when the tool is dismissed.
         want = panel.controls_widget.sizeHint().width() + 28
-        self._sidebar.setFixedWidth(max(224, min(want, 420)))
+        self._sidebar.setFixedWidth(max(244, min(want, 420)))
         self._sync_view_switch()
 
     def _back_to_tools(self):
@@ -674,7 +678,7 @@ class MainWindow(QMainWindow):
         layout sheets — restoring that view's sidebar content in the process."""
         for btn in self._tool_btns.values():
             btn.set_active(False)
-        self._sidebar.setFixedWidth(224)
+        self._sidebar.setFixedWidth(244)
         ctx = self._tool_return_ctx
         self._tool_return_ctx = None
         stack_idx, in_manage = ctx if ctx is not None else (0, False)
@@ -915,3 +919,7 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, theme: str):
         apply_theme_globally(theme)
+        # The title bar's drawn icons are built with theme_color() and so go
+        # stale on a switch — refresh them when the theme changes by any route
+        # (the toggle in the title bar, or the Darstellung dialog).
+        self._title_bar._sync_theme_icons()

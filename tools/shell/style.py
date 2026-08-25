@@ -80,7 +80,7 @@ QWidget#currentFileBar {{
 /* ── Title bar ──────────────────────────────────────────── */
 QWidget#titleBar {{
     background: {_SB_LOGO};
-    border-bottom: 1px solid {_LINE};
+    border-bottom: 1px solid {_LSTRONG};
 }}
 QLabel#titleBarLabel {{
     color: {_TEXT}; font-size: 13px; font-weight: bold;
@@ -112,11 +112,17 @@ QPushButton#titleBarBtn {{
 }}
 QPushButton#titleBarBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
 QPushButton#titleBarBtn:last-child:hover {{ background: {_CLOSE}; color: {_ON_ACC}; }}
+QPushButton#themeBtn {{
+    background: transparent; color: {_DIM};
+    border: none; border-radius: 7px;
+    min-width: 42px; margin-right: 2px;
+}}
+QPushButton#themeBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
 
 /* ── Sidebar ────────────────────────────────────────────── */
 QWidget#sidebar {{
     background: {_SB};
-    border-right: 1px solid {_LINE};
+    border-right: 1px solid {_LSTRONG};
 }}
 /* The containers inside it stay out of the way. They are plain QWidgets, so the
    blanket `QWidget {{ background: {_BG} }}` above painted the window colour over
@@ -166,7 +172,7 @@ QWidget#viewSwitch {{
 QPushButton#viewSeg {{
     background: transparent; color: {_NB_TEXT};
     border: none; border-radius: 6px;
-    padding: 6px 1px; font-size: 10px; min-height: 26px;
+    padding: 6px 2px; font-size: 11px; min-height: 26px;
 }}
 QPushButton#viewSeg:hover {{ color: {_NB_ACT_TEXT}; }}
 /* No accent fill on the checked segment — the raised surface says it, and the
@@ -409,11 +415,10 @@ QTabWidget::pane {{
 }}
 QTabBar {{
     background: {_TAB_B};
-    border-bottom: 1px solid {_LINE};
     min-height: 44px; max-height: 44px;
 }}
 QTabBar::tab {{
-    background: {_TAB_B}; color: {_DIM};
+    background: {_S2}; color: {_DIM};
     padding: 0px 10px 0px 16px;
     border: none;
     border-top: 2px solid transparent;
@@ -426,9 +431,12 @@ QTabBar::tab {{
     min-height: 42px;
 }}
 QTabBar::tab:first {{ margin-left: 0; }}
-QTabBar::tab:hover:!selected {{ background: {_S2}; color: {_TEXT}; }}
+/* Inactive tabs are a raised surface of their own so they read as tabs, not
+   as part of the docbar band behind them (user issue #8 — previously the
+   inactive fill was the rail's own colour and the tabs merged with it). */
+QTabBar::tab:hover:!selected {{ background: {_S3}; color: {_TEXT}; }}
 QTabBar::tab:selected {{
-    background: {_S2}; color: {_TEXT};
+    background: {_S3}; color: {_TEXT};
     font-weight: 600;
     border-top: 2px solid {_ACC};
 }}
@@ -446,6 +454,16 @@ QTabBar::close-button:pressed {{ background: {_S3}; }}
 /* The tab bar IS the row: the actions ride in its right-hand corner, so one
    40 px strip carries what used to take a 46 px button bar above a tab strip. */
 QWidget#docActions {{ background: {_TAB_B}; }}
+QWidget#docRow {{
+    background: {_TAB_B};
+    border-bottom: 1px solid {_LSTRONG};
+}}
+QPushButton#newtabBtn {{
+    background: transparent; color: {_DIM};
+    border: none; border-radius: 7px;
+    font-size: 14px; min-width: 30px;
+}}
+QPushButton#newtabBtn:hover {{ background: {_S3}; color: {_TEXT}; }}
 QPushButton#docBtn {{
     background: {_S2}; color: {_TEXT};
     border: 1px solid {_LINE}; border-radius: 7px;
@@ -480,7 +498,7 @@ QLineEdit#findEdit {{
    ruler switch and the zoomer pill. */
 QWidget#statusBar {{
     background: {_SB};
-    border-top: 1px solid {_LINE};
+    border-top: 1px solid {_LSTRONG};
 }}
 QLabel#sbReading {{ color: {_DIM}; font-size: 12px; background: transparent; }}
 QLabel#sbSep {{ color: {_FAINT}; background: transparent; }}

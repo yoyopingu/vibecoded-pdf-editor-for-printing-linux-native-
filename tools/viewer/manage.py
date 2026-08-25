@@ -20,16 +20,18 @@ from tools.theme import _TV, _register_themed
 
 
 class _ListBtn(QPushButton):
-    def __init__(self, label, icon_char, kbd, parent=None):
+    def __init__(self, label, icon_name, kbd, parent=None):
         super().__init__(parent)
         self.setObjectName("listbtn")
         self.setFixedHeight(31)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._icon_name = icon_name
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 0, 10, 0)
         lay.setSpacing(6)
-        self._icon = QLabel(icon_char)
+        self._icon = QLabel()
         self._icon.setObjectName("listbtnIcon")
+        self._icon.setFixedSize(18, 18)
         lay.addWidget(self._icon)
         self._label = QLabel(label)
         lay.addWidget(self._label, 1)
@@ -38,24 +40,28 @@ class _ListBtn(QPushButton):
             self._kbd_lbl = QLabel(kbd)
             self._kbd_lbl.setObjectName("listbtnKbd")
             lay.addWidget(self._kbd_lbl)
+        self._paint_icon(False)
+
+    def _paint_icon(self, hover):
+        """Draw the monochrome icon in the live theme's colour — dim normally,
+        accent under the pointer. The emoji glyphs this replaced rendered in
+        full colour and broke the theme (concept: a drawn, monochrome set)."""
+        t = _TV
+        colour = t['acc'] if hover else t['vdim']
+        self._icon.setPixmap(icon(self._icon_name, colour=colour, size=16)
+                             .pixmap(16, 16))
+        if self._kbd_lbl:
+            self._kbd_lbl.setStyleSheet(
+                f"color:{t['vdim']};background:transparent;"
+                f"font-family:monospace;font-size:10.5px;")
 
     def enterEvent(self, e):
         super().enterEvent(e)
-        t = _TV
-        self._icon.setStyleSheet(f"color:{t['acc']};background:transparent;")
-        if self._kbd_lbl:
-            self._kbd_lbl.setStyleSheet(
-                f"color:{t['vdim']};background:transparent;"
-                f"font-family:monospace;font-size:10.5px;")
+        self._paint_icon(True)
 
     def leaveEvent(self, e):
         super().leaveEvent(e)
-        t = _TV
-        self._icon.setStyleSheet(f"color:{t['vdim']};background:transparent;")
-        if self._kbd_lbl:
-            self._kbd_lbl.setStyleSheet(
-                f"color:{t['vdim']};background:transparent;"
-                f"font-family:monospace;font-size:10.5px;")
+        self._paint_icon(False)
 
 
 class ManagePanel(QWidget):
@@ -136,16 +142,18 @@ class ManagePanel(QWidget):
         zp_lay = QHBoxLayout(zoom_pill)
         zp_lay.setContentsMargins(2, 2, 2, 2)
         zp_lay.setSpacing(0)
-        for text, tip, slot in (
-                ("⊖", "Thumbnails verkleinern", lambda: self._zoom_grid(-1)),
-                ("⊕", "Thumbnails vergroessern", lambda: self._zoom_grid(+1)),
-                ("⊡", "Zoom zuruecksetzen",      lambda: self._zoom_grid(0))):
-            b = QPushButton(text)
+        self._zoom_btns = []
+        for ico, tip, slot in (
+                ("minus", "Thumbnails verkleinern", lambda: self._zoom_grid(-1)),
+                ("plus", "Thumbnails vergroessern", lambda: self._zoom_grid(+1)),
+                ("fit", "Zoom zuruecksetzen",      lambda: self._zoom_grid(0))):
+            b = QPushButton()
             b.setFixedSize(28, 26)
             b.setToolTip(tr(tip))
             b.setObjectName("pillBtn")
             b.clicked.connect(slot)
             zp_lay.addWidget(b)
+            self._zoom_btns.append((b, ico))
         view_row.addWidget(zoom_pill)
 
         rot_pill = QWidget()
@@ -153,35 +161,37 @@ class ManagePanel(QWidget):
         rp_lay = QHBoxLayout(rot_pill)
         rp_lay.setContentsMargins(2, 2, 2, 2)
         rp_lay.setSpacing(0)
-        for text, tip, slot in (
-                ("↺", "Auswahl 90° gegen den Uhrzeigersinn drehen",
+        self._rot_btns = []
+        for ico, tip, slot in (
+                ("rotl", "Auswahl 90° gegen den Uhrzeigersinn drehen",
                  lambda: self.grid.rotate_selected(270)),
-                ("↻", "Auswahl 90° im Uhrzeigersinn drehen",
+                ("rotr", "Auswahl 90° im Uhrzeigersinn drehen",
                  lambda: self.grid.rotate_selected(90))):
-            b = QPushButton(text)
+            b = QPushButton()
             b.setFixedSize(28, 26)
             b.setToolTip(tr(tip))
             b.setObjectName("pillBtn")
             b.clicked.connect(slot)
             rp_lay.addWidget(b)
+            self._rot_btns.append((b, ico))
         view_row.addWidget(rot_pill)
         view_row.addStretch()
         layout.addLayout(view_row)
 
         self._section(layout, tr("OPERATIONEN"))
-        layout.addWidget(self._listbtn(tr("Loeschen"),     self._delete,          "🗑", "Entf"))
-        layout.addWidget(self._listbtn(tr("Kopieren"),     self._copy,            "📋", "Strg+C"))
-        layout.addWidget(self._listbtn(tr("Einfuegen"),    self._paste,           "📄", "Strg+V"))
-        layout.addWidget(self._listbtn(tr("Rueckgaengig"), self._undo,            "↩", "Strg+Z"))
-        layout.addWidget(self._listbtn(tr("Extrahieren..."),           self._extract,          "✂"))
-        layout.addWidget(self._listbtn(tr("Als neuen Tab oeffnen"),    self._open_as_tab,      "📑"))
-        layout.addWidget(self._listbtn(tr("Leere Seite einfuegen"),    self._insert_blank,     "➕"))
-        layout.addWidget(self._listbtn(tr("Aus Datei(en) einfuegen..."), self._insert_from_file, "📁"))
+        layout.addWidget(self._listbtn(tr("Loeschen"),     self._delete,          "trash",    "Entf"))
+        layout.addWidget(self._listbtn(tr("Kopieren"),     self._copy,            "copy",     "Strg+C"))
+        layout.addWidget(self._listbtn(tr("Einfuegen"),    self._paste,           "paste",    "Strg+V"))
+        layout.addWidget(self._listbtn(tr("Rueckgaengig"), self._undo,            "undo",     "Strg+Z"))
+        layout.addWidget(self._listbtn(tr("Extrahieren..."),           self._extract,          "scissors"))
+        layout.addWidget(self._listbtn(tr("Als neuen Tab oeffnen"),    self._open_as_tab,      "doc"))
+        layout.addWidget(self._listbtn(tr("Leere Seite einfuegen"),    self._insert_blank,     "fileplus"))
+        layout.addWidget(self._listbtn(tr("Aus Datei(en) einfuegen..."), self._insert_from_file, "files"))
 
         self._section(layout, tr("TRENNEN"))
-        layout.addWidget(self._listbtn(tr("Auswahl als Datei speichern"), self._split_selection, "💾"))
-        layout.addWidget(self._listbtn(tr("Jede Seite als Datei"),        self._split_each,      "📤"))
-        layout.addWidget(self._listbtn(tr("Alle N Seiten..."),            self._split_n,         "📤"))
+        layout.addWidget(self._listbtn(tr("Auswahl als Datei speichern"), self._split_selection, "save"))
+        layout.addWidget(self._listbtn(tr("Jede Seite als Datei"),        self._split_each,      "split"))
+        layout.addWidget(self._listbtn(tr("Alle N Seiten..."),            self._split_n,         "split"))
 
         layout.addStretch()
 
@@ -192,8 +202,8 @@ class ManagePanel(QWidget):
         back_btn.clicked.connect(self.closed.emit)
         layout.addWidget(back_btn)
 
-    def _listbtn(self, label, fn, icon_char, kbd=""):
-        b = _ListBtn(label, icon_char, kbd)
+    def _listbtn(self, label, fn, icon_name, kbd=""):
+        b = _ListBtn(label, icon_name, kbd)
         b.clicked.connect(fn)
         self._op_btns.append(b)
         return b
@@ -231,10 +241,11 @@ class ManagePanel(QWidget):
                  f"border:1px solid {t['border']};}}")
         for b in self._op_btns:
             b.setStyleSheet(_list)
-            if hasattr(b, '_icon'):
-                b._icon.setStyleSheet(f"color:{t['vdim']};background:transparent;")
+            if hasattr(b, '_paint_icon'):
+                b._paint_icon(False)
             if hasattr(b, '_label'):
-                b._label.setStyleSheet(f"color:{t['text']};background:transparent;")
+                b._label.setStyleSheet(
+                    f"color:{t['text']};background:transparent;font-size:12px;")
             if hasattr(b, '_kbd_lbl') and b._kbd_lbl is not None:
                 b._kbd_lbl.setStyleSheet(
                     f"color:{t['vdim']};background:transparent;"
@@ -252,6 +263,16 @@ class ManagePanel(QWidget):
         for b in self.findChildren(QPushButton):
             if b.objectName() == "pillBtn":
                 b.setStyleSheet(_pill_btn)
+                # The zoom/rotate pills draw their marks as icons (minus/plus/
+                # fit/rotl/rotr), not as text glyphs — rebuild in the live theme.
+                ico = None
+                for grp in (self._zoom_btns, self._rot_btns):
+                    for bb, name in grp:
+                        if bb is b:
+                            ico = name
+                if ico:
+                    b.setIcon(icon(ico, colour=t['vdim'], size=14))
+                    b.setIconSize(QSize(14, 14))
 
         _pair = (f"QWidget#btnpair{{border:1px solid {t['border']};"
                  f"border-radius:8px;}}")
