@@ -58,6 +58,20 @@ TOOLS = ([("Layout", LayoutPanel)]
          + [entry for _grp, entries in TOOL_GROUPS for entry in entries]
          + [("Plugin-Manager", PluginManagerPanel)])
 
+# The concept gives each tool a nav icon (gui-concept.html:1391-1433). Keyed by
+# the sidebar label; the icons live in tools/shell/icons.py.
+TOOL_ICONS = {
+    "Graustufen":            "drop",
+    "Farbprofil / CMYK":     "layers",
+    "Seitenzahlen":          "num",
+    "Formulare / Reduzieren": "form",
+    "OCR — Texterkennung":   "eye",
+    "Druckvorstufenprüfung": "shield",
+    "PDF/X-Export":          "export",
+    "Komprimieren":          "zip",
+    "Plugin-Manager":        "puzzle",
+}
+
 
 VIEW_PREVIEW = 0
 VIEW_PAGES   = 1
@@ -420,7 +434,7 @@ class MainWindow(QMainWindow):
             tl.addWidget(gl)
             for label, PanelClass in entries:
                 panel = PanelClass(self)
-                btn = NavBtn(tr(label))
+                btn = NavBtn(tr(label), icon_name=TOOL_ICONS.get(label))
                 if getattr(panel, "controls_widget", None) is not None:
                     btn.clicked.connect(lambda c, p=panel: self._mount_tool(p))
                     tl.addWidget(btn)
@@ -440,7 +454,7 @@ class MainWindow(QMainWindow):
         sep0.setFrameShape(QFrame.Shape.HLine)
         tl.addWidget(sep0)
         pm_panel = PluginManagerPanel(self)
-        pm_btn = NavBtn(tr("Plugin-Manager"))
+        pm_btn = NavBtn(tr("Plugin-Manager"), icon_name=TOOL_ICONS.get("Plugin-Manager"))
         pm_btn.clicked.connect(lambda c, p=pm_panel: self._mount_tool(p))
         tl.addWidget(pm_btn)
         self._tool_panels["Plugin-Manager"] = pm_panel

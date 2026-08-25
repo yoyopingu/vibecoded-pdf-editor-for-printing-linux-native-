@@ -12,8 +12,11 @@ from tools.shell.icons import icon
 
 
 class NavBtn(QPushButton):
-    def __init__(self, text, viewer=False, parent=None):
+    def __init__(self, text, viewer=False, parent=None, icon_name=None):
         super().__init__(text, parent)
+        if icon_name:
+            self.setIcon(icon(icon_name, colour=theme_color("DIM"), size=16))
+            self.setIconSize(QSize(18, 18))
         self.setObjectName("viewerBtn" if viewer else "navBtn")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setProperty("active", "false")
