@@ -120,13 +120,28 @@ is why tabs vanish in Layout/tool panels. Move tab bar + doc-actions row to
 Picking a tool turns the whole sidebar into that tool's settings panel
 (fields + one primary Apply + "‹ Werkzeuge" back). Main area keeps showing
 the document; progress/results go to the center status message (decision 2).
-N-Up/Crop/Broschüre are already Layout stages — the remaining 9 tools need
-no interactive preview.
+N-Up/Crop/Broschüre are already Layout stages.
+
+**HARD CONSTRAINT: grayscale (tools/panels/grayscale.py) is NOT migrated.**
+Owner directive: its logic is fragile and its preview is unique/purpose-built.
+It keeps its current split-view form. BasePanel's 5.1 refactor must be
+additive — `build_tool_sidebar`/`build_tool_right_panel`/`apply_split_view_theme`
+stay byte-identical (grayscale/crop/nup use them); grayscale overrides
+`_setup()` so base changes are invisible to it. Do NOT list grayscale as a
+migration target. Verify with `test_tools_colour` after 5.1.
 | # | Step | Files | Tests |
 |---|---|---|---|
-| 5.1 | `BasePanel`: split every panel into `controls_widget` (sidebar-bound: fields + Apply + back + Stop-while-running) and optional `preview_widget` (stack-bound). `run_async` busy-relabel + Stop surface in the sidebar panel; LogBox removed | `panels/base.py` | `test_tools_misc` |
-| 5.2–5.10 | Migrate one panel per step: grayscale → colour_profile → page_numbers → forms → ocr → preflight → pdfx → compress → plugin manager | `panels/*.py` | per-tool test file |
-| 5.11 | Tools toggle in manage/layout hosts the same list; picking a tool there behaves identically (same tools, same behaviour, every view) | `window.py` | `test_manage` |
+| 5.1 | `BasePanel`: add `back_requested` signal + `build_controls_widget()` (sidebar widget: "‹ Werkzeuge" back + title + file_bar + `build_ui` + combo-shrink + log + action row); change `_setup()` to build `controls_widget`/`preview_widget` | `panels/base.py` | `test_tools_misc` |
+| 5.2 | MainWindow wiring: stop adding the 8 tool panels to the stack; tools mount `panel.controls_widget` into `SidebarHost` (`mount("tool", …)`); stack keeps viewer(0)/layout(1) only; `back_requested` → tool list. Rework `_switch`/`_btns`/`_show_tool_panel` indexing | `shell/window.py` | `test_app`, `test_manage` |
+| 5.3 | Migrate colour_profile: route `report` result → `notify()`/`self.log` (decision 2) | `panels/colour_profile.py` | `test_tools_colour` |
+| 5.4 | Migrate page_numbers (fits sidebar; sync `_run_action` as-is) | `panels/page_numbers.py` | `test_tools_misc` |
+| 5.5 | Migrate forms (keep inner QScrollArea for field list) | `panels/forms.py` | `test_tools_misc` |
+| 5.6 | Migrate ocr (progress → center status line) | `panels/ocr.py` | `test_tools_misc` |
+| 5.7 | Migrate preflight (route `report` → `notify()`/`self.log`) | `panels/preflight.py` | `test_tools_colour` |
+| 5.8 | Migrate pdfx (`_cond_lbl` + "Ausgabebedingung ändern…" stay) | `panels/pdfx.py` | `test_pdfx` |
+| 5.9 | Migrate compress (build_ui fits; `_run_action` as-is) | `panels/compress.py` | `test_tools_misc` |
+| 5.10 | Migrate plugin_manager (QListWidget + detail; `build_action_row` override preserved) | `plugin_manager.py` | `test_tools_misc` |
+| 5.11 | Tools toggle in manage/layout mounts the SAME `controls_widget` in the sidebar slot; identical behaviour everywhere; back returns to toggle state | `window.py` | `test_manage` |
 
 ### Phase 6 — Print dialog
 | # | Step | Files | Tests |
