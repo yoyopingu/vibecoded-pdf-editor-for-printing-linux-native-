@@ -8,7 +8,9 @@ has its highlights taken off every document, not just the current one.
 from PyQt6.QtCore import QObject, QSize
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QLabel
 
+from tools.app_state import theme_color
 from tools.i18n import tr
+from tools.shell.icons import icon, rotated
 from tools.shell.style import search_icon
 from tools.theme import _TV
 from tools.viewer.tab import PdfTab
@@ -46,12 +48,18 @@ class FindBar(QObject):
         self.count.setObjectName("dimLabel")
         self.count.setMinimumWidth(58)
         fl.addWidget(self.count)
-        self._prev = act("▲", tr("Vorheriger Treffer"),
+        self._prev = act("", tr("Vorheriger Treffer"),
                          lambda: self.step(-1), "Umschalt+F3", icon=True)
-        self._next = act("▼", tr("Nächster Treffer"),
+        self._prev.setIcon(rotated(icon("chev", colour=theme_color("DIM")), 180))
+        self._prev.setIconSize(QSize(16, 16))
+        self._next = act("", tr("Nächster Treffer"),
                          lambda: self.step(+1), "F3", icon=True)
-        self._close = act("✕", tr("Suche schliessen"),
+        self._next.setIcon(icon("chev", colour=theme_color("DIM")))
+        self._next.setIconSize(QSize(16, 16))
+        self._close = act("", tr("Suche schliessen"),
                           lambda: self.set_visible(False), icon=True)
+        self._close.setIcon(icon("close", colour=theme_color("DIM")))
+        self._close.setIconSize(QSize(16, 16))
         for b in (self._prev, self._next, self._close):
             b.setParent(self.box)
             fl.addWidget(b)

@@ -21,9 +21,11 @@ import math
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QPushButton, QLabel, QFrame, QApplication,
                              QSizePolicy)
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect, QPoint
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect, QPoint, QSize
 from PyQt6.QtGui import QPixmap, QCursor
+from tools.app_state import theme_color
 from tools.i18n import tr
+from tools.shell.icons import icon, rotated
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
@@ -220,9 +222,13 @@ class SinglePageView(QWidget):
         sl.setSpacing(4)
 
         self._nav_btns = []
-        for text, tip, fn in [("▲", tr("Vorherige Seite"), self._rail_prev),
-                              ("▼", tr("Nächste Seite"),   self._rail_next)]:
-            b = QPushButton(text)
+        for ic, tip, fn in [(rotated(icon("chev", colour=theme_color("DIM")), 180),
+                             tr("Vorherige Seite"), self._rail_prev),
+                            (icon("chev", colour=theme_color("DIM")),
+                             tr("Nächste Seite"),   self._rail_next)]:
+            b = QPushButton()
+            b.setIcon(ic)
+            b.setIconSize(QSize(16, 16))
             b.setFixedSize(22, 16)
             b.setToolTip(tip)
             b.clicked.connect(fn)

@@ -5,9 +5,10 @@ preview pane, the paper sizes and the page geometry.
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                              QSizePolicy, QWidget, QComboBox, QDoubleSpinBox,
                              QCheckBox)
-from PyQt6.QtCore import Qt, QTimer, QEvent, pyqtSignal
-from tools.app_state import AppState
+from PyQt6.QtCore import Qt, QTimer, QEvent, pyqtSignal, QSize
+from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
+from tools.shell.icons import icon
 
 
 MM_TO_PT = 2.8346456693
@@ -141,11 +142,11 @@ class PreviewPane(QWidget):
         hdr_row.addStretch(); hdr_row.addWidget(hdr); hdr_row.addStretch()
         # iconBtn, not secondaryBtn: the latter's padding leaves no room for the
         # glyph in a 22px square and the buttons come out blank.
-        zoom_out_btn = QPushButton("−"); zoom_out_btn.setFixedSize(24, 24); zoom_out_btn.setObjectName("iconBtn")
+        zoom_out_btn = QPushButton(); zoom_out_btn.setIcon(icon("minus", colour=theme_color("DIM"))); zoom_out_btn.setIconSize(QSize(16, 16)); zoom_out_btn.setFixedSize(24, 24); zoom_out_btn.setObjectName("iconBtn")
         self._zoom_lbl = QLabel("100%"); self._zoom_lbl.setObjectName("dimLabel")
         self._zoom_lbl.setFixedWidth(38); self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zoom_in_btn  = QPushButton("+");  zoom_in_btn.setFixedSize(24, 24);  zoom_in_btn.setObjectName("iconBtn")
-        zoom_rst_btn = QPushButton("⟳"); zoom_rst_btn.setFixedSize(24, 24); zoom_rst_btn.setObjectName("iconBtn")
+        zoom_in_btn  = QPushButton(); zoom_in_btn.setIcon(icon("plus", colour=theme_color("DIM"))); zoom_in_btn.setIconSize(QSize(16, 16)); zoom_in_btn.setFixedSize(24, 24); zoom_in_btn.setObjectName("iconBtn")
+        zoom_rst_btn = QPushButton(); zoom_rst_btn.setIcon(icon("fit", colour=theme_color("DIM"))); zoom_rst_btn.setIconSize(QSize(16, 16)); zoom_rst_btn.setFixedSize(24, 24); zoom_rst_btn.setObjectName("iconBtn")
         hdr_row.addWidget(zoom_out_btn); hdr_row.addWidget(self._zoom_lbl)
         hdr_row.addWidget(zoom_in_btn);  hdr_row.addWidget(zoom_rst_btn)
         outer.addLayout(hdr_row)

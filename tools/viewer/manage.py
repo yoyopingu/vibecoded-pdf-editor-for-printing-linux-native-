@@ -9,9 +9,10 @@ control surface over it.
 import logging
 import os
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QApplication, QLineEdit
-from PyQt6.QtCore import Qt, pyqtSignal
-from tools.app_state import AppState
+from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from tools.app_state import AppState, theme_color
 from tools.i18n import tr
+from tools.shell.icons import icon
 from tools.viewer.model import _parse_positions, _positions_to_str
 from tools.viewer.shortcuts import ThumbGridShortcutFilter
 from tools.viewer.tab_base import PdfTabBase, owning_tab
@@ -184,7 +185,9 @@ class ManagePanel(QWidget):
 
         layout.addStretch()
 
-        back_btn = QPushButton(tr("◀  Einzelansicht  [Tab / Esc]"))
+        back_btn = QPushButton(tr("Einzelansicht  [Tab / Esc]"))
+        back_btn.setIcon(icon("prev", colour=theme_color("DIM")))
+        back_btn.setIconSize(QSize(16, 16))
         back_btn.setObjectName("secondaryBtn")
         back_btn.clicked.connect(self.closed.emit)
         layout.addWidget(back_btn)

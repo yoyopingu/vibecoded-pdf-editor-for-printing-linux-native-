@@ -14,7 +14,7 @@ deal the stylesheet offers, and the reason callers should build their icons
 once and rebuild them on theme change (nothing does yet — no callers exist).
 """
 from PyQt6.QtCore import QByteArray, Qt
-from PyQt6.QtGui import QGuiApplication, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QGuiApplication, QIcon, QPainter, QPixmap, QTransform
 from PyQt6.QtSvg import QSvgRenderer
 
 from tools.app_state import theme_color
@@ -118,3 +118,13 @@ def icon(name, colour=None, size=16):
     renderer.render(p)
     p.end()
     return QIcon(pm)
+
+
+def rotated(qicon, degrees):
+    """A copy of `qicon`'s pixmap rotated clockwise by `degrees` (90, 180, 270).
+
+    The concept's "chev" points down; a previous/up arrow is the same mark
+    turned round. The icon is handed back as a plain QIcon, so it loses nothing
+    the original did not already lose to the pixmap build."""
+    pm = qicon.pixmap(16, 16)
+    return QIcon(pm.transformed(QTransform().rotate(degrees)))

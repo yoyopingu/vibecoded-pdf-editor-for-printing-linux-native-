@@ -3,10 +3,12 @@ The frameless window's own chrome — the menu bar, the drag-to-move, and
 the window buttons.
 """
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
-from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtCore import Qt, QPoint, QSize
 from PyQt6.QtGui import QKeySequence, QAction
+from tools.app_state import theme_color
 from tools.i18n import tr, get_language
 from tools.branding import APP_NAME, app_title
+from tools.shell.icons import icon
 
 
 class NavBtn(QPushButton):
@@ -49,12 +51,14 @@ class TitleBar(QWidget):
         layout.addStretch()
 
         # Window controls
-        for symbol, tip, slot in [
-            ("─", "Minimieren",    window.showMinimized),
-            ("□", "Maximieren",    self._toggle_max),
-            ("✕", "Schließen",     window.close),
+        for name, tip, slot in [
+            ("min",   "Minimieren",    window.showMinimized),
+            ("max",   "Maximieren",    self._toggle_max),
+            ("close", "Schließen",     window.close),
         ]:
-            btn = QPushButton(symbol)
+            btn = QPushButton()
+            btn.setIcon(icon(name, colour=theme_color("DIM"), size=16))
+            btn.setIconSize(QSize(16, 16))
             btn.setObjectName("titleBarBtn")
             btn.setToolTip(tr(tip))
             btn.setFixedSize(42, 42)

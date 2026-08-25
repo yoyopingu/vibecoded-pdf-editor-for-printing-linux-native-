@@ -261,7 +261,7 @@ _EN: dict[str, str] = {
     "TRENNEN": "SPLIT",
     "Jede Seite als Datei": "Each page as file",
     "Alle N Seiten...": "Every N pages...",
-    "◀  Einzelansicht  [Tab / Esc]": "◀  Single view  [Tab / Esc]",
+    "Einzelansicht  [Tab / Esc]": "Single view  [Tab / Esc]",
 
     # ── Print dialog ──────────────────────────────────────────────────────────
     "Drucken": "Print",

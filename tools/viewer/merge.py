@@ -7,9 +7,11 @@ opens this instead of guessing which one was meant.
 """
 import os, logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QScrollArea, QSizePolicy, QSplitter, QLineEdit
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer, QSize
 from PyQt6.QtGui import QPixmap, QImage, QColor, QDrag, QPainter, QFont
+from tools.app_state import theme_color
 from tools.i18n import tr
+from tools.shell.icons import icon, rotated
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.viewer.model import _parse_positions, _positions_to_str
@@ -753,9 +755,12 @@ class MergeOrderWidget(QWidget):
         lbl.setObjectName("sectionLabel")
         layout.addWidget(lbl)
 
-    def _btn(self, text, fn):
+    def _btn(self, text, fn, _icon=None):
         b = QPushButton(text)
         b.setObjectName("secondaryBtn")
+        if _icon is not None:
+            b.setIcon(_icon)
+            b.setIconSize(QSize(16, 16))
         b.clicked.connect(fn)
         b.setMinimumHeight(28)
         return b
@@ -830,8 +835,10 @@ class MergeOrderWidget(QWidget):
         ll.addWidget(self._sep())
 
         self._section(ll, tr("REIHENFOLGE"))
-        ll.addWidget(self._btn(tr("▲  Hoch"),   self._move_up))
-        ll.addWidget(self._btn(tr("▼  Runter"), self._move_down))
+        ll.addWidget(self._btn(tr("Hoch"),   self._move_up,
+                               _icon=rotated(icon("chev", colour=theme_color("DIM")), 180)))
+        ll.addWidget(self._btn(tr("Runter"), self._move_down,
+                               _icon=icon("chev", colour=theme_color("DIM"))))
         ll.addWidget(self._sep())
 
         self._section(ll, tr("OPERATIONEN"))
