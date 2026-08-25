@@ -38,6 +38,7 @@ from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.document_cache import open_document as _open_pdf
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
 from tools.theme import INK, PAPER, _TV, _register_themed
+from tools.shell.icons import icon
 
 from tools.panels._cropmarks import _crop_mark_segments
 from tools.panels._shared import (MM_TO_PT, PaperFormatSelector,
@@ -54,47 +55,138 @@ MODE_BOOKLET = 1
 class Stage(QWidget):
     """One switchable step of the pipeline.
 
-    Two widgets, deliberately not nested. `self` is the switch — a checkbox
-    naming the stage — and lives in the 224 px column with the other two
-    switches, so the whole pipeline can be read at a glance. `panel` holds the
-    controls that switch governs and is placed in the wider options column
-    beside it, because a paper-size dropdown and four margin fields do not fit
-    in 224 px and were coming out clipped and half-legible.
+    `self` is the switch — a full-width clickable *card* — and lives in the
+    224 px column with the other two cards, so the whole pipeline can be read
+    at a glance. The card carries an icon, the stage's name and a one-line
+    description, and a toggle switch on the right. `panel` holds the controls
+    that switch governs and is placed in the wider options column beside it,
+    because a paper-size dropdown and four margin fields do not fit in 224 px.
 
-    A stage that is off shows no panel at all, so the options column only ever
-    carries the settings that are actually going to be applied.
+    `self.check` is the switch itself, a checkable widget styled as a pill.
+    The tests and the run logic read/write it through isChecked()/setChecked(),
+    and the card as a whole toggles it too. A stage that is off shows no panel
+    at all, so the options column only ever carries the settings that are
+    actually going to be applied.
     """
     changed = pyqtSignal()
 
-    def __init__(self, title, parent=None):
+    def __init__(self, title, desc, icon_name, parent=None):
         super().__init__(parent)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+        self.setObjectName("stage")
+        self._icon_name = icon_name
 
-        self.check = QCheckBox(title)
-        self.check.setObjectName("stageHead")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(8)
+
+        # Icon (left).
+        self._icon_lbl = QLabel()
+        self._icon_lbl.setObjectName("stageIcon")
+        self._icon_lbl.setFixedSize(18, 18)
+        self._icon_lbl.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lay.addWidget(self._icon_lbl)
+
+        # Name + description, stacked.
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        self.title_lbl = QLabel(title)
+        self.title_lbl.setObjectName("stageTitle")
+        self.title_lbl.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        col.addWidget(self.title_lbl)
+        self.desc_lbl = QLabel(desc)
+        self.desc_lbl.setObjectName("stageDesc")
+        self.desc_lbl.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        col.addWidget(self.desc_lbl)
+        lay.addLayout(col, 1)
+
+        # Toggle switch (right).
+        self.check = QCheckBox()
+        self.check.setObjectName("stageSwitch")
+        self.check.setFixedSize(34, 19)
+        self.check.setCursor(Qt.CursorShape.PointingHandCursor)
         self.check.toggled.connect(self._on_toggled)
-        lay.addWidget(self.check)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay.addWidget(self.check, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # Repeats the stage's name at the top of its controls: the switch that
-        # turned them on is in another column, and an unlabelled block of
-        # fields belongs to nothing.
+        # The options block, placed in the wide column by _build_preview.
         self.panel = QWidget()
+        self.panel.setObjectName("optCard")
         pl = QVBoxLayout(self.panel)
-        pl.setContentsMargins(0, 0, 0, 14)
-        pl.setSpacing(6)
+        pl.setContentsMargins(13, 12, 13, 12)
+        pl.setSpacing(8)
+
+        # Card header: icon + (title + subtitle).
+        hdr = QHBoxLayout()
+        hdr.setSpacing(10)
+        self._hdr_icon = QLabel()
+        self._hdr_icon.setObjectName("optCardIcon")
+        self._hdr_icon.setFixedSize(20, 20)
+        hdr.addWidget(self._hdr_icon)
+        tcol = QVBoxLayout()
+        tcol.setSpacing(0)
         self.heading = QLabel(title)
-        self.heading.setObjectName("optGroup")
-        pl.addWidget(self.heading)
+        self.heading.setObjectName("optTitle")
+        tcol.addWidget(self.heading)
+        self.subtitle = QLabel(desc)
+        self.subtitle.setObjectName("optSub")
+        tcol.addWidget(self.subtitle)
+        hdr.addLayout(tcol, 1)
+        pl.addLayout(hdr)
+
         self.body = QVBoxLayout()
         self.body.setSpacing(5)
         pl.addLayout(self.body)
         self.panel.setVisible(False)
 
     def _on_toggled(self, _on):
+        self.setProperty("on", "true" if self.check.isChecked() else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self._refresh_icon()
         self.panel.setVisible(self.check.isChecked())
         self.changed.emit()
+
+    def _refresh_icon(self):
+        """Rebuild the left card icon so it turns accent when the stage is on."""
+        t = _TV
+        colour = t['acc'] if self.check.isChecked() else t['dim']
+        self._icon_lbl.setPixmap(
+            icon(self._icon_name, colour=colour, size=18).pixmap(18, 18))
+
+    def apply_theme(self, t, acc_soft):
+        self._refresh_icon()
+        self._hdr_icon.setPixmap(
+            icon(self._icon_name, colour=t['acc'], size=20).pixmap(20, 20))
+        self.setStyleSheet(
+            f"QWidget#stage{{background:{t['surface_2']};"
+            f"border:1px solid {t['border']};border-radius:10px;}}"
+            f"QWidget#stage:hover{{border-color:{t['line_strong']};}}"
+            f'QWidget#stage[on="true"]{{background:{acc_soft};'
+            f"border-color:{t['acc']};}}"
+            f"QLabel#stageIcon{{background:transparent;}}"
+            f"QLabel#stageTitle{{color:{t['text']};font-size:12px;"
+            f"font-weight:600;background:transparent;}}"
+            f"QLabel#stageDesc{{color:{t['dim']};font-size:10px;"
+            f"background:transparent;}}"
+            f"QCheckBox#stageSwitch{{background:transparent;}}"
+            f"QCheckBox#stageSwitch::indicator{{width:30px;height:17px;"
+            f"border-radius:9px;border:none;"
+            f"background:{t['line_strong']};}}"
+            f"QCheckBox#stageSwitch::indicator:hover{{"
+            f"background:{t['acc']};}}"
+            f"QCheckBox#stageSwitch::indicator:checked{{"
+            f"background:{t['acc']};}}")
+        self.panel.setStyleSheet(
+            f"QWidget#optCard{{background:{t['surface_3']};"
+            f"border:1px solid {t['border']};border-radius:10px;}}"
+            f"QLabel#optCardIcon{{background:transparent;}}"
+            f"QLabel#optTitle{{color:{t['text']};font-size:12px;"
+            f"font-weight:bold;background:transparent;}}"
+            f"QLabel#optSub{{color:{t['dim']};font-size:10px;"
+            f"background:transparent;}}")
 
     def enabled(self):
         return self.check.isChecked()
@@ -105,6 +197,13 @@ class Stage(QWidget):
         else:
             self.body.addWidget(w)
         return w
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.check.setChecked(not self.check.isChecked())
+            e.accept()
+        else:
+            super().mousePressEvent(e)
 
 
 def _hint(text):
@@ -550,7 +649,12 @@ class LayoutPanel(BasePanel):
 
         self.log = LogAdapter()
 
-        btn_row = QHBoxLayout()
+        # The run row, card-aligned: Ausführen stretches to fill the width, a
+        # narrow Stop sits beside it and only appears while a job runs.
+        self.run_row = QWidget()
+        self.run_row.setObjectName("runRow")
+        btn_row = QHBoxLayout(self.run_row)
+        btn_row.setContentsMargins(0, 10, 0, 0)
         btn_row.setSpacing(6)
         self.build_action_row(btn_row)
         # build_action_row leads with a stretch meant for a much wider sidebar
@@ -562,7 +666,7 @@ class LayoutPanel(BasePanel):
         self.stop_btn.setFixedWidth(56)
         self.run_btn.setMinimumWidth(0)
         btn_row.setStretchFactor(self.run_btn, 1)
-        lay.addLayout(btn_row)
+        lay.addWidget(self.run_row)
 
         # build_ui() ran before run_btn existed, so its settling call to
         # _update_preview() found nothing to disable yet — without this,
@@ -591,7 +695,7 @@ class LayoutPanel(BasePanel):
         self._opts_content = opts
         ol = QVBoxLayout(opts)
         ol.setContentsMargins(16, 14, 16, 14)
-        ol.setSpacing(0)
+        ol.setSpacing(12)
         for st in (self.st_crop, self.st_arr, self.st_marks):
             ol.addWidget(st.panel)
         ol.addStretch()
@@ -642,25 +746,17 @@ class LayoutPanel(BasePanel):
         self._opts_scroll.setStyleSheet(
             f"QScrollArea{{background:{t['panel_bg']};border:none;}}")
         self._sheetwrap.apply_theme()
-        # Full text colour, at the size the rest of the app writes at — these
-        # are the pipeline itself, not captions about it, and they were being
-        # drawn dim-grey at 11 px as though they were hints. The box is 16 px:
-        # it is the only control in the column and has to look pressable.
+        # The run row: a hairline above it sets it apart from the cards above,
+        # so it reads as the row that acts on all of them.
+        self.run_row.setStyleSheet(
+            f"QWidget#runRow{{border-top:1px solid {t['border']};}}")
+        # The accent-soft ground an on-stage card sits on — the same rgba the
+        # shell stylesheet derives for its selected nav items, recomputed here
+        # because _TV carries only the solid accent.
+        _r, _g, _b = (int(t['acc'][1:][i:i+2], 16) for i in (0, 2, 4))
+        acc_soft = f"rgba({_r},{_g},{_b},{0.16})"
         for st in (self.st_crop, self.st_arr, self.st_marks):
-            st.check.setStyleSheet(
-                f"QCheckBox#stageHead{{color:{t['text']};font-size:13px;"
-                f"padding:9px 0 9px 2px;spacing:9px;}}"
-                f"QCheckBox#stageHead::indicator{{width:16px;height:16px;"
-                f"border:1px solid {t['btn_brd']};border-radius:4px;"
-                f"background:{t['btn_bg']};}}"
-                f"QCheckBox#stageHead::indicator:hover{{border-color:{t['acc']};}}"
-                f"QCheckBox#stageHead::indicator:checked{{"
-                f"background:{t['acc']};border-color:{t['acc']};}}"
-                f"QCheckBox#stageHead:checked{{color:{t['acc']};font-weight:bold;}}")
-            st.heading.setStyleSheet(
-                f"QLabel#optGroup{{color:{t['acc']};font-size:11px;"
-                f"font-weight:bold;letter-spacing:1px;"
-                f"border-bottom:1px solid {t['border']};padding-bottom:5px;}}")
+            st.apply_theme(t, acc_soft)
         self._sheetwrap.refresh()
 
     def _update_preview(self):
@@ -702,8 +798,15 @@ class LayoutPanel(BasePanel):
             # fallback for whatever a shorter label still cannot buy back.
             return row(label, widget, label_w=92)
 
+        # ── Section heading ────────────────────────────────────────────────
+        sec = QLabel(tr("Druckstufen"))
+        sec.setObjectName("sectionLabel")
+        sec.setContentsMargins(2, 4, 0, 2)
+        layout.addWidget(sec)
+
         # ── Stage 1 · Zuschneiden / Skalieren ────────────────────────────────
-        self.st_crop = Stage(tr("Zuschneiden / Skalieren"))
+        self.st_crop = Stage(tr("Zuschneiden / Skalieren"),
+                             tr("Format · Ränder · Skalierung"), "crop")
         self.st_crop.changed.connect(self._update_preview)
 
         self.crop_fmt = PaperFormatSelector(before=[tr("— Kein —")])
@@ -746,10 +849,10 @@ class LayoutPanel(BasePanel):
         for w in (self.fit_content, self.keep_ratio, self.apply_all):
             self.st_crop.add(w)
         layout.addWidget(self.st_crop)
-        layout.addWidget(self._rule())
 
         # ── Stage 2 · Anordnung ──────────────────────────────────────────────
-        self.st_arr = Stage(tr("Anordnung"))
+        self.st_arr = Stage(tr("Anordnung"),
+                            tr("Raster · Broschüre · Blattformat"), "grid")
         self.st_arr.changed.connect(self._update_preview)
 
         self.mode = QComboBox()
@@ -817,10 +920,10 @@ class LayoutPanel(BasePanel):
         self.full_scale.toggled.connect(self._update_preview)
         self.st_arr.add(self.full_scale)
         layout.addWidget(self.st_arr)
-        layout.addWidget(self._rule())
 
         # ── Stage 3 · Marken ─────────────────────────────────────────────────
-        self.st_marks = Stage(tr("Marken"))
+        self.st_marks = Stage(tr("Marken"),
+                              tr("Schnittmarken · Endformat"), "marks")
         self.st_marks.changed.connect(self._update_preview)
 
         self.cut_marks = QCheckBox(tr("Schnittmarken"))
