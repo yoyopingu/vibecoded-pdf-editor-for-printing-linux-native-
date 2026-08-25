@@ -70,7 +70,7 @@ class TitleBar(QWidget):
         menu_file = mb.addMenu(tr("Datei"))
         act_open = QAction(tr("Datei öffnen…"), self)
         act_open.setShortcut(QKeySequence("Ctrl+O"))
-        act_open.triggered.connect(self._win._open_dialog)
+        act_open.triggered.connect(self._win._open_multi_dialog)
         menu_file.addAction(act_open)
         act_multi = QAction(tr("Mehrere Dateien öffnen…"), self)
         act_multi.triggered.connect(self._win._open_multi_dialog)

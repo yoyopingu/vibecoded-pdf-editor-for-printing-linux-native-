@@ -281,6 +281,7 @@ class PageViewerPanel(QWidget):
         self.mount_sidebar   = None   # SidebarHost.mount(view, widget=None)
         self.sync_view_switch = None  # lambda: reread which of the 3 views is current
         self.show_status            = None   # lambda msg: window-level status bar
+        self.open_multi_dialog = None  # lambda: main._open_multi_dialog() — the "+" open
         self._pre_manage_idx    = None   # gespeicherter Stack-Index vor Manage-Modus
         self._pf_job      = None
         self._setup_ui()
@@ -515,7 +516,7 @@ class PageViewerPanel(QWidget):
         self._viewer_info.setMaximumWidth(260)
         lay.addWidget(self._viewer_info)
 
-        self._new_btn = act("+", tr("Datei öffnen"), lambda: self._open(),
+        self._new_btn = act("+", tr("Datei öffnen"), self._open_multi_dialog,
                             "Strg+O", icon=True)
 
         self._find = FindBar(self, act)
@@ -926,7 +927,21 @@ class PageViewerPanel(QWidget):
         """"Mehrere zusammenführen…" in the empty window."""
         from tools.multi_open import file_dialog_filter
         paths, _ = QFileDialog.getOpenFileNames(
-            self, tr("Mehrere Dateien oeffnen"), "", file_dialog_filter())
+            self, tr("Mehrere Dateien öffnen"), "", file_dialog_filter())
+        self._open_dropped(paths)
+
+    def _open_multi_dialog(self):
+        """"+" in the doc row (and its Ctrl+O): a MULTI-select picker, not the
+        single-file one — one file opens directly, several go to the same
+        merge-or-separate preview a drag of several does. Routed through the
+        window's handler when present, because it owns the window/viewer switch;
+        a bare panel (a test) opens the same picker itself."""
+        if self.open_multi_dialog is not None:
+            self.open_multi_dialog()
+            return
+        from tools.multi_open import file_dialog_filter
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, tr("Mehrere Dateien öffnen"), "", file_dialog_filter())
         self._open_dropped(paths)
 
     def _open_dropped(self, paths):

@@ -507,6 +507,9 @@ class MainWindow(QMainWindow):
         # The status bar's preflight light offers a way through to the full
         # check; the viewer knows it wants the panel, not where the panel is.
         self.viewer.show_tool_panel = self._show_tool_panel
+        # The "+" button in the doc row is a multi-select open; it lives in the
+        # panel but needs the window's handler, which owns the viewer switch.
+        self.viewer.open_multi_dialog = self._open_multi_dialog
 
         # Wire the shared sidebar slot into the page viewer. One entry point —
         # SidebarHost.mount(view, widget) — replaces the three protocols that
