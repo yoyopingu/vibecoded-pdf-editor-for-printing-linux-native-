@@ -107,23 +107,22 @@ def test_merge_view_reorders_and_removes():
 
 
 def test_merge_tab_end_to_end():
-    """Open the merge tab, reorder, confirm — the result must be one PDF in the
-    order shown, replacing the merge tab."""
+    """Open the merge view, reorder, confirm — the result must be one PDF in the
+    order shown, replacing the merge view (which is now a main-area view, not a
+    doc-bar tab)."""
     from tools.viewer.panel import PageViewerPanel
     from tools.viewer.merge import MergeOrderWidget
     paths = [FX["normal"], FX["single"], FX["framed"]]      # 5 + 1 + 1 pages
     vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
     vp.show_merge_tab(paths)
     for _ in range(30): _app.processEvents(); time.sleep(0.01)
-    w = vp.tabs.currentWidget()
-    assert isinstance(w, MergeOrderWidget), "merge tab did not open"
+    w = vp._merge_widget
+    assert isinstance(w, MergeOrderWidget), "the merge view did not open"
     w._grid._selected = {2}; w._grid._last_selected = 2
     w._grid.move_up(); w._grid.move_up()
     assert w._grid.get_paths()[0] == FX["framed"], "reorder did not stick"
     w._confirm()
-    _settle(vp, lambda: vp.tabs.count()
-            and not isinstance(vp.tabs.currentWidget(), MergeOrderWidget),
-            tries=500)
+    _settle(vp, lambda: vp._merge_widget is None, tries=500)
     cur = vp.tabs.currentWidget()
     assert not isinstance(cur, MergeOrderWidget), "merge never completed"
     out = getattr(cur, "pdf_path", None)
@@ -290,19 +289,18 @@ def test_several_files_go_straight_to_the_preview():
 
     assert not [w for w in _app.topLevelWidgets()
                 if isinstance(w, QDialog) and w.isVisible()], "a popup appeared"
-    w = vp.tabs.currentWidget()
+    w = vp._merge_widget
     assert isinstance(w, MergeOrderWidget), "the preview did not open"
     assert w._grid.get_paths() == paths
     assert "Zusammenfuehren" in w._btn_go.text() and w._btn_go.isEnabled()
     assert "Einzeln" in w._btn_single.text() and w._btn_single.isEnabled()
 
-    # a repeat request for the same files raises that tab, it does not stack
+    # one pending merge batch at a time (decision 3): a repeat request for the
+    # same files raises the same single preview, it does not stack
     for _ in range(4):
         MAIN.MainWindow._open_multi(FakeWindow(vp), paths)
     _app.processEvents()
-    previews = [vp.tabs.widget(i) for i in range(vp.tabs.count())
-                if isinstance(vp.tabs.widget(i), MergeOrderWidget)]
-    assert len(previews) == 1, f"{len(previews)} preview tabs, expected 1"
+    assert vp._merge_widget is w, "a second preview stacked behind the first"
 
     # a single file still bypasses the preview entirely
     MAIN.MainWindow._open_multi(FakeWindow(vp), [FX["color"]])
@@ -321,10 +319,9 @@ def test_preview_opens_files_separately():
     vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
     vp.show_merge_tab(paths)
     _app.processEvents()
-    w = vp.tabs.currentWidget()
+    w = vp._merge_widget
     w._do_open_separately()
-    assert _settle(vp, lambda: not any(isinstance(vp.tabs.widget(i), MergeOrderWidget)
-                                       for i in range(vp.tabs.count()))), \
+    assert _settle(vp, lambda: vp._merge_widget is None), \
         "open-separately never finished"
     opened = [vp.tabs.widget(i).pdf_path for i in range(vp.tabs.count())
               if isinstance(vp.tabs.widget(i), PdfTab)]
@@ -456,18 +453,22 @@ def test_merge_preview_hides_the_app_sidebar():
 
     vp.show_merge_tab([FX["normal"], FX["single"]])
     _spin(20, 0.01)
-    assert isinstance(vp.tabs.currentWidget(), MergeOrderWidget)
+    assert isinstance(vp._merge_widget, MergeOrderWidget)
     assert shown and shown[-1] == "merge", f"sidebar not hidden ({shown})"
 
-    vp.tabs.currentWidget()._do_cancel()
+    vp._merge_widget._do_cancel()
     _spin(20, 0.01)
     assert shown[-1] == "tool_list", f"sidebar not restored after cancel ({shown})"
 
-    # …and it stays away only for that tab
+    # …and it stays away only for that view. The merge is a main-area view, not
+    # a tab, so with two documents open the bar keeps both; switching to one of
+    # the still-visible document tabs leaves the merge view and restores the
+    # tool list.
     vp.open_file(FX["normal"]); _spin(30, 0.01)
-    vp.show_merge_tab([FX["single"], FX["framed"]]); _spin(20, 0.01)
+    vp.open_file(FX["single"]); _spin(30, 0.01)      # two tabs; current = single
+    vp.show_merge_tab([FX["framed"], FX["mixed"]]); _spin(20, 0.01)
     assert shown[-1] == "merge", "sidebar not hidden for a second preview"
-    vp.tabs.setCurrentIndex(0); _spin(20, 0.01)
+    vp.tabs.setCurrentIndex(0); _spin(20, 0.01)       # switch to the first doc
     assert shown[-1] == "tool_list", "sidebar not restored when switching to a PDF tab"
     vp.deleteLater()
 
@@ -590,9 +591,8 @@ def test_preview_reports_files_it_could_not_convert():
     orig = QMessageBox.warning
     QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a))
     try:
-        vp.tabs.currentWidget()._confirm()
-        assert _settle(vp, lambda: not any(isinstance(vp.tabs.widget(i), MergeOrderWidget)
-                                           for i in range(vp.tabs.count()))), \
+        vp._merge_widget._confirm()
+        assert _settle(vp, lambda: vp._merge_widget is None), \
             "the merge never completed"
     finally:
         QMessageBox.warning = orig
@@ -608,68 +608,72 @@ def test_preview_survives_fast_clicks():
 
     Two conversions at once used to overwrite the panel's single worker
     attribute, dropping the last reference to a QThread that was still running
-    — which Qt answers by aborting the process. Two previews converting side by
-    side must both finish, each into its own output."""
+    — which Qt answers by aborting the process. Under decision 3 there is one
+    pending merge batch at a time: a different file set replaces the current
+    batch, and once a batch is busy no button can start work behind it."""
     from tools.viewer.panel import PageViewerPanel
     from tools.viewer.merge import MergeOrderWidget
     from tools.viewer.tab import PdfTab
     vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
     set_a = [FX["normal"], FX["image"]]      # the image forces real work
     set_b = [FX["single"], FX["framed"], FX["image"]]
-    vp.show_merge_tab(set_a); vp.show_merge_tab(set_b)
-    previews = [vp.tabs.widget(i) for i in range(vp.tabs.count())
-                if isinstance(vp.tabs.widget(i), MergeOrderWidget)]
-    assert len(previews) == 2, "different file sets each need their own tab"
-    a, b = previews
-    assert a.tmp_dir != b.tmp_dir, "previews must not share a conversion dir"
+    vp.show_merge_tab(set_a)
+    a = vp._merge_widget
+    assert isinstance(a, MergeOrderWidget)
+    a_dir = a.tmp_dir
+    vp.show_merge_tab(set_b)                 # one batch at a time: replaces a
+    b = vp._merge_widget
+    assert b is not a, "a different file set must replace the current batch"
+    assert b.tmp_dir != a_dir, "previews must not share a conversion dir"
+    assert not os.path.isdir(a_dir), "the replaced batch's dir was not cleaned up"
 
-    a._confirm()
-    a._confirm(); a._do_open_separately(); a._do_cancel()   # all ignored: busy
+    b._confirm()
+    b._confirm(); b._do_open_separately(); b._do_cancel()   # all ignored: busy
     from tools.jobs import active_jobs
     running = lambda: [j for j in active_jobs() if j.name == "convert-files"]
-    assert len(running()) == 1, f"{len(running())} jobs after spamming one tab"
-    assert not a._btn_go.isEnabled() and not a._btn_single.isEnabled()
-    b._confirm()                                            # second job, in parallel
-    assert len(running()) == 2, "the running job was dropped"
+    assert len(running()) == 1, f"{len(running())} jobs after spamming one batch"
+    assert not b._btn_go.isEnabled() and not b._btn_single.isEnabled()
 
-    assert _settle(vp, lambda: not any(isinstance(vp.tabs.widget(i), MergeOrderWidget)
-                                       for i in range(vp.tabs.count()))), \
-        "the merges never completed"
+    assert _settle(vp, lambda: vp._merge_widget is None, tries=500), \
+        "the merge never completed"
     outs = [vp.tabs.widget(i).pdf_path for i in range(vp.tabs.count())
             if isinstance(vp.tabs.widget(i), PdfTab)]
-    assert len(outs) == 2, f"{len(outs)} merged tabs, expected 2"
-    assert len(set(outs)) == 2, "both merges wrote to the same file"
+    assert len(outs) == 1, f"{len(outs)} merged tabs, expected 1"
+    assert len(set(outs)) == 1, "only one merge batch should have produced output"
     pages = sorted(len(PdfReader(o, strict=False).pages) for o in outs)
-    assert pages == [3, 6], f"merged page counts {pages}, expected [3, 6]"
+    assert pages == [3], f"merged page counts {pages}, expected [3]"
     _settle(vp, lambda: not running(), tries=100)
     assert not running(), "finished jobs were never released"
     vp.deleteLater()
 
 
 def test_closing_a_merge_tab_deletes_its_conversion_directory():
-    """Opening several files converts them into a temp directory per tab, and
-    closing the tab is what removes it.
+    """Opening several files converts them into a temp directory per batch, and
+    leaving the merge view is what removes it.
 
     It never did. shutil was imported inside one method of the viewer module and
     used at module level in two others, so the rmtree raised NameError straight
     into `except Exception: pass` — every multi-file open left its converted
-    PDFs on disk until reboot, silently."""
+    PDFs on disk until reboot, silently. Under decision 3 the merge is no longer
+    a doc-bar tab: its temp dir now follows the new exit paths, so cancelling
+    the merge view is the cleanup trigger."""
     import tempfile
     from tools.viewer.panel import PageViewerPanel
     from tools.viewer.merge import MergeOrderWidget
 
     vp = PageViewerPanel(); vp.resize(900, 700); vp.show()
     try:
-        w = MergeOrderWidget([FX["normal"], FX["single"]])
-        w.tmp_dir = tempfile.mkdtemp(prefix="copyshop_test_")
-        with open(os.path.join(w.tmp_dir, "converted.pdf"), "w") as fh:
-            fh.write("x")
-        idx = vp.tabs.addTab(w, "merge")
+        vp.show_merge_tab([FX["normal"], FX["single"]])
+        _spin(20, 0.01)
+        w = vp._merge_widget
+        assert isinstance(w, MergeOrderWidget)
         assert os.path.isdir(w.tmp_dir)
-        vp._close_tab(idx)
+        # Exiting the view (here: cancel) removes the conversion directory.
+        w._do_cancel()
         _spin(20, 0.0)
         assert not os.path.isdir(w.tmp_dir), \
-            f"the conversion directory survived the tab: {w.tmp_dir}"
+            f"the conversion directory survived the exit: {w.tmp_dir}"
+        assert vp._merge_widget is None, "cancelling did not leave the merge view"
     finally:
         vp.deleteLater(); _app.processEvents()
 

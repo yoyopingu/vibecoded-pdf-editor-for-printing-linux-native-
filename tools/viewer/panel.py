@@ -351,6 +351,8 @@ class PageViewerPanel(QWidget):
 
     def _ensure_single_view(self):
         """Esc: immer zur Einzelansicht — Manage verlassen, Viewer zeigen, kein Zurück-Sprung."""
+        if self._merge_widget is not None:
+            self._exit_merge_preview()   # Esc exits the merge view (decision 3)
         if self.switch_to_viewer:
             self.switch_to_viewer()
         tab = self._current()
@@ -471,6 +473,17 @@ class PageViewerPanel(QWidget):
         self._merge = MergeFlow(self)
         self._manage_tab         = None   # PdfTab whose panel is mounted
         self._toggle_in_progress = False  # reentrancy guard for _toggle_manage
+        # The one active merge batch (decision 3: one at a time). Not a doc-bar
+        # tab — the merge is the fourth view, its pane in the sidebar and its
+        # FileGrid in the main area, so this widget is owned here rather than by
+        # the tab strip. None when no merge view is showing.
+        self._merge_widget   = None
+        self._merge_rail_tab = None   # PdfTab whose nav rail is in the merge host
+        self._merge_leaving  = False  # suppress the doc-tab auto-exit mid-inset
+        # Retired merge views, kept alive so the shared render thread never
+        # emits into a torn-down grid (see _exit_merge_preview). Cleared only
+        # when the panel goes away.
+        self._merge_retired = []
 
         # The preflight light re-checks a little after the document settles.
         self._pf_timer = QTimer(self)
@@ -1080,6 +1093,148 @@ class PageViewerPanel(QWidget):
     def show_merge_tab(self, file_paths):
         self._merge.show_merge_tab(file_paths)
 
+    # ── the merge view (decision 3: a main-area view, one batch at a time) ──
+
+    def _enter_merge(self, widget):
+        """Bring the merge view up: its FileGrid becomes the main-area content
+        (mounted into `_pages` as a non-tab page — the real document tabs stay
+        awake in the doc bar), its pane mounts into the main sidebar via the
+        SidebarHost, and the shared nav rail (if a tab is open to share one)
+        is reparented into the merge's rail host."""
+        if self._merge_widget is widget:
+            # Re-entering the current batch: just re-point the main area.
+            self._reveal_tabs()
+            self._pages.setCurrentWidget(widget.preview_widget)
+            widget._ensure_filter()
+            return
+        self._merge_widget = widget
+        self._reveal_tabs()
+        self._pages.addWidget(widget.preview_widget)
+        self._pages.setCurrentWidget(widget.preview_widget)
+        if self.mount_sidebar:
+            self.mount_sidebar("merge", widget.controls_widget)
+        self._enter_merge_rail(widget)
+        widget._ensure_filter()
+        self._update_toolbar()
+        self._viewer_info.setText(
+            tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
+        if self.sync_view_switch:
+            self.sync_view_switch()
+
+    def _enter_merge_rail(self, widget):
+        """Reparent the active tab's shared nav rail into the merge view's rail
+        host and point it at the FileGrid (like Layout does with its sheets)."""
+        # The current *document* is the bar's current tab. `_current()` would
+        # return None here: the merge preview is what `_pages` is showing.
+        tab = None
+        idx = self._bar.currentIndex()
+        if 0 <= idx < self.tabs.count():
+            w = self.tabs.widget(idx)
+            if isinstance(w, PdfTab):
+                tab = w
+        self._merge_rail_tab = tab
+        widget._file_rail.single = tab.single if tab is not None else None
+        host_lay = widget.rail_host.layout()
+        while host_lay.count():
+            it = host_lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None)
+        if tab is None or getattr(tab, "_nav_col", None) is None:
+            widget.rail_host.setVisible(False)
+            widget._file_rail.sync()
+            return
+        host_lay.addWidget(tab._nav_col)
+        widget.rail_host.setVisible(True)
+        tab.single.rail_delegate = widget._file_rail
+        tab.single.nav_scroll_mode(True)
+        self._merge_bar_conn = widget._scroll.verticalScrollBar().valueChanged.connect(
+            widget._file_rail.sync)
+        widget._file_rail.sync()
+
+    def _exit_merge_preview(self):
+        """Leave the merge view: unmount its pane and rail, drop the grid from
+        the main area, and clean up the merge's temp dir. Follows the new exit
+        paths — cancel / Esc / Zusammenführen / Einzeln öffnen, or picking one
+        of the still-visible document tabs."""
+        widget = self._merge_widget
+        if widget is None:
+            return
+        self._merge_widget = None
+        self._exit_merge_rail(widget)
+        try:
+            from tools.jobs import cancel_owner
+            cancel_owner(widget)
+            for child in widget.findChildren(QWidget):
+                cancel_owner(child)
+        except Exception:
+            logging.debug("exiting merge: cancelling its jobs failed", exc_info=True)
+        i = self._pages.indexOf(widget.preview_widget)
+        if i >= 0:
+            self._pages.removeWidget(widget.preview_widget)
+        widget._cleanup_filter()
+        # The merge's FileGrid renders thumbnails on the shared pdfium render
+        # thread. Tearing the widget down here races that thread — a render
+        # finishing a moment later would emit into a half-deleted grid and
+        # corrupt the heap. So the widget is *retired*, not destroyed: its
+        # pending renders are cancelled, it is handed its preview back, and it
+        # is kept referenced until the panel itself goes away (the render
+        # thread drains, then the whole session is torn down by
+        # QApplication.aboutToQuit / os._exit). One batch at a time, so at most
+        # a handful of small merge views accumulate.
+        try:
+            widget._grid.cancel_render_work()
+        except Exception:
+            logging.debug("exiting merge: cancelling thumbnails failed", exc_info=True)
+        widget.preview_widget.setParent(widget._splitter)
+        self._merge_retired.append(widget)
+        # The merge temp dir moves with the exit path (open_flow.py:63–69).
+        if widget.tmp_dir:
+            try: shutil.rmtree(widget.tmp_dir, ignore_errors=True)
+            except Exception: pass
+        # Restore the sidebar: the manage operations if a tab is in manage mode,
+        # otherwise the tool list.
+        if self.mount_sidebar:
+            if (self._manage_tab is not None
+                    and self._manage_tab._manage_panel is not None):
+                self.mount_sidebar("manage", self._manage_tab._manage_panel)
+            else:
+                self.mount_sidebar("tool_list")
+        # Point the main area back at the previously current document (or the
+        # empty state when none is open).
+        if self.tabs.count() > 0 and self._bar.currentIndex() >= 0:
+            self._pages.setCurrentIndex(self._bar.currentIndex())
+        self._sync_empty_state()
+        self._update_toolbar()
+        if self.sync_view_switch:
+            self.sync_view_switch()
+
+    def _exit_merge_rail(self, widget):
+        """Hand the shared rail back to its owning tab, and the rail delegate
+        back to the single-page view."""
+        tab = self._merge_rail_tab
+        self._merge_rail_tab = None
+        if tab is None:
+            return
+        try:
+            widget._scroll.verticalScrollBar().valueChanged.disconnect(
+                self._merge_bar_conn)
+        except (TypeError, AttributeError):
+            pass
+        try:
+            tab.single.rail_delegate = None
+            tab.single.nav_scroll_mode(tab.single._continuous)
+        except RuntimeError:
+            return    # tab already closed while the merge was showing
+        widget._file_rail.single = None
+        if getattr(tab, "_nav_col", None) is not None:
+            try:
+                tab._nav_col.setParent(tab)
+                tab.layout().addWidget(tab._nav_col)
+            except RuntimeError:
+                pass
+        widget.rail_host.setVisible(False)
+
     def _update_toolbar(self):
         """Bring the document row in line with the tab that is open.
 
@@ -1174,6 +1329,16 @@ class PageViewerPanel(QWidget):
         # on the transition to/from -1, whichever call site caused it.
         self._sync_empty_state()
 
+        # ── A doc tab picked while the merge view is up exits it ─────────────
+        # The merge is a main-area view, not a tab, so it has no entry in the
+        # bar. Clicking one of the document tabs that stay visible (decision 3)
+        # leaves the merge view and returns to that document. (During
+        # open-separately the _merge_leaving guard keeps the temp dir alive
+        # until every converted file has been read.)
+        if (self._merge_widget is not None
+                and not getattr(self, "_merge_leaving", False)):
+            self._exit_merge_preview()
+
         # ── Always clean up manage layout when switching file tabs ────────────
         # The manage panel belongs to the outgoing tab; if it is still mounted
         # in the tool column we must detach it now, before _current() changes
@@ -1231,10 +1396,12 @@ class PageViewerPanel(QWidget):
     def _sync_sidebar(self):
         """The merge preview brings its own sidebar. The app's tool nav sitting
         next to it made two stacked sidebars, the left one offering tools that
-        do not apply to the view — so it steps aside for that tab, exactly as it
-        does for the page manager."""
+        do not apply to the view — so it steps aside for the merge view, exactly
+        as it does for the page manager. The merge pane is mounted (or removed)
+        by the merge enter/exit paths, so here we only have to avoid clobbering
+        it while a doc tab is current."""
+        if self._merge_widget is not None:
+            return
         w = self.tabs.currentWidget()
-        if isinstance(w, MergeOrderWidget):
-            if self.mount_sidebar: self.mount_sidebar("merge")
-        elif self._manage_tab is None:   # manage mode owns it there
+        if self._manage_tab is None:   # manage mode owns it there
             if self.mount_sidebar: self.mount_sidebar("tool_list")

@@ -521,6 +521,8 @@ _EN: dict[str, str] = {
     "Extrahieren als": "Extract as",
     "Speichern als": "Save as",
     "Gehe zu Seite": "Go to page",
+    "Gehe zu Datei": "Go to file",
+    "Datei (1 – {p0}):": "File (1 – {p0}):",
     "Kopieren": "Copy",
     "Alles auswählen": "Select all",
     "VORSCHAU": "PREVIEW",

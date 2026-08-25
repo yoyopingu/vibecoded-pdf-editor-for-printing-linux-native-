@@ -116,8 +116,8 @@ def test_dropping_files_opens_one_or_previews_several():
     vp2._empty_state.files_dropped.emit([FX["single"], FX["normal"]])
     _spin(30, 0.01)
     from tools.viewer.merge import MergeOrderWidget
-    assert vp2.tabs.count() == 1
-    assert isinstance(vp2.tabs.widget(0), MergeOrderWidget), \
+    assert vp2.tabs.count() == 0      # the merge is a main-area view, not a tab
+    assert isinstance(vp2._merge_widget, MergeOrderWidget), \
         "several dropped files should land in the merge preview, not open separately"
     vp2.deleteLater(); _app.processEvents()
 

@@ -123,7 +123,7 @@ class SidebarHost:
         "manage"     — ManagePanel's operations (widget mounted),
         "layout"     — the layout view's staging controls (widget mounted),
         "tool"       — a tool's settings panel (widget mounted, Phase 5),
-        "merge"      — the merge preview (no replacement; the list steps aside).
+        "merge"      — the merge view's pane (widget mounted, Phase 7.3).
 
     The slot is the concept's single scroll surface (`.toolscroll`): a
     Werkzeuge toggle (shown only in manage/layout) above one QScrollArea whose
@@ -218,7 +218,7 @@ class SidebarHost:
         list_visible = (view in ("tool_list", "preview")
                         or (self._open and view in ("manage", "layout")))
 
-        if view in ("manage", "layout", "tool") and self._extra is not None:
+        if view in ("manage", "layout", "tool", "merge") and self._extra is not None:
             clay.addWidget(self._extra)
             self._extra.show()
         if list_visible:

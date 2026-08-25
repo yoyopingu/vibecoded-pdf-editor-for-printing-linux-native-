@@ -332,6 +332,15 @@ class FileGrid(QWidget):
         if 0 <= cidx < len(self._cards):
             self._cards[cidx].set_image(image)
 
+    def cancel_render_work(self):
+        """Stop any background thumbnail renders still queued or in flight.
+
+        Called when the merge view is torn down, so a render task cannot emit
+        into a grid that no longer exists."""
+        for t in self._thumb_tasks:
+            t.cancel()
+        self._thumb_tasks.clear()
+
     # ── layout ────────────────────────────────────────────────────────────────
     def _per_row(self):
         w = self.width() or 800
@@ -552,38 +561,128 @@ class FileGrid(QWidget):
         return tr('{p0} Dateien ausgewaehlt').format(p0=len(sel))
 
 
+class _FileGridRail:
+    """Drives the shared navigation rail while the merge grid is showing.
+
+    The clone of `_GridRail` (tools/viewer/tab.py): the thumb maps onto the
+    file grid's scroll range, the arrows step it, and every scroll pushes the
+    position back to the rail. The merge view is "Seiten verwalten" for files,
+    so the file grid is the page grid's twin and maps the rail onto *cards*
+    exactly the way the page manager does — `single` is the active tab's
+    SinglePageView, set by the host when the rail is attached.
+    """
+    def __init__(self, widget):
+        self.widget = widget   # the MergeOrderWidget that owns the grid
+        self.single = None     # the active tab's SinglePageView, set at mount
+
+    def _bar(self):
+        return self.widget._scroll.verticalScrollBar()
+
+    def _cards(self):
+        return self.widget._grid._cards
+
+    def rail_prev(self):
+        self._nudge(-1)
+
+    def rail_next(self):
+        self._nudge(1)
+
+    def _nudge(self, direction):
+        bar = self._bar()
+        step = max(60, int(self.widget._scroll.viewport().height() * 0.85))
+        bar.setValue(bar.value() + direction * step)
+
+    def rail_wheel(self, dy_px):
+        bar = self._bar()
+        bar.setValue(bar.value() + int(dy_px))
+
+    def rail_go_to(self, page):
+        cards = self._cards()
+        if not cards:
+            return
+        i = max(0, min(int(page) - 1, len(cards) - 1))
+        self._bar().setValue(max(0, int(cards[i].y()) - 8))
+
+    def rail_drag_to(self, frac):
+        bar = self._bar()
+        bar.setValue(round(float(frac) * bar.maximum()))
+
+    def rail_prompt_goto(self):
+        n = len(self._cards())
+        if n <= 0:
+            return
+        from PyQt6.QtWidgets import QInputDialog
+        page, ok = QInputDialog.getInt(
+            self.widget, tr("Gehe zu Datei"),
+            tr('Datei (1 – {p0}):').format(p0=n),
+            self.page(), 1, n)
+        if ok:
+            self.rail_go_to(page)
+
+    def page(self):
+        cards = self._cards()
+        n = len(cards)
+        if n <= 1:
+            return max(1, n)
+        bar = self._bar()
+        vmax = bar.maximum()
+        frac = (bar.value() / vmax) if vmax > 0 else 0.0
+        return max(1, min(n, int(round(frac * (n - 1))) + 1))
+
+    def sync(self):
+        """Scrollbar position → rail thumb and file number."""
+        if self.single is None:
+            return
+        bar = self._bar()
+        vmax = bar.maximum()
+        frac = (bar.value() / vmax) if vmax > 0 else 0.0
+        self.single.nav_set_document(len(self._cards()), self.page())
+        self.single.nav_set_fraction(frac)
+
+
 class MergeOrderWidget(QWidget):
     merge_confirmed = pyqtSignal(list)
     open_separately = pyqtSignal(list)
     cancelled       = pyqtSignal()
 
-    # Shared between merge previews, like ManagePanel._shared_clipboard
+    # Shared between merge previews, like the page manager's clipboard
     _shared_clipboard: list = []
 
     def __init__(self, file_paths, parent=None):
         super().__init__(parent)
         self._busy        = False
-        self.source_paths = list(file_paths)   # what the tab was opened with
+        self.source_paths = list(file_paths)   # what the batch was opened with
         self.tmp_dir      = None               # set by PageViewerPanel
         self._history     = []
         self._redo_stack  = []
         self._key_filter  = None
         self._setup(file_paths)
+        # The rail adapter that drives the shared nav rail over the file grid.
+        self._file_rail = _FileGridRail(self)
         self.destroyed.connect(self._cleanup_filter)
 
     # ── keyboard ─────────────────────────────────────────────────────────────
     def showEvent(self, e):
         super().showEvent(e)
-        if self._key_filter is None:
-            self._key_filter = ThumbGridShortcutFilter(
-                lambda: self.isVisible() and not self._busy, self._grid,
-                self._remove, self._copy, self._cut, self._paste,
-                self._undo, self._redo)
-            QApplication.instance().installEventFilter(self._key_filter)
+        self._ensure_filter()
 
     def hideEvent(self, e):
         super().hideEvent(e)
         self._cleanup_filter()
+
+    def _ensure_filter(self):
+        """Install the page-manager shortcut filter. Called from showEvent and
+        again by the panel when the merge view is entered without `self` being
+        visible (its controls + grid are mounted out into the sidebar / main
+        area, so the merge object itself never gets a showEvent)."""
+        if self._key_filter is None:
+            self._key_filter = ThumbGridShortcutFilter(
+                lambda: (self.isVisible()
+                         or getattr(self, "controls_widget", self).isVisible())
+                and not self._busy, self._grid,
+                self._remove, self._copy, self._cut, self._paste,
+                self._undo, self._redo)
+            QApplication.instance().installEventFilter(self._key_filter)
 
     def _cleanup_filter(self):
         if getattr(self, "_key_filter", None) is not None:
@@ -666,26 +765,24 @@ class MergeOrderWidget(QWidget):
         # sidebar with the same margins/sections/helpers, grid on the right) — this
         # view is "Seiten verwalten" for files, so it should not look like a
         # different program.
+        #
+        # Phase 7.3 (decision 3): the merge view is the fourth view of the main
+        # chrome, not a doc-bar tab. The left controls become a sidebar tenant —
+        # `controls_widget`, mounted into the app's 224px SidebarHost slot the way
+        # Layout's staging sections are — and the FileGrid becomes the main-area
+        # content — `preview_widget`, with a narrow rail host beside it for the
+        # shared navigation rail. `self` keeps owning both (and the whole
+        # selection/history/reorder logic) so tests and callers can keep talking
+        # to one object, and a standalone `MergeOrderWidget(paths).show()` still
+        # lays both out side by side through a splitter.
         root = QVBoxLayout(self)
         root.setContentsMargins(0,0,0,0); root.setSpacing(0)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setStyleSheet(
-            f"QSplitter::handle{{background:{_TV['splitter']};width:2px;}}")
-
-        # ── Links: Steuerung wie ManagePanel ─────────────────────────
-        self._left_w = QWidget(); self._left_w.setObjectName("mergeLeftW")
-        # Wide enough that the primary action still fits at the narrowest the
-        # splitter allows — "Zusammenfuehren (n)" needs ~200px of button.
-        self._left_w.setMinimumWidth(236)
-        ol = QVBoxLayout(self._left_w); ol.setContentsMargins(0,0,0,0); ol.setSpacing(0)
-
-        self._title_w = QWidget(); self._title_w.setObjectName("mergeTitleW")
-        self._title_w.setFixedHeight(36)
-        tl = QHBoxLayout(self._title_w); tl.setContentsMargins(10, 0, 10, 0)
-        self._title_lbl = QLabel(tr("Dateien oeffnen"))
-        tl.addWidget(self._title_lbl)
-        ol.addWidget(self._title_w)
+        # ── Steuerung: wird der Sidebar-Slot (controls_widget) ────────────────
+        self.controls_widget = QWidget()
+        self.controls_widget.setObjectName("mergeControlsW")
+        cw = QVBoxLayout(self.controls_widget)
+        cw.setContentsMargins(0,0,0,0); cw.setSpacing(0)
 
         self._left_scroll = QScrollArea(); self._left_scroll.setWidgetResizable(True)
         self._left_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -693,7 +790,7 @@ class MergeOrderWidget(QWidget):
         self._left_content = QWidget(); self._left_content.setObjectName("mergeLeftContent")
         ll = QVBoxLayout(self._left_content); ll.setContentsMargins(10, 8, 22, 10); ll.setSpacing(5)
         self._left_scroll.setWidget(self._left_content)
-        ol.addWidget(self._left_scroll, 1)
+        cw.addWidget(self._left_scroll, 1)
 
         sel_lbl = QLabel(tr("Auswahl  (z.B. 1, 3, 5-8)"))
         sel_lbl.setObjectName("sectionLabel")
@@ -785,12 +882,12 @@ class MergeOrderWidget(QWidget):
         self.status.setWordWrap(True)
         self.status.setStyleSheet("font-size:10px;min-height:32px;background:transparent;")
         al.addWidget(self.status)
-        ol.addWidget(self._actions_w)
-        splitter.addWidget(self._left_w)
+        cw.addWidget(self._actions_w)
 
-        # ── Rechts: FileGrid ─────────────────────────────────────────
-        self._right_w = QWidget(); self._right_w.setObjectName("mergeRightW")
-        rl = QVBoxLayout(self._right_w); rl.setContentsMargins(0,0,0,0); rl.setSpacing(0)
+        # ── → der Hauptbereich: FileGrid + Rail (preview_widget) ─────────
+        self.preview_widget = QWidget()
+        self.preview_widget.setObjectName("mergePreviewW")
+        pl = QHBoxLayout(self.preview_widget); pl.setContentsMargins(0,0,0,0); pl.setSpacing(0)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -800,25 +897,37 @@ class MergeOrderWidget(QWidget):
         self._grid.order_about_to_change.connect(self._save_history)
         self._grid.selection_changed.connect(self._on_select)
         self._scroll.setWidget(self._grid)
-        rl.addWidget(self._scroll, 1)
-        splitter.addWidget(self._right_w)
+        pl.addWidget(self._scroll, 1)
 
-        splitter.setSizes([236, 500])
-        splitter.setStretchFactor(0,0); splitter.setStretchFactor(1,1)
-        root.addWidget(splitter, 1)
+        # The narrow host the shared nav rail is parked in while the merge view
+        # shows (decision 3 / concept: rail in every view). Hidden until the
+        # host reparents a tab's rail into it — see PageViewerPanel._enter_merge.
+        self.rail_host = QWidget()
+        rh = QVBoxLayout(self.rail_host)
+        rh.setContentsMargins(0, 0, 0, 0); rh.setSpacing(0)
+        self.rail_host.setFixedWidth(40)
+        self.rail_host.setVisible(False)
+        pl.addWidget(self.rail_host)
+
+        # ── Beide in einem Splitter, damit ein Standalone-Widget alles zeigt ──
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setStyleSheet(
+            f"QSplitter::handle{{background:{_TV['splitter']};width:2px;}}")
+        self._splitter.addWidget(self.controls_widget)
+        self._splitter.addWidget(self.preview_widget)
+        self._splitter.setSizes([236, 500])
+        self._splitter.setStretchFactor(0,0); self._splitter.setStretchFactor(1,1)
+        root.addWidget(self._splitter, 1)
 
         # Keys go through the same app-level filter class the page manager uses
-        # (ThumbGridShortcutFilter, installed in showEvent), so this view
-        # answers to the same set. It used to register three lone QShortcuts,
-        # which is why
+        # (ThumbGridShortcutFilter, installed in showEvent / on enter), so this
+        # view answers to the same set. It used to register three lone
+        # QShortcuts, which is why
         # Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+Z did nothing here while working one
         # view over.
         self._on_order_changed()
 
-        # Enter merges, the way Enter runs a tool in every panel. This is a
-        # plain QWidget in a tab rather than a QDialog, so there is no default
-        # button to inherit it from — the same two QShortcuts BasePanel
-        # registers are what carry it here.
+        # Enter merges, the way Enter runs a tool in every panel.
         from PyQt6.QtGui import QKeySequence, QShortcut
         for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             QShortcut(QKeySequence(key), self).activated.connect(
@@ -843,12 +952,8 @@ class MergeOrderWidget(QWidget):
 
     def _apply_theme(self):
         t = _TV
-        self._left_w.setStyleSheet(
-            f"QWidget#mergeLeftW{{background:{t['sidebar_bg']};border-right:1px solid {t['border']};}}")
-        self._title_w.setStyleSheet(
-            f"QWidget#mergeTitleW{{background:{t['sidebar_bg']};}}")
-        self._title_lbl.setStyleSheet(
-            f"color:{t['text']};font-size:13px;font-weight:bold;background:transparent;")
+        self.controls_widget.setStyleSheet(
+            f"QWidget#mergeControlsW{{background:{t['sidebar_bg']};}}")
         self._left_scroll.setStyleSheet(
             f"QScrollArea{{background:{t['sidebar_bg']};border:none;}}")
         self._left_content.setStyleSheet(
@@ -856,8 +961,8 @@ class MergeOrderWidget(QWidget):
         self._actions_w.setStyleSheet(
             f"QWidget#mergeActionsW{{background:{t['sidebar_bg']};"
             f"border-top:1px solid {t['border']};}}")
-        self._right_w.setStyleSheet(
-            f"QWidget#mergeRightW{{background:{t['viewer_bg']};}}")
+        self.preview_widget.setStyleSheet(
+            f"QWidget#mergePreviewW{{background:{t['viewer_bg']};}}")
         self._scroll.setStyleSheet(
             f"QScrollArea{{background:{t['viewer_bg']};border:none;}}")
         _zs = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
