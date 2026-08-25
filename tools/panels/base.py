@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QScrollArea, QApplication,
     QSizePolicy, QComboBox
 )
-from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal
 from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
 from tools.pdf_access import is_locked
@@ -192,63 +192,65 @@ class BasePanel(QWidget):
     # Beschriftung des Ausfuehren-Buttons (pro Tool ueberschreibbar)
     RUN_LABEL = "  Ausfuehren"
 
+    # Emitted when the operator clicks the "‹ Werkzeuge" back button; the
+    # window listens and returns the sidebar to the tool list.
+    back_requested = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._setup()
 
     def _setup(self):
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        self.controls_widget = self.build_controls_widget()
+        self.preview_widget = None
 
-        # ── Fixed header — title + subtitle never scroll away ─────────────
-        hdr = QWidget()
-        hl = QVBoxLayout(hdr)
-        hl.setContentsMargins(14, 12, 14, 8)
-        hl.setSpacing(3)
+    def build_controls_widget(self) -> QWidget:
+        """The settings panel a tool morphs the whole sidebar into when it is
+        picked (Phase 5). Top to bottom: a "‹ Werkzeuge" back button, the tool
+        title, the current-file bar, the tool's own fields, and the action row.
+        No nested scroll — the SidebarHost's toolscroll is the one and only
+        scroll surface. Sets the attributes the helpers rely on (file_bar,
+        log, run_btn, stop_btn, back_btn)."""
+        content = QWidget(self)
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(10, 8, 12, 10)
+        lay.setSpacing(8)
+
+        self.back_btn = QPushButton(tr("‹ Werkzeuge"))
+        self.back_btn.setObjectName("secondaryBtn")
+        self.back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.back_btn.clicked.connect(self.back_requested.emit)
+        lay.addWidget(self.back_btn)
+
         title = QLabel(tr(self.TITLE))
-        title.setWordWrap(True)
-        tf = title.font(); tf.setPointSize(15); tf.setBold(True); title.setFont(tf)
-        hl.addWidget(title)
-        if self.SUBTITLE:
-            sub = make_label(tr(self.SUBTITLE), dim=True)
-            hl.addWidget(sub)
-        outer.addWidget(hdr)
-        outer.addWidget(make_separator())
+        tf = title.font(); tf.setPointSize(13); tf.setBold(True); title.setFont(tf)
+        lay.addWidget(title)
+        lay.addWidget(make_separator())
 
-        # ── Scrollable content ────────────────────────────────────────────
-        scroll = ToolScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        content = QWidget()
-        root = QVBoxLayout(content)
-        root.setContentsMargins(14, 8, 14, 10)
-        root.setSpacing(8)
-
-        # Current file bar (shows which PDF is active)
         self.file_bar = CurrentFileBar()
-        root.addWidget(self.file_bar)
-        root.addWidget(make_separator())
+        lay.addWidget(self.file_bar)
+        lay.addWidget(make_separator())
 
-        # Tool content
-        self.build_ui(root)
+        self.build_ui(lay)
 
-        root.addStretch()
-        root.addWidget(make_separator())
+        # Let combo boxes shrink with the sidebar instead of demanding their
+        # widest item's full width (which used to blow the sidebar past its cap
+        # and clip the right-hand side of the controls).
+        for combo in content.findChildren(QComboBox):
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
 
-        # Log — a routing adapter, not a widget: see tools/shell/protokoll.py.
+        lay.addStretch()
+        lay.addWidget(make_separator())
+
         self.log = LogAdapter()
 
-        # Action row
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
         self.build_action_row(btn_row)
-        root.addLayout(btn_row)
+        lay.addLayout(btn_row)
 
-        scroll.setWidget(content)
-        outer.addWidget(scroll)
+        return content
 
     def build_tool_sidebar(self) -> QWidget:
         """Standardized left sidebar for split-view tools (Crop, Grayscale,

@@ -122,6 +122,7 @@ class SidebarHost:
         "tool_list"  — the default / preview (the list, always open),
         "manage"     — ManagePanel's operations (widget mounted),
         "layout"     — the layout view's staging controls (widget mounted),
+        "tool"       — a tool's settings panel (widget mounted, Phase 5),
         "merge"      — the merge preview (no replacement; the list steps aside).
 
     The slot is the concept's single scroll surface (`.toolscroll`): a
@@ -217,7 +218,7 @@ class SidebarHost:
         list_visible = (view in ("tool_list", "preview")
                         or (self._open and view in ("manage", "layout")))
 
-        if view in ("manage", "layout") and self._extra is not None:
+        if view in ("manage", "layout", "tool") and self._extra is not None:
             clay.addWidget(self._extra)
             self._extra.show()
         if list_visible:
@@ -399,6 +400,16 @@ class MainWindow(QMainWindow):
         tl = QVBoxLayout(self._tool_list)
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(0)
+        # Tools are no longer stack pages: picking one morphs the whole sidebar
+        # into its settings panel, so the main stack keeps only the viewer (0)
+        # and Layout (1). Each panel is instantiated once and reused, keyed by
+        # the sidebar label.
+        self._tool_panels = {}
+        self._tool_btns = {}
+        # Next free stack slot for any tool or plugin that keeps the old
+        # full-page form as a stack page. The viewer is 0 and Layout is 1; the
+        # counter is shared with the plugin loop below so the indices stay
+        # contiguous and unique across both.
         idx = 2
         for group, entries in TOOL_GROUPS:
             gl = QLabel(tr(group).upper())
@@ -406,19 +417,33 @@ class MainWindow(QMainWindow):
             gl.setContentsMargins(16, 13, 0, 3)
             tl.addWidget(gl)
             for label, PanelClass in entries:
+                panel = PanelClass(self)
                 btn = NavBtn(tr(label))
-                btn.clicked.connect(lambda c, x=idx: self._switch(x))
-                tl.addWidget(btn); self._btns.append(btn)
-                self._stack.addWidget(PanelClass())
-                idx += 1
+                if getattr(panel, "controls_widget", None) is not None:
+                    btn.clicked.connect(lambda c, p=panel: self._mount_tool(p))
+                    tl.addWidget(btn)
+                    self._tool_panels[label] = panel
+                    self._tool_btns[label] = btn
+                    panel.back_requested.connect(self._back_to_tools)
+                else:
+                    # A tool without a controls_widget (e.g. Grayscale, a
+                    # split-view tool) keeps the old full-page form as a stack
+                    # page — don't break it.
+                    btn.clicked.connect(lambda c, x=idx: self._switch(x))
+                    tl.addWidget(btn); self._btns.append(btn)
+                    self._stack.addWidget(panel)
+                    idx += 1
 
         sep0 = QFrame(); sep0.setObjectName("separator")
         sep0.setFrameShape(QFrame.Shape.HLine)
         tl.addWidget(sep0)
+        pm_panel = PluginManagerPanel(self)
         pm_btn = NavBtn(tr("Plugin-Manager"))
-        pm_btn.clicked.connect(lambda c, x=idx: self._switch(x))
-        tl.addWidget(pm_btn); self._btns.append(pm_btn)
-        self._stack.addWidget(PluginManagerPanel())
+        pm_btn.clicked.connect(lambda c, p=pm_panel: self._mount_tool(p))
+        tl.addWidget(pm_btn)
+        self._tool_panels["Plugin-Manager"] = pm_panel
+        self._tool_btns["Plugin-Manager"] = pm_btn
+        pm_panel.back_requested.connect(self._back_to_tools)
         sb.addWidget(self._sidebar_slot, 1)
         self._sidebar_host = SidebarHost(self._sidebar_slot, self._tool_list)
 
@@ -430,11 +455,21 @@ class MainWindow(QMainWindow):
             pl = QLabel(tr("PLUGINS")); pl.setObjectName("navGroup")
             pl.setContentsMargins(16, 13, 0, 3); tl.addWidget(pl)
             for plabel, PCls in plugins:
-                idx += 1
-                btn = NavBtn(plabel.strip())
-                btn.clicked.connect(lambda c, x=idx: self._switch(x))
-                tl.addWidget(btn); self._btns.append(btn)
-                self._stack.addWidget(PCls())
+                pp = PCls(self)
+                if getattr(pp, "controls_widget", None) is not None:
+                    btn = NavBtn(plabel.strip())
+                    btn.clicked.connect(lambda c, p=pp: self._mount_tool(p))
+                    tl.addWidget(btn)
+                    self._tool_btns[plabel.strip()] = btn
+                    pp.back_requested.connect(self._back_to_tools)
+                else:
+                    # A plugin without a controls_widget keeps the old full-page
+                    # form as a stack page — don't break it.
+                    btn = NavBtn(plabel.strip())
+                    btn.clicked.connect(lambda c, x=idx: self._switch(x))
+                    tl.addWidget(btn); self._btns.append(btn)
+                    self._stack.addWidget(pp)
+                    idx += 1
 
         # The column is taller than the list, and the slack has to land
         # somewhere. Without this it went to the only children that can grow
@@ -575,14 +610,37 @@ class MainWindow(QMainWindow):
 
     def _show_tool_panel(self, label):
         """Bring a tool panel forward by the name it carries in the sidebar."""
-        for i, (name, _cls) in enumerate(TOOLS):
-            if name == label:
-                self._switch(i + 1)
-                return
+        panel = self._tool_panels.get(label)
+        if panel is not None:
+            self._mount_tool(panel)
+
+    def _mount_tool(self, panel):
+        """Morph the whole sidebar into `panel`'s settings, keeping the main
+        area on the document (viewer, stack index 0)."""
+        self._switch(0)
+        self._sidebar_host.mount("tool", panel.controls_widget)
+        for label, p in self._tool_panels.items():
+            if p is panel:
+                btn = self._tool_btns.get(label)
+                if btn is not None:
+                    btn.set_active(True)
+                break
+        self._sync_view_switch()
+
+    def _back_to_tools(self):
+        """The "‹ Werkzeuge" back button: unmount the tool and return to the
+        viewer's tool list."""
+        for btn in self._tool_btns.values():
+            btn.set_active(False)
+        self._switch(0)
 
     def _switch(self, idx: int):
         # _btns carries a None where a stack page is reached by the view switch
-        # rather than by a nav button (the viewer, and Layout).
+        # rather than by a nav button (the viewer, and Layout). Tools are not
+        # stack pages — their buttons are highlighted by _mount_tool, so every
+        # stack switch clears them.
+        for btn in self._tool_btns.values():
+            btn.set_active(False)
         for i, btn in enumerate(self._btns):
             if btn is not None:
                 btn.set_active(i == idx)
