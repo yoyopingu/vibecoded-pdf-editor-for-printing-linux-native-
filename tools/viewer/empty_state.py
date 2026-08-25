@@ -197,7 +197,10 @@ class EmptyStateWidget(QWidget):
         self._recent_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         outer.addLayout(self._recent_row)
 
-        outer.addStretch(3)
+        # Equal flexible space above and below the block centres it vertically.
+        # It was 2 above / 3 below, which parked the icon+text+buttons at ~40%
+        # height with dead space below them.
+        outer.addStretch(2)
         self._cards = []
 
     def set_recent(self, paths):

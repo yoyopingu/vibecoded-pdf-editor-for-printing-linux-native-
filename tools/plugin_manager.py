@@ -2,7 +2,7 @@
 import os, sys, importlib.util
 from PyQt6.QtWidgets import (
     QVBoxLayout, QPushButton,
-    QListWidget, QListWidgetItem, QTextEdit, QFileDialog, QGroupBox
+    QListWidget, QListWidgetItem, QTextEdit, QFileDialog, QGroupBox, QLabel
 )
 from PyQt6.QtCore import Qt
 from tools.panels.base import BasePanel, make_label
@@ -40,7 +40,23 @@ class PluginManagerPanel(BasePanel):
     def build_ui(self, layout):
         ib = QGroupBox(tr("WIE PLUGINS FUNKTIONIEREN"))
         il = QVBoxLayout(ib)
-        il.addWidget(make_label(tr("Plugin-Ordner:  {p0}").format(p0=PLUGIN_DIR), dim=True))
+        # The folder path is long enough to wrap and clip inside the box, so it
+        # gets its own word-wrapped label in a smaller monospace face that fits.
+        path_lbl = QLabel(tr("Plugin-Ordner:"))
+        path_lbl.setObjectName("dimLabel")
+        path_lbl.setWordWrap(True)
+        path_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        path_lbl.setStyleSheet(
+            "font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;"
+            "font-size:10px;padding:2px 0;")
+        il.addWidget(path_lbl)
+        path_val = QLabel(PLUGIN_DIR)
+        path_val.setObjectName("dimLabel")
+        path_val.setWordWrap(True)
+        path_val.setStyleSheet(
+            "font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;"
+            "font-size:10px;padding:0 0 4px 0;")
+        il.addWidget(path_val)
         il.addWidget(make_label(tr(
             "Lege eine .py-Datei mit einer BasePanel-Unterklasse und PLUGIN_NAME "
             "in den Plugin-Ordner. Nach einem Neustart erscheint das Plugin in der Seitenleiste."), dim=True))

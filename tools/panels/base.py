@@ -235,11 +235,16 @@ class BasePanel(QWidget):
 
         # Let combo boxes shrink with the sidebar instead of demanding their
         # widest item's full width (which used to blow the sidebar past its cap
-        # and clip the right-hand side of the controls).
+        # and clip the right-hand side of the controls). A combo's horizontal
+        # size policy is Fixed by default, so it also needs to be told to
+        # expand into the field row — otherwise it stays at its sizeHint and
+        # clips long item texts at the widget edge.
         for combo in content.findChildren(QComboBox):
             combo.setSizeAdjustPolicy(
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                combo.sizePolicy().verticalPolicy())
 
         lay.addStretch()
         lay.addWidget(make_separator())
@@ -287,6 +292,8 @@ class BasePanel(QWidget):
             combo.setSizeAdjustPolicy(
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                combo.sizePolicy().verticalPolicy())
 
         lay.addStretch()
         lay.addWidget(make_separator())

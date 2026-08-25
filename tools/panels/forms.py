@@ -4,7 +4,9 @@ annotations with them, into the page content.
 """
 import os, shutil, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
-from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QLineEdit, QGroupBox, QCheckBox, QScrollArea, QWidget, QFrame
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (QVBoxLayout, QPushButton, QLineEdit, QGroupBox,
+                             QCheckBox, QScrollArea, QWidget, QFrame, QLabel)
 from tools.panels.base import BasePanel
 from tools.i18n import tr
 from tools.panels._shared import row
@@ -87,6 +89,14 @@ class FormsPanel(BasePanel):
         grp=QGroupBox(tr("FORMULARFELDER")); grp_vl=QVBoxLayout(grp); grp_vl.setContentsMargins(4,4,4,4)
         self.form_box=QWidget()
         self.form_vbox=QVBoxLayout(self.form_box); self.form_vbox.setContentsMargins(0,0,0,0)
+        # A dim placeholder so an empty field list reads as "nothing to fill in"
+        # rather than a large empty dark rectangle. It sits inside the same box
+        # the fields are built into and is hidden the moment any row appears.
+        self._empty_hint = QLabel(tr("Keine Formularfelder"))
+        self._empty_hint.setObjectName("dimLabel")
+        self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_hint.setContentsMargins(0, 24, 0, 24)
+        self.form_vbox.addWidget(self._empty_hint)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(self.form_box); scroll.setMinimumHeight(140)
         grp_vl.addWidget(scroll)
@@ -111,6 +121,9 @@ class FormsPanel(BasePanel):
 
     def _load_done(self, fields):
         self._fields.clear()
+        # Drop every built field row but keep the placeholder label at the top.
+        self._empty_hint.hide()
+        self.form_vbox.removeWidget(self._empty_hint)
         while self.form_vbox.count():
             item = self.form_vbox.takeAt(0)
             if item.layout():
@@ -121,7 +134,11 @@ class FormsPanel(BasePanel):
             elif item.widget():
                 item.widget().deleteLater()
         if not fields:
+            self.form_vbox.addWidget(self._empty_hint)
+            self._empty_hint.show()
             self.log.log(tr("Keine Formularfelder gefunden.")); return
+        self.form_vbox.addWidget(self._empty_hint)
+        self._empty_hint.hide()
         for name, ft, val in fields:
             if ft == "/Btn":
                 w = QCheckBox(); w.setChecked(str(val) in ("/Yes", "/On", "Yes", "On"))

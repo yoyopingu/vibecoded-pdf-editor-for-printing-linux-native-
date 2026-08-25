@@ -173,6 +173,7 @@ class SidebarHost:
 
         # One scroll surface for the list and whatever is mounted beneath it.
         self._scroll = QScrollArea()
+        self._scroll.setObjectName("sidebarScroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(
@@ -180,7 +181,10 @@ class SidebarHost:
         self._content = QWidget()
         self._content.setObjectName("toolscroll")
         clay = QVBoxLayout(self._content)
-        clay.setContentsMargins(0, 0, 0, 8)
+        # A generous bottom margin so the last mounted row clears the scroll
+        # edge before the BETA chip below it — an 8px margin left the final
+        # row cut mid-row and reading as overlap with the chip.
+        clay.setContentsMargins(0, 0, 0, 20)
         clay.setSpacing(0)
         self._scroll.setWidget(self._content)
         lay.addWidget(self._scroll, 1)

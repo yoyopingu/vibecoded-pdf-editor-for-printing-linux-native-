@@ -20,30 +20,33 @@ import os
 
 
 # (label, candidate .icc filenames, OutputConditionIdentifier, OutputCondition)
+# The labels are what the combo shows beside "CMYK-Profil:"; the long German
+# descriptions they used to embed clipped at the combo's edge, so the descriptive
+# part now lives in the panel's info text below the field instead.
 CMYK_PROFILES = [
-    ("Standard (generisch) — universell, ohne ICC-Datei",
+    ("Standard (generisch)",
         None,
         "Custom",
         "Generic CMYK, no characterised printing condition"),
-    ("ISO Coated v2 (FOGRA39) — gestrichenes Papier, EU-Offset-Standard",
+    ("ISO Coated v2 (FOGRA39)",
         ("ISOcoated_v2_eci.icc", "ISOcoated_v2_300_eci.icc"),
         "FOGRA39L",
         "Offset commercial and specialty printing according to "
         "ISO 12647-2:2004/Amd 1, paper type 1 or 2, coated"),
-    ("PSO Coated v3 (FOGRA51) — modernes gestrichenes Papier, Premium-Offset",
+    ("PSO Coated v3 (FOGRA51)",
         ("PSOcoated_v3.icc",),
         "FOGRA51L",
         "Offset printing according to ISO 12647-2:2013, "
         "premium coated paper"),
-    ("PSO Uncoated v3 (FOGRA52) — ungestrichenes/Naturpapier, Bücher & Briefbögen",
+    ("PSO Uncoated v3 (FOGRA52)",
         ("PSOuncoated_v3_FOGRA52.icc", "PSO_Uncoated_ISO12647_eci.icc"),
         "FOGRA52L",
         "Offset printing according to ISO 12647-2:2013, uncoated paper"),
-    ("U.S. Web Coated (SWOP) v2 — US-Rollenoffset, Magazine (gestrichen)",
+    ("U.S. Web Coated (SWOP) v2",
         ("USWebCoatedSWOP.icc",),
         "CGATS TR 001",
         "U.S. Web Coated (SWOP) publication printing"),
-    ("Coated GRACoL 2006 — US-Bogenoffset, hochwertiges gestrichenes Papier",
+    ("Coated GRACoL 2006",
         ("GRACoL2006_Coated1v2.icc", "CGATS21_CRPC6.icc"),
         "CGATS TR 006",
         "U.S. sheetfed offset printing, GRACoL 2006 coated #1"),

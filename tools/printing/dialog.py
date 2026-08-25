@@ -114,7 +114,11 @@ class PrintDialog(QDialog):
         self.model    = model
         self._progress = None       # transfer-progress popup while a job spools
         self.setWindowTitle(tr("Drucken"))
-        self.setMinimumSize(820, 540)
+        # The minimum must fit the settings pane's natural height above the
+        # pinned action bar. Set too short, the bottom rows (Kopien, Farbe)
+        # land below the scroll viewport and sit hidden behind the footer —
+        # which is exactly what happened at the old 820x540.
+        self.setMinimumSize(820, 660)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._setup()
 
@@ -229,7 +233,7 @@ class PrintDialog(QDialog):
         scroll.setWidget(right)
         rl = QVBoxLayout(right)
         rl.setContentsMargins(18, 14, 18, 14)
-        rl.setSpacing(6)
+        rl.setSpacing(4)
 
         n = len(self.model.order)
 
@@ -323,7 +327,7 @@ class PrintDialog(QDialog):
         rl.addWidget(_sec(tr("SEITENHANDHABUNG")))
         pg = QGridLayout()
         pg.setHorizontalSpacing(8)
-        pg.setVerticalSpacing(6)
+        pg.setVerticalSpacing(4)
         pg.setColumnMinimumWidth(0, 145)
         pg.setColumnStretch(1, 1)
 
@@ -447,7 +451,7 @@ class PrintDialog(QDialog):
         # 2-col) — Kopien moved up out of AUSGABE to sit near the top.
         kf = QGridLayout()
         kf.setHorizontalSpacing(8)
-        kf.setVerticalSpacing(6)
+        kf.setVerticalSpacing(4)
         kf.setColumnMinimumWidth(0, 145)
         kf.setColumnStretch(1, 1)
 
@@ -605,7 +609,25 @@ class PrintDialog(QDialog):
             getattr(widget, signal).connect(self._update_summary)
         self._update_summary()
 
+        # Wide rows: printers and paper/tray/colour/combo rows must compress
+        # inside their column rather than stretch the pane past the viewport.
+        for name in ("printer_combo", "orient_combo", "paper_combo",
+                     "source_combo", "color_combo", "duplex_edge_combo"):
+            self._shrinkable(getattr(self, name))
+
         self._make_enter_print(print_btn, cancel_btn)
+
+    def _shrinkable(self, combo):
+        """Let a combo compress to its column instead of forcing the pane wide.
+
+        A QComboBox's minimumSizeHint is the widest item it holds, so a long
+        paper or tray name used to stretch the settings pane beyond the scroll
+        viewport and push the dropdown's arrow out of the window. The label
+        column it sits in keeps the row readable; Ignored lets the combo give
+        up characters (elided with an ellipsis) before it gives up pixels."""
+        from PyQt6.QtWidgets import QSizePolicy
+        combo.setSizePolicy(QSizePolicy.Policy.Ignored,
+                            QSizePolicy.Policy.Fixed)
 
     def _make_enter_print(self, print_btn, cancel_btn):
         """Enter prints, the way Enter runs a tool in every panel.

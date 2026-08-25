@@ -23,10 +23,13 @@ class CompressPanel(BasePanel):
     def build_ui(self, layout):
         gb = QGroupBox(tr("EINSTELLUNGEN")); gl = QVBoxLayout(gb)
         self.preset = QComboBox()
-        self.preset.addItems([tr("Screen  (72 dpi — Web)"),
-                              tr("Ebook   (150 dpi — Tablet)"),
-                              tr("Drucker (300 dpi — Standard)"),
-                              tr("Vordruck (300 dpi — Profidruck)")])
+        # The dpi presets, shortened to the name + resolution so the longest
+        # ("Drucker (300 dpi)") fits the combo's field edge in the narrow tool
+        # sidebar — the full "— Standard" tail elided into "…" before this.
+        self.preset.addItems([tr("Screen (72 dpi)"),
+                              tr("Ebook (150 dpi)"),
+                              tr("Drucker (300 dpi)"),
+                              tr("Vordruck (300 dpi)")])
         self.preset.setCurrentIndex(2)
         gl.addLayout(row(tr("Qualitaetsstufe:"), self.preset))
         self.gs_check = QCheckBox(tr("Ghostscript verwenden (empfohlen)"))

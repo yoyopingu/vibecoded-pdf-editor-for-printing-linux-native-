@@ -123,6 +123,7 @@ QPushButton#themeBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
 QWidget#sidebar {{
     background: {_SB};
     border-right: 1px solid {_LSTRONG};
+    padding-bottom: 4px;
 }}
 /* The containers inside it stay out of the way. They are plain QWidgets, so the
    blanket `QWidget {{ background: {_BG} }}` above painted the window colour over
@@ -181,9 +182,11 @@ QPushButton#viewSeg:hover {{ color: {_NB_ACT_TEXT}; }}
 QPushButton#viewSeg:checked {{
     background: {_S3}; color: {_TEXT}; font-weight: bold;
 }}
+/* The BETA chip under the sidebar slot — deliberately quiet: a small, dim,
+   monospace mark, not the accent-coloured announcement it used to be. */
 QLabel#betaChip {{
-    color: {_ACC}; font-family: 'JetBrains Mono','DejaVu Sans Mono',monospace;
-    font-size: 9px; font-weight: bold; letter-spacing: 2px;
+    color: {_FAINT}; font-family: 'JetBrains Mono','DejaVu Sans Mono',monospace;
+    font-size: 8px; letter-spacing: 1px;
 }}
 QCheckBox#stageHead {{
     color: {_TEXT}; font-weight: bold; font-size: 12px; padding: 6px 0 2px;
@@ -384,6 +387,18 @@ QScrollBar::handle:horizontal {{
 QScrollBar::handle:horizontal:hover {{ background: {_ACC}; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 
+/* The sidebar's own scroll surface gets the same 8px scrollbar explicitly,
+   so it is never left with Fusion's thin 2px thumb. */
+QScrollArea#sidebarScroll QScrollBar:vertical {{
+    background: {_SCT}; width: 8px; border-radius: 4px; margin: 2px;
+}}
+QScrollArea#sidebarScroll QScrollBar::handle:vertical {{
+    background: {_SCB}; border-radius: 4px; min-height: 24px;
+}}
+QScrollArea#sidebarScroll QScrollBar::handle:vertical:hover {{ background: {_ACC}; }}
+QScrollArea#sidebarScroll QScrollBar::add-line:vertical,
+QScrollArea#sidebarScroll QScrollBar::sub-line:vertical {{ height: 0; }}
+
 /* ── Slider ─────────────────────────────────────────────── */
 QSlider::groove:horizontal {{
     background: {_IBD}; height: 4px; border-radius: 2px;
@@ -437,7 +452,7 @@ QTabBar::tab:first {{ margin-left: 0; }}
 QTabBar::tab:hover:!selected {{ background: {_S3}; color: {_TEXT}; }}
 QTabBar::tab:selected {{
     background: {_S3}; color: {_TEXT};
-    font-weight: 600;
+    font-weight: 700;
     border-top: 2px solid {_ACC};
 }}
 QTabBar::close-button {{
@@ -500,7 +515,8 @@ QWidget#statusBar {{
     background: {_SB};
     border-top: 1px solid {_LSTRONG};
 }}
-QLabel#sbReading {{ color: {_DIM}; font-size: 12px; background: transparent; }}
+QLabel#sbReading {{ color: {_DIM}; font-size: 12px; background: transparent;
+    padding: 0 2px; }}
 QLabel#sbSep {{ color: {_FAINT}; background: transparent; }}
 QLabel#sbMsg {{
     color: {_DIM}; font-size: 12px; background: transparent;

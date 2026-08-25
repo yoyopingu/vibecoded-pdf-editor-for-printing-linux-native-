@@ -110,6 +110,7 @@ class ManagePanel(QWidget):
         layout.addLayout(auswahl_row)
 
         self.sel_edit = QLineEdit()
+        self.sel_edit.setObjectName("selEdit")
         self.sel_edit.setPlaceholderText(tr("z.B. 1, 3, 5-8, 12  →  Enter"))
         self.sel_edit.returnPressed.connect(self._apply_sel_edit)
         layout.addWidget(self.sel_edit)
@@ -127,6 +128,7 @@ class ManagePanel(QWidget):
             b = QPushButton(text)
             b.setObjectName("btnpairBtn")
             b.setToolTip(tip)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(fn)
             bp_layout.addWidget(b)
             self._pair_btns.append(b)
@@ -286,14 +288,17 @@ class ManagePanel(QWidget):
                 f"QPushButton#btnpairBtn{{background:{t['surface_2']};"
                 f"color:{t['vdim']};border:none;{left}"
                 f"font-size:12px;min-height:29px;}}"
-                f"QPushButton#btnpairBtn:hover{{color:{t['text']};}}")
+                f"QPushButton#btnpairBtn:hover{{background:{t['surface_3']};"
+                f"color:{t['text']};}}")
 
         if hasattr(self, 'sel_edit'):
+            # Scoped to the object name so the global QLineEdit rule cannot
+            # override it — the field must always read as a bordered input.
             self.sel_edit.setStyleSheet(
-                f"QLineEdit{{background:{t['input_bg']};color:{t['text']};"
+                f"QLineEdit#selEdit{{background:{t['input_bg']};color:{t['text']};"
                 f"border:1px solid {t['input_brd']};border-radius:3px;"
                 f"padding:3px 6px;font-size:12px;}}"
-                f"QLineEdit:focus{{border:1px solid {t['acc']};}}")
+                f"QLineEdit#selEdit:focus{{border:1px solid {t['acc']};}}")
 
     def _section(self, layout, text):
         lbl = QLabel(text)

@@ -18,7 +18,7 @@ import time
 from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QPlainTextEdit, QPushButton,
                              QVBoxLayout)
 
-from tools.app_state import AppState
+from tools.app_state import AppState, theme_color
 from tools.i18n import tr
 
 # The store: one list of (timestamp, level, text) shared by everything. It is
@@ -105,8 +105,16 @@ class ProtokollWindow(QDialog):
         self.refresh()
 
     def refresh(self):
-        self._body.setPlainText(
-            "\n".join(f"{ts} · {lv} · {tx}" for ts, lv, tx in log_store))
+        if log_store:
+            self._body.setStyleSheet("")
+            self._body.setPlainText(
+                "\n".join(f"{ts} · {lv} · {tx}" for ts, lv, tx in log_store))
+        else:
+            # A dim placeholder so an empty log reads as "nothing here" rather
+            # than a blank box.
+            self._body.setStyleSheet(
+                f"QPlainTextEdit{{color:{theme_color('DIM')};font-style:italic;}}")
+            self._body.setPlainText(tr("Protokoll ist leer."))
 
     def showEvent(self, event):
         # Re-read the store on every show, so the window never shows a stale

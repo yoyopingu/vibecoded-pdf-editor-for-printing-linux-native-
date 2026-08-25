@@ -867,8 +867,9 @@ class MergeOrderWidget(QWidget):
         al = QVBoxLayout(self._actions_w)
         # No 22px right inset here: that one exists in the scroll area above to
         # clear its scrollbar, and copying it made "Zusammenfuehren (n)" wider
-        # than its button.
-        al.setContentsMargins(10, 8, 10, 10); al.setSpacing(5)
+        # than its button. The extra bottom inset keeps the drag-hint status
+        # line clear of the scroll edge.
+        al.setContentsMargins(10, 8, 10, 20); al.setSpacing(5)
 
         self._section(al, tr("OEFFNEN"))
         self._total = QLabel("")
@@ -885,9 +886,14 @@ class MergeOrderWidget(QWidget):
         self._btn_cancel = self._btn(tr("✗  Abbrechen"), self._do_cancel)
         al.addWidget(self._btn_cancel)
 
-        self.status = QLabel(tr("Drag & Drop zum Umsortieren  ·  Strg/Shift zum Mehrfachauswaehlen"))
+        self.status = QLabel(tr("Drag & Drop sortiert · Strg/Shift mehrfach"))
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("font-size:10px;min-height:32px;background:transparent;")
+        # One line on purpose: the full hint ("Drag & Drop zum Umsortieren ·
+        # Strg/Shift zum Mehrfachauswaehlen") wrapped to two lines, and as the
+        # last row of a scrolling sidebar the second line's lower half sat under
+        # the viewport edge (and the BETA chip). A single line that fits the
+        # ~210px column cannot be cut the same way.
+        self.status.setStyleSheet("font-size:9px;min-height:20px;background:transparent;")
         al.addWidget(self.status)
         cw.addWidget(self._actions_w)
 
@@ -982,7 +988,7 @@ class MergeOrderWidget(QWidget):
                 f"color:{t['vdim']};font-size:9px;background:transparent;")
         if hasattr(self, "status"):
             self.status.setStyleSheet(
-                f"color:{t['vdim']};font-size:10px;min-height:32px;background:transparent;")
+                f"color:{t['vdim']};font-size:9px;min-height:20px;background:transparent;")
 
     FILE_KINDS = {
         ".pdf":"PDF",".jpg":"JPEG",".jpeg":"JPEG",".png":"PNG",
