@@ -112,10 +112,12 @@ def test_preflight_sees_a_tiny_colour_mark():
     c.showPage(); c.save()
 
     _open(src)
-    p = PreflightPanel(); _sync_async(p); p.log.log = lambda *a, **k: None
+    p = PreflightPanel(); _sync_async(p)
+    captured = []
+    p.log.log = lambda *a, **k: captured.append(str(a[0]) if a else "")
     p.chk_colour.setChecked(True)
     p._run_action()
-    report = p.report.toPlainText()
+    report = "\n".join(captured)
     assert "Farbseiten:" in report, f"the colour mark was missed:\n{report}"
 
 
@@ -482,9 +484,11 @@ def test_farbprofil_report_names_every_colour_space_present():
     a file with an RGB image and a CMYK vector fill was reported as plain RGB
     and recommended for conversion it had partly had already."""
     _open(_mixed_colour_pdf("cs_report.pdf"))
-    p = ColourProfilePanel(); p.log.log = lambda *a, **k: None
+    p = ColourProfilePanel()
+    captured = []
+    p.log.log = lambda *a, **k: captured.append(str(a[0]) if a else "")
     p._inspect()
-    report = p.report.toPlainText()
+    report = "\n".join(captured)
     assert "CMYK" in report and "RGB" in report, f"report missed a colour space:\n{report}"
     assert "Gemischt" in report, f"mixed file not flagged as mixed:\n{report}"
 

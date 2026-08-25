@@ -4,8 +4,8 @@ press, and report it rather than changing anything.
 """
 import os, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
-from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox, QTextEdit
-from tools.panels.base import BasePanel, make_label
+from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox
+from tools.panels.base import BasePanel
 from tools.i18n import tr
 from tools.panels._shared import _paper_sizes_pt, row
 from tools.panels._colour import _colour_histogram, _hist_stats
@@ -46,9 +46,6 @@ class PreflightPanel(BasePanel):
         self.chk_layers = QCheckBox(tr("Ebenen (OCG) auflisten"))
         self.chk_layers.setChecked(True); xl.addWidget(self.chk_layers)
         layout.addWidget(xb)
-        layout.addWidget(make_label(tr("Bericht:"), dim=True))
-        self.report=QTextEdit(); self.report.setReadOnly(True); self.report.setMinimumHeight(180)
-        self.report.setPlaceholderText(tr("Pruefung starten...")); layout.addWidget(self.report)
 
     def _run_action(self):
         # The checks are read here; the page walk goes to a worker. It renders
@@ -78,9 +75,8 @@ class PreflightPanel(BasePanel):
         return None
 
     def _preflight_done(self, result):
-        lines, verdict = result
-        self.report.setPlainText("\n".join(lines))
-        self.log.log(verdict)
+        lines, _verdict = result
+        self.log.log("\n".join(lines))
 
 
 # What the status bar's light runs. Structure only — the page-by-page walk in

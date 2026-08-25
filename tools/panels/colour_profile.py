@@ -4,7 +4,7 @@ it to CMYK or sRGB through Ghostscript, checking the result before it ships.
 """
 import logging
 import os, shutil
-from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox, QTextEdit
+from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QGroupBox
 from tools.panels.base import BasePanel, make_label
 from tools.colorspace import document_colorspaces, has_cmyk, has_rgb
 from tools.ghostscript import (failed, ghostscript_binary, page_range_flags,
@@ -25,8 +25,6 @@ class ColourProfilePanel(BasePanel):
     def build_ui(self, layout):
         ib=QPushButton(tr("  Farbprofil pruefen")); ib.setObjectName("secondaryBtn")
         ib.clicked.connect(self._inspect); layout.addWidget(ib)
-        self.report=QTextEdit(); self.report.setReadOnly(True); self.report.setMaximumHeight(150)
-        self.report.setPlaceholderText(tr("Farbprofil-Info erscheint hier...")); layout.addWidget(self.report)
 
         cb=QGroupBox(tr("IN CMYK UMWANDELN")); cl=QVBoxLayout(cb)
         cl.addWidget(make_label(tr(
@@ -79,7 +77,7 @@ class ColourProfilePanel(BasePanel):
                 lines.append(tr("⚠  RGB — vor Profidruck in CMYK umwandeln."))
             else:
                 lines.append(tr("ℹ  Farbraum nicht eindeutig erkennbar."))
-            self.report.setPlainText("\n".join(lines))
+            self.log.log("\n".join(lines))
             self.log.log(tr("Pruefung abgeschlossen."))
         except Exception as e:
             self.log.log(str(e), error=True)
