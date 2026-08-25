@@ -3,6 +3,7 @@ Merge Preview.
 """
 import os, time, tempfile
 from PyQt6.QtWidgets import QLabel
+from PyQt6.QtGui import QPixmap
 from pypdf import PdfReader
 from tools.viewer.model import PageModel
 import tools.app as MAIN
@@ -44,27 +45,28 @@ def test_merge_view_matches_manage_view():
     pgrid.deselect_all(); fgrid.deselect_all()
     assert not fgrid._selected, "deselect all"
 
-    # The two cards have to *look* the same, which used to be checked by
-    # comparing their stylesheets. They have none now — both are painted by
-    # page_grid.paint_card — so compare what the user actually sees: the card
-    # rendered, with its caption blanked so only the frame and the well are
-    # left. A stylesheet comparison would now pass on two empty strings.
+    # The file card is a distinct card from a page card — by design it shows the
+    # filename (bold) with the page count beneath the well, drawn by its own
+    # page_grid.paint_file_card, instead of a page number. What it must share
+    # with the page grid is the chrome (size, selection ring, zoom), so we
+    # assert the new contract instead of the old pixel-identical render: the
+    # caption is the filename, a page count is shown, and the card paints
+    # non-blank in both selection states.
     pc, fc = pgrid._cards[0], fgrid._cards[0]
     assert pc.size() == fc.size(), f"card size {pc.size()} vs {fc.size()}"
-
-    def frame_of(card):
-        from PyQt6.QtGui import QPixmap
-        was, card._caption = card._caption, ""
-        pm = QPixmap(card.size()); pm.fill(_Qt.GlobalColor.black)
-        card.render(pm)
-        card._caption = was
-        return pm.toImage()
-
+    assert fc._caption == os.path.basename(paths[0]), \
+        f"file card should caption the filename, got {fc._caption!r}"
+    assert fc._page_count(), "file card should show a page count beneath the name"
     for state in (False, True):
         pc.set_selected(state); fc.set_selected(state)
         _app.processEvents()
-        assert frame_of(pc) == frame_of(fc), \
-            f"the two cards are drawn differently when selected={state}"
+        pm = QPixmap(fc.size()); pm.fill(_Qt.GlobalColor.black)
+        fc.render(pm)
+        img = pm.toImage()
+        assert any(img.pixelColor(x, y) != _Qt.GlobalColor.black
+                   for x in range(0, img.width(), 3)
+                   for y in range(0, img.height(), 3)), \
+            f"file card rendered blank when selected={state}"
 
     # zoom, like the page grid
     w0 = fgrid._card_w; fgrid.zoom_in()

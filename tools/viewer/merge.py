@@ -15,19 +15,19 @@ from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_
 from tools.viewer.model import _parse_positions, _positions_to_str
 from tools.viewer.shortcuts import ThumbGridShortcutFilter
 from tools.viewer.page_grid import (CARD_H, CARD_W, GAP, MARGIN,
-                                    card_size, paint_card)
+                                    card_size, paint_file_card)
 from tools.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
 
 
 class FileCard(QFrame):
     """Thumbnail card for one file.
 
-    The merge view is the page-manager view for files, so a file card must be
-    the same card: same size, same selected look, same Ctrl-click handling and
-    the same multi-drag pixmap. It used to be a near-copy of PageCard kept in
-    step by hand and by one test; the drawing is now literally the same code
-    (page_grid.paint_card), and only what goes on the card differs — a file
-    name and an icon rather than a page number."""
+    The merge view is the page-manager view for files, so a file card shares
+    the page card's chrome — size, selection ring, zoom, Ctrl-click handling
+    and multi-drag pixmap — but is drawn by its own painter (page_grid.
+    paint_file_card) that shows the first-page thumbnail with the filename and
+    page count beneath it, rather than a page number. It used to be a
+    near-copy of PageCard kept in step by hand and by one test."""
     clicked = pyqtSignal(int)
 
     FILE_ICONS = {
@@ -55,6 +55,8 @@ class FileCard(QFrame):
         self._pixmap = None
         self._icon = None
         self._caption = self._label_text()
+        self._meta = None
+        self._meta_loaded = False
         self.setToolTip(path)
         if pixmap is not None:
             self.set_pixmap(pixmap)
@@ -62,14 +64,37 @@ class FileCard(QFrame):
             self._load_local_preview()
 
     def _label_text(self):
-        """"<n>  <name>", elided to the card width — the position matters for the
-        merge order, the name for telling the files apart."""
+        """The filename, elided to the card width. The order the file sits in is
+        still readable from the merge position; the page count goes under the
+        name, so the old "<n>  <name>" head would crowd both off the card."""
         from PyQt6.QtGui import QFontMetrics
         f = QFont()
-        f.setPixelSize(max(9, min(13, self._card_w // 10)))
+        f.setPixelSize(max(9, min(12, self._card_w // 14)))
         return QFontMetrics(f).elidedText(
-            f"{self.pos + 1}  {os.path.basename(self.path)}",
+            os.path.basename(self.path),
             Qt.TextElideMode.ElideMiddle, self._card_w)
+
+    def _page_count(self):
+        """The page count shown under the filename, read once and cached.
+
+        Read from the shared pdfium document registry, which keeps the open
+        PDFs warm, so a card costs a cached `len(doc)` rather than a reparse.
+        Non-PDF files have no count to show until they are converted — and a
+        PDF that cannot be opened for any reason reads as unknown, so we never
+        block the grid on one bad file."""
+        if self._meta_loaded:
+            return self._meta
+        self._meta_loaded = True
+        if os.path.splitext(self.path)[1].lower() != ".pdf":
+            self._meta = None
+            return self._meta
+        try:
+            from tools.render.document_cache import page_document
+            with page_document(self.path) as doc:
+                self._meta = tr('{p0} Seiten').format(p0=len(doc))
+        except Exception:
+            self._meta = None
+        return self._meta
 
     def pixmap(self):
         return self._pixmap
@@ -88,9 +113,9 @@ class FileCard(QFrame):
         self.set_pixmap(QPixmap.fromImage(image))
 
     def paintEvent(self, _e):
-        paint_card(self, self._pixmap, self._caption,
-                   self._card_w, self._card_h, self._selected,
-                   placeholder=self._icon)
+        paint_file_card(self, self._pixmap, self._caption, self._page_count(),
+                        self._card_w, self._card_h, self._selected,
+                        placeholder=self._icon)
 
     def _load_local_preview(self):
         """Non-PDF files: images render from disk, everything else gets its icon.

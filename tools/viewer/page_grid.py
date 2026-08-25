@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QWidget, QFrame, QApplication, QScrollArea,
                              QSizePolicy)
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QDrag, QPainter, QPen,
-                         QTransform, QFont)
+                         QTransform, QFont, QFontMetrics)
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
@@ -102,6 +102,61 @@ def paint_card(widget, pixmap, caption, card_w, card_h, selected,
         p.setFont(f)
         p.drawText(x, y + card_h + CARD_SPACING, card_w, CARD_CAPTION,
                    int(Qt.AlignmentFlag.AlignCenter), caption)
+    p.end()
+
+
+def paint_file_card(widget, pixmap, name, meta, card_w, card_h, selected,
+                    placeholder=None):
+    """Draw one file card: the same frame, well and selection ring as
+    paint_card, but the caption is the filename (bold) over the page count
+    (faint) rather than a page number, and the well holds the file's first page.
+    A sibling of paint_card — the merge view is "Seiten verwalten" for files, so
+    it shares the page grid's chrome while reading as a file list, not a page
+    list. `meta` is the page-count line, drawn only when it is known."""
+    p = QPainter(widget)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    t = _TV
+    rect = widget.rect().adjusted(1, 1, -1, -1)
+    if selected:
+        p.setPen(QPen(QColor(t['acc']), 2))
+        p.setBrush(QColor(t['sel_bg']))
+        p.drawRoundedRect(rect, 5, 5)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+    x = CARD_MARGIN + 2
+    y = CARD_MARGIN + 2
+    p.setPen(QPen(QColor(t['border']), 1))
+    p.setBrush(QColor(t['card_bg']))
+    p.drawRect(x, y, card_w - 1, card_h - 1)
+
+    if pixmap is not None and not pixmap.isNull():
+        p.drawPixmap(x + (card_w - pixmap.width()) // 2,
+                     y + (card_h - pixmap.height()) // 2, pixmap)
+    elif placeholder:
+        p.setPen(QColor(t['dim']))
+        f = p.font()
+        f.setPixelSize(max(18, card_w // 3))
+        p.setFont(f)
+        p.drawText(x, y, card_w, card_h,
+                   int(Qt.AlignmentFlag.AlignCenter), placeholder)
+
+    # Filename over page count — the file-list twin of the page-number caption.
+    cy = y + card_h + CARD_SPACING
+    p.setPen(QColor(t['text']))
+    f = p.font(); f.setBold(True)
+    f.setPixelSize(max(9, min(12, card_w // 14)))
+    p.setFont(f)
+    name = QFontMetrics(f).elidedText(name, Qt.TextElideMode.ElideMiddle, card_w)
+    p.drawText(x, cy, card_w, 13,
+               int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), name)
+    if meta:
+        p.setPen(QColor(t['dim']))
+        f.setBold(False)
+        f.setPixelSize(max(8, min(11, card_w // 16)))
+        p.setFont(f)
+        meta = QFontMetrics(f).elidedText(meta, Qt.TextElideMode.ElideMiddle, card_w)
+        p.drawText(x, cy + 13, card_w, 11,
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), meta)
     p.end()
 
 
