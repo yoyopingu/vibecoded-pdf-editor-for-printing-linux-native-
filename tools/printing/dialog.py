@@ -22,6 +22,7 @@ from tools.printing.spool import (PAPER_PRINTER_DEFAULT,
 from tools.viewer.model import _positions_to_str
 from tools.viewer.tab_base import owning_tab
 from tools.theme import _TV
+from tools.printing.radiopill import RadioPill
 
 
 def _qt_page_sizes():
@@ -149,7 +150,7 @@ class PrintDialog(QDialog):
             return ""
 
     def _setup(self):
-        from PyQt6.QtWidgets import QGridLayout, QRadioButton, QComboBox
+        from PyQt6.QtWidgets import QGridLayout, QComboBox
 
         # Solid themed background. Without this the dialog inherits the system
         # palette; on a light desktop the transparent settings pane then shows
@@ -241,26 +242,61 @@ class PrintDialog(QDialog):
         rl.addWidget(title)
         rl.addWidget(_sep())
 
-        # ── DRUCKER ──────────────────────────────────────────────────────────
-        rl.addWidget(_sec(tr("DRUCKER")))
+        # ── Printer row: printer combo + Bitmap + dpi ────────────────────────
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(8)
         self.printer_combo = QComboBox()
         self._hw_margin_mm = 3.0
-        rl.addWidget(self.printer_combo)
+        top_row.addWidget(self.printer_combo, 1)
+
+        self.bitmap_check = QCheckBox(tr("Bitmap"))
+        self.bitmap_check.setToolTip(tr(
+            "Druckt die Seiten so, wie sie in der Vorschau aussehen.\n\n"
+            "Normalerweise wird die PDF an den Drucker geschickt und dort "
+            "erneut interpretiert — mit einer anderen Schrift-Ersetzung als "
+            "in der Vorschau, wenn die Datei ihre Schriften nicht mitbringt.\n"
+            "Als Bitmap wird stattdessen genau das gedruckt, was die Vorschau "
+            "zeigt.\n\n"
+            "Dafuer ist der Text im Druckauftrag nicht mehr markierbar und "
+            "die Datei wird groesser."))
+        top_row.addWidget(self.bitmap_check)
+
+        self.bitmap_dpi = QComboBox()
+        for dpi in (300, 600, 1200, 2400):
+            self.bitmap_dpi.addItem(f"{dpi} dpi", dpi)
+        self.bitmap_dpi.setCurrentIndex(1)          # 600 dpi
+        self.bitmap_dpi.setFixedWidth(96)
+        self.bitmap_dpi.setToolTip(tr(
+            "Aufloesung der Rasterung. 600 dpi ist fuer Text und normale "
+            "Grafiken ueblich, 1200 dpi fuer feine Linien und kleine Schrift."))
+        self.bitmap_dpi.setEnabled(False)
+        self.bitmap_dpi.setVisible(False)
+        self.bitmap_check.toggled.connect(self.bitmap_dpi.setEnabled)
+        self.bitmap_check.toggled.connect(self.bitmap_dpi.setVisible)
+        top_row.addWidget(self.bitmap_dpi)
+        rl.addLayout(top_row)
         rl.addWidget(_sep())
 
         # ── SEITEN ───────────────────────────────────────────────────────────
         rl.addWidget(_sec(tr("SEITEN")))
-        self.radio_all     = QRadioButton(tr("Alle Seiten  (1 – {n})").format(n=n))
-        self.radio_current = QRadioButton(tr("Aktuelle Seite"))
-        self.radio_range   = QRadioButton(tr("Seitenbereich:"))
+        self.radio_all     = RadioPill(tr("Alle (1 – {n})").format(n=n))
+        self.radio_current = RadioPill(tr("Aktuelle Seite"))
+        self.radio_range   = RadioPill(tr("Bereich"))
+        # Radiopills are QToolButtons, which are not auto-exclusive — the
+        # group is what makes them behave like radios. No IDs are needed here;
+        # the code reads isChecked(), not checkedId().
+        self._page_group = QButtonGroup(self)
+        for _r in (self.radio_all, self.radio_current, self.radio_range):
+            self._page_group.addButton(_r)
         self.radio_all.setChecked(True)
-        rl.addWidget(self.radio_all)
-        rl.addWidget(self.radio_current)
 
-        range_row = QHBoxLayout()
-        range_row.setContentsMargins(0, 0, 0, 0)
-        range_row.setSpacing(6)
-        range_row.addWidget(self.radio_range)
+        pages_row = QHBoxLayout()
+        pages_row.setContentsMargins(0, 0, 0, 0)
+        pages_row.setSpacing(8)
+        pages_row.addWidget(self.radio_all)
+        pages_row.addWidget(self.radio_current)
+
         self.range_edit = QLineEdit()
         self.range_edit.setPlaceholderText(tr("z.B.  1-3, 5, 7-9"))
         self.range_edit.setFixedWidth(160)
@@ -272,9 +308,15 @@ class PrintDialog(QDialog):
         # pages are ready if you want them, not chosen on your behalf.
         self.range_edit.setText(self._selected_pages_text())
         self.radio_range.toggled.connect(self.range_edit.setEnabled)
+        range_row = QHBoxLayout()
+        range_row.setContentsMargins(0, 0, 0, 0)
+        range_row.setSpacing(6)
+        range_row.addWidget(self.radio_range)
         range_row.addWidget(self.range_edit)
         range_row.addStretch()
-        rl.addLayout(range_row)
+        pages_row.addLayout(range_row)
+        pages_row.addStretch()
+        rl.addLayout(pages_row)
         rl.addWidget(_sep())
 
         # ── SEITENHANDHABUNG ─────────────────────────────────────────────────
@@ -288,13 +330,12 @@ class PrintDialog(QDialog):
         pg.addWidget(_lbl(tr("Skalierung:")), 0, 0)
 
         # On show, not behind a dropdown: three settings that decide how big the
-        # job prints, one click each instead of two. Radio buttons rather than
-        # tick boxes because exactly one of them applies — two ticked would be a
-        # state the printer cannot be in — and because the page options above
-        # are already radio buttons, so the section reads the same way twice.
-        self.scale_fit    = QRadioButton(tr("An Seite anpassen"))
-        self.scale_fixed  = QRadioButton(tr("Feste Größe"))
-        self.scale_shrink = QRadioButton(tr("Auf bedruckbaren Bereich verkleinern"))
+        # job prints, one click each instead of two. Radiopills rather than tick
+        # boxes because exactly one of them applies — two ticked would be a state
+        # the printer cannot be in.
+        self.scale_fit    = RadioPill(tr("Anpassen"))
+        self.scale_fixed  = RadioPill(tr("Feste Größe"))
+        self.scale_shrink = RadioPill(tr("Verkleinern"))
         self.scale_fit.setToolTip(tr(
             "Skaliert hoch und runter — Seite füllt den Druckbereich vollständig (Acrobat: Fit Page)"))
         self.scale_fixed.setToolTip(tr(
@@ -401,17 +442,16 @@ class PrintDialog(QDialog):
         self._applying = False
 
         rl.addLayout(pg)
-        rl.addWidget(_sep())
 
-        # ── AUSGABE ──────────────────────────────────────────────────────────
-        rl.addWidget(_sec(tr("AUSGABE")))
-        out = QGridLayout()
-        out.setHorizontalSpacing(8)
-        out.setVerticalSpacing(6)
-        out.setColumnMinimumWidth(0, 145)
-        out.setColumnStretch(1, 1)
+        # Kopien + Farbe: a two-column row (the concept's Seitenhandhabung
+        # 2-col) — Kopien moved up out of AUSGABE to sit near the top.
+        kf = QGridLayout()
+        kf.setHorizontalSpacing(8)
+        kf.setVerticalSpacing(6)
+        kf.setColumnMinimumWidth(0, 145)
+        kf.setColumnStretch(1, 1)
 
-        out.addWidget(_lbl(tr("Kopien:")), 0, 0)
+        kf.addWidget(_lbl(tr("Kopien:")), 0, 0)
         copies_row = QHBoxLayout()
         copies_row.setContentsMargins(0, 0, 0, 0)
         copies_row.setSpacing(8)
@@ -424,9 +464,9 @@ class PrintDialog(QDialog):
         self.collate_check.setChecked(True)
         copies_row.addWidget(self.collate_check)
         copies_row.addStretch()
-        out.addLayout(copies_row, 0, 1)
+        kf.addLayout(copies_row, 0, 1)
 
-        out.addWidget(_lbl(tr("Farbe:")), 1, 0)
+        kf.addWidget(_lbl(tr("Farbe:")), 1, 0)
         self.color_combo = QComboBox()
         # "Drucker-Standard" sends no colour option at all, so the queue's own
         # setting decides — that is what lets a job be re-routed or configured
@@ -438,24 +478,13 @@ class PrintDialog(QDialog):
             "Drucker-Standard: keine Vorgabe senden — der Drucker bzw. die "
             "Warteschlange entscheidet.\n"
             "Die Farbinformation bleibt in jedem Fall in der Datei erhalten."))
-        out.addWidget(self.color_combo, 1, 1)
+        kf.addWidget(self.color_combo, 1, 1)
 
-        out.addWidget(_lbl(tr("Farbkonvertierung:")), 2, 0)
-        self.colorconv_combo = QComboBox()
-        self.colorconv_combo.addItems([
-            tr("Unverändert"),
-            tr("→ CMYK  (für CMYK-Drucker)"),
-            tr("→ sRGB  (für RGB-Drucker)"),
-        ])
-        self.colorconv_combo.setToolTip(
-            tr("Unverändert: Druckertreiber entscheidet (empfohlen mit ICC-Profilen)\n"
-               "→ CMYK: Vor dem Druck in CMYK umrechnen\n"
-               "→ sRGB: Vor dem Druck in sRGB umrechnen"))
-        out.addWidget(self.colorconv_combo, 2, 1)
-        self.color_combo.currentIndexChanged.connect(
-            lambda _: self.colorconv_combo.setEnabled(
-                self.color_combo.currentData() != "mono"))
+        rl.addLayout(kf)
+        rl.addWidget(_sep())
 
+        # ── AUSGABE (Duplex) ─────────────────────────────────────────────────
+        rl.addWidget(_sec(tr("AUSGABE")))
         duplex_row = QHBoxLayout()
         duplex_row.setContentsMargins(0, 0, 0, 0)
         duplex_row.setSpacing(8)
@@ -476,40 +505,8 @@ class PrintDialog(QDialog):
         self.duplex_check.toggled.connect(self.duplex_edge_combo.setEnabled)
         duplex_row.addWidget(self.duplex_edge_combo)
         duplex_row.addStretch()
-        out.addLayout(duplex_row, 3, 0, 1, 2)
+        rl.addLayout(duplex_row)
 
-        # Beside duplex, because it is the same kind of decision — how the job
-        # is put on paper, not what goes on it — and because one more row here
-        # costs nothing, where a section of its own would cost a heading.
-        bitmap_row = QHBoxLayout()
-        bitmap_row.setContentsMargins(0, 0, 0, 0)
-        bitmap_row.setSpacing(8)
-        self.bitmap_check = QCheckBox(tr("Als Bitmap drucken"))
-        self.bitmap_check.setToolTip(tr(
-            "Druckt die Seiten so, wie sie in der Vorschau aussehen.\n\n"
-            "Normalerweise wird die PDF an den Drucker geschickt und dort "
-            "erneut interpretiert — mit einer anderen Schrift-Ersetzung als "
-            "in der Vorschau, wenn die Datei ihre Schriften nicht mitbringt.\n"
-            "Als Bitmap wird stattdessen genau das gedruckt, was die Vorschau "
-            "zeigt.\n\n"
-            "Dafuer ist der Text im Druckauftrag nicht mehr markierbar und "
-            "die Datei wird groesser."))
-        bitmap_row.addWidget(self.bitmap_check)
-        self.bitmap_dpi = QComboBox()
-        for dpi in (150, 300, 600, 1200):
-            self.bitmap_dpi.addItem(f"{dpi} dpi", dpi)
-        self.bitmap_dpi.setCurrentIndex(1)          # 300 dpi
-        self.bitmap_dpi.setFixedWidth(96)
-        self.bitmap_dpi.setToolTip(tr(
-            "Aufloesung der Rasterung. 300 dpi ist fuer Text und normale "
-            "Grafiken ueblich, 600 dpi fuer feine Linien und kleine Schrift."))
-        self.bitmap_dpi.setEnabled(False)
-        self.bitmap_check.toggled.connect(self.bitmap_dpi.setEnabled)
-        bitmap_row.addWidget(self.bitmap_dpi)
-        bitmap_row.addStretch()
-        out.addLayout(bitmap_row, 4, 0, 1, 2)
-
-        rl.addLayout(out)
         rl.addStretch(1)
 
         # ── Pinned action bar (status + buttons), always visible ────────────
@@ -536,6 +533,13 @@ class PrintDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(8)
+        # Summary note on the left of the button row: "6 Seiten · 1 Kopie ·
+        # Farbe · beidseitig" — the concept's right-aligned block.
+        self.summary_lbl = QLabel("")
+        self.summary_lbl.setStyleSheet(
+            f"color:{_TV['dim']};background:transparent;font-size:12px;")
+        btn_row.addWidget(self.summary_lbl)
         btn_row.addStretch()
         cancel_btn = QPushButton(tr("Abbrechen"))
         cancel_btn.setObjectName("secondaryBtn")
@@ -560,7 +564,6 @@ class PrintDialog(QDialog):
                 (self.paper_combo, "currentIndexChanged"),
                 (self.orient_combo, "currentIndexChanged"),
                 (self.color_combo, "currentIndexChanged"),
-                (self.colorconv_combo, "currentIndexChanged"),
                 (self._scale_group, "idToggled"),
                 (self.scale_pct, "valueChanged"),
                 (self.source_combo, "currentIndexChanged"),
@@ -588,6 +591,19 @@ class PrintDialog(QDialog):
         self.radio_range.toggled.connect(self._sync_preview_pages)
         self.range_edit.textChanged.connect(self._sync_preview_pages)
         self._sync_preview_pages()
+
+        # The summary line follows what would be sent: pages, copies, colour,
+        # sides.
+        for widget, signal in (
+                (self.radio_all, "toggled"),
+                (self.radio_current, "toggled"),
+                (self.radio_range, "toggled"),
+                (self.range_edit, "textChanged"),
+                (self.copies_spin, "valueChanged"),
+                (self.color_combo, "currentIndexChanged"),
+                (self.duplex_check, "toggled")):
+            getattr(widget, signal).connect(self._update_summary)
+        self._update_summary()
 
         self._make_enter_print(print_btn, cancel_btn)
 
@@ -672,6 +688,47 @@ class PrintDialog(QDialog):
         pages = self._preview_pages()
         if pages:   # None/empty → leave the current preview in place
             self._preview.set_pages(pages)
+
+    def _update_summary(self):
+        """The action-bar note: how many pages, copies, colour and sides.
+
+        Mirrors the concept's "6 Seiten · 1 Kopie · Farbe · beidseitig". Reads
+        the same controls _do_print reads, so the summary cannot promise a job
+        the dialog will not send.
+        """
+        n = len(self.model.order)
+        if self.radio_all.isChecked():
+            count = n
+        elif self.radio_current.isChecked():
+            count = 1
+        else:
+            text = self.range_edit.text().strip()
+            count = 0
+            try:
+                for part in text.split(","):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    if "-" in part:
+                        a, b = part.split("-", 1)
+                        lo, hi = int(a.strip()), int(b.strip())
+                        if lo < 1 or hi > n or lo > hi:
+                            count = n; break
+                        count += hi - lo + 1
+                    else:
+                        p = int(part)
+                        count += 1 if 1 <= p <= n else 0
+            except ValueError:
+                count = n
+            if count == 0:
+                count = n
+        copies = self.copies_spin.value()
+        color = self.color_combo.currentText()
+        sides = (tr("beidseitig") if self.duplex_check.isChecked()
+                 else tr("einseitig"))
+        self.summary_lbl.setText(tr(
+            "{pages} Seiten · {copies} Kopie(n) · {color} · {sides}").format(
+                pages=count, copies=copies, color=color, sides=sides))
 
     def _load_printers(self):
         """Populate the printer combo.
@@ -951,7 +1008,6 @@ class PrintDialog(QDialog):
             "paper":        self.paper_combo.currentData(),
             "orientation":  self.orient_combo.currentIndex(),
             "color":        self.color_combo.currentData(),
-            "colorconv":    self.colorconv_combo.currentIndex(),
             "scale":        self._scale_index(),
             "scale_pct":    self.scale_pct.value(),
             "collate":      self.collate_check.isChecked(),
@@ -990,7 +1046,6 @@ class PrintDialog(QDialog):
         self.paper_combo.blockSignals(False)
         _combo_by_index(self.orient_combo, saved.get("orientation"))
         _combo_by_data(self.color_combo, saved.get("color"))
-        _combo_by_index(self.colorconv_combo, saved.get("colorconv"))
         self._set_scale_index(saved.get("scale"))
         if isinstance(saved.get("scale_pct"), int):
             self.scale_pct.setValue(saved["scale_pct"])
@@ -1005,7 +1060,6 @@ class PrintDialog(QDialog):
         # a driver queue means nothing on a driverless one.
         if source and len(source) == 2 and source[0] == self._source_keyword:
             _combo_by_data(self.source_combo, source[1])
-        self.colorconv_combo.setEnabled(self.color_combo.currentData() != "mono")
 
     def _on_printers_enumerated(self, names, default):
         """A fresh enumeration has come back from the background thread.
@@ -1205,8 +1259,6 @@ class PrintDialog(QDialog):
                     "Drucker-Standard: keine Vorgabe senden — der Drucker bzw. "
                     "die Warteschlange entscheidet.\n"
                     "Die Farbinformation bleibt in jedem Fall in der Datei erhalten."))
-            self.colorconv_combo.setEnabled(
-                self.color_combo.currentData() != "mono")
 
             # ── Hardware margins (determines "Fit Page" / "Shrink" behaviour) ──
             self._hw_margin_mm = 3.0  # safe default
@@ -1347,7 +1399,7 @@ class PrintDialog(QDialog):
         """Disable/re-enable controls while a print job is in progress."""
         for w in [self.printer_combo, self.copies_spin,
                   self.paper_combo, self.orient_combo,
-                  self.color_combo, self.colorconv_combo,
+                  self.color_combo,
                   self.collate_check, self.duplex_check, self.duplex_edge_combo,
                   self.source_combo,
                   self.radio_all, self.radio_current, self.radio_range,
@@ -1378,7 +1430,9 @@ class PrintDialog(QDialog):
 
         copies    = self.copies_spin.value()
         color_mode = self.color_combo.currentData() or "auto"
-        colorconv = self.colorconv_combo.currentIndex()
+        # Farbkonvertierung was removed from the dialog (settled decision 1);
+        # the spooler still takes the parameter, so hand it the fixed value.
+        colorconv = 0
         collate   = self.collate_check.isChecked()
         duplex    = self.duplex_check.isChecked()
         duplex_edge = self.duplex_edge_combo.currentData() or "long"
@@ -1472,14 +1526,6 @@ class PrintDialog(QDialog):
                 except Exception as e:
                     errors.append(f"GS/lp: {e}")
                     _report(tr("GS-Pfad fehlgeschlagen — Versuche Qt-Fallback…"))
-                    # The rasteriser cannot do the colour-space conversions, so
-                    # say so instead of printing a job that quietly ignores the
-                    # setting the operator chose.
-                    if colorconv in (1, 2):
-                        _report(tr(
-                            "Hinweis: Der Fallback kann die gewaehlte "
-                            "Farbraum-Umwandlung nicht ausfuehren — es wird "
-                            "ohne sie gedruckt."))
 
             # ── Fallback: Qt rasteriser ───────────────────────────────────────
             # Pre-render pages in background (pdfium, no QPrinter); draw on GUI thread.

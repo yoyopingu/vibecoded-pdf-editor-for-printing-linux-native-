@@ -34,7 +34,7 @@ _BY_PRINTER = "printing/by_printer"
 # Only settings that describe *how* to print. Not the copy count, which is a
 # property of the job in front of you rather than of how you like to print, and
 # not the page range, which belongs to the document.
-REMEMBERED = ("paper", "orientation", "color", "colorconv", "scale",
+REMEMBERED = ("paper", "orientation", "color", "scale", "scale_pct",
               "collate", "duplex", "duplex_edge", "paper_source")
 
 
