@@ -341,6 +341,7 @@ class MainWindow(QMainWindow):
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(224)
+        self._sidebar = sidebar
         sb = QVBoxLayout(sidebar)
         sb.setContentsMargins(0, 6, 0, 0)
         sb.setSpacing(0)
@@ -625,6 +626,12 @@ class MainWindow(QMainWindow):
                 if btn is not None:
                     btn.set_active(True)
                 break
+        # A tool's settings column is wider than the 224px preview sidebar
+        # (its controls were built for a full-width panel). Widen the sidebar
+        # to fit the tool so its fields are not clipped, and give it back to
+        # the narrow list when the tool is dismissed.
+        want = panel.controls_widget.sizeHint().width() + 28
+        self._sidebar.setFixedWidth(max(224, min(want, 420)))
         self._sync_view_switch()
 
     def _back_to_tools(self):
@@ -632,6 +639,7 @@ class MainWindow(QMainWindow):
         viewer's tool list."""
         for btn in self._tool_btns.values():
             btn.set_active(False)
+        self._sidebar.setFixedWidth(224)
         self._switch(0)
 
     def _switch(self, idx: int):
