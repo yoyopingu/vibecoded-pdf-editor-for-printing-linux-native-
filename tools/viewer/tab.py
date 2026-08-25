@@ -399,7 +399,7 @@ class PdfTab(PdfTabBase):
         self.changed.emit()
 
     def _print(self):
-        """Öffnet den vollstaendigen Druckdialog."""
+        """Öffnet den vollständigen Druckdialog."""
         if not self.model:
             return
         dlg = PrintDialog(self.pdf_path, self.model, self)

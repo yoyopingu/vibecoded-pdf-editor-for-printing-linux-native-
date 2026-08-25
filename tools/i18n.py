@@ -315,6 +315,19 @@ _EN: dict[str, str] = {
         "→ sRGB: convert to sRGB before printing",
     "Beidseitig drucken  (Duplex)": "Print double-sided  (duplex)",
     "Als Bitmap drucken": "Print as bitmap",
+    "Bitmap": "Bitmap",
+    "Anpassen": "Fit",
+    "Verkleinern": "Shrink",
+    "Bereich": "Range",
+    "Alle (1 – {n})": "All (1 – {n})",
+    "einseitig": "single-sided",
+    "beidseitig": "double-sided",
+    "{pages} Seiten · {copies} Kopie(n) · {color} · {sides}":
+        "{pages} pages · {copies} copy/copies · {color} · {sides}",
+    "Auflösung der Rasterung. 600 dpi ist für Text und normale Grafiken "
+    "üblich, 1200 dpi für feine Linien und kleine Schrift.":
+        "Rendering resolution. 600 dpi is usual for text and normal graphics, "
+        "1200 dpi for fine lines and small type.",
     "Benutzerdefiniert…": "Custom…",
     "Wie im Drucker eingestellt": "As set on the printer",
     "PAPIERFORMATE": "PAPER SIZES",
@@ -610,6 +623,7 @@ _EN: dict[str, str] = {
         "Images and Office documents are converted when opened.",
     "Mehrere zusammenführen…": "Merge multiple files…",
     "Zuletzt geöffnet": "Recently opened",
+    "{p0} S": "{p0} p.",   # the compact page count under a recent-file card
     # ── Plugin manager ────────────────────────────────────────────────────────
     "Plugin ist bereits installiert.": "Plugin is already installed.",
     "Plugin ersetzen?": "Replace plugin?",

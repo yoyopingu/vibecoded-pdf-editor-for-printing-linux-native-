@@ -699,6 +699,12 @@ class SinglePageView(QWidget):
         self._tot_lbl.setStyleSheet(
             f"color:{t['vdim']};font-size:9px;background:transparent;")
         self._track.update()
+        # The chevrons are stroked in the shell theme's DIM and would keep the
+        # colour of the theme the view was built under otherwise.
+        dim = theme_color("DIM")
+        self._nav_btns[0].setIcon(
+            rotated(icon("chev", colour=dim), 180))
+        self._nav_btns[1].setIcon(icon("chev", colour=dim))
         _nb = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
                f"border:1px solid {t['btn_brd']};border-radius:5px;font-size:12px;}}"
                f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}")

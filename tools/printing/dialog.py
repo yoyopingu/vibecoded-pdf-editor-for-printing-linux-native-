@@ -1437,6 +1437,10 @@ class PrintDialog(QDialog):
             # Likewise the tray: a queue that offers no choice of one must not
             # come back from a job with an empty combo suddenly enabled.
             self.source_combo.setEnabled(self.source_combo.count() > 1)
+            # And the range box is only ever usable with "Bereich". A failed
+            # job must not bring it back enabled under "Alle" — the re-enable
+            # loop above would otherwise undo the radio's own disable.
+            self.range_edit.setEnabled(self.radio_range.isChecked())
 
     def _do_print(self):
         pages_to_print = self._get_pages()
@@ -1521,7 +1525,7 @@ class PrintDialog(QDialog):
 
         def _report(msg):
             obj = self_ref()
-            if obj is not None:
+            if obj is not None and not _is_gone(obj):
                 try:
                     obj._print_status.emit(msg)   # queued to the GUI thread
                 except RuntimeError:
@@ -1543,7 +1547,11 @@ class PrintDialog(QDialog):
                         paper_key, orient_idx, _report,
                         paper_source=paper_source, scale_pct=scale_pct)
                     obj = self_ref()
-                    if obj is not None:
+                    # Same guard as the Qt paths below: the dialog may have
+                    # been closed while Ghostscript ran, and emitting into a
+                    # half-deleted widget takes the process down (see _is_gone).
+                    if (obj is not None and not job.cancelled
+                            and not _is_gone(obj)):
                         obj._print_finished.emit(pages_to_print, copies, skipped)
                     return
                 except Exception as e:
@@ -1561,12 +1569,12 @@ class PrintDialog(QDialog):
                 errors.append(f"Qt render: {e}")
                 msg = tr("Druckfehler:") + "\n" + "\n".join(errors)
                 obj = self_ref()
-                if obj is not None and not job.cancelled:
+                if obj is not None and not job.cancelled and not _is_gone(obj):
                     obj._print_failed.emit(msg)
                 return
 
             obj = self_ref()
-            if obj is not None and not job.cancelled:
+            if obj is not None and not job.cancelled and not _is_gone(obj):
                 obj._print_qt_send.emit((
                     rendered, skipped, pages_to_print, copies, color_mode,
                     collate, duplex, duplex_edge, printer_name, paper_key,
@@ -1643,6 +1651,11 @@ class PrintDialog(QDialog):
         QTimer.singleShot(600, self._after_print_close)
 
     def _after_print_close(self):
+        # The 600 ms "Fertig" timer can outlive a cancel: Abbrechen/Esc closes
+        # the dialog while it is pending, and touching a half-deleted widget
+        # then raises in the middle of the event loop (see _is_gone).
+        if _is_gone(self):
+            return
         self._close_progress()
         self.accept()
 

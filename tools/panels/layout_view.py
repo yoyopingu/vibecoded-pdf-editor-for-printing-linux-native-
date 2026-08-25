@@ -378,8 +378,19 @@ class _SheetColumn(QScrollArea):
         while self._lay.count():
             it = self._lay.takeAt(0)
             w = it.widget()
-            if w is not None:
+            # `_cap` is re-added to `_lay` on the empty/no-PDF branches below
+            # and reused across rebuilds, so it must never be deleteLater'd
+            # here: the queued delete would be processed by Qt while the next
+            # rebuild is still touching the label, and the RuntimeError on the
+            # deleted object aborts the whole process. Sweep the sheets, hide
+            # the caption; the branches below re-show it via addWidget.
+            if w is not None and w is not self._cap:
                 w.deleteLater()
+            elif w is self._cap:
+                w.hide()
+        # Every branch below re-adds `_cap` (the empty-state message or the
+        # bottom summary caption); the hide above must not stick.
+        self._cap.show()
         self._sheets = []
         self._params = None
         self._reset_scroll()

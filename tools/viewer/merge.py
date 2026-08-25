@@ -839,10 +839,11 @@ class MergeOrderWidget(QWidget):
         ll.addWidget(self._sep())
 
         self._section(ll, tr("REIHENFOLGE"))
-        ll.addWidget(self._btn(tr("Hoch"),   self._move_up,
-                               _icon=rotated(icon("chev", colour=theme_color("DIM")), 180)))
-        ll.addWidget(self._btn(tr("Runter"), self._move_down,
-                               _icon=icon("chev", colour=theme_color("DIM"))))
+        self._btn_up   = self._btn(tr("Hoch"),   self._move_up,
+                                   _icon=rotated(icon("chev", colour=theme_color("DIM")), 180))
+        self._btn_down = self._btn(tr("Runter"), self._move_down,
+                                   _icon=icon("chev", colour=theme_color("DIM")))
+        ll.addWidget(self._btn_up); ll.addWidget(self._btn_down)
         ll.addWidget(self._sep())
 
         self._section(ll, tr("OPERATIONEN"))
@@ -1013,6 +1014,18 @@ class MergeOrderWidget(QWidget):
         self._total.setText(txt)
         self._btn_go.setText(tr('  Zusammenführen  ({p0})').format(p0=n))
         self._btn_single.setText(tr('  Einzeln öffnen  ({p0})').format(p0=n))
+        self._update_move_buttons()
+
+    def _update_move_buttons(self):
+        """Hoch/Runter only make sense when something is selected and it is not
+        already pinned against that edge of the list."""
+        sel = self._grid._selected
+        n = len(self._grid.get_paths())
+        if not sel or n < 2:
+            self._btn_up.setEnabled(False); self._btn_down.setEnabled(False)
+            return
+        self._btn_up.setEnabled(min(sel) > 0)
+        self._btn_down.setEnabled(max(sel) < n - 1)
 
     def _apply_sel_edit(self):
         positions = _parse_positions(self.sel_edit.text(), len(self._grid.get_paths()))
@@ -1034,6 +1047,7 @@ class MergeOrderWidget(QWidget):
 
     def _on_select(self, pos):
         self.update_info()
+        self._update_move_buttons()
         path = self._grid.current_path()
         if not path:
             self._inf_name.setText("—"); self._inf_type.setText("")

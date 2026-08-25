@@ -870,17 +870,22 @@ class PageViewerPanel(QWidget):
         return self._add_pdf_tab(converted)
 
     def _add_pdf_tab(self, path):
-        self._reveal_tabs()
         from PyQt6.QtWidgets import QMessageBox
         from tools.pdf_access import ensure_openable
         # A file that genuinely needs a password gets asked about, once, with an
         # explanation — and is worked on as a decrypted copy from here on. A
         # restricted one, which is most of what people call password-protected,
         # needs nothing and is not asked about.
+        #
+        # The password prompt and every early-return below run BEFORE
+        # `_reveal_tabs()`: a cancel or a failure here must leave the empty
+        # state exactly where it was, not a blank page area with the count still
+        # at zero.
         opened = ensure_openable(path, self)
         if opened is None:
             return              # cancelled at the password prompt
         path = opened
+        self._reveal_tabs()
         # A damaged, encrypted or truncated PDF makes this raise. Unhandled in a
         # slot, PyQt takes the whole process down — so a single bad file killed
         # the app instead of reporting one failed open.
@@ -891,6 +896,7 @@ class PageViewerPanel(QWidget):
             QMessageBox.critical(
                 self, tr("Datei konnte nicht geöffnet werden"),
                 tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
+            self._sync_empty_state()   # restore the empty window (count is 0)
             return
         self._wire_tab(tab)
         idx  = self.tabs.addTab(tab, self._tab_label(tab, os.path.basename(path)))
@@ -1030,6 +1036,7 @@ class PageViewerPanel(QWidget):
             QMessageBox.critical(
                 self, tr("Ergebnis konnte nicht geöffnet werden"),
                 tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
+            self._sync_empty_state()   # restore the empty window (count is 0)
             return
         self._wire_tab(tab)
         idx  = self.tabs.addTab(tab, self._tab_label(tab, title))
