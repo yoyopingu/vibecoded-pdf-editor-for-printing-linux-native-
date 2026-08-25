@@ -407,6 +407,7 @@ class MainWindow(QMainWindow):
         # the sidebar label.
         self._tool_panels = {}
         self._tool_btns = {}
+        self._tool_return_ctx = None   # (stack idx, in_manage) a tool came from
         # Next free stack slot for any tool or plugin that keeps the old
         # full-page form as a stack page. The viewer is 0 and Layout is 1; the
         # counter is shared with the plugin loop below so the indices stay
@@ -617,8 +618,24 @@ class MainWindow(QMainWindow):
 
     def _mount_tool(self, panel):
         """Morph the whole sidebar into `panel`'s settings, keeping the main
-        area on the document (viewer, stack index 0)."""
-        self._switch(0)
+        area on the view it was picked from — the viewer preview, the manage
+        grid, or the layout sheets — never jumping it to the preview.
+
+        The view a tool is picked from is remembered so the "‹ Werkzeuge" back
+        button can hand the main area back to exactly that view."""
+        stack_idx = self._stack.currentIndex()
+        tab = self.viewer._current()
+        in_manage = bool(tab is not None and tab.in_manage_mode())
+        # A tool is only ever picked from a main-area view (preview/manage on
+        # stack 0, layout on stack 1). If the stack is somewhere else — e.g. a
+        # grayscale full-page form, whose sidebar still offers the other tools —
+        # fall back to the viewer preview rather than mis-remembering it.
+        if stack_idx not in (0, 1):
+            stack_idx, in_manage = 0, False
+            self._switch(0)
+        self._tool_return_ctx = (stack_idx, in_manage)
+        # Only the sidebar morphs; the main stack keeps showing whatever view
+        # it was already in.
         self._sidebar_host.mount("tool", panel.controls_widget)
         for label, p in self._tool_panels.items():
             if p is panel:
@@ -636,10 +653,30 @@ class MainWindow(QMainWindow):
 
     def _back_to_tools(self):
         """The "‹ Werkzeuge" back button: unmount the tool and return to the
-        viewer's tool list."""
+        view it was picked from — the viewer preview, the manage grid, or the
+        layout sheets — restoring that view's sidebar content in the process."""
         for btn in self._tool_btns.values():
             btn.set_active(False)
         self._sidebar.setFixedWidth(224)
+        ctx = self._tool_return_ctx
+        self._tool_return_ctx = None
+        stack_idx, in_manage = ctx if ctx is not None else (0, False)
+        if stack_idx == 1:
+            # Came from Layout: re-enter it (mounts its staging controls and
+            # re-points the shared rail), leaving the main area on the sheets.
+            self._switch(1)
+            return
+        if in_manage:
+            # Came from the manage grid (stack 0, tab in manage mode): keep the
+            # main area on the grid and put ManagePanel's operations back in the
+            # sidebar — not the tool list.
+            tab = self.viewer._current()
+            if tab is not None and tab.in_manage_mode() and \
+                    tab._manage_panel is not None:
+                self._sidebar_host.mount("manage", tab._manage_panel)
+                self._sync_view_switch()
+                return
+        # Default (and fallback when nothing was remembered): the preview list.
         self._switch(0)
 
     def _switch(self, idx: int):

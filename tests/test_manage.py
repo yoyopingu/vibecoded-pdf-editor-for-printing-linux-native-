@@ -563,3 +563,56 @@ def test_tools_toggle_resets_on_mount_and_appends_the_list_when_open():
     finally:
         host = None
         slot.deleteLater(); _app.processEvents()
+
+
+def test_picking_a_tool_keeps_the_view_and_back_restores_it():
+    """Phase 5.11: picking a tool from ANY view morphs only the sidebar and
+    keeps the main area in that view (preview, manage grid, or layout sheets);
+    "‹ Werkzeuge" returns to the SAME view with that view's sidebar restored,
+    never a jump to the preview. (docs/gui-refactor-plan.md line 144.)"""
+    import tools.app as MAIN
+    win = MAIN.MainWindow()
+    win.show()
+    try:
+        win.viewer.open_file(FX["normal"])
+        panel = win._tool_panels["Farbprofil / CMYK"]
+        host = win._sidebar_host
+
+        # Preview: mount keeps stack 0 + tool list; back returns to tool list.
+        win._switch(0)
+        win._mount_tool(panel)
+        assert win._stack.currentIndex() == 0 and win._tool_return_ctx == (0, False)
+        assert host._view == "tool", "sidebar must morph to the tool"
+        win._back_to_tools()
+        assert win._stack.currentIndex() == 0 and host._view == "tool_list", \
+            "back from preview must return to the tool list"
+
+        # Manage: mount keeps the manage grid in the main area; back re-mounts
+        # ManagePanel's operations (not the tool list).
+        win._pick_view(1)                       # VIEW_PAGES → manage mode
+        assert win.viewer._current().in_manage_mode()
+        win._mount_tool(panel)
+        assert win._stack.currentIndex() == 0 and win._tool_return_ctx == (0, True)
+        assert win.viewer._current().in_manage_mode(), \
+            "mounting a tool from manage must keep the manage grid in the main area"
+        assert host._view == "tool", "sidebar must morph to the tool"
+        win._back_to_tools()
+        assert win._stack.currentIndex() == 0 and host._view == "manage", \
+            "back from a tool picked in manage must restore ManagePanel, not the list"
+        assert win.viewer._current().in_manage_mode(), \
+            "the manage grid must still be in the main area after back"
+
+        # Layout: mount keeps stack 1; back re-enters layout. (Entering layout
+        # via the view switch exits manage mode first, as the app does.)
+        win._pick_view(2)                       # VIEW_LAYOUT
+        assert win._stack.currentIndex() == 1 and not win.viewer._current().in_manage_mode()
+        win._mount_tool(panel)
+        assert win._stack.currentIndex() == 1 and win._tool_return_ctx == (1, False)
+        assert host._view == "tool"
+        win._back_to_tools()
+        assert win._stack.currentIndex() == 1 and host._view == "layout", \
+            "back from a tool picked in Layout must return to Layout"
+    finally:
+        win.close()
+        win.deleteLater()
+        _app.processEvents()
