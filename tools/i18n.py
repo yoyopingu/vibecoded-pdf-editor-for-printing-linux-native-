@@ -451,6 +451,7 @@ _EN: dict[str, str] = {
     "Öffnen...": "Open...",
     "Auswahl als Datei speichern": "Save selection as file",
     "Zuerst Seiten auswählen.": "Select pages first.",
+    "Keine gültige Seitenangabe.": "No valid page range.",
     "Auswahl speichern als": "Save selection as",
     "Zielordner wählen": "Choose target folder",
     "Seite(n) gespeichert.": "page(s) saved.",

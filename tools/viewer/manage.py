@@ -202,6 +202,7 @@ class ManagePanel(QWidget):
         back_btn.setIconSize(QSize(16, 16))
         back_btn.setObjectName("secondaryBtn")
         back_btn.clicked.connect(self.closed.emit)
+        self._back_btn = back_btn
         layout.addWidget(back_btn)
 
     def _listbtn(self, label, fn, icon_name, kbd=""):
@@ -236,6 +237,14 @@ class ManagePanel(QWidget):
         if hasattr(self, '_sel_count'):
             self._sel_count.setStyleSheet(
                 f"color:{t['vdim']};font-size:11px;background:transparent;")
+
+        # The "Einzelansicht" button's arrow is a QIcon painted once at build
+        # time with theme_color("DIM") — it must be rebuilt so it follows a
+        # theme switch instead of keeping the theme it was born in.
+        if hasattr(self, '_back_btn'):
+            self._back_btn.setIcon(
+                icon("prev", colour=theme_color("DIM")))
+            self._back_btn.setIconSize(QSize(16, 16))
 
         _list = (f"QPushButton#listbtn{{background:transparent;color:{t['text']};"
                  f"border:none;border-radius:0;padding:0;text-align:left;}}"
@@ -320,11 +329,19 @@ class ManagePanel(QWidget):
     _positions_to_str = staticmethod(_positions_to_str)
 
     def _apply_sel_edit(self):
-        positions = _parse_positions(self.sel_edit.text(), len(self.model.order))
+        text = self.sel_edit.text()
+        positions = _parse_positions(text, len(self.model.order))
         if positions:
             self.model.selected = {self.model.order[i] for i in positions}
             self.grid._update_selection()
             self.grid.selection_changed.emit()
+        elif text.strip():
+            # Nothing parsed from a real input — the user typed something the
+            # field cannot make sense of (abc, 0, 99 on a 4-page file…).
+            # Leaving the selection alone silently reads as the input being
+            # ignored, so say what happened.
+            AppState.get().status_message.emit(
+                tr("Keine gültige Seitenangabe."))
         self.update_info()
 
     def _owning_tab(self):

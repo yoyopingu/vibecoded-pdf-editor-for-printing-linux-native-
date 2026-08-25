@@ -14,6 +14,7 @@ from PyQt6.QtGui import (QPixmap, QImage, QColor, QDrag, QPainter, QPen,
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
+from tools.render.region import cached_page_size_pt as _cached_page_size_pt
 from tools.theme import (STATUS, _DROP_THICKNESS, _TV, _paint_drop_marker,
                          _register_themed)
 
@@ -395,8 +396,22 @@ class PageGrid(QWidget):
                 if is_single:
                     c_w = max(60, grid_w - 2*MARGIN - 16)
                     pw, ph = _FullPageCache.get_dims(src_path, orig, rot)
+                    # get_dims already returns the page's oriented dimensions
+                    # (rotation applied, like the render the cache keys on), so
+                    # the thumbnail box simply follows that aspect. Swapping
+                    # here again for rot in (90, 270) was a second, opposite
+                    # swap: a rotated landscape page ended up in a portrait
+                    # box, with the thumbnail floated in ~half of it.
+                    if pw <= 0 or ph <= 0:
+                        # Full-page cache is cold (manage renders through the
+                        # thumbnail cache) — fall back to the page's measured
+                        # size, still oriented.
+                        pw_pt, ph_pt = _cached_page_size_pt(src_path, orig)
+                        if pw_pt and ph_pt:
+                            pw, ph = ((ph_pt, pw_pt) if rot % 180 == 90
+                                      else (pw_pt, ph_pt))
                     if pw > 0 and ph > 0:
-                        c_h = int(c_w * pw / ph) if rot in (90, 270) else int(c_w * ph / pw)
+                        c_h = int(c_w * ph / pw)
                     else:
                         c_h = int(c_w * CARD_H / CARD_W)
                     render_w = _thumb_render_width(c_w * 1.5)

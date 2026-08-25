@@ -385,8 +385,10 @@ class BasePanel(QWidget):
 
         from PyQt6.QtGui import QKeySequence, QShortcut
         sc = QShortcut(QKeySequence(Qt.Key.Key_Return), self)
+        sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc.activated.connect(self._enter_pressed)
         sc2 = QShortcut(QKeySequence(Qt.Key.Key_Enter), self)
+        sc2.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc2.activated.connect(self._enter_pressed)
 
     def _run_action(self) -> str:

@@ -34,7 +34,12 @@ def _parse_positions(text, n):
         try:
             if "-" in part:
                 a, b = part.split("-", 1)
-                for i in range(int(a.strip())-1, int(b.strip())):
+                lo, hi = int(a.strip()), int(b.strip())
+                if lo > hi:
+                    lo, hi = hi, lo   # "5-2" and "2-5" are the same range
+                if lo < 1 or hi < 1:  # "1--4", "0-3": a range with no page 1
+                    continue
+                for i in range(lo - 1, hi):
                     if 0 <= i < n: out.add(i)
             else:
                 i = int(part) - 1
