@@ -167,7 +167,7 @@ def run_chunked(report, build_cmd, out, n_pages, *, timeout=None,
              for part, (first, last) in zip(parts, ranges)],
             timeout=timeout, text=True, errors="replace")
         if failed(results) is None:
-            report(tr("Seitenbereiche werden zusammengefuegt …"))
+            report(tr("Seitenbereiche werden zusammengefügt …"))
             merge_chunks(parts, out, carry_document_state=carry_document_state)
         return results
     finally:

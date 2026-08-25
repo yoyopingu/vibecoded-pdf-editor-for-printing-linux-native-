@@ -4,7 +4,7 @@ BasePanel v3
 - Liest aktuelle PDF aus AppState (kein eigener Datei-Dialog noetig)
 - Scrollbar damit Inhalte nie abgeschnitten werden
 - Alles auf Main-Thread — keine Crashes
-- Ergebnisse werden automatisch in neuem Tab geoeffnet
+- Ergebnisse werden automatisch in neuem Tab geöffnet
 """
 import logging
 import os
@@ -96,7 +96,7 @@ class CurrentFileBar(QWidget):
         icon.setFixedWidth(30)
         layout.addWidget(icon)
 
-        self.file_label = QLabel(tr("Keine Datei geoeffnet — oeffne zuerst eine PDF im Page Viewer"))
+        self.file_label = QLabel(tr("Keine Datei geöffnet — öffne zuerst eine PDF im Page Viewer"))
         self.file_label.setObjectName("currentFileLabel")
         self.file_label.setWordWrap(False)
         # Don't let the (long) filename/placeholder dictate the width of the bar —
@@ -113,7 +113,7 @@ class CurrentFileBar(QWidget):
             self.file_label.setText(os.path.basename(path))
             self.file_label.setObjectName("currentFileLabel")
         else:
-            self.file_label.setText(tr("Keine Datei geoeffnet — oeffne zuerst eine PDF im Page Viewer"))
+            self.file_label.setText(tr("Keine Datei geöffnet — öffne zuerst eine PDF im Page Viewer"))
             self.file_label.setObjectName("dimLabel")
         self.file_label.setStyleSheet("")  # let QSS handle colour
         self.file_label.style().unpolish(self.file_label)
@@ -149,11 +149,11 @@ class FileDropList(QListWidget):
             e.ignore()
 
     def dropEvent(self, e):
-        # Internes Drag & Drop — Qt uebernimmt das Umsortieren
+        # Internes Drag & Drop — Qt übernimmt das Umsortieren
         if e.source() is self:
             super().dropEvent(e)
             return
-        # Externe Dateien hinzufuegen
+        # Externe Dateien hinzufügen
         for url in e.mimeData().urls():
             path = url.toLocalFile()
             ext  = os.path.splitext(path)[1].lower()
@@ -189,8 +189,8 @@ class FileDropList(QListWidget):
 class BasePanel(QWidget):
     TITLE    = "Tool"
     SUBTITLE = ""
-    # Beschriftung des Ausfuehren-Buttons (pro Tool ueberschreibbar)
-    RUN_LABEL = "  Ausfuehren"
+    # Beschriftung des Ausführen-Buttons (pro Tool überschreibbar)
+    RUN_LABEL = "  Ausführen"
 
     # Emitted when the operator clicks the "‹ Werkzeuge" back button; the
     # window listens and returns the sidebar to the tool list.
@@ -401,7 +401,7 @@ class BasePanel(QWidget):
 
     def current_pdf(self) -> str:
         """Pfad der PDF, die das Tool verarbeiten soll — die Seiten so, wie der
-        Viewer sie zeigt (Reihenfolge, Drehung, eingefuegte Seiten). Fuer den
+        Viewer sie zeigt (Reihenfolge, Drehung, eingefügte Seiten). Für den
         Original-Dateinamen (Titelzeile, Ausgabename) AppState.current_pdf.
 
         Call this, not AppState.get().current_pdf, from anywhere that measures
@@ -412,12 +412,12 @@ class BasePanel(QWidget):
         return ensure_view_snapshot(AppState.get().current_pdf)
 
     def require_pdf(self) -> str:
-        """Gibt aktuellen PDF-Pfad zurueck, wirft Fehler wenn keine offen."""
+        """Gibt aktuellen PDF-Pfad zurück, wirft Fehler wenn keine offen."""
         path = AppState.get().current_pdf
         if not path:
             raise ValueError(tr(
-                "Keine PDF geoeffnet.\n"
-                "Oeffne zuerst eine PDF im Page Viewer (linke Seite)."))
+                "Keine PDF geöffnet.\n"
+                "Öffne zuerst eine PDF im Page Viewer (linke Seite)."))
         if not os.path.isfile(path):
             # A document *is* open — its file has gone from under it. Saying
             # "no PDF open" here sent the operator to open the file they
@@ -426,10 +426,10 @@ class BasePanel(QWidget):
             # else all arrived as that same wrong sentence.
             raise ValueError(tr(
                 "Die Datei ist nicht mehr auffindbar:\n{p0}\n\n"
-                "Sie wurde verschoben, umbenannt oder geloescht — oder das "
+                "Sie wurde verschoben, umbenannt oder gelöscht — oder das "
                 "Laufwerk ist nicht mehr verbunden. Die Seitenansicht zeigt "
                 "noch den letzten Stand; zum Weiterarbeiten die Datei wieder "
-                "verfuegbar machen und neu oeffnen."
+                "verfügbar machen und neu öffnen."
             ).format(p0=path))
         # Central guard: a locked PDF cannot be processed and otherwise surfaces
         # as a cryptic library error (PasswordError / FileNotDecryptedError /
@@ -441,8 +441,8 @@ class BasePanel(QWidget):
         # that pikepdf and pdfium open without being asked for anything.
         if is_locked(path):
             raise ValueError(tr(
-                "Diese PDF ist passwortgeschuetzt.\n"
-                "Bitte zuerst entsperren (Passwort entfernen), dann erneut oeffnen."))
+                "Diese PDF ist passwortgeschützt.\n"
+                "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen."))
         # And a document with no pages in it, which every tool then failed at in
         # its own way — "Accessing nonexistent PDF page number" from one,
         # "Failed to load document (PDFium: Success)" from another.
@@ -453,13 +453,13 @@ class BasePanel(QWidget):
         except Exception:
             empty = False      # unreadable for another reason: let the tool say so
         if empty:
-            raise ValueError(tr("Das PDF enthaelt keine Seiten."))
+            raise ValueError(tr("Das PDF enthält keine Seiten."))
         # Only now flatten the page manager's view: the guards above have to run
         # on the real file (an encrypted one can't be copied page by page).
         return ensure_view_snapshot(path)
 
     def open_result(self, path: str, title: str = ""):
-        """Oeffnet ein Ergebnis in einem neuen Tab."""
+        """Öffnet ein Ergebnis in einem neuen Tab."""
         AppState.get().open_result(path, title)
 
     def _safe_run(self):
@@ -508,7 +508,7 @@ class BasePanel(QWidget):
         """
         job = getattr(self, "_async_job", None)
         if job is not None and not job.is_finished:
-            raise RuntimeError(tr("Vorgang laeuft bereits — bitte warten."))
+            raise RuntimeError(tr("Vorgang läuft bereits — bitte warten."))
 
         self._async_running = True
         prev_label = None
@@ -596,12 +596,12 @@ class BasePanel(QWidget):
         os.makedirs(tmp_dir, exist_ok=True)
         return tmp_dir
 
-    def pick_pdf(self, caption="PDF oeffnen") -> str:
+    def pick_pdf(self, caption="PDF öffnen") -> str:
         path, _ = QFileDialog.getOpenFileName(self, tr(caption), "", tr("PDF Dateien (*.pdf)"))
         return path or ""
 
     def pick_pdfs(self) -> list:
-        paths, _ = QFileDialog.getOpenFileNames(self, tr("PDFs oeffnen"), "", tr("PDF Dateien (*.pdf)"))
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("PDFs öffnen"), "", tr("PDF Dateien (*.pdf)"))
         return paths
 
     def pick_images(self) -> list:
@@ -610,5 +610,5 @@ class BasePanel(QWidget):
         from tools.multi_open import IMAGE_EXTS
         pattern = " ".join("*" + e for e in sorted(IMAGE_EXTS))
         paths, _ = QFileDialog.getOpenFileNames(
-            self, tr("Bilder oeffnen"), "", tr("Bilder") + f" ({pattern})")
+            self, tr("Bilder öffnen"), "", tr("Bilder") + f" ({pattern})")
         return paths

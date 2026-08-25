@@ -1,7 +1,7 @@
 """
 What a PDF brings with it that decides whether it can go on a press.
 
-Read-only: nothing here changes a file. "Druckvorstufenpruefung" turns these
+Read-only: nothing here changes a file. "Druckvorstufenprüfung" turns these
 into a report, and the PDF/X export uses the same answers to decide what to
 say about what it did — one module so the two can never disagree about
 whether a file was ready.

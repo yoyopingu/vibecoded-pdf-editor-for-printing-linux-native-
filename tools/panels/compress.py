@@ -17,7 +17,7 @@ from tools.panels._verify import _verify_pages_intact
 # ══════════════════════════════════════════════════════════════════════════════
 class CompressPanel(BasePanel):
     TITLE         = "Komprimieren"
-    SUBTITLE      = "PDF-Dateigroesse reduzieren. Ergebnis wird als neuer Tab geoeffnet."
+    SUBTITLE      = "PDF-Dateigröße reduzieren. Ergebnis wird als neuer Tab geöffnet."
     RUN_LABEL     = "  Komprimieren"
 
     def build_ui(self, layout):
@@ -31,7 +31,7 @@ class CompressPanel(BasePanel):
                               tr("Drucker (300 dpi)"),
                               tr("Vordruck (300 dpi)")])
         self.preset.setCurrentIndex(2)
-        gl.addLayout(row(tr("Qualitaetsstufe:"), self.preset))
+        gl.addLayout(row(tr("Qualitätsstufe:"), self.preset))
         self.gs_check = QCheckBox(tr("Ghostscript verwenden (empfohlen)"))
         self.gs_check.setChecked(ghostscript_binary() is not None)
         gl.addWidget(self.gs_check)
@@ -109,14 +109,14 @@ def _compress(src, out, gs_setting, use_gs, report):
                 n_out = len(_b.pages)
             if n_out != n_src:
                 raise RuntimeError(tr(
-                    'Komprimierung hat die Seitenzahl veraendert '
+                    'Komprimierung hat die Seitenzahl verändert '
                     '({p0} → {p1}) — Datei nicht gespeichert.').format(
                         p0=n_src, p1=n_out))
             report(tr("Prüfe Seiten …"))
             damaged = _verify_pages_intact(src, gs_tmp, range(n_src), report)
             if damaged:
                 raise RuntimeError(tr(
-                    'Komprimierung hat Seite(n) beschaedigt: {p0} — Datei '
+                    'Komprimierung hat Seite(n) beschädigt: {p0} — Datei '
                     'nicht gespeichert.').format(
                         p0=", ".join(f"{i + 1} ({why})"
                                      for i, why in sorted(damaged.items()))))
@@ -128,7 +128,7 @@ def _compress(src, out, gs_setting, use_gs, report):
         try:
             pdf = pikepdf.open(src)
         except Exception as e:
-            raise RuntimeError(tr("PDF konnte nicht geoeffnet werden: {p0}").format(p0=e))
+            raise RuntimeError(tr("PDF konnte nicht geöffnet werden: {p0}").format(p0=e))
         try:
             pdf.save(out, compress_streams=True, recompress_flate=True)
         except Exception as e:

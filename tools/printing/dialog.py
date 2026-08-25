@@ -73,7 +73,7 @@ _PRINTER_LIST_CACHE = None   # (names:list[str], default:str) — last enumerati
 class PrintDialog(QDialog):
     """
     Vollstaendiger Druckdialog mit allen gaengigen Optionen.
-    Verwendet Qt QPrinter wenn verfuegbar, sonst Ghostscript/lp als Fallback.
+    Verwendet Qt QPrinter wenn verfügbar, sonst Ghostscript/lp als Fallback.
     """
 
     def done(self, result_code):
@@ -262,8 +262,8 @@ class PrintDialog(QDialog):
             "in der Vorschau, wenn die Datei ihre Schriften nicht mitbringt.\n"
             "Als Bitmap wird stattdessen genau das gedruckt, was die Vorschau "
             "zeigt.\n\n"
-            "Dafuer ist der Text im Druckauftrag nicht mehr markierbar und "
-            "die Datei wird groesser."))
+            "Dafür ist der Text im Druckauftrag nicht mehr markierbar und "
+            "die Datei wird größer."))
         top_row.addWidget(self.bitmap_check)
 
         self.bitmap_dpi = QComboBox()
@@ -272,8 +272,8 @@ class PrintDialog(QDialog):
         self.bitmap_dpi.setCurrentIndex(1)          # 600 dpi
         self.bitmap_dpi.setFixedWidth(96)
         self.bitmap_dpi.setToolTip(tr(
-            "Aufloesung der Rasterung. 600 dpi ist fuer Text und normale "
-            "Grafiken ueblich, 1200 dpi fuer feine Linien und kleine Schrift."))
+            "Auflösung der Rasterung. 600 dpi ist für Text und normale "
+            "Grafiken üblich, 1200 dpi für feine Linien und kleine Schrift."))
         self.bitmap_dpi.setEnabled(False)
         self.bitmap_dpi.setVisible(False)
         self.bitmap_check.toggled.connect(self.bitmap_dpi.setEnabled)
@@ -396,12 +396,12 @@ class PrintDialog(QDialog):
         paper_row.setSpacing(8)
         self.paper_combo = QComboBox()
         self.paper_combo.setToolTip(tr(
-            "Drucker-Standard laesst das Papier so, wie die Warteschlange es "
+            "Drucker-Standard lässt das Papier so, wie die Warteschlange es "
             "eingestellt hat — richtig, solange im Drucker liegt, worauf "
             "gedruckt werden soll.\n\n"
-            "Eine Groesse hier zu waehlen ueberschreibt das. Wird eine "
-            "kleinere genannt als eingelegt ist, wird nur diese Flaeche "
-            "bedruckt; wird eine groessere genannt, verkleinert der Drucker."))
+            "Eine Größe hier zu wählen überschreibt das. Wird eine "
+            "kleinere genannt als eingelegt ist, wird nur diese Fläche "
+            "bedruckt; wird eine größere genannt, verkleinert der Drucker."))
         paper_row.addWidget(self.paper_combo, 1)
         # Two boxes for a size nobody's list has. Hidden until "Benutzer-
         # definiert" is chosen, because that is the only time they mean
@@ -464,7 +464,8 @@ class PrintDialog(QDialog):
         self.copies_spin.setValue(1)
         self.copies_spin.setFixedWidth(60)
         copies_row.addWidget(self.copies_spin)
-        self.collate_check = QCheckBox(tr("Sortieren  (1,2,3 / 1,2,3)"))
+        self.collate_check = QCheckBox(tr("Sortieren"))
+        self.collate_check.setToolTip(tr("1,2,3 – 1,2,3 (sortiert) statt 1,1,1 – 2,2,2 (gebündelt)"))
         self.collate_check.setChecked(True)
         copies_row.addWidget(self.collate_check)
         copies_row.addStretch()
@@ -928,7 +929,7 @@ class PrintDialog(QDialog):
         else:
             self.status_lbl.setText(tr(
                 "Achtung: Der Ausdruck wird anders aussehen als die Vorschau. "
-                "Die Schriften der Datei ueberstehen den Druckweg nicht. "
+                "Die Schriften der Datei überstehen den Druckweg nicht. "
                 "„Als Bitmap drucken“ druckt genau das, was die Vorschau "
                 "zeigt."))
 
@@ -1151,7 +1152,7 @@ class PrintDialog(QDialog):
         return [(label(name), name) for name in sizes()]
 
     def _on_printer_changed(self):
-        """Aktualisiert Papierformat, Duplex und Farbe basierend auf dem gewaehlten Drucker."""
+        """Aktualisiert Papierformat, Duplex und Farbe basierend auf dem gewählten Drucker."""
         try:
             from PyQt6.QtPrintSupport import QPrinterInfo, QPrinter
             from PyQt6.QtGui import QPageSize
@@ -1381,7 +1382,7 @@ class PrintDialog(QDialog):
                 # looking at — that prints the wrong sheet and says nothing.
                 self.status_lbl.setText(tr(
                     "Aktuelle Seite kann nicht ermittelt werden — bitte "
-                    "»Alle Seiten« oder einen Bereich waehlen."))
+                    "»Alle Seiten« oder einen Bereich wählen."))
                 return None
             return [cur]
         else:

@@ -180,7 +180,7 @@ class PdfTab(PdfTabBase):
             n = len(reader.pages)
         except Exception as e:
             logging.error(f"PdfTab._load: {e}")
-            raise RuntimeError(tr('Die Datei ist beschaedigt oder keine gueltige PDF.\n{p0}')
+            raise RuntimeError(tr('Die Datei ist beschädigt oder keine gültige PDF.\n{p0}')
                                .format(p0=e)) from e
         if encrypted and is_locked(self.pdf_path):
             # Only a file nothing can read without a password. A *restricted*
@@ -193,7 +193,7 @@ class PdfTab(PdfTabBase):
                 "Diese PDF ist passwortgeschützt.\n"
                 "Bitte zuerst entsperren (Passwort entfernen), dann erneut öffnen."))
         if n == 0:
-            raise RuntimeError(tr("Das PDF enthaelt keine Seiten."))
+            raise RuntimeError(tr("Das PDF enthält keine Seiten."))
         self.model = PageModel(n)
         self.single.load(self.pdf_path, self.model)
         AppState.get().page_model   = self.model
@@ -263,7 +263,11 @@ class PdfTab(PdfTabBase):
         self.single._tot_lbl.setText(str(n))
         self.single.publish_colour_counts()
 
-    def _exit_manage(self):
+    def _restore_rail_after_manage(self):
+        """Undo what _enter_manage did to the shared rail: give the single-page
+        view back the rail (its own delegate, its own scroll mode) and stop the
+        grid from pushing into it. Used by the full _exit_manage path and by the
+        panel when a tab switch leaves a manage-mode tab without calling it."""
         if self._manage_rail is not None:
             try:
                 self._manage_rail._bar().valueChanged.disconnect(
@@ -272,6 +276,9 @@ class PdfTab(PdfTabBase):
                 pass      # never connected, or already torn down
         self.single.rail_delegate = None
         self.single.nav_scroll_mode(self.single._continuous)
+
+    def _exit_manage(self):
+        self._restore_rail_after_manage()
         self._stack.setCurrentWidget(self.single)
         # Restore sidebar / layout via callback
         cb = getattr(self, '_on_manage_exit', None)
@@ -392,7 +399,7 @@ class PdfTab(PdfTabBase):
         self.changed.emit()
 
     def _print(self):
-        """Oeffnet den vollstaendigen Druckdialog."""
+        """Öffnet den vollstaendigen Druckdialog."""
         if not self.model:
             return
         dlg = PrintDialog(self.pdf_path, self.model, self)

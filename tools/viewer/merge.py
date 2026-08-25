@@ -560,7 +560,7 @@ class FileGrid(QWidget):
         if not self._selected: return tr("Keine Auswahl")
         sel = sorted(self._selected)
         if len(sel)==1: return tr('Datei {p0}').format(p0=sel[0] + 1)
-        return tr('{p0} Dateien ausgewaehlt').format(p0=len(sel))
+        return tr('{p0} Dateien ausgewählt').format(p0=len(sel))
 
 
 class _FileGridRail:
@@ -703,13 +703,15 @@ class MergeOrderWidget(QWidget):
         picked = [self._grid.get_paths()[i] for i in sorted(self._grid._selected)
                   if 0 <= i < len(self._grid.get_paths())]
         if not picked:
-            self.status.setText(tr("Zuerst Dateien auswaehlen.")); return
+            self.status.setText(tr("Zuerst Dateien auswählen.")); return
         MergeOrderWidget._shared_clipboard = picked
-        self.status.setText(tr('{p0} Datei(en) kopiert.').format(p0=len(picked)))
+        n = len(picked)
+        self.status.setText(tr("{p0} Datei kopiert.").format(p0=n) if n == 1
+                            else tr("{p0} Dateien kopiert.").format(p0=n))
 
     def _cut(self):
         if not self._grid._selected:
-            self.status.setText(tr("Zuerst Dateien auswaehlen.")); return
+            self.status.setText(tr("Zuerst Dateien auswählen.")); return
         self._copy()
         self._save_history()
         self._grid.remove_selected()
@@ -724,16 +726,18 @@ class MergeOrderWidget(QWidget):
         self._save_history()
         self._grid.insert_paths(at, clip)
         self._on_order_changed()
-        self.status.setText(tr('{p0} Datei(en) eingefuegt.').format(p0=len(clip)))
+        n = len(clip)
+        self.status.setText(tr("{p0} Datei eingefügt.").format(p0=n) if n == 1
+                            else tr("{p0} Dateien eingefügt.").format(p0=n))
 
     def _undo(self):
         if not self._history:
-            self.status.setText(tr("Nichts rueckgaengig zu machen.")); return
+            self.status.setText(tr("Nichts rückgängig zu machen.")); return
         self._redo_stack.append((self._grid.get_paths(), set(self._grid._selected)))
         paths, sel = self._history.pop()
         self._grid.set_state(paths, sel)
         self._on_order_changed()
-        self.status.setText(tr("Rueckgaengig."))
+        self.status.setText(tr("Rückgängig."))
 
     def _redo(self):
         if not self._redo_stack:
@@ -818,8 +822,8 @@ class MergeOrderWidget(QWidget):
         self._zoom_btns = []
         for text, tip, fn in [
                 ("−",   "Thumbnails verkleinern",  lambda: self._grid.zoom_out()),
-                ("+",   "Thumbnails vergroessern", lambda: self._grid.zoom_in()),
-                ("1:1", "Zoom zuruecksetzen",      lambda: self._grid.zoom_reset())]:
+                ("+",   "Thumbnails vergrößern", lambda: self._grid.zoom_in()),
+                ("1:1", "Zoom zurücksetzen",      lambda: self._grid.zoom_reset())]:
             b = QPushButton(text); b.setFixedSize(32, 26)
             b.setToolTip(tr(tip))
             b.clicked.connect(fn)
@@ -830,7 +834,7 @@ class MergeOrderWidget(QWidget):
         ll.addWidget(self._sep())
 
         self._section(ll, tr("AUSWAHL"))
-        ll.addWidget(self._btn(tr("Alle auswaehlen  (Strg+A)"),  lambda: self._grid.select_all()))
+        ll.addWidget(self._btn(tr("Alle auswählen  (Strg+A)"),  lambda: self._grid.select_all()))
         ll.addWidget(self._btn(tr("Auswahl aufheben  (Strg+D)"), lambda: self._grid.deselect_all()))
         ll.addWidget(self._sep())
 
@@ -845,8 +849,8 @@ class MergeOrderWidget(QWidget):
         ll.addWidget(self._btn(tr("Entfernen  (Entf)"),       self._remove))
         ll.addWidget(self._btn(tr("Kopieren  (Strg+C)"),      self._copy))
         ll.addWidget(self._btn(tr("Ausschneiden  (Strg+X)"),  self._cut))
-        ll.addWidget(self._btn(tr("Einfuegen  (Strg+V)"),     self._paste))
-        ll.addWidget(self._btn(tr("Rueckgaengig  (Strg+Z)"),  self._undo))
+        ll.addWidget(self._btn(tr("Einfügen  (Strg+V)"),     self._paste))
+        ll.addWidget(self._btn(tr("Rückgängig  (Strg+Z)"),  self._undo))
         ll.addWidget(self._sep())
 
         self._section(ll, tr("DATEI-INFO"))
@@ -861,27 +865,27 @@ class MergeOrderWidget(QWidget):
         # ── The two ways out, pinned below the scroll area ───────────────
         # These are what the view exists for, so they must never be scrolled
         # out of reach: at the bottom of the scrolling column they sat below
-        # the fold on a standard window and "Zusammenfuehren" was invisible
+        # the fold on a standard window and "Zusammenführen" was invisible
         # until the sidebar was scrolled.
         self._actions_w = QWidget(); self._actions_w.setObjectName("mergeActionsW")
         al = QVBoxLayout(self._actions_w)
         # No 22px right inset here: that one exists in the scroll area above to
-        # clear its scrollbar, and copying it made "Zusammenfuehren (n)" wider
+        # clear its scrollbar, and copying it made "Zusammenführen (n)" wider
         # than its button. The extra bottom inset keeps the drag-hint status
         # line clear of the scroll edge.
         al.setContentsMargins(10, 8, 10, 20); al.setSpacing(5)
 
-        self._section(al, tr("OEFFNEN"))
+        self._section(al, tr("ÖFFNEN"))
         self._total = QLabel("")
         self._total.setWordWrap(True)
         self._total.setObjectName("dimLabel")
         al.addWidget(self._total)
-        self._btn_go = QPushButton(tr("  Zusammenfuehren"))
+        self._btn_go = QPushButton(tr("  Zusammenführen"))
         self._btn_go.setObjectName("actionBtn")
         self._btn_go.setMinimumHeight(28)
         self._btn_go.clicked.connect(self._confirm)
         al.addWidget(self._btn_go)
-        self._btn_single = self._btn(tr("  Einzeln oeffnen"), self._do_open_separately)
+        self._btn_single = self._btn(tr("  Einzeln öffnen"), self._do_open_separately)
         al.addWidget(self._btn_single)
         self._btn_cancel = self._btn(tr("✗  Abbrechen"), self._do_cancel)
         al.addWidget(self._btn_cancel)
@@ -889,7 +893,7 @@ class MergeOrderWidget(QWidget):
         self.status = QLabel(tr("Drag & Drop sortiert · Strg/Shift mehrfach"))
         self.status.setWordWrap(True)
         # One line on purpose: the full hint ("Drag & Drop zum Umsortieren ·
-        # Strg/Shift zum Mehrfachauswaehlen") wrapped to two lines, and as the
+        # Strg/Shift zum Mehrfachauswählen") wrapped to two lines, and as the
         # last row of a scrolling sidebar the second line's lower half sat under
         # the viewport edge (and the BETA chip). A single line that fits the
         # ~210px column cannot be cut the same way.
@@ -1003,11 +1007,12 @@ class MergeOrderWidget(QWidget):
         n = len(self._grid.get_paths())
         n_conv = sum(1 for p in self._grid.get_paths()
                      if os.path.splitext(p)[1].lower() != ".pdf")
-        txt = tr('{p0} Datei(en)').format(p0=n)
+        txt = (tr("{p0} Datei").format(p0=n) if n == 1
+               else tr("{p0} Dateien").format(p0=n))
         if n_conv: txt += tr("  —  {p0} zu konvertieren").format(p0=n_conv)
         self._total.setText(txt)
-        self._btn_go.setText(tr('  Zusammenfuehren  ({p0})').format(p0=n))
-        self._btn_single.setText(tr('  Einzeln oeffnen  ({p0})').format(p0=n))
+        self._btn_go.setText(tr('  Zusammenführen  ({p0})').format(p0=n))
+        self._btn_single.setText(tr('  Einzeln öffnen  ({p0})').format(p0=n))
 
     def _apply_sel_edit(self):
         positions = _parse_positions(self.sel_edit.text(), len(self._grid.get_paths()))
@@ -1034,11 +1039,18 @@ class MergeOrderWidget(QWidget):
             self._inf_name.setText("—"); self._inf_type.setText("")
             self._inf_pages.setText(""); self._inf_size.setText("")
             self._info.setText(tr("Keine Auswahl")); return
-        self._info.setText(self._grid.get_selected_info())
+        # A multi-selection advertises how many files are picked; a single pick
+        # says where in the list the file sits. get_selected_info() already
+        # branched on this, but the position line below used to clobber it.
+        if len(self._grid._selected) == 1:
+            self._info.setText(tr('Datei {p0} von {p1}').format(
+                p0=pos + 1, p1=len(self._grid.get_paths())))
+        else:
+            self._info.setText(self._grid.get_selected_info())
         ext = os.path.splitext(path)[1].lower()
         self._inf_name.setText(os.path.basename(path))
         self._inf_type.setText(f"Typ: {self.FILE_KINDS.get(ext, ext.upper().lstrip('.'))}")
-        try: self._inf_size.setText(tr('Groesse: {p0:.0f} KB').format(p0=os.path.getsize(path) / 1024))
+        try: self._inf_size.setText(tr('Größe: {p0:.0f} KB').format(p0=os.path.getsize(path) / 1024))
         except Exception: self._inf_size.setText("")
         if ext == ".pdf":
             try:
@@ -1047,8 +1059,6 @@ class MergeOrderWidget(QWidget):
             except Exception: self._inf_pages.setText(tr("Seiten: ?"))
         else:
             self._inf_pages.setText(tr("Seiten: nach Konvertierung"))
-        paths = self._grid.get_paths()
-        self._info.setText(tr('Datei {p0} von {p1}').format(p0=pos + 1, p1=len(paths)))
 
     def _move_up(self):
         if self._grid._selected: self._save_history()
@@ -1062,7 +1072,7 @@ class MergeOrderWidget(QWidget):
 
     def _remove(self):
         if not self._grid._selected:
-            self.status.setText(tr("Zuerst Dateien auswaehlen.")); return
+            self.status.setText(tr("Zuerst Dateien auswählen.")); return
         self._save_history()
         self._grid.remove_selected()
         self._on_order_changed()

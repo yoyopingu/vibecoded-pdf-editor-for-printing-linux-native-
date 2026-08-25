@@ -147,8 +147,8 @@ class PageModel:
 
     def selected_info(self):
         positions = [i+1 for i, u in enumerate(self.order) if u in self.selected]
-        if not positions: return tr("Keine Seiten ausgewaehlt")
+        if not positions: return tr("Keine Seiten ausgewählt")
         if len(positions) == 1: return tr('Seite {p0}').format(p0=positions[0])
         if len(positions) <= 6:
             return tr('{p0} Seiten: {p1}').format(p0=len(positions), p1=', '.join((str(p) for p in positions)))
-        return tr('{p0} Seiten ausgewaehlt').format(p0=len(positions))
+        return tr('{p0} Seiten ausgewählt').format(p0=len(positions))

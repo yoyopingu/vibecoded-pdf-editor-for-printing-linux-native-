@@ -1,5 +1,5 @@
 """
-The flow behind "mehrere Dateien oeffnen": a sort preview for several picked
+The flow behind "mehrere Dateien öffnen": a sort preview for several picked
 files, conversion of what needs converting, and the two ways out — merge into
 one document, or open each as its own tab.
 
@@ -99,8 +99,10 @@ class MergeFlow:
             return
         detail = "\n".join(f"{os.path.basename(p)}  —  {m}" for p, m in failures)
         logging.error("conversion failed:\n%s", detail)
+        n = len(failures)
         AppState.get().status_message.emit(
-            tr('{p0} Datei(en) konnten nicht konvertiert werden').format(p0=len(failures)))
+            tr("{p0} Datei konnte nicht konvertiert werden").format(p0=n) if n == 1
+            else tr("{p0} Dateien konnten nicht konvertiert werden").format(p0=n))
         QMessageBox.warning(
             self.panel, tr("Nicht konvertierte Dateien"),
             tr("Diese Dateien fehlen im Ergebnis:\n\n{p0}").format(p0=detail))
@@ -149,7 +151,7 @@ class MergeFlow:
         return dest
 
     def _convert_and_merge(self, file_paths, merge_widget):
-        """Konvertiert Dateien und fuegt sie zusammen."""
+        """Konvertiert Dateien und fügt sie zusammen."""
         logging.debug(f"_convert_and_merge: {len(file_paths)} Dateien")
 
         def _on_done(pdfs, failures):
@@ -179,7 +181,7 @@ class MergeFlow:
             # reads the file while it still exists; adding the tab then trips
             # _on_tab_changed, which leaves the merge view and cleans up. The
             # explicit exit below is the safety net when no tab change fired.
-            self.panel._open_result_tab(out, tr("Zusammengefuehrt"))
+            self.panel._open_result_tab(out, tr("Zusammengeführt"))
             self.panel._update_toolbar()
             self._report_conversion_failures(failures)
             self.panel._exit_merge_preview()
@@ -187,7 +189,7 @@ class MergeFlow:
         self._start_conversion(file_paths, merge_widget, _on_done)
 
     def _convert_and_open(self, file_paths, merge_widget):
-        """"Einzeln oeffnen" — same conversion as the merge, but every file
+        """"Einzeln öffnen" — same conversion as the merge, but every file
         becomes its own tab instead of one combined document."""
         logging.debug(f"_convert_and_open: {len(file_paths)} Dateien")
 

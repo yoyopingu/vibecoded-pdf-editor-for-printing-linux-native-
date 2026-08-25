@@ -72,6 +72,12 @@ class FindBar(QObject):
 
     def retheme(self):
         self.open_btn.setIcon(search_icon(_TV['text']))
+        # The step/close chevrons are drawn in the shell theme's DIM and go
+        # stale on a switch otherwise.
+        dim = theme_color("DIM")
+        self._prev.setIcon(rotated(icon("chev", colour=dim), 180))
+        self._next.setIcon(icon("chev", colour=dim))
+        self._close.setIcon(icon("close", colour=dim))
 
     def toggle(self):
         """Strg+F — open the find bar, or close it if it is already open."""

@@ -20,16 +20,16 @@ from tools.panels._verify import _verify_pages_intact
 # ══════════════════════════════════════════════════════════════════════════════
 class ColourProfilePanel(BasePanel):
     TITLE         = "Farbprofil / CMYK"
-    SUBTITLE      = "ICC-Profile pruefen und in CMYK umwandeln."
+    SUBTITLE      = "ICC-Profile prüfen und in CMYK umwandeln."
 
     def build_ui(self, layout):
-        ib=QPushButton(tr("  Farbprofil pruefen")); ib.setObjectName("secondaryBtn")
+        ib=QPushButton(tr("  Farbprofil prüfen")); ib.setObjectName("secondaryBtn")
         ib.clicked.connect(self._inspect); layout.addWidget(ib)
 
         cb=QGroupBox(tr("IN CMYK UMWANDELN")); cl=QVBoxLayout(cb)
         cl.addWidget(make_label(tr(
             "Konvertiert via Ghostscript nach DeviceCMYK. "
-            "Qualitaetsstufe: Prepress (hoechste Qualitaet, alle Fonts eingebettet)."), dim=True))
+            "Qualitätsstufe: Prepress (höchste Qualität, alle Fonts eingebettet)."), dim=True))
         self.profile_combo = QComboBox()
         for label, cands, _oci, _condition in CMYK_PROFILES:
             self.profile_combo.addItem(tr(label), cands)
@@ -46,7 +46,7 @@ class ColourProfilePanel(BasePanel):
             "~/.local/share/copyshop_pdf_suite/icc/ — fehlt sie, wird generisch "
             "konvertiert."), dim=True))
         gs_ok = bool(ghostscript_binary())
-        status = tr("✓  Ghostscript verfuegbar") if gs_ok else tr("✗  Ghostscript fehlt  →  sudo pacman -S ghostscript")
+        status = tr("✓  Ghostscript verfügbar") if gs_ok else tr("✗  Ghostscript fehlt  →  sudo pacman -S ghostscript")
         cl.addWidget(make_label(status, dim=True))
         layout.addWidget(cb)
 
@@ -85,7 +85,7 @@ class ColourProfilePanel(BasePanel):
             else:
                 lines.append(tr("ℹ  Farbraum nicht eindeutig erkennbar."))
             self.log.log("\n".join(lines))
-            self.log.log(tr("Pruefung abgeschlossen."))
+            self.log.log(tr("Prüfung abgeschlossen."))
         except Exception as e:
             self.log.log(str(e), error=True)
 
@@ -129,7 +129,7 @@ class ColourProfilePanel(BasePanel):
         if damaged:
             verify += "\n⚠  " + tr(
                 'ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt '
-                'und blieben deshalb unveraendert: {p1}').format(
+                'und blieben deshalb unverändert: {p1}').format(
                     p0=len(damaged),
                     p1=", ".join(f"{i + 1} ({why})" for i, why in sorted(damaged.items())))
         self.log.log(tr('Konvertierung abgeschlossen.\n{p0}\n{p1}').format(

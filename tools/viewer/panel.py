@@ -590,6 +590,9 @@ class PageViewerPanel(QWidget):
         # The Bearbeiten glyph is stroked in the live theme's DIM, so it has to
         # be re-drawn on a theme switch like every other drawn icon.
         self._edit_btn.setIcon(icon("edit", colour=theme_color("DIM"), size=16))
+        # The "+" next to the tabs is drawn the same way and would otherwise
+        # keep the colour of the theme the app started in.
+        self._new_btn.setIcon(icon("plus", colour=theme_color("DIM"), size=16))
 
     def _on_status(self, msg):
         """Whatever the app has to say goes through the window's status bar
@@ -611,7 +614,7 @@ class PageViewerPanel(QWidget):
         if tab is None:
             return
         AppState.get().status_message.emit(
-            tr("Rueckgaengig.") if tab.undo() else tr("Nichts zum Rueckgaengig."))
+            tr("Rückgängig.") if tab.undo() else tr("Nichts zum Rückgängig."))
         self._update_toolbar()
 
     def _redo(self):
@@ -782,7 +785,7 @@ class PageViewerPanel(QWidget):
                                       file_dialog_filter)
         if not path:
             path, _ = QFileDialog.getOpenFileName(
-                self, tr("Datei oeffnen"), "", file_dialog_filter())
+                self, tr("Datei öffnen"), "", file_dialog_filter())
         if not path: return
 
         # Everything below assumes a readable file. Opening one that vanished
@@ -797,8 +800,8 @@ class PageViewerPanel(QWidget):
         ext = os.path.splitext(path)[1].lower()
         if ext not in PDF_EXT | IMAGE_EXTS | OFFICE_EXTS:
             QMessageBox.warning(
-                self, tr("Format nicht unterstuetzt"),
-                tr('{p0} kann "{p1}" nicht oeffnen.').format(
+                self, tr("Format nicht unterstützt"),
+                tr('{p0} kann "{p1}" nicht öffnen.').format(
                     p0=APP_NAME, p1=ext or "?"))
             return
 
@@ -836,7 +839,7 @@ class PageViewerPanel(QWidget):
         soffice = shutil.which("soffice") or shutil.which("libreoffice")
         if not soffice:
             QMessageBox.warning(self, tr("LibreOffice fehlt"),
-                tr("LibreOffice wird benoetigt um Office-Dateien zu oeffnen.\n"
+                tr("LibreOffice wird benötigt um Office-Dateien zu öffnen.\n"
                    "Installation: sudo pacman -S libreoffice-still"))
             return None
         try:
@@ -886,7 +889,7 @@ class PageViewerPanel(QWidget):
         except Exception as e:
             logging.exception("open failed: %s", path)
             QMessageBox.critical(
-                self, tr("Datei konnte nicht geoeffnet werden"),
+                self, tr("Datei konnte nicht geöffnet werden"),
                 tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
             return
         self._wire_tab(tab)
@@ -945,7 +948,7 @@ class PageViewerPanel(QWidget):
         going through open_file() so the choice is recorded like any other."""
         from tools.multi_open import file_dialog_filter
         path, _ = QFileDialog.getOpenFileName(
-            self, tr("Datei oeffnen"), "", file_dialog_filter())
+            self, tr("Datei öffnen"), "", file_dialog_filter())
         if path:
             self.open_file(path)
 
@@ -1025,7 +1028,7 @@ class PageViewerPanel(QWidget):
             logging.exception("result tab failed: %s", path)
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(
-                self, tr("Ergebnis konnte nicht geoeffnet werden"),
+                self, tr("Ergebnis konnte nicht geöffnet werden"),
                 tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
             return
         self._wire_tab(tab)
@@ -1130,7 +1133,7 @@ class PageViewerPanel(QWidget):
         widget._ensure_filter()
         self._update_toolbar()
         self._viewer_info.setText(
-            tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
+            tr("Dateien sortieren, zusammenführen oder einzeln öffnen"))
         if self.sync_view_switch:
             self.sync_view_switch()
 
@@ -1362,6 +1365,11 @@ class PageViewerPanel(QWidget):
             if old_tab._stack.currentWidget() is not old_tab.single:
                 old_tab._stack.setCurrentWidget(old_tab.single)
                 old_tab._on_manage_exit = None  # discard stale callback
+                # _exit_manage() also hands the shared rail back to the single
+                # view; switching the stack directly above skipped that, so the
+                # outgoing tab was left driving its (now hidden) page-manager
+                # grid, and the nav rail went dead when the user returned.
+                old_tab._restore_rail_after_manage()
             self._exit_manage_layout()   # detach panel → old tab, unmount
 
         # ── Memory management: freeze outgoing tab, resume incoming tab ────────
@@ -1399,7 +1407,7 @@ class PageViewerPanel(QWidget):
             self.focus_page_view()
         elif isinstance(w, MergeOrderWidget):
             self._update_toolbar()
-            self._viewer_info.setText(tr("Dateien sortieren, zusammenfuehren oder einzeln oeffnen"))
+            self._viewer_info.setText(tr("Dateien sortieren, zusammenführen oder einzeln öffnen"))
             w.setFocus()
         else:
             self._update_toolbar()

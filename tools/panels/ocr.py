@@ -85,7 +85,7 @@ def _ocr_with_tesseract(src, out, lang, deskew, skip, report):
     missing = [p for p in lang.split("+") if available and p not in available]
     if missing:
         raise RuntimeError(tr(
-            "Sprachpaket fehlt: {p0}\nVerfuegbar: {p1}\n"
+            "Sprachpaket fehlt: {p0}\nVerfügbar: {p1}\n"
             "Installation z.B.:  sudo pacman -S tesseract-data-{p0}"
         ).format(p0=", ".join(missing), p1=", ".join(available) or "—"))
 
@@ -97,7 +97,7 @@ def _ocr_with_tesseract(src, out, lang, deskew, skip, report):
             "Seiten konnten nicht gerendert werden (poppler installiert?):\n{p0}"
         ).format(p0=e))
     if not images:
-        raise RuntimeError(tr("Das PDF enthaelt keine Seiten."))
+        raise RuntimeError(tr("Das PDF enthält keine Seiten."))
 
     reader = PdfReader(src, strict=False)
     writer = PdfWriter()
@@ -125,7 +125,7 @@ def _ocr_with_tesseract(src, out, lang, deskew, skip, report):
             try:
                 r = report.run(cmd, text=True, errors="replace", timeout=300)
             except subprocess.TimeoutExpired:
-                raise RuntimeError(tr('Zeitueberschreitung bei Seite {p0}.').format(p0=i + 1))
+                raise RuntimeError(tr('Zeitüberschreitung bei Seite {p0}.').format(p0=i + 1))
             page_pdf = base + ".pdf"
             if r.returncode != 0 or not os.path.isfile(page_pdf):
                 raise RuntimeError(tr('Seite {p0}: {p1}').format(
@@ -146,7 +146,7 @@ def _ocr_with_tesseract(src, out, lang, deskew, skip, report):
         raise RuntimeError(tr("OCR hat keine Ausgabedatei erzeugt."))
     note = tr('OCR abgeschlossen ({p0}) — {p1} Seite(n) erkannt').format(p0=lang, p1=done)
     if skipped:
-        note += tr(', {p0} bereits mit Text uebersprungen').format(p0=skipped)
+        note += tr(', {p0} bereits mit Text übersprungen').format(p0=skipped)
     return out, note
 
 
@@ -209,7 +209,7 @@ class OcrPanel(BasePanel):
         if idx >= 0: self.lang.setCurrentIndex(idx)
         ol.addLayout(row(tr("Sprache:"), self.lang))
         self.deskew = QCheckBox(tr("Seiten begradigen")); self.deskew.setChecked(True); ol.addWidget(self.deskew)
-        self.skip   = QCheckBox(tr("Seiten mit Text ueberspringen")); self.skip.setChecked(True); ol.addWidget(self.skip)
+        self.skip   = QCheckBox(tr("Seiten mit Text überspringen")); self.skip.setChecked(True); ol.addWidget(self.skip)
         layout.addWidget(ob)
 
         # Fortschrittsanzeige

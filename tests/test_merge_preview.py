@@ -292,7 +292,7 @@ def test_several_files_go_straight_to_the_preview():
     w = vp._merge_widget
     assert isinstance(w, MergeOrderWidget), "the preview did not open"
     assert w._grid.get_paths() == paths
-    assert "Zusammenfuehren" in w._btn_go.text() and w._btn_go.isEnabled()
+    assert "Zusammenführen" in w._btn_go.text() and w._btn_go.isEnabled()
     assert "Einzeln" in w._btn_single.text() and w._btn_single.isEnabled()
 
     # one pending merge batch at a time (decision 3): a repeat request for the
@@ -310,7 +310,7 @@ def test_several_files_go_straight_to_the_preview():
 
 
 def test_preview_opens_files_separately():
-    """"Einzeln oeffnen" converts the same way the merge does, but gives every
+    """"Einzeln öffnen" converts the same way the merge does, but gives every
     file its own tab."""
     from tools.viewer.panel import PageViewerPanel
     from tools.viewer.merge import MergeOrderWidget

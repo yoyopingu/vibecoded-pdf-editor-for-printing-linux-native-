@@ -191,7 +191,7 @@ def test_manage_open_as_tab_copies_or_moves():
 
 
 def test_manage_inserts_several_files_at_once():
-    """"Aus Datei(en) einfuegen..." replaced the separate merge button, so it has
+    """"Aus Dateien einfügen..." replaced the separate merge button, so it has
     to accept more than one file and insert them after the selection."""
     from PyQt6.QtWidgets import QFileDialog
     from tools.snapshots import ensure_view_snapshot

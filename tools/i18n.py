@@ -81,15 +81,15 @@ _EN: dict[str, str] = {
     "Weitere Fehler dieser Sitzung werden nur noch ins Protokoll geschrieben.":
         "Further errors this session will only be written to the log.",
     "Der Arbeitsspeicher hat nicht gereicht. Sehr grosse Seiten bei hohem "
-    "Zoom sind die haeufigste Ursache — mit weniger Zoom oder weniger "
-    "geoeffneten Dateien erneut versuchen.":
+    "Zoom sind die häufigste Ursache — mit weniger Zoom oder weniger "
+    "geöffneten Dateien erneut versuchen.":
         "There was not enough memory. Very large pages at high zoom are the "
         "most common cause — try again with less zoom, or fewer files open.",
-    "Auf dem Datentraeger ist kein Platz mehr frei.":
+    "Auf dem Datenträger ist kein Platz mehr frei.":
         "The disk is full.",
     "Der Zugriff wurde vom Betriebssystem verweigert. Meist ist das Ziel "
-    "schreibgeschuetzt, gehoert einem anderen Benutzer, oder die Datei ist "
-    "in einem anderen Programm geoeffnet.":
+    "schreibgeschützt, gehört einem anderen Benutzer, oder die Datei ist "
+    "in einem anderen Programm geöffnet.":
         "The operating system refused access. Usually the target is "
         "read-only, belongs to another user, or the file is open in another "
         "program.",
@@ -97,27 +97,27 @@ _EN: dict[str, str] = {
     "siehe README, Abschnitt Requirements.":
         "{p0} was not found. It is installed separately — see the README, "
         "Requirements section.",
-    "Ein benoetigtes Python-Paket fehlt oder laesst sich nicht laden. "
-    "requirements.txt nennt die Pakete, die installiert sein muessen.":
+    "Ein benötigtes Python-Paket fehlt oder lässt sich nicht laden. "
+    "requirements.txt nennt die Pakete, die installiert sein müssen.":
         "A required Python package is missing or will not load. "
         "requirements.txt lists the packages that must be installed.",
     "Die Datei war nicht mehr da. Sie wurde vermutlich verschoben, "
-    "umbenannt oder geloescht, waehrend sie hier geoeffnet war.":
+    "umbenannt oder gelöscht, während sie hier geöffnet war.":
         "The file was gone. It was probably moved, renamed or deleted while "
         "it was open here.",
-    "Die PDF-Datei ist passwortgeschuetzt und kann ohne das Passwort nicht "
+    "Die PDF-Datei ist passwortgeschützt und kann ohne das Passwort nicht "
     "bearbeitet werden.":
         "The PDF is password-protected and cannot be edited without the "
         "password.",
-    "Die PDF-Datei ist beschaedigt oder entspricht nicht dem Standard. "
-    "Andere Programme koennen sie trotzdem anzeigen — sie sind toleranter "
+    "Die PDF-Datei ist beschädigt oder entspricht nicht dem Standard. "
+    "Andere Programme können sie trotzdem anzeigen — sie sind toleranter "
     "als die Bibliothek, die hier bearbeitet.":
         "The PDF is damaged, or does not follow the standard. Other programs "
         "may still display it — they are more tolerant than the library that "
         "edits it here.",
-    "Ein Fenster-Element wurde benutzt, nachdem Qt es bereits geloescht "
+    "Ein Fenster-Element wurde benutzt, nachdem Qt es bereits gelöscht "
     "hatte. Das ist ein Fehler in dieser Anwendung, nicht an Ihrer Datei — "
-    "der Bericht unten gehoert in eine Fehlermeldung an die Entwickler.":
+    "der Bericht unten gehört in eine Fehlermeldung an die Entwickler.":
         "A window element was used after Qt had already deleted it. That is "
         "a bug in this application, not a problem with your file — the "
         "report below belongs in a bug report to the developers.",
@@ -126,17 +126,17 @@ _EN: dict[str, str] = {
         "Something was nested too deeply — PDFs with very deeply nested "
         "structures can cause this.",
     "Der Absturz geschah in der Qt-Anbindung, meist wenn ein Fenster-Element "
-    "benutzt wird, nachdem Qt es geloescht hat. Das ist ein Fehler in dieser "
+    "benutzt wird, nachdem Qt es gelöscht hat. Das ist ein Fehler in dieser "
     "Anwendung, nicht an Ihrer Datei.":
         "The crash happened in the Qt bindings, usually when a window element "
         "is used after Qt has deleted it. That is a bug in this application, "
         "not a problem with your file.",
     "Der Absturz geschah beim Darstellen einer Seite. Meist liegt das an "
-    "einer beschaedigten PDF-Datei, die die Darstellungs-Bibliothek nicht "
+    "einer beschädigten PDF-Datei, die die Darstellungs-Bibliothek nicht "
     "verarbeiten kann.":
         "The crash happened while rendering a page. Usually this is a damaged "
         "PDF the rendering library cannot handle.",
-    "Der Absturz geschah in Ghostscript, waehrend eine Datei konvertiert "
+    "Der Absturz geschah in Ghostscript, während eine Datei konvertiert "
     "wurde.":
         "The crash happened inside Ghostscript, while converting a file.",
 
@@ -164,19 +164,18 @@ _EN: dict[str, str] = {
     "Ausschießen (2-up)": "Impose (2-up)",
 
     # ── Panel TITLE fields ────────────────────────────────────────────────────
-    "Zusammenfuehren / Trennen": "Merge / Split",
+    "Zusammenführen / Trennen": "Merge / Split",
     "Bild zu/von PDF": "Image to/from PDF",
     "Graustufen-Konvertierung": "Grayscale Conversion",
     "Ausschießen (2-up / Broschüre)": "Impose (2-up / Booklet)",
     "OCR -- Texterkennung": "OCR — Text Recognition",
-    "Druckvorstufenpruefung": "Preflight Check",
 
     # ── Tool subtitles ────────────────────────────────────────────────────────
     "PDF-Dateigrösse reduzieren — Ghostscript oder pikepdf":
         "Reduce PDF file size — Ghostscript or pikepdf",
-    "PDF-Dateigroesse reduzieren. Ergebnis wird als neuer Tab geoeffnet.":
+    "PDF-Dateigröße reduzieren. Ergebnis wird als neuer Tab geöffnet.":
         "Reduce PDF file size. Result opens as a new tab.",
-    "PDFs zusammenfuehren oder in Teile aufteilen.":
+    "PDFs zusammenführen oder in Teile aufteilen.":
         "Merge PDFs or split into parts.",
     "Seiten zuschneiden oder auf ein anderes Format skalieren":
         "Crop or scale pages to a different format",
@@ -190,11 +189,11 @@ _EN: dict[str, str] = {
         "Convert images to PDF or export PDF pages as images.",
     "PDF in Graustufen umwandeln":
         "Convert PDF to grayscale",
-    "Visuell graue Seiten in echtes DeviceGray umwandeln. Farbseiten bleiben unveraendert.":
+    "Visuell graue Seiten in echtes DeviceGray umwandeln. Farbseiten bleiben unverändert.":
         "Convert visually gray pages to true DeviceGray. Color pages remain unchanged.",
     "Formularfelder aus PDF entfernen / einbetten":
         "Remove / embed form fields from PDF",
-    "Formularfelder ausfuellen und einbetten.":
+    "Formularfelder ausfüllen und einbetten.":
         "Fill in and embed form fields.",
     "Text aus Scans erkennen (OCR)":
         "Recognize text from scans (OCR)",
@@ -202,17 +201,17 @@ _EN: dict[str, str] = {
         "Make scanned PDFs searchable.",
     "PDF auf Druckprobleme prüfen":
         "Check PDF for print issues",
-    "PDF auf Drucktauglichkeit pruefen.":
+    "PDF auf Drucktauglichkeit prüfen.":
         "Check PDF for print readiness.",
     "ICC-Farbprofil einbetten oder entfernen":
         "Embed or remove ICC color profile",
-    "ICC-Profile pruefen und in CMYK umwandeln.":
+    "ICC-Profile prüfen und in CMYK umwandeln.":
         "Check ICC profiles and convert to CMYK.",
     "Seiten für den Druck anordnen":
         "Arrange pages for printing",
     "Vorschau zeigt Zuschneiden + Anordnung — Ausführen wendet beide an.":
         "Preview shows crop + arrangement — Run applies both.",
-    "Mehrere Seiten auf groessere Boegen anordnen.":
+    "Mehrere Seiten auf größere Boegen anordnen.":
         "Arrange multiple pages on larger sheets.",
 
     # ── BasePanel / CurrentFileBar ────────────────────────────────────────────
@@ -235,28 +234,28 @@ _EN: dict[str, str] = {
     "z.B. 1, 3, 5-8, 12  →  Enter": "e.g. 1, 3, 5–8, 12  →  Enter",
     "ANSICHT": "VIEW",
     "AUSWAHL": "SELECTION",
-    "Alle auswaehlen  (Strg+A)": "Select all  (Ctrl+A)",
+    "Alle auswählen  (Strg+A)": "Select all  (Ctrl+A)",
     "Auswahl aufheben  (Strg+D)": "Deselect all  (Ctrl+D)",
     "Thumbnails verkleinern": "Smaller thumbnails",
-    "Thumbnails vergroessern": "Larger thumbnails",
-    "Zoom zuruecksetzen": "Reset zoom",
+    "Thumbnails vergrößern": "Larger thumbnails",
+    "Zoom zurücksetzen": "Reset zoom",
     "Auswahl 90° gegen den Uhrzeigersinn drehen": "Rotate selection 90° counter-clockwise",
     "Auswahl 90° im Uhrzeigersinn drehen": "Rotate selection 90° clockwise",
     "OPERATIONEN": "OPERATIONS",
-    "Loeschen  (Entf)": "Delete  (Del)",
+    "Löschen  (Entf)": "Delete  (Del)",
     "Kopieren  (Strg+C)": "Copy  (Ctrl+C)",
-    "Einfuegen  (Strg+V)": "Paste  (Ctrl+V)",
-    "Rueckgaengig  (Strg+Z)": "Undo  (Ctrl+Z)",
+    "Einfügen  (Strg+V)": "Paste  (Ctrl+V)",
+    "Rückgängig  (Strg+Z)": "Undo  (Ctrl+Z)",
     "Extrahieren...": "Extract...",
-    "Als neuen Tab oeffnen": "Open as new tab",
+    "Als neuen Tab öffnen": "Open as new tab",
     "Speichern unter…": "Save as…",
-    "{p0} Seite(n) in einem neuen Tab oeffnen.": "Open {p0} page(s) in a new tab.",
+    "{p0} Seite(n) in einem neuen Tab öffnen.": "Open {p0} page(s) in a new tab.",
     "Sollen die Seiten hier ebenfalls bleiben?": "Should the pages also stay here?",
     "Kopieren  (hier behalten)": "Copy  (keep here)",
     "Verschieben  (hier entfernen)": "Move  (remove here)",
     "{p0} Seite(n) in neuen Tab verschoben.": "Moved {p0} page(s) into a new tab.",
-    "Leere Seite einfuegen": "Insert blank page",
-    "Aus Datei(en) einfuegen...": "Insert from file(s)...",
+    "Leere Seite einfügen": "Insert blank page",
+    "Aus Dateien einfügen...": "Insert from file(s)...",
     "Speichern": "Save",
     "TRENNEN": "SPLIT",
     "Jede Seite als Datei": "Each page as file",
@@ -301,7 +300,9 @@ _EN: dict[str, str] = {
         "Shrinks only when necessary, never enlarges (Acrobat: Shrink to Printable Area)",
     "Automatisch": "Automatic",
     "Papier:": "Paper:",
-    "Sortieren  (1,2,3 / 1,2,3)": "Collate  (1,2,3 / 1,2,3)",
+    "Sortieren": "Collate",
+    "1,2,3 – 1,2,3 (sortiert) statt 1,1,1 – 2,2,2 (gebündelt)":
+        "1,2,3 – 1,2,3 (collated) instead of 1,1,1 – 2,2,2 (bundled)",
     "Farbe:": "Color:",
     "Unverändert": "Unchanged",
     "→ CMYK  (für CMYK-Drucker)": "→ CMYK  (for CMYK printers)",
@@ -318,29 +319,29 @@ _EN: dict[str, str] = {
     "Wie im Drucker eingestellt": "As set on the printer",
     "PAPIERFORMATE": "PAPER SIZES",
     "Welche Formate in allen Werkzeugen und im Druckdialog zur Auswahl "
-    "stehen. Abgewaehlte werden nirgends mehr angeboten; eigene "
-    "Formate erscheinen ueberall, wo ein Format gewaehlt wird.":
+    "stehen. Abgewählte werden nirgends mehr angeboten; eigene "
+    "Formate erscheinen überall, wo ein Format gewählt wird.":
         "Which sizes are offered in every tool and in the print dialog. "
         "Unticked ones are offered nowhere; your own sizes appear everywhere "
         "a size is chosen.",
     "Name": "Name",
-    "Hinzufuegen": "Add",
+    "Hinzufügen": "Add",
     "Eigenes entfernen": "Remove own",
     "Eigenes Format": "Your own size",
-    "{p0} hinzugefuegt.": "{p0} added.",
+    "{p0} hinzugefügt.": "{p0} added.",
     "{p0} entfernt.": "{p0} removed.",
-    "Mitgelieferte Formate lassen sich nicht loeschen — "
-    "das Haekchen entfernen blendet sie ueberall aus.":
+    "Mitgelieferte Formate lassen sich nicht löschen — "
+    "das Häkchen entfernen blendet sie überall aus.":
         "Sizes that ship with the app cannot be deleted — unticking one hides "
         "it everywhere instead.",
     "Papier im Schacht: {p0}": "Paper in the tray: {p0}",
     "Papier wie im Drucker eingestellt": "Paper as set on the printer",
-    "Drucker-Standard laesst das Papier so, wie die Warteschlange es "
+    "Drucker-Standard lässt das Papier so, wie die Warteschlange es "
     "eingestellt hat — richtig, solange im Drucker liegt, worauf "
     "gedruckt werden soll.\n\n"
-    "Eine Groesse hier zu waehlen ueberschreibt das. Wird eine "
-    "kleinere genannt als eingelegt ist, wird nur diese Flaeche "
-    "bedruckt; wird eine groessere genannt, verkleinert der Drucker.":
+    "Eine Größe hier zu wählen überschreibt das. Wird eine "
+    "kleinere genannt als eingelegt ist, wird nur diese Fläche "
+    "bedruckt; wird eine größere genannt, verkleinert der Drucker.":
         "Printer default leaves the paper as the queue has it set — right, "
         "as long as what you mean to print on is what is loaded.\n\n"
         "Choosing a size here overrides that. Name one smaller than what is "
@@ -352,8 +353,8 @@ _EN: dict[str, str] = {
     "in der Vorschau, wenn die Datei ihre Schriften nicht mitbringt.\n"
     "Als Bitmap wird stattdessen genau das gedruckt, was die Vorschau "
     "zeigt.\n\n"
-    "Dafuer ist der Text im Druckauftrag nicht mehr markierbar und "
-    "die Datei wird groesser.":
+    "Dafür ist der Text im Druckauftrag nicht mehr markierbar und "
+    "die Datei wird größer.":
         "Prints the pages exactly as they look in the preview.\n\n"
         "Normally the PDF is sent to the printer and interpreted again "
         "there — substituting fonts differently from the preview, when the "
@@ -361,8 +362,8 @@ _EN: dict[str, str] = {
         "As a bitmap, what gets printed is what the preview shows.\n\n"
         "In exchange the text in the job is no longer selectable, and the "
         "file is larger.",
-    "Aufloesung der Rasterung. 300 dpi ist fuer Text und normale "
-    "Grafiken ueblich, 600 dpi fuer feine Linien und kleine Schrift.":
+    "Auflösung der Rasterung. 300 dpi ist für Text und normale "
+    "Grafiken üblich, 600 dpi für feine Linien und kleine Schrift.":
         "Resolution of the rasterisation. 300 dpi is usual for text and "
         "ordinary graphics, 600 dpi for fine lines and small type.",
     "Achtung: Der Ausdruck wird anders aussehen als die Vorschau "
@@ -372,7 +373,7 @@ _EN: dict[str, str] = {
         "are not embedded. “Print as bitmap” prints exactly what the preview "
         "shows.",
     "Achtung: Der Ausdruck wird anders aussehen als die Vorschau. "
-    "Die Schriften der Datei ueberstehen den Druckweg nicht. "
+    "Die Schriften der Datei überstehen den Druckweg nicht. "
     "„Als Bitmap drucken“ druckt genau das, was die Vorschau "
     "zeigt.":
         "Warning: the print will not look like the preview. This file's "
@@ -436,9 +437,9 @@ _EN: dict[str, str] = {
     # ── Manage panel / save & split dialogs / main buttons ──────────────────────
     "Öffnen...": "Open...",
     "Auswahl als Datei speichern": "Save selection as file",
-    "Zuerst Seiten auswaehlen.": "Select pages first.",
+    "Zuerst Seiten auswählen.": "Select pages first.",
     "Auswahl speichern als": "Save selection as",
-    "Zielordner waehlen": "Choose target folder",
+    "Zielordner wählen": "Choose target folder",
     "Seite(n) gespeichert.": "page(s) saved.",
     "Dateien erstellt": "files created",
     "Seiten pro Teil": "Pages per part",
@@ -449,14 +450,14 @@ _EN: dict[str, str] = {
 
     # ── Tools: grayscale / N-Up / imposition / CMYK / workers ───────────────────
     "Vorgang läuft bereits — bitte warten.": "Operation already running — please wait.",
-    "Pruefung laeuft bereits — bitte warten.": "Check already running — please wait.",
-    "Keine PDF geoeffnet": "No PDF open",
+    "Prüfung läuft bereits — bitte warten.": "Check already running — please wait.",
+    "Keine PDF geöffnet": "No PDF open",
     "Datei nicht mehr auffindbar": "File no longer found",
     "Die Datei ist nicht mehr auffindbar:\n{p0}\n\n"
-    "Sie wurde verschoben, umbenannt oder geloescht — oder das "
+    "Sie wurde verschoben, umbenannt oder gelöscht — oder das "
     "Laufwerk ist nicht mehr verbunden. Die Seitenansicht zeigt "
     "noch den letzten Stand; zum Weiterarbeiten die Datei wieder "
-    "verfuegbar machen und neu oeffnen.":
+    "verfügbar machen und neu öffnen.":
         "The file can no longer be found:\n{p0}\n\n"
         "It has been moved, renamed or deleted — or its drive is no longer "
         "connected. The page view still shows the last state; to carry on, "
@@ -504,8 +505,8 @@ _EN: dict[str, str] = {
     "Abstände zu groß — kein Platz für Inhalt.": "Gaps too large — no room for content.",
     "Ränder zu groß — von der Seite bleibt nichts übrig.":
         "Margins too large — nothing left of the page.",
-    "Bitte zuerst ein Format waehlen.": "Please choose a format first.",
-    "Bitte zuerst ein Format waehlen, um Schnittmarken zu setzen.":
+    "Bitte zuerst ein Format wählen.": "Please choose a format first.",
+    "Bitte zuerst ein Format wählen, um Schnittmarken zu setzen.":
         "Please choose a format first, to set crop marks.",
 
     # ── Static UI strings: menus, buttons, dialogs, merge/plugin panels ─────────
@@ -515,9 +516,9 @@ _EN: dict[str, str] = {
     "PDF (*.pdf)": "PDF (*.pdf)",
     "Python-Dateien (*.py)": "Python files (*.py)",
     "Mehrere PDFs öffnen": "Open multiple PDFs",
-    "Datei oeffnen": "Open file",
-    "PDF(s) einfuegen": "Insert PDF(s)",
-    "PDFs einfuegen": "Insert PDFs",
+    "Datei öffnen": "Open file",
+    "PDF(s) einfügen": "Insert PDF(s)",
+    "PDFs einfügen": "Insert PDFs",
     "Extrahieren als": "Extract as",
     "Speichern als": "Save as",
     "Gehe zu Seite": "Go to page",
@@ -531,10 +532,10 @@ _EN: dict[str, str] = {
     "Masse: —": "Size: —",
     "Farbprofil: —": "Color profile: —",
     "Farbprofil: …": "Color profile: …",
-    "Leere Seite eingefuegt.": "Blank page inserted.",
-    "Nichts zum Einfuegen.  Zuerst Strg+C.": "Nothing to paste.  Press Ctrl+C first.",
-    "Nichts zum Rueckgaengig.": "Nothing to undo.",
-    "Rueckgaengig.  Strg+Y = Wiederholen.": "Undone.  Ctrl+Y = Redo.",
+    "Leere Seite eingefügt.": "Blank page inserted.",
+    "Nichts zum Einfügen.  Zuerst Strg+C.": "Nothing to paste.  Press Ctrl+C first.",
+    "Nichts zum Rückgängig.": "Nothing to undo.",
+    "Rückgängig.  Strg+Y = Wiederholen.": "Undone.  Ctrl+Y = Redo.",
     "Nichts zum Wiederholen.": "Nothing to redo.",
     "Wiederholt.": "Redone.",
     "OCR läuft …": "OCR running …",
@@ -542,38 +543,41 @@ _EN: dict[str, str] = {
     "Fehler.": "Error.",
     "Bild-Konvertierung fehlgeschlagen": "Image conversion failed",
     "LibreOffice fehlt": "LibreOffice missing",
-    "LibreOffice wird benoetigt um Office-Dateien zu oeffnen.\nInstallation: sudo pacman -S libreoffice-still":
+    "LibreOffice wird benötigt um Office-Dateien zu öffnen.\nInstallation: sudo pacman -S libreoffice-still":
         "LibreOffice is required to open Office files.\nInstallation: sudo pacman -S libreoffice-still",
     "Konvertierung fehlgeschlagen": "Conversion failed",
     "Office-Konvertierung fehlgeschlagen": "Office conversion failed",
-    "Alle unterstuetzten Dateien (*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp *.docx *.doc *.xlsx *.xls *.pptx *.ppt *.odt *.ods *.odp *.rtf *.pages);;PDF (*.pdf);;Bilder (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;Office (*.docx *.doc *.xlsx *.xls *.pptx *.ppt *.odt *.ods *.odp *.rtf *.pages)":
+    "Alle unterstützten Dateien (*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp *.docx *.doc *.xlsx *.xls *.pptx *.ppt *.odt *.ods *.odp *.rtf *.pages);;PDF (*.pdf);;Bilder (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;Office (*.docx *.doc *.xlsx *.xls *.pptx *.ppt *.odt *.ods *.odp *.rtf *.pages)":
         "All supported files (*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp *.docx *.doc *.xlsx *.xls *.pptx *.ppt *.odt *.ods *.odp *.rtf *.pages);;PDF (*.pdf);;Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;Office (*.docx *.doc *.xlsx *.xls *.pptx *.ppt *.odt *.ods *.odp *.rtf *.pages)",
     "z.B. Seite ": "e.g. page ",
     "z.B.  / {gesamt}": "e.g.  / {gesamt}",
     # Merge / multi-open panels
-    "Dateien zusammenfuehren": "Merge files",
-    "Dateien oeffnen — CopyShop PDF Suite": "Open files — CopyShop PDF Suite",
-    "Dateien sortieren und zusammenfuehren": "Sort and merge files",
-    "Dateien sortieren, zusammenfuehren oder einzeln oeffnen":
+    "Dateien zusammenführen": "Merge files",
+    "Dateien öffnen — CopyShop PDF Suite": "Open files — CopyShop PDF Suite",
+    "Dateien sortieren und zusammenführen": "Sort and merge files",
+    "Dateien sortieren, zusammenführen oder einzeln öffnen":
         "Sort files, then merge them or open them separately",
-    "Dateien oeffnen": "Open files",
-    "OEFFNEN": "OPEN",
+    "Dateien öffnen": "Open files",
+    "ÖFFNEN": "OPEN",
     "Was soll mit den Dateien passieren?": "What should happen with the files?",
     "Keine Auswahl": "No selection",
     "Drag & Drop zum Umsortieren": "Drag & drop to reorder",
-    "  Drag & Drop zum Umsortieren  |  Klick zum Auswaehlen  |  Entf zum Entfernen":
+    "  Drag & Drop zum Umsortieren  |  Klick zum Auswählen  |  Entf zum Entfernen":
         "  Drag & drop to reorder  |  Click to select  |  Del to remove",
-    "Drag & Drop zum Umsortieren  ·  Strg/Shift zum Mehrfachauswaehlen":
+    "Drag & Drop zum Umsortieren  ·  Strg/Shift zum Mehrfachauswählen":
         "Drag & drop to reorder  ·  Ctrl/Shift for multiple selection",
+    "Drag & Drop sortiert · Strg/Shift mehrfach":
+        "Drag & drop to sort  ·  Ctrl/Shift for multiple",
+    "Thumbnails": "Thumbnails",
     "DATEI-INFO": "FILE INFO",
     "Entfernen  (Entf)": "Remove  (Del)",
     "✗  Abbrechen": "✗  Cancel",
     "{p0} Dateien": "{p0} files",
-    "  Zusammenfuehren": "  Merge",
-    "  Zusammenfuehren...": "  Merge...",
-    "  Einzeln oeffnen": "  Open separately",
-    "  🔗  Zusammenfuehren  ": "  🔗  Merge  ",
-    "  📂  Dateien oeffnen  ": "  📂  Open files  ",
+    "  Zusammenführen": "  Merge",
+    "  Zusammenführen...": "  Merge...",
+    "  Einzeln öffnen": "  Open separately",
+    "  🔗  Zusammenführen  ": "  🔗  Merge  ",
+    "  📂  Dateien öffnen  ": "  📂  Open files  ",
     "  ⏳  Konvertiere...  ": "  ⏳  Converting...  ",
     "  ✗  Fehler  ": "  ✗  Error  ",
     "Konvertiere Dateien...": "Converting files...",
@@ -581,9 +585,8 @@ _EN: dict[str, str] = {
     # ── Open dialogs / supported formats ──────────────────────────────────────
     "Datei öffnen…": "Open File…",
     "Mehrere Dateien öffnen…": "Open Multiple Files…",
-    "Datei öffnen": "Open File",
     "Mehrere Dateien öffnen": "Open Multiple Files",
-    "Alle unterstuetzten Dateien": "All supported files",
+    "Alle unterstützten Dateien": "All supported files",
     "Bilder": "Images",
     "Office & Text": "Office & Text",
     "Alle Dateien": "All files",
@@ -593,18 +596,27 @@ _EN: dict[str, str] = {
     "LibreOffice hat keine PDF erzeugt.": "LibreOffice produced no PDF.",
     "Datei nicht gefunden": "File not found",
     "Die Datei existiert nicht mehr:\n{p0}": "This file no longer exists:\n{p0}",
-    "Format nicht unterstuetzt": "Format not supported",
-    '{p0} kann "{p1}" nicht oeffnen.': '{p0} cannot open "{p1}".',
-    "Datei konnte nicht geoeffnet werden": "Could not open file",
-    "Ergebnis konnte nicht geoeffnet werden": "Could not open result",
+    "Format nicht unterstützt": "Format not supported",
+    '{p0} kann "{p1}" nicht öffnen.': '{p0} cannot open "{p1}".',
+    "Datei konnte nicht geöffnet werden": "Could not open file",
+    "Ergebnis konnte nicht geöffnet werden": "Could not open result",
     "{p0}\n\n{p1}": "{p0}\n\n{p1}",
+    # ── Empty state (tools/viewer/empty_state.py) ──────────────────────────────
+    "HEUTE": "TODAY",
+    "GESTERN": "YESTERDAY",
+    "PDF, Bild oder Office-Datei hierher ziehen":
+        "Drag a PDF, image, or Office file here",
+    "Bilder und Office-Dokumente werden beim Öffnen umgewandelt.":
+        "Images and Office documents are converted when opened.",
+    "Mehrere zusammenführen…": "Merge multiple files…",
+    "Zuletzt geöffnet": "Recently opened",
     # ── Plugin manager ────────────────────────────────────────────────────────
     "Plugin ist bereits installiert.": "Plugin is already installed.",
     "Plugin ersetzen?": "Replace plugin?",
     '"{p0}" ist bereits installiert. Ersetzen?': '"{p0}" is already installed. Replace it?',
     "Installation fehlgeschlagen": "Installation failed",
     "Installation fehlgeschlagen: {p0}": "Installation failed: {p0}",
-    "Ordner konnte nicht geoeffnet werden: {p0}\n{p1}":
+    "Ordner konnte nicht geöffnet werden: {p0}\n{p1}":
         "Could not open folder: {p0}\n{p1}",
     # ── OCR ───────────────────────────────────────────────────────────────────
     "✓  tesseract  —  erzeugt durchsuchbare PDFs\n"
@@ -616,41 +628,45 @@ _EN: dict[str, str] = {
     "✗  Kein OCR-Programm  →  sudo pacman -S tesseract tesseract-data-deu":
         "✗  No OCR program  →  sudo pacman -S tesseract tesseract-data-deu",
     "Sprachpakete: {p0}": "Language packs: {p0}",
-    "Sprachpaket fehlt: {p0}\nVerfuegbar: {p1}\n"
+    "Sprachpaket fehlt: {p0}\nVerfügbar: {p1}\n"
     "Installation z.B.:  sudo pacman -S tesseract-data-{p0}":
         "Language pack missing: {p0}\nAvailable: {p1}\n"
         "Install e.g.:  sudo pacman -S tesseract-data-{p0}",
     "Seiten konnten nicht gerendert werden (poppler installiert?):\n{p0}":
         "Could not render pages (is poppler installed?):\n{p0}",
-    "Das PDF enthaelt keine Seiten.": "This PDF has no pages.",
-    "Die Datei ist beschaedigt oder keine gueltige PDF.\n{p0}":
+    "Das PDF enthält keine Seiten.": "This PDF has no pages.",
+    "Die Datei ist beschädigt oder keine gültige PDF.\n{p0}":
         "This file is damaged or not a valid PDF.\n{p0}",
-    "Zeitueberschreitung bei Seite {p0}.": "Timed out on page {p0}.",
+    "Zeitüberschreitung bei Seite {p0}.": "Timed out on page {p0}.",
     "Seite {p0}: {p1}": "Page {p0}: {p1}",
     "tesseract beendet mit Code {p0}": "tesseract exited with code {p0}",
     "OCR hat keine Seiten erzeugt.": "OCR produced no pages.",
     "OCR abgeschlossen ({p0}) — {p1} Seite(n) erkannt":
         "OCR complete ({p0}) — {p1} page(s) recognised",
-    ", {p0} bereits mit Text uebersprungen": ", {p0} already had text and were skipped",
+    ", {p0} bereits mit Text übersprungen": ", {p0} already had text and were skipped",
     # The OCR language names used to live here as tr() keys — moved into
     # OcrPanel._LANG_NAMES as (German, English) pairs, since a language name
     # is not a sentence and collided here with the "Deutsch" menu item below.
     "Ausschneiden  (Strg+X)": "Cut  (Ctrl+X)",
-    "Zuerst Dateien auswaehlen.": "Select files first.",
+    "Zuerst Dateien auswählen.": "Select files first.",
     "Zwischenablage ist leer.": "Clipboard is empty.",
-    "Rueckgaengig.": "Undone.",
+    "Rückgängig.": "Undone.",
     "Wiederhergestellt.": "Redone.",
-    "Nichts rueckgaengig zu machen.": "Nothing to undo.",
+    "Nichts rückgängig zu machen.": "Nothing to undo.",
     "Nichts zu wiederholen.": "Nothing to redo.",
-    "{p0} Datei(en) kopiert.": "{p0} file(s) copied.",
-    "{p0} Datei(en) eingefuegt.": "{p0} file(s) pasted.",
+    "{p0} Datei kopiert.": "{p0} file copied.",
+    "{p0} Dateien kopiert.": "{p0} files copied.",
+    "{p0} Datei eingefügt.": "{p0} file pasted.",
+    "{p0} Dateien eingefügt.": "{p0} files pasted.",
     "Auswahl speichern als ({p0} Seiten)": "Save selection as ({p0} pages)",
     "{p0} Seite(n) gespeichert als: {p1}": "{p0} page(s) saved as: {p1}",
     "Nicht konvertierte Dateien": "Files that were not converted",
     "Diese Dateien fehlen im Ergebnis:\n\n{p0}":
         "These files are missing from the result:\n\n{p0}",
-    "{p0} Datei(en) konnten nicht konvertiert werden":
-        "{p0} file(s) could not be converted",
+    "{p0} Datei konnte nicht konvertiert werden":
+        "{p0} file could not be converted",
+    "{p0} Dateien konnten nicht konvertiert werden":
+        "{p0} files could not be converted",
     "Seiten: ?": "Pages: ?",
     "Seiten: nach Konvertierung": "Pages: after conversion",
     "Seiten: nach Konvertierung bekannt": "Pages: known after conversion",
@@ -688,9 +704,9 @@ _EN: dict[str, str] = {
     "Lineale und Hilfslinien": "Rulers and guides",
     "Hilfslinien dieser Seite entfernen": "Clear guides on page",
     "Alle Hilfslinien entfernen": "Clear all guides",
-    '  Datei pruefen':
+    '  Datei prüfen':
         '  Check file',
-    'PDF/X-Pruefbericht erscheint hier...':
+    'PDF/X-Prüfbericht erscheint hier...':
         'PDF/X check report appears here...',
     'AUSGABEBEDINGUNG':
         'OUTPUT CONDITION',
@@ -700,17 +716,17 @@ _EN: dict[str, str] = {
         'Ghostscript: PDF/X conversion …',
     '(unbenannt)':
         '(unnamed)',
-    'Das Ausgabeprofil beschreibt, fuer welche Druckbedingung die Datei separiert wurde. Es wird als Output-Intent eingebettet — die Druckerei liest daran ab, ob die Datei zu ihrer Maschine passt.':
+    'Das Ausgabeprofil beschreibt, für welche Druckbedingung die Datei separiert wurde. Es wird als Output-Intent eingebettet — die Druckerei liest daran ab, ob die Datei zu ihrer Maschine passt.':
         'The output profile records which printing condition the file was separated for. It is embedded as an output intent — the print shop reads it to tell whether the file suits their press.',
     'Ausgabeprofil:':
         'Output profile:',
     'Benannte Profile nutzen die passende .icc-Datei aus ~/.local/share/copyshop_pdf_suite/icc/ — fehlt sie, wird ein generisches CMYK-Profil eingebettet und im Bericht vermerkt.':
         'Named profiles use the matching .icc file from ~/.local/share/copyshop_pdf_suite/icc/ — without it a generic CMYK profile is embedded and the report says so.',
-    'Die Ausgabe traegt keine PDF/X-Kennung.':
+    'Die Ausgabe trägt keine PDF/X-Kennung.':
         'The output carries no PDF/X identifier.',
     'Die Ausgabe hat keinen Output-Intent.':
         'The output has no output intent.',
-    'Der Output-Intent enthaelt kein ICC-Profil.':
+    'Der Output-Intent enthält kein ICC-Profil.':
         'The output intent contains no ICC profile.',
     '⚠  RGB vorhanden — wird beim Export nach CMYK konvertiert.':
         '⚠  RGB present — will be converted to CMYK on export.',
@@ -718,7 +734,7 @@ _EN: dict[str, str] = {
         '✓  No RGB colours found.',
     '✓  Jede Seite hat eine TrimBox.':
         '✓  Every page has a TrimBox.',
-    'Ebenen (in PDF/X-3 nicht zulaessig, werden aufgeloest):':
+    'Ebenen (in PDF/X-3 nicht zulässig, werden aufgelöst):':
         'Layers (not permitted in PDF/X-3, resolved on export):',
     '✓  Keine Ebenen (OCG).':
         '✓  No layers (OCG).',
@@ -726,25 +742,25 @@ _EN: dict[str, str] = {
         'Output condition: {p0}  ({p1})',
     'PDF/X-Export abgeschlossen ({p0}).':
         'PDF/X export finished ({p0}).',
-    'Der Export erzeugt {p0}: alle Farben in CMYK, alle Schriften eingebettet, Transparenz reduziert, TrimBox auf jeder Seite. Ebenen (OCG) werden dabei gemaess ihrer Standard-Sichtbarkeit aufgeloest — ausgeschaltete Ebenen sind in der Ausgabe nicht mehr enthalten.':
+    'Der Export erzeugt {p0}: alle Farben in CMYK, alle Schriften eingebettet, Transparenz reduziert, TrimBox auf jeder Seite. Ebenen (OCG) werden dabei gemäß ihrer Standard-Sichtbarkeit aufgelöst — ausgeschaltete Ebenen sind in der Ausgabe nicht mehr enthalten.':
         'The export produces {p0}: all colour in CMYK, all fonts embedded, transparency flattened, a TrimBox on every page. Layers (OCG) are resolved by their default visibility — a layer switched off is not in the output.',
     "⚠  Profil '{p0}' nicht installiert — generisches CMYK eingebettet.\n   .icc-Datei nach {p1} legen.":
         "⚠  Profile '{p0}' is not installed — generic CMYK embedded.\n   Put the .icc file in {p1}.",
     'Ausgabebedingung: {p0}':
         'Output condition: {p0}',
-    'Aufgeloeste Ebenen (nicht in der Ausgabe): {p0}':
+    'Aufgelöste Ebenen (nicht in der Ausgabe): {p0}':
         'Resolved layers (not in the output): {p0}',
     'Seiten ohne TrimBox: {p0}':
         'Pages without a TrimBox: {p0}',
     'Seitenzahl stimmt nicht: {p0} statt {p1} — die Datei wurde nicht gespeichert.':
         'Page count does not match: {p0} instead of {p1} — the file was not saved.',
-    'PDF/X-Export hat Seite(n) beschaedigt: {p0} — die Datei wurde nicht gespeichert.':
+    'PDF/X-Export hat Seite(n) beschädigt: {p0} — die Datei wurde nicht gespeichert.':
         'The PDF/X export damaged page(s): {p0} — the file was not saved.',
-    '⚠  {p0} Seite(n) ohne TrimBox — wird beim Export ergaenzt.':
+    '⚠  {p0} Seite(n) ohne TrimBox — wird beim Export ergänzt.':
         '⚠  {p0} page(s) without a TrimBox — added on export.',
     '   ✓ {p0} — sichtbar, wird eingerechnet':
         '   ✓ {p0} — visible, will be included',
-    '   ✗ {p0} — ausgeschaltet, entfaellt':
+    '   ✗ {p0} — ausgeschaltet, entfällt':
         '   ✗ {p0} — switched off, dropped',
     'Kein CMYK-ICC-Profil gefunden. PDF/X verlangt ein eingebettetes Ausgabeprofil.\n.icc-Datei nach {p0} legen.':
         'No CMYK ICC profile found. PDF/X requires an embedded output profile.\nPut the .icc file in {p0}.',
@@ -760,15 +776,15 @@ _EN: dict[str, str] = {
         'Producing PDF/X …',
     'Ausgabebedingung ändern…':
         'Change output condition…',
-    'Was die Datei mitbringt — Anschnitt, Schriften, Bildauflösung — zeigt „Druckvorstufenpruefung“.':
-        'What the file brings with it — bleed, fonts, image resolution — is shown by “Druckvorstufenpruefung”.',
+    'Was die Datei mitbringt — Anschnitt, Schriften, Bildauflösung — zeigt „Druckvorstufenprüfung“.':
+        'What the file brings with it — bleed, fonts, image resolution — is shown by “Druckvorstufenprüfung”.',
     '{p0}  (Profil fehlt — generisches CMYK)':
         '{p0}  (profile missing — generic CMYK)',
     'Ausgabebedingung: {p0}   ·   Bilder: {p1} dpi':
         'Output condition: {p0}   ·   Images: {p1} dpi',
-    'Erzeugt {p0}: alle Farben in CMYK gegen das eingestellte Ausgabeprofil, alle Schriften eingebettet, Transparenz reduziert, Ebenen aufgeloest, Bilder auf Druckauflösung. Das Ergebnis wird geprueft, bevor es gespeichert wird.':
+    'Erzeugt {p0}: alle Farben in CMYK gegen das eingestellte Ausgabeprofil, alle Schriften eingebettet, Transparenz reduziert, Ebenen aufgelöst, Bilder auf Druckauflösung. Das Ergebnis wird geprüft, bevor es gespeichert wird.':
         'Produces {p0}: all colour in CMYK against the configured output profile, all fonts embedded, transparency flattened, layers resolved, images at press resolution. The result is checked before it is saved.',
-    'Der Beschnitt hat sich veraendert auf Seite(n): {p0} — die Datei wurde nicht gespeichert.':
+    'Der Beschnitt hat sich verändert auf Seite(n): {p0} — die Datei wurde nicht gespeichert.':
         'The trim geometry changed on page(s): {p0} — the file was not saved.',
     '{p0} ({p1})':
         '{p0} ({p1})',
@@ -810,7 +826,7 @@ _EN: dict[str, str] = {
         'unreadable',
     'Druckvorstufe…':
         'Prepress…',
-    'DRUCKFAEHIGKEIT':
+    'DRUCKFÄHIGKEIT':
         'PRESS READINESS',
     'Anschnitt / Endformat (TrimBox)':
         'Bleed / trim size (TrimBox)',
@@ -834,7 +850,7 @@ _EN: dict[str, str] = {
         'Images below {p0} dpi: {p1}',
     'Bildauflösung mindestens {p0} dpi':
         'Image resolution at least {p0} dpi',
-    'Ebenen: {p0} sichtbar, {p1} ausgeschaltet — beim PDF/X-Export wird beides aufgeloest':
+    'Ebenen: {p0} sichtbar, {p1} ausgeschaltet — beim PDF/X-Export wird beides aufgelöst':
         'Layers: {p0} visible, {p1} switched off — the PDF/X export resolves both',
     'Anschnitt nur auf einem Teil der Seiten (ohne TrimBox: {p0})':
         'Bleed on only some pages (no TrimBox on: {p0})',
@@ -842,23 +858,23 @@ _EN: dict[str, str] = {
         'Bleed: {p0:.1f} mm',
     'Anschnitt: {p0:.1f}–{p1:.1f} mm':
         'Bleed: {p0:.1f}–{p1:.1f} mm',
-    '{p0} — knapp, ueblich sind 3 mm':
+    '{p0} — knapp, üblich sind 3 mm':
         '{p0} — tight; 3 mm is usual',
     'Seite {p0} ({p1} dpi)':
         'page {p0} ({p1} dpi)',
     'Das eingebettete Ausgabeprofil ist nicht CMYK.':
         'The embedded output profile is not CMYK.',
-    'Die Ausgabe enthaelt noch Ebenen (OCG).':
+    'Die Ausgabe enthält noch Ebenen (OCG).':
         'The output still contains layers (OCG).',
-    'Die Ausgabe ist verschluesselt.':
+    'Die Ausgabe ist verschlüsselt.':
         'The output is encrypted.',
     'eingebettete Dateien':
         'embedded files',
-    'Die Ausgabe enthaelt {p0}.':
+    'Die Ausgabe enthält {p0}.':
         'The output contains {p0}.',
     'Transparenz wird reduziert — das dauert bei grossen Seiten …':
         'Flattening transparency — this takes a while on large pages …',
-    'Rasterauflösung auf {p0} dpi begrenzt — bei dieser Seitengroesse waere ein hoeherer Wert fuer Betrachter nicht mehr lesbar.':
+    'Rasterauflösung auf {p0} dpi begrenzt — bei dieser Seitengröße wäre ein höherer Wert für Betrachter nicht mehr lesbar.':
         'Raster resolution capped at {p0} dpi — at this page size a higher value would be unreadable to viewers.',
     'Transparenz (wird beim Export reduziert)':
         'Transparency (flattened on export)',
@@ -866,15 +882,15 @@ _EN: dict[str, str] = {
         'Transparency …',
     'Keine Transparenz — Vektoren bleiben Vektoren':
         'No transparency — vectors stay vectors',
-    'Transparenz auf {p0} Seite(n) — beim PDF/X-Export werden diese Seiten in Pixel umgewandelt (Vektoren gehen dort verloren) und der Export dauert entsprechend laenger: {p1}':
+    'Transparenz auf {p0} Seite(n) — beim PDF/X-Export werden diese Seiten in Pixel umgewandelt (Vektoren gehen dort verloren) und der Export dauert entsprechend länger: {p1}':
         'Transparency on {p0} page(s) — the PDF/X export converts those pages to pixels (vectors are lost there) and takes correspondingly longer: {p1}',
-    'Alle Farben in CMYK gegen das eingestellte Ausgabeprofil, alle Schriften eingebettet, Bilder auf Druckauflösung. Vektoren und Schrift bleiben scharf in jeder Groesse. Das Ergebnis wird geprueft, bevor es gespeichert wird.':
+    'Alle Farben in CMYK gegen das eingestellte Ausgabeprofil, alle Schriften eingebettet, Bilder auf Druckauflösung. Vektoren und Schrift bleiben scharf in jeder Größe. Das Ergebnis wird geprüft, bevor es gespeichert wird.':
         'All colour in CMYK against the configured output profile, all fonts embedded, images at press resolution. Vectors and type stay sharp at any size. The result is checked before it is saved.',
     '{p0}   ·   {p1}   ·   Bilder: {p2} dpi':
         '{p0}   ·   {p1}   ·   Images: {p2} dpi',
-    'Transparenz auf {p0} Seite(n) — PDF/X-3 kann sie nicht darstellen, diese Seiten werden in Pixel umgewandelt (Vektoren gehen dort verloren) und der Export dauert entsprechend laenger: {p1}':
+    'Transparenz auf {p0} Seite(n) — PDF/X-3 kann sie nicht darstellen, diese Seiten werden in Pixel umgewandelt (Vektoren gehen dort verloren) und der Export dauert entsprechend länger: {p1}':
         'Transparency on {p0} page(s) — PDF/X-3 cannot represent it, so those pages are converted to pixels (vectors are lost there) and the export takes correspondingly longer: {p1}',
-    'Transparenz auf {p0} Seite(n) — PDF/X-4 behaelt sie, nichts wird gerastert':
+    'Transparenz auf {p0} Seite(n) — PDF/X-4 behält sie, nichts wird gerastert':
         'Transparency on {p0} page(s) — PDF/X-4 keeps it, nothing is rasterised',
     'Standard:':
         'Standard:',
@@ -898,37 +914,36 @@ _EN: dict[str, str] = {
         'Separating images …',
     '  Komprimieren':
         '  Compress',
-    'Datei ist bereits {p0} — unveraendert uebernommen.':
+    'Datei ist bereits {p0} — unverändert übernommen.':
         'The file is already {p0} — passed through unchanged.',
     'nicht lesbar':
         'not readable',
     'Wird konvertiert: {p0}':
         'Converting: {p0}',
-    'Datei ist fuer {p0} separiert, eingestellt ist {p1}':
+    'Datei ist für {p0} separiert, eingestellt ist {p1}':
         'the file is separated for {p0}, the setting is {p1}',
     'Bilder mit bis zu {p0} dpi, Ziel sind {p1} dpi':
         'images up to {p0} dpi, the target is {p1} dpi',
-    'Datei ist {p0}, gewuenscht ist {p1}':
+    'Datei ist {p0}, gewünscht ist {p1}':
         'the file is {p0}, the target is {p1}',
     'unbenannt':
         'unnamed',
     'noch kein PDF/X':
         'not PDF/X yet',
     "Keine PDF geladen.": "No PDF loaded.",
-    "Keine Seiten ausgewaehlt.": "No pages selected.",
-    "Keine Seiten ausgewaehlt": "No pages selected",
+    "Keine Seiten ausgewählt": "No pages selected",
     "Kein Ausgabepfad angegeben.": "No output path specified.",
-    "Mindestens eine PDF hinzufuegen.": "Add at least one PDF.",
-    "Bilder hinzufuegen.": "Add images.",
+    "Mindestens eine PDF hinzufügen.": "Add at least one PDF.",
+    "Bilder hinzufügen.": "Add images.",
     "Keine Formularfelder gefunden.": "No form fields found.",
     "Rendere Seiten …": "Rendering pages …",
     "Starte ocrmypdf …": "Starting ocrmypdf …",
     "N-Up läuft …": "N-Up running …",
-    "Pruefung abgeschlossen.": "Check complete.",
+    "Prüfung abgeschlossen.": "Check complete.",
     "Ghostscript-Fehler": "Ghostscript error",
     "Seite {i} / {total}…": "Page {i} / {total}…",
     "Seiten analysieren …": "Analysing pages …",
-    "Pruefung laeuft …": "Checking …",
+    "Prüfung läuft …": "Checking …",
     "Formular wird ausgefüllt …": "Filling in the form …",
     "Bilder werden exportiert …": "Exporting images …",
     "Ghostscript: komprimiere …": "Ghostscript: compressing …",
@@ -949,32 +964,32 @@ _EN: dict[str, str] = {
         "Printer default: send no preference — the printer or queue decides.\nThe colour information is kept in the file either way.",
     "Dieser Drucker meldet nur Graustufen — die Farbe bleibt in der Datei erhalten und kann anderswo gedruckt werden.":
         "This printer reports greyscale only — the colour stays in the file and can be printed elsewhere.",
-    "Aktuelle Seite kann nicht ermittelt werden — bitte »Alle Seiten« oder einen Bereich waehlen.":
+    "Aktuelle Seite kann nicht ermittelt werden — bitte »Alle Seiten« oder einen Bereich wählen.":
         "Cannot determine the current page — please choose \u00abAll pages\u00bb or a range.",
-    "Hinweis: Der Fallback kann die gewaehlte Farbraum-Umwandlung nicht ausfuehren — es wird ohne sie gedruckt.":
+    "Hinweis: Der Fallback kann die gewählte Farbraum-Umwandlung nicht ausführen — es wird ohne sie gedruckt.":
         "Note: the fallback cannot perform the selected colour conversion — printing without it.",
-    "{p0} Dateien zusammengefuehrt ({p1} Seiten)": "{p0} files merged ({p1} pages)",
-    "Keine der gewaehlten Dateien enthielt Seiten.": "None of the selected files contained any pages.",
-    "Ohne Seiten uebersprungen: {p0}": "Skipped, no pages: {p0}",
+    "{p0} Dateien zusammengeführt ({p1} Seiten)": "{p0} files merged ({p1} pages)",
+    "Keine der gewählten Dateien enthielt Seiten.": "None of the selected files contained any pages.",
+    "Ohne Seiten übersprungen: {p0}": "Skipped, no pages: {p0}",
     "Reduzieren hat Seiteninhalt entfernt — die Datei wurde nicht gespeichert. Bitte ohne 'Reduzieren' erneut speichern.":
         "Flattening removed page content — the file was not saved. Please save again without 'flatten'.",
-    "Reduzieren hat die ausgefuellten Werte nicht ins Seitenbild uebernommen — die Datei wurde nicht gespeichert. Bitte ohne 'Reduzieren' erneut speichern.":
+    "Reduzieren hat die ausgefüllten Werte nicht ins Seitenbild übernommen — die Datei wurde nicht gespeichert. Bitte ohne 'Reduzieren' erneut speichern.":
         "Flattening did not transfer the filled-in values onto the page — the file was not saved. Please save again without 'flatten'.",
-    "Komprimierung hat die Seitenzahl veraendert ({p0} → {p1}) — Datei nicht gespeichert.":
+    "Komprimierung hat die Seitenzahl verändert ({p0} → {p1}) — Datei nicht gespeichert.":
         "Compression changed the page count ({p0} → {p1}) — file not saved.",
-    "Komprimierung hat Seite(n) beschaedigt: {p0} — Datei nicht gespeichert.":
+    "Komprimierung hat Seite(n) beschädigt: {p0} — Datei nicht gespeichert.":
         "Compression damaged page(s): {p0} — file not saved.",
-    "Reduzieren hat Seite(n) beschaedigt: {p0} — die unreduzierte Datei wurde behalten.":
+    "Reduzieren hat Seite(n) beschädigt: {p0} — die unreduzierte Datei wurde behalten.":
         "Flattening damaged page(s): {p0} — the unflattened file was kept.",
     "Seitenzahl": "page count",
-    "Farbumwandlung hat Seite(n) {p0} geschwaerzt — es wird ohne Umwandlung gedruckt.":
+    "Farbumwandlung hat Seite(n) {p0} geschwärzt — es wird ohne Umwandlung gedruckt.":
         "Colour conversion blacked out page(s) {p0} — printing without conversion.",
-    "ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt und blieben deshalb unveraendert: {p1}":
+    "ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt und blieben deshalb unverändert: {p1}":
         "WARNING: {p0} page(s) were damaged by the conversion and were therefore left unchanged: {p1}",
     "Prüfe Seite {p0} / {p1} …{p2}": "Verifying page {p0} / {p1} …{p2}",
     "Seite {p0} erneut versuchen …": "Retrying page {p0} …",
     "{p0} Seite(n) einzeln nachkonvertiert.": "{p0} page(s) re-converted individually.",
-    "ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt und blieben deshalb unveraendert farbig: {p1}":
+    "ACHTUNG: {p0} Seite(n) wurden bei der Konvertierung beschädigt und blieben deshalb unverändert farbig: {p1}":
         "WARNING: {p0} page(s) were damaged by the conversion and were therefore left unchanged, in colour: {p1}",
     "Ghostscript beendet mit Code {p0}": "Ghostscript exited with code {p0}",
     "Ghostscript hat nach 15 Minuten nicht geantwortet und wurde abgebrochen. Die PDF ist vermutlich beschädigt oder sehr groß.":
@@ -988,12 +1003,12 @@ _EN: dict[str, str] = {
         "No OCR program found.\nInstallation:  pip install ocrmypdf --break-system-packages\n           or:  sudo pacman -S tesseract tesseract-data-deu",
     "Ghostscript nicht gefunden.\nInstallation:  sudo pacman -S ghostscript":
         "Ghostscript not found.\nInstallation:  sudo pacman -S ghostscript",
-    "Zusammengefuehrt": "Merged",
+    "Zusammengeführt": "Merged",
     "Mit Seitenzahlen": "With page numbers",
     "Aus Bildern": "From images",
     "Ebenen verarbeitet": "Layers processed",
     "CMYK konvertiert": "CMYK converted",
-    "Formular ausgefuellt": "Form filled",
+    "Formular ausgefüllt": "Form filled",
     "Französisch": "French",
     "Sonderfarbe": "Spot color",
     "Standard (generisch) — universell, ohne ICC-Datei": "Standard (generic) — universal, without ICC file",
@@ -1002,8 +1017,8 @@ _EN: dict[str, str] = {
     "PSO Uncoated v3 (FOGRA52) — ungestrichenes/Naturpapier, Bücher & Briefbögen": "PSO Uncoated v3 (FOGRA52) — uncoated/natural paper, books & letterheads",
     "U.S. Web Coated (SWOP) v2 — US-Rollenoffset, Magazine (gestrichen)": "U.S. Web Coated (SWOP) v2 — US web offset, magazines (coated)",
     "Coated GRACoL 2006 — US-Bogenoffset, hochwertiges gestrichenes Papier": "Coated GRACoL 2006 — US sheet offset, high-quality coated paper",
-    "PDF ist passwortgeschuetzt": "PDF is password-protected",
-    "Nicht verschluesselt": "Not encrypted",
+    "PDF ist passwortgeschützt": "PDF is password-protected",
+    "Nicht verschlüsselt": "Not encrypted",
     "Gemischte Ausrichtungen": "Mixed orientations",
     "Einheitlich: {p0}": "Uniform: {p0}",
     "Keine Farbseiten erkannt": "No color pages detected",
@@ -1032,7 +1047,8 @@ _EN: dict[str, str] = {
     "am Ende": "at the end",
     "  —  {p0} zu konvertieren": "  —  {p0} to convert",
     "LibreOffice nicht gefunden.\nsudo pacman -S libreoffice-still": "LibreOffice not found.\nsudo pacman -S libreoffice-still",
-    "Nicht unterstuetzt: {p0}": "Not supported: {p0}",
+    "LibreOffice-Timeout nach {p0}s ({p1} MB)": "LibreOffice timed out after {p0}s ({p1} MB)",
+    "Nicht unterstützt: {p0}": "Not supported: {p0}",
     "Verarbeite: {p0}": "Processing: {p0}",
     # Plugin manager
     "Installierte Plugins:": "Installed plugins:",
@@ -1067,46 +1083,46 @@ _EN: dict[str, str] = {
     "nach Seite {p0}": "after page {p0}",
     "{p0} Seiten": "{p0} pages",
     "+{p0} Seiten": "+{p0} pages",
-    "{p0} Seiten ausgewaehlt": "{p0} pages selected",
+    "{p0} Seiten ausgewählt": "{p0} pages selected",
     "{p0} Seiten: {p1}": "{p0} pages: {p1}",
     "{p0} Seite(n) bearbeitet.": "{p0} page(s) processed.",
-    "{p0} Seite(n) geloescht.  Strg+Z = Rueckgaengig.": "{p0} page(s) deleted.  Ctrl+Z = Undo.",
-    "{p0} Seite(n) kopiert.  Strg+V = Einfuegen (auch in anderen Tabs).": "{p0} page(s) copied.  Ctrl+V = Paste (also in other tabs).",
-    "{p0} Seite(n) ausgeschnitten.  Strg+V = Einfuegen.": "{p0} page(s) cut.  Ctrl+V = Paste.",
-    "{p0} Seite(n) eingefuegt.": "{p0} page(s) pasted.",
+    "{p0} Seite(n) gelöscht.  Strg+Z = Rückgängig.": "{p0} page(s) deleted.  Ctrl+Z = Undo.",
+    "{p0} Seite(n) kopiert.  Strg+V = Einfügen (auch in anderen Tabs).": "{p0} page(s) copied.  Ctrl+V = Paste (also in other tabs).",
+    "{p0} Seite(n) ausgeschnitten.  Strg+V = Einfügen.": "{p0} page(s) cut.  Ctrl+V = Paste.",
+    "{p0} Seite(n) eingefügt.": "{p0} page(s) pasted.",
     "{p0} Seite(n) extrahiert.": "{p0} page(s) extracted.",
-    "{p0} Seite(n) als neuer Tab geoeffnet.": "{p0} page(s) opened as a new tab.",
-    "OK: {p0} Seite(n) {p1} eingefuegt": "OK: {p0} page(s) {p1} inserted",
+    "{p0} Seite(n) als neuer Tab geöffnet.": "{p0} page(s) opened as a new tab.",
+    "OK: {p0} Seite(n) {p1} eingefügt": "OK: {p0} page(s) {p1} inserted",
     "Datei {p0}": "File {p0}",
     "Datei {p0} von {p1}": "File {p0} of {p1}",
     "Datei:   {p0}": "File:   {p0}",
     "Seiten: {p0}": "Pages: {p0}",
     "Seiten:  {p0}": "Pages:  {p0}",
     "Seiten: {p0}  |  {p1} KB": "Pages: {p0}  |  {p1} KB",
-    "Groesse: {p0:.0f} KB": "Size: {p0:.0f} KB",
+    "Größe: {p0:.0f} KB": "Size: {p0:.0f} KB",
     "Masse: {p0:.0f} × {p1:.0f} mm": "Size: {p0:.0f} × {p1:.0f} mm",
     "Farbprofil: {p0}": "Color profile: {p0}",
-    "{p0} Datei(en)": "{p0} file(s)",
-    "{p0} Datei(en) ausgewaehlt": "{p0} file(s) selected",
-    "{p0} Dateien ausgewaehlt": "{p0} files selected",
-    "{p0} Dateien zusammengefuehrt": "{p0} files merged",
+    "{p0} Datei": "{p0} file",
+    "{p0} Datei ausgewählt": "{p0} file selected",
+    "{p0} Dateien ausgewählt": "{p0} files selected",
+    "{p0} Dateien zusammengeführt": "{p0} files merged",
     "In {p0} Dateien aufgeteilt": "Split into {p0} files",
     "Teil 1 von {p0}": "Part 1 of {p0}",
-    "  Zusammenfuehren  ({p0})": "  Merge  ({p0})",
-    "  Einzeln oeffnen  ({p0})": "  Open separately  ({p0})",
+    "  Zusammenführen  ({p0})": "  Merge  ({p0})",
+    "  Einzeln öffnen  ({p0})": "  Open separately  ({p0})",
     "  —  {p0} werden noch konvertiert": "  —  {p0} still converting",
-    "  🔗  Konvertieren & zusammenfuehren  ({p0})": "  🔗  Convert & merge  ({p0})",
+    "  🔗  Konvertieren & zusammenführen  ({p0})": "  🔗  Convert & merge  ({p0})",
     "Konvertierung fehlgeschlagen:\n{p0}": "Conversion failed:\n{p0}",
     "Konvertierung abgeschlossen.\n{p0}\n{p1}": "Conversion complete.\n{p0}\n{p1}",
     "PDF aus {p0} Bildern erstellt": "PDF created from {p0} images",
     "{p0} Bilder exportiert": "{p0} images exported",
-    "Seitenzahlen auf {p0} Seiten hinzugefuegt": "Page numbers added to {p0} pages",
+    "Seitenzahlen auf {p0} Seiten hinzugefügt": "Page numbers added to {p0} pages",
     "Schnittmarken auf {p0} Seite(n) gesetzt ({p1:.0f}×{p2:.0f} mm).": "Crop marks added to {p0} page(s) ({p1:.0f}×{p2:.0f} mm).",
     "Broschüre: {p0} Seiten auf {p1} Blattseiten.": "Booklet: {p0} pages on {p1} sheet sides.",
     "{p0}×{p1}-up: {p2} Seiten auf {p3} Bögen.": "{p0}×{p1}-up: {p2} pages on {p3} sheets.",
     "Fertig. {p0} Seiten auf {p1} Blatt ({p2}×{p3}).": "Done. {p0} pages on {p1} sheets ({p2}×{p3}).",
     "Fertig. {p0} → {p1}  ({p2:+.1f}%)": "Done. {p0} → {p1}  ({p2:+.1f}%)",
-    "Formular ausgefuellt ({p0} Felder)": "Form filled ({p0} fields)",
+    "Formular ausgefüllt ({p0} Felder)": "Form filled ({p0} fields)",
     "{p0} Feld(er) geladen.": "{p0} field(s) loaded.",
     "{p0} Ebene(n) gefunden.": "{p0} layer(s) found.",
     "OCR Seite {p0} / {p1} …": "OCR page {p0} / {p1} …",
@@ -1136,12 +1152,11 @@ _EN: dict[str, str] = {
     "AUSGABE": "OUTPUT",
     "ERGEBNIS": "RESULT",
     "PRÜFUNGEN": "CHECKS",
-    "PRUEFUNGEN": "CHECKS",
     "FORMULARFELDER": "FORM FIELDS",
     "ZUSAMMENFUEHREN": "MERGE",
     "MODUS": "MODE",
     "BILDER  nach  PDF": "IMAGES  to  PDF",
-    "PDF  nach  BILDER  (aktuell geoeffnete PDF)": "PDF  to  IMAGES  (currently open PDF)",
+    "PDF  nach  BILDER  (aktuell geöffnete PDF)": "PDF  to  IMAGES  (currently open PDF)",
     "IN CMYK UMWANDELN": "CONVERT TO CMYK",
 
     # ── Compress panel ────────────────────────────────────────────────────────
@@ -1253,12 +1268,12 @@ _EN: dict[str, str] = {
         "Images (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.webp)",
 
     # ── all_tools.py panel strings ────────────────────────────────────────────
-    "PDFs hinzufuegen. Reihenfolge per Drag & Drop.":
+    "PDFs hinzufügen. Reihenfolge per Drag & Drop.":
         "Add PDFs. Drag & drop to reorder.",
-    "+ Hinzufuegen": "+ Add",
+    "+ Hinzufügen": "+ Add",
     "- Entfernen": "- Remove",
-    "  Zusammenfuehren und speichern...": "  Merge and save...",
-    "Verwendet die aktuell im Viewer geoeffnete PDF.":
+    "  Zusammenführen und speichern...": "  Merge and save...",
+    "Verwendet die aktuell im Viewer geöffnete PDF.":
         "Uses the currently open PDF in the viewer.",
     "Jede Seite als eigene Datei": "Each page as separate file",
     "Nach Seitenbereichen  (z.B. 1-3, 5, 7-9)": "By page ranges  (e.g. 1-3, 5, 7-9)",
@@ -1267,28 +1282,27 @@ _EN: dict[str, str] = {
     "Seitenbereiche:": "Page ranges:",
     "Seiten pro Teil:": "Pages per part:",
     "  Trennen und in Ordner speichern...": "  Split and save to folder...",
-    "Qualitaetsstufe:": "Quality level:",
+    "Qualitätsstufe:": "Quality level:",
     "Ghostscript verwenden (empfohlen)": "Use Ghostscript (recommended)",
-    "Ausfuehren": "Run",
-    "Bilder hinzufuegen. Reihenfolge per Drag & Drop.":
+    "Ausführen": "Run",
+    "Bilder hinzufügen. Reihenfolge per Drag & Drop.":
         "Add images. Drag & drop to reorder.",
     "+ Bilder": "+ Images",
     "  In PDF umwandeln...": "  Convert to PDF...",
     "Ausgabeformat:": "Output format:",
-    "Aufloesung:": "Resolution:",
+    "Auflösung:": "Resolution:",
     "  Seiten als Bilder exportieren...": "  Export pages as images...",
     "  Seiten analysieren": "  Analyze pages",
-    "Ergebnis  (Grau = wird konvertiert, Rot = bleibt unveraendert):":
+    "Ergebnis  (Grau = wird konvertiert, Rot = bleibt unverändert):":
         "Result  (grey = will be converted, red = stays unchanged):",
-    "Praefix:": "Prefix:",
-    "Erste N Seiten ueberspringen:": "Skip first N pages:",
-    "Schriftgroesse (pt):": "Font size (pt):",
+    "Erste N Seiten überspringen:": "Skip first N pages:",
+    "Schriftgröße (pt):": "Font size (pt):",
     "Abstand vom Rand (pt):": "Distance from edge (pt):",
     "Alle gleich": "All equal",
     "Auf Null setzen": "Reset to zero",
     "Skalieren": "Scale",
     "Skalierung": "Scale",
-    "Zeigt, wie gross die Seite durch Format und Raender wird. Eingabe skaliert die ganze Seite zentriert auf diesen Wert.":
+    "Zeigt, wie gross die Seite durch Format und Ränder wird. Eingabe skaliert die ganze Seite zentriert auf diesen Wert.":
         "Shows how big the page becomes from Format and margins. "
         "Typing a value scales the whole page, centred, to that amount.",
     "Inhalt in das neue Format einpassen": "Fit content into the new size",
@@ -1296,18 +1310,18 @@ _EN: dict[str, str] = {
     "Proportionen beibehalten": "Keep proportions",
     "Alle PDF-Seiten": "All PDF pages",
     "Modus:": "Mode:",
-    "Letzte Seite mit Leerseiten auffuellen": "Fill last page with blank pages",
-    "Nach dem Speichern reduzieren (fuer Druck)": "Flatten after saving (for printing)",
+    "Letzte Seite mit Leerseiten auffüllen": "Fill last page with blank pages",
+    "Nach dem Speichern reduzieren (für Druck)": "Flatten after saving (for printing)",
     "Erwartetes Format:": "Expected format:",
     "Seiten begradigen": "Deskew pages",
-    "Seiten mit Text ueberspringen": "Skip pages with text",
-    "Beliebige Groesse": "Any size",
+    "Seiten mit Text überspringen": "Skip pages with text",
+    "Beliebige Größe": "Any size",
     "Seitenformat korrekt": "Page format correct",
     "Einheitliche Ausrichtung": "Consistent orientation",
     "Farbige Seiten erkennen": "Detect color pages",
-    "Nicht passwortgeschuetzt": "Not password protected",
+    "Nicht passwortgeschützt": "Not password protected",
     "Bericht:": "Report:",
-    "Pruefung starten...": "Start check...",
+    "Prüfung starten...": "Start check...",
 
     # ── NUp panel ─────────────────────────────────────────────────────────────
     "Mehrere Seiten auf einem Blatt — mit Rand- und Abstandssteuerung.":
@@ -1335,7 +1349,6 @@ _EN: dict[str, str] = {
     "Beide Abstände gleich": "Both gaps equal",
     "Vorschau (erstes Blatt)": "Preview (first sheet)",
     "N-Up erstellen": "Create N-Up",
-    "Keine PDF geöffnet": "No PDF open",
     "z.B.  1-3, 5": "e.g.  1-3, 5",
 
     # ── Imposition panel (ImposePanel) ────────────────────────────────────────
@@ -1414,14 +1427,14 @@ _EN: dict[str, str] = {
     "Vorab-Rendering:": "Pre-rendering:",
     "Thumbnail-Cache:": "Thumbnail cache:",
     "ALLGEMEIN": "GENERAL",
-    "Letzte Datei beim Programmstart automatisch oeffnen":
+    "Letzte Datei beim Programmstart automatisch öffnen":
         "Automatically open last file on startup",
 
     # ── Crop/Scale panel ─────────────────────────────────────────────────────
     "Vorschau": "Preview",
     "Format": "Format",
     "— Kein —": "— None —",
-    "Raender  [+ schneiden / - erweitern]": "Margins  [+ crop / - expand]",
+    "Ränder  [+ schneiden / - erweitern]": "Margins  [+ crop / - expand]",
     "Oben": "Top",
     "Unten": "Bottom",
     "Links": "Left",
@@ -1438,23 +1451,23 @@ _EN: dict[str, str] = {
         "How much must a pixel deviate from gray to be considered 'colored'?",
     "Streng": "Strict",
     "Tolerant": "Tolerant",
-    "Mindest-Anteil farbiger Pixel  (fuer Modus 'Nach Anteil')":
+    "Mindest-Anteil farbiger Pixel  (für Modus 'Nach Anteil')":
         "Minimum ratio of colored pixels  (for 'By ratio' mode)",
     "Wieviel % der Pixel muss farbig sein damit die Seite als Farbseite gilt?":
         "What % of pixels must be colored for the page to count as a color page?",
 
     # ── Imposition panel ─────────────────────────────────────────────────────
     "2-up (zwei Seiten nebeneinander)": "2-up (two pages side by side)",
-    "Broschuere (Sattelheftung)": "Booklet (saddle stitch)",
+    "Broschüre (Sattelheftung)": "Booklet (saddle stitch)",
 
     # ── Layers panel ─────────────────────────────────────────────────────────
 
     # ── Color profile panel ───────────────────────────────────────────────────
-    "  Farbprofil pruefen": "  Check color profile",
+    "  Farbprofil prüfen": "  Check color profile",
     "Farbprofil-Info erscheint hier...": "Color profile info appears here...",
-    "Konvertiert via Ghostscript nach DeviceCMYK. Qualitaetsstufe: Prepress (hoechste Qualitaet, alle Fonts eingebettet).":
+    "Konvertiert via Ghostscript nach DeviceCMYK. Qualitätsstufe: Prepress (höchste Qualität, alle Fonts eingebettet).":
         "Converts to DeviceCMYK via Ghostscript. Quality: Prepress (highest quality, all fonts embedded).",
-    "✓  Ghostscript verfuegbar": "✓  Ghostscript available",
+    "✓  Ghostscript verfügbar": "✓  Ghostscript available",
     "✗  Ghostscript fehlt  →  sudo pacman -S ghostscript":
         "✗  Ghostscript missing  →  sudo pacman -S ghostscript",
 
@@ -1476,9 +1489,8 @@ _EN: dict[str, str] = {
     "Inhalt einpassen": "Fit content",
     "Proportionen behalten": "Keep proportions",
     "Jede Seite wiederholt": "Each page repeated",
-    "Ausführen": "Run",
     "Keine": "None",
-    "Alle auswaehlen": "Select all",
+    "Alle auswählen": "Select all",
     "Auswahl aufheben": "Deselect",
     "Wie Quellseite × Anordnung  (automatisch)":
         "Like source page × arrangement  (automatic)",

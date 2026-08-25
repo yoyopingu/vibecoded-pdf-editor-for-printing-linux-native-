@@ -134,7 +134,7 @@ class PluginManagerPanel(BasePanel):
             subprocess.Popen(["xdg-open", PLUGIN_DIR])
         except Exception as e:
             # No xdg-open on a bare desktop, or the folder cannot be created.
-            self.log.log(tr('Ordner konnte nicht geoeffnet werden: {p0}\n{p1}').format(
+            self.log.log(tr('Ordner konnte nicht geöffnet werden: {p0}\n{p1}').format(
                 p0=PLUGIN_DIR, p1=e), error=True)
 
     def _run_action(self): return tr("Buttons oben verwenden.")

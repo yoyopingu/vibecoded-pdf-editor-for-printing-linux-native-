@@ -16,7 +16,7 @@ One button, and no options on it. Which press the shop separates for and how
 much image resolution that press can use are properties of the press, not of
 the job, so they live in Einstellungen → Druckvorstufe and are set once. What
 a *file* brings with it — its bleed, its fonts, its image resolution — is
-reporting, and belongs to "Druckvorstufenpruefung"; this panel converts.
+reporting, and belongs to "Druckvorstufenprüfung"; this panel converts.
 
 It replaced the old "Ebenen (OCG)" tool. X-4 keeps optional content, so a
 layered file comes through with its layers. X-3 has no optional content at
@@ -77,7 +77,7 @@ from tools.panels._verify import _verify_pages_intact
 def _describe_os_error(e: OSError) -> str:
     """Return a user-friendly description of an OSError."""
     if e.errno == 28:
-        return tr("Kein Speicherplatz mehr auf dem Geraet.")
+        return tr("Kein Speicherplatz mehr auf dem Gerät.")
     if e.errno == 13:
         return tr("Keine Schreibberechtigung.")
     if e.errno == 2:
@@ -94,11 +94,11 @@ class PdfxPanel(BasePanel):
         layout.addWidget(make_label(tr(
             "Alle Farben in CMYK gegen das eingestellte Ausgabeprofil, alle "
             "Schriften eingebettet, Bilder auf Druckauflösung. Vektoren und "
-            "Schrift bleiben scharf in jeder Groesse. Das Ergebnis wird "
-            "geprueft, bevor es gespeichert wird."), dim=True))
+            "Schrift bleiben scharf in jeder Größe. Das Ergebnis wird "
+            "geprüft, bevor es gespeichert wird."), dim=True))
         layout.addWidget(make_label(tr(
             "Was die Datei mitbringt — Anschnitt, Schriften, Bildauflösung — "
-            "zeigt „Druckvorstufenpruefung“."), dim=True))
+            "zeigt „Druckvorstufenprüfung“."), dim=True))
 
         # The condition and the resolution belong to the press, not to the job,
         # so they live in Einstellungen and the panel is one button. This line
@@ -114,7 +114,7 @@ class PdfxPanel(BasePanel):
 
         gs_ok = bool(ghostscript_binary())
         layout.addWidget(make_label(
-            tr("✓  Ghostscript verfuegbar") if gs_ok else
+            tr("✓  Ghostscript verfügbar") if gs_ok else
             tr("✗  Ghostscript fehlt  →  sudo pacman -S ghostscript"), dim=True))
         layout.addStretch()
         self._refresh_condition()
@@ -191,11 +191,11 @@ class PdfxPanel(BasePanel):
         lines = [tr('PDF/X-Export abgeschlossen ({p0}).').format(p0=version), note]
         if capped_to:
             lines.append(tr(
-                'Rasterauflösung auf {p0} dpi begrenzt — bei dieser Seitengroesse '
-                'waere ein hoeherer Wert fuer Betrachter nicht mehr lesbar.')
+                'Rasterauflösung auf {p0} dpi begrenzt — bei dieser Seitengröße '
+                'wäre ein höherer Wert für Betrachter nicht mehr lesbar.')
                 .format(p0=capped_to))
         if dropped:
-            lines.append(tr("Aufgeloeste Ebenen (nicht in der Ausgabe): {p0}")
+            lines.append(tr("Aufgelöste Ebenen (nicht in der Ausgabe): {p0}")
                          .format(p0=", ".join(dropped)))
         self.log.log("\n".join(lines), hold=True)
         self.open_result(out, tr("PDF/X exportiert"))
@@ -263,7 +263,7 @@ def _check_conformance(path, standard=DEFAULT_STANDARD, exact_version=True):
     with pikepdf.open(path) as pdf:
         # Check encryption first: a locked file cannot be verified for PDF/X.
         if pdf.is_encrypted:
-            raise RuntimeError(tr("Die Ausgabe ist verschluesselt."))
+            raise RuntimeError(tr("Die Ausgabe ist verschlüsselt."))
         _key, version, _label = standard_of(standard)
         claimed = str(pdf.docinfo.get("/GTS_PDFXVersion", ""))
         # Exact when checking our own output — it must say what we wrote.
@@ -271,14 +271,14 @@ def _check_conformance(path, standard=DEFAULT_STANDARD, exact_version=True):
         # PDF/X-3:2003 are the same profiles under different revisions, and
         # insisting on our spelling made every foreign file look unconverted.
         if (claimed != version) if exact_version else (_family(claimed) is None):
-            raise RuntimeError(tr("Die Ausgabe traegt keine PDF/X-Kennung."))
+            raise RuntimeError(tr("Die Ausgabe trägt keine PDF/X-Kennung."))
         intents = pdf.Root.get("/OutputIntents")
         if not intents or len(intents) == 0:
             raise RuntimeError(tr("Die Ausgabe hat keinen Output-Intent."))
         intent = intents[0]
         profile = intent.get("/DestOutputProfile")
         if profile is None:
-            raise RuntimeError(tr("Der Output-Intent enthaelt kein ICC-Profil."))
+            raise RuntimeError(tr("Der Output-Intent enthält kein ICC-Profil."))
         if int(profile.get("/N", 0)) != 4:
             raise RuntimeError(tr("Das eingebettete Ausgabeprofil ist nicht CMYK."))
         missing = [i + 1 for i, p in enumerate(pdf.pages)
@@ -293,12 +293,12 @@ def _check_conformance(path, standard=DEFAULT_STANDARD, exact_version=True):
         # one of the reasons X-4 is cheaper: the layers do not have to be
         # resolved away.
         if standard != "x4" and "/OCProperties" in pdf.Root:
-            raise RuntimeError(tr("Die Ausgabe enthaelt noch Ebenen (OCG)."))
+            raise RuntimeError(tr("Die Ausgabe enthält noch Ebenen (OCG)."))
         names = pdf.Root.get("/Names") or {}
         for key, why in (("/JavaScript", "JavaScript"),
                          ("/EmbeddedFiles", tr("eingebettete Dateien"))):
             if key in names:
-                raise RuntimeError(tr("Die Ausgabe enthaelt {p0}.").format(p0=why))
+                raise RuntimeError(tr("Die Ausgabe enthält {p0}.").format(p0=why))
 
     not_embedded = unembedded_fonts(path)
     if not_embedded:
@@ -394,7 +394,7 @@ def _conversion_reason(src, standard, oci, dpi):
         with pikepdf.open(src) as pdf:
             claimed = _family(pdf.docinfo.get("/GTS_PDFXVersion"))
             if claimed != standard:
-                return tr('Datei ist {p0}, gewuenscht ist {p1}').format(
+                return tr('Datei ist {p0}, gewünscht ist {p1}').format(
                     p0=str(pdf.docinfo.get("/GTS_PDFXVersion")),
                     p1=PDFX_STANDARDS[standard][0])
             intent = pdf.Root["/OutputIntents"][0]
@@ -405,7 +405,7 @@ def _conversion_reason(src, standard, oci, dpi):
         # A *named* setting is an opinion, and a file made for another
         # condition genuinely has to be separated again.
         if oci != "Custom" and found != oci:
-            return tr('Datei ist fuer {p0} separiert, eingestellt ist {p1}').format(
+            return tr('Datei ist für {p0} separiert, eingestellt ist {p1}').format(
                 p0=found or tr("unbenannt"), p1=oci)
 
         finest = highest_image_dpi(src, stop_above=dpi * 1.01)
@@ -483,7 +483,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
     # which also says why a file that looks like PDF/X still needs work.
     reason = _conversion_reason(src, standard, oci, dpi)
     if reason is None:
-        report(tr("Datei ist bereits {p0} — unveraendert uebernommen.")
+        report(tr("Datei ist bereits {p0} — unverändert übernommen.")
                .format(p0=version))
         try:
             shutil.copyfile(src, out)
@@ -614,7 +614,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
         moved = _boxes_survived(src, tmp)
         if moved:
             raise RuntimeError(tr(
-                'Der Beschnitt hat sich veraendert auf Seite(n): {p0} — die '
+                'Der Beschnitt hat sich verändert auf Seite(n): {p0} — die '
                 'Datei wurde nicht gespeichert.').format(p0=", ".join(moved)))
 
         # Same guard the CMYK and greyscale conversions use: pdfwrite can black
@@ -632,7 +632,7 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
         damaged = _verify_pages_intact(src, tmp, range(n_src), report) if not off else {}
         if damaged:
             raise RuntimeError(tr(
-                'PDF/X-Export hat Seite(n) beschaedigt: {p0} — die Datei wurde '
+                'PDF/X-Export hat Seite(n) beschädigt: {p0} — die Datei wurde '
                 'nicht gespeichert.').format(
                     p0=", ".join(f"{i + 1} ({why})" for i, why in sorted(damaged.items()))))
         shutil.copyfile(tmp, out)

@@ -88,18 +88,18 @@ def _guess(exc_type, exc_value, text):
     # Out of memory. Large PDFs at high zoom are how this app reaches it.
     if name == "MemoryError":
         return tr("Der Arbeitsspeicher hat nicht gereicht. Sehr grosse "
-                  "Seiten bei hohem Zoom sind die haeufigste Ursache — mit "
-                  "weniger Zoom oder weniger geoeffneten Dateien erneut "
+                  "Seiten bei hohem Zoom sind die häufigste Ursache — mit "
+                  "weniger Zoom oder weniger geöffneten Dateien erneut "
                   "versuchen.")
 
     # Disk full — an errno, because the message text for it varies by locale.
     if getattr(exc_value, "errno", None) == 28:
-        return tr("Auf dem Datentraeger ist kein Platz mehr frei.")
+        return tr("Auf dem Datenträger ist kein Platz mehr frei.")
 
     if name == "PermissionError":
         return tr("Der Zugriff wurde vom Betriebssystem verweigert. Meist ist "
-                  "das Ziel schreibgeschuetzt, gehoert einem anderen Benutzer, "
-                  "oder die Datei ist in einem anderen Programm geoeffnet.")
+                  "das Ziel schreibgeschützt, gehört einem anderen Benutzer, "
+                  "oder die Datei ist in einem anderen Programm geöffnet.")
 
     # An external binary this app drives, rather than a document. Matched
     # against the exception's own message and not the traceback: the traceback
@@ -115,31 +115,31 @@ def _guess(exc_type, exc_value, text):
                           "Requirements.").format(p0=label)
 
     if name in ("ModuleNotFoundError", "ImportError"):
-        return tr("Ein benoetigtes Python-Paket fehlt oder laesst sich nicht "
+        return tr("Ein benötigtes Python-Paket fehlt oder lässt sich nicht "
                   "laden. requirements.txt nennt die Pakete, die installiert "
-                  "sein muessen.")
+                  "sein müssen.")
 
     if name == "FileNotFoundError":
         return tr("Die Datei war nicht mehr da. Sie wurde vermutlich "
-                  "verschoben, umbenannt oder geloescht, waehrend sie hier "
-                  "geoeffnet war.")
+                  "verschoben, umbenannt oder gelöscht, während sie hier "
+                  "geöffnet war.")
 
     # pikepdf/pypdf, which is how a bad document announces itself.
     if "password" in low or "encrypted" in low:
-        return tr("Die PDF-Datei ist passwortgeschuetzt und kann ohne das "
+        return tr("Die PDF-Datei ist passwortgeschützt und kann ohne das "
                   "Passwort nicht bearbeitet werden.")
     if any(k in low for k in ("pdferror", "damaged", "not a pdf",
                               "eof marker", "startxref", "invalid pdf")):
-        return tr("Die PDF-Datei ist beschaedigt oder entspricht nicht dem "
-                  "Standard. Andere Programme koennen sie trotzdem anzeigen — "
+        return tr("Die PDF-Datei ist beschädigt oder entspricht nicht dem "
+                  "Standard. Andere Programme können sie trotzdem anzeigen — "
                   "sie sind toleranter als die Bibliothek, die hier bearbeitet.")
 
     # The characteristic PyQt lifetime failure: Python still holding a handle
     # to a widget whose C++ half Qt has already destroyed.
     if "has been deleted" in low or "wrapped c/c++ object" in low:
         return tr("Ein Fenster-Element wurde benutzt, nachdem Qt es bereits "
-                  "geloescht hatte. Das ist ein Fehler in dieser Anwendung, "
-                  "nicht an Ihrer Datei — der Bericht unten gehoert in eine "
+                  "gelöscht hatte. Das ist ein Fehler in dieser Anwendung, "
+                  "nicht an Ihrer Datei — der Bericht unten gehört in eine "
                   "Fehlermeldung an die Entwickler.")
 
     if name == "RecursionError":
@@ -155,15 +155,15 @@ def _guess_native(text):
     low = text.lower()
     if "sip" in low or "pyqt" in low:
         return tr("Der Absturz geschah in der Qt-Anbindung, meist wenn ein "
-                  "Fenster-Element benutzt wird, nachdem Qt es geloescht hat. "
+                  "Fenster-Element benutzt wird, nachdem Qt es gelöscht hat. "
                   "Das ist ein Fehler in dieser Anwendung, nicht an Ihrer "
                   "Datei.")
     if "pdfium" in low:
         return tr("Der Absturz geschah beim Darstellen einer Seite. Meist "
-                  "liegt das an einer beschaedigten PDF-Datei, die die "
+                  "liegt das an einer beschädigten PDF-Datei, die die "
                   "Darstellungs-Bibliothek nicht verarbeiten kann.")
     if "ghostscript" in low or "libgs" in low:
-        return tr("Der Absturz geschah in Ghostscript, waehrend eine Datei "
+        return tr("Der Absturz geschah in Ghostscript, während eine Datei "
                   "konvertiert wurde.")
     return None
 

@@ -24,7 +24,7 @@ class PageNumbersPanel(BasePanel):
         ol.addLayout(row(tr("Position:"), self.pos))
 
         self.prefix = QLineEdit(); self.prefix.setPlaceholderText(tr("z.B. Seite "))
-        ol.addLayout(row(tr("Praefix:"), self.prefix))
+        ol.addLayout(row(tr("Präfix:"), self.prefix))
 
         self.suffix = QLineEdit(); self.suffix.setPlaceholderText(tr("z.B.  / {gesamt}"))
         ol.addLayout(row(tr("Suffix:"), self.suffix))
@@ -33,10 +33,10 @@ class PageNumbersPanel(BasePanel):
         ol.addLayout(row(tr("Startnummer:"), self.start_spin))
 
         self.skip_spin = QSpinBox(); self.skip_spin.setRange(0,999); self.skip_spin.setValue(0)
-        ol.addLayout(row(tr("Erste N Seiten ueberspringen:"), self.skip_spin))
+        ol.addLayout(row(tr("Erste N Seiten überspringen:"), self.skip_spin))
 
         self.font_spin = QSpinBox(); self.font_spin.setRange(5,48); self.font_spin.setValue(10)
-        ol.addLayout(row(tr("Schriftgroesse (pt):"), self.font_spin))
+        ol.addLayout(row(tr("Schriftgröße (pt):"), self.font_spin))
 
         self.margin_spin = QSpinBox(); self.margin_spin.setRange(5,100); self.margin_spin.setValue(20)
         ol.addLayout(row(tr("Abstand vom Rand (pt):"), self.margin_spin))
@@ -78,4 +78,4 @@ class PageNumbersPanel(BasePanel):
             page.merge_page(PR(packet).pages[0]); writer.add_page(page)
         with open(out, "wb") as f: writer.write(f)
         self.open_result(out, tr("Mit Seitenzahlen"))
-        return tr('Seitenzahlen auf {p0} Seiten hinzugefuegt').format(p0=n - skip)
+        return tr('Seitenzahlen auf {p0} Seiten hinzugefügt').format(p0=n - skip)

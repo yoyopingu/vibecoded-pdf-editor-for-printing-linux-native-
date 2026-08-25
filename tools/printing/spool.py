@@ -592,7 +592,7 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
 
 
 # The three scaling modes, in the order the dialog's radio buttons sit in
-# (tools/printing/dialog.py: An Seite anpassen / Feste Groesse / Auf
+# (tools/printing/dialog.py: An Seite anpassen / Feste Größe / Auf
 # bedruckbaren Bereich verkleinern).
 FIT, FIXED, SHRINK = 0, 1, 2
 
@@ -621,7 +621,7 @@ def _scaling_options(scale_idx):
         # 1.000). fit-to-page is deliberately NOT sent alongside it here: it
         # enlarges, which is the one thing this mode promises never to do.
         return ["print-scaling=auto-fit"]
-    # Feste Groesse: print it at the size asked for, whatever that is.
+    # Feste Größe: print it at the size asked for, whatever that is.
     return ["print-scaling=none"]
 
 
@@ -638,7 +638,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
       to CUPS, which fits to the driver's *real* imageable area rather than to
       an estimate of it, and adapts to whichever printer the job goes to.
       Ghostscript passes the pages through at their own size.
-    * "Feste Groesse" is done here: Ghostscript fixes the media so the page
+    * "Feste Größe" is done here: Ghostscript fixes the media so the page
       prints at 1:1 on the sheet, recenter_on_paper applies the percentage if
       it is not 100, and CUPS is told print-scaling=none so it does not scale
       the result a second time.
@@ -759,7 +759,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                 logging.error("print: colour conversion blacked out page(s) %s "
                               "— printing the unconverted file", blackout)
                 AppState.get().status_message.emit(tr(
-                    'Farbumwandlung hat Seite(n) {p0} geschwaerzt — es wird '
+                    'Farbumwandlung hat Seite(n) {p0} geschwärzt — es wird '
                     'ohne Umwandlung gedruckt.').format(
                         p0=", ".join(str(i + 1) for i in blackout)))
             elif r.returncode == 0 and os.path.getsize(norm_tmp) > 100:
@@ -768,7 +768,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                 logging.warning("GS normalization failed (rc=%d): %s",
                                 r.returncode, r.stderr[:300])
 
-        # Feste Groesse at anything but 100 %: scale the content and centre it
+        # Feste Größe at anything but 100 %: scale the content and centre it
         # on the sheet here, because Ghostscript can fit a page or leave it
         # alone and neither of those is "make it 70 % of what it is".
         if scale_idx == FIXED and scale_pct != 100:

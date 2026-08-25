@@ -440,8 +440,8 @@ class PrepressDialog(QDialog):
         _dlg_section(outer, "PAPIERFORMATE")
         outer.addWidget(_dlg_note(tr(
             "Welche Formate in allen Werkzeugen und im Druckdialog zur Auswahl "
-            "stehen. Abgewaehlte werden nirgends mehr angeboten; eigene "
-            "Formate erscheinen ueberall, wo ein Format gewaehlt wird.")))
+            "stehen. Abgewählte werden nirgends mehr angeboten; eigene "
+            "Formate erscheinen überall, wo ein Format gewählt wird.")))
         outer.addWidget(self._build_paper_list())
 
         add_row = QHBoxLayout()
@@ -453,7 +453,7 @@ class PrepressDialog(QDialog):
         self._paper_w.setValue(320); self._paper_w.setSuffix(" mm")
         self._paper_h = QSpinBox(); self._paper_h.setRange(1, 5000)
         self._paper_h.setValue(450); self._paper_h.setSuffix(" mm")
-        add_btn = QPushButton(tr("Hinzufuegen"))
+        add_btn = QPushButton(tr("Hinzufügen"))
         add_btn.setObjectName("secondaryBtn")
         add_btn.clicked.connect(self._add_paper)
         del_btn = QPushButton(tr("Eigenes entfernen"))
@@ -527,7 +527,7 @@ class PrepressDialog(QDialog):
         self._paper_name.clear()
         self._reload_paper_list()
         self._paper_msg.setText(
-            tr("{p0} hinzugefuegt.").format(p0=paper.label(name)))
+            tr("{p0} hinzugefügt.").format(p0=paper.label(name)))
 
     def _remove_paper(self):
         """Only the shop's own sizes can be removed; a built-in is unticked."""
@@ -538,8 +538,8 @@ class PrepressDialog(QDialog):
         name = item.data(Qt.ItemDataRole.UserRole)
         if name not in paper.custom_sizes():
             self._paper_msg.setText(tr(
-                "Mitgelieferte Formate lassen sich nicht loeschen — "
-                "das Haekchen entfernen blendet sie ueberall aus."))
+                "Mitgelieferte Formate lassen sich nicht löschen — "
+                "das Häkchen entfernen blendet sie überall aus."))
             return
         paper.remove_custom(name)
         self._reload_paper_list()
@@ -644,7 +644,7 @@ class GeneralDialog(QDialog):
 
         _dlg_section(outer, "ALLGEMEIN")
 
-        self._reopen_cb = QCheckBox(tr("Letzte Datei beim Programmstart automatisch oeffnen"))
+        self._reopen_cb = QCheckBox(tr("Letzte Datei beim Programmstart automatisch öffnen"))
         self._reopen_cb.setChecked(self._s.reopen_last())
         outer.addWidget(self._reopen_cb)
 

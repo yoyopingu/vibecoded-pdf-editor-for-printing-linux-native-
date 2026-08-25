@@ -36,7 +36,7 @@ def _pattern(exts):
 
 def file_dialog_filter():
     """Filter string for every "open a file" dialog in the app."""
-    return (tr("Alle unterstuetzten Dateien") + f" ({_pattern(ALL_EXTS)});;"
+    return (tr("Alle unterstützten Dateien") + f" ({_pattern(ALL_EXTS)});;"
             + f"PDF ({_pattern(PDF_EXT)});;"
             + tr("Bilder") + f" ({_pattern(IMAGE_EXTS)});;"
             + tr("Office & Text") + f" ({_pattern(OFFICE_EXTS)});;"
@@ -80,7 +80,7 @@ def convert_to_pdf(path, out_dir):
             if f.endswith(".pdf"):
                 return os.path.join(out_dir, f)
         raise RuntimeError(tr('Konvertierung fehlgeschlagen:\n{p0}').format(p0=r.stderr.strip()[:300]))
-    raise RuntimeError(tr("Nicht unterstuetzt: {p0}").format(p0=os.path.basename(path)))
+    raise RuntimeError(tr("Nicht unterstützt: {p0}").format(p0=os.path.basename(path)))
 
 
 def convert_files(paths, out_dir, job=None):

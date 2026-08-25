@@ -45,7 +45,7 @@ def _plain_ink(path):
 def _flatten_form(filled, out, has_values):
     """Bake the filled-in values into the page so they survive printing.
 
-    "Reduzieren (fuer Druck)" used to be `del page["/Annots"]`, which deletes the
+    "Reduzieren (für Druck)" used to be `del page["/Annots"]`, which deletes the
     widget annotations — and the widget is *where the value is drawn*. The field
     value stayed in the AcroForm dictionary, so the file still looked filled to
     anything that inspects fields, while the page itself rendered blank. Ticking
@@ -73,14 +73,14 @@ def _flatten_form(filled, out, has_values):
                 "gespeichert. Bitte ohne 'Reduzieren' erneut speichern."))
         if has_values and sum(after) <= sum(before):
             raise RuntimeError(tr(
-                "Reduzieren hat die ausgefuellten Werte nicht ins Seitenbild "
-                "uebernommen — die Datei wurde nicht gespeichert. Bitte ohne "
+                "Reduzieren hat die ausgefüllten Werte nicht ins Seitenbild "
+                "übernommen — die Datei wurde nicht gespeichert. Bitte ohne "
                 "'Reduzieren' erneut speichern."))
 
 
 class FormsPanel(BasePanel):
     TITLE         = "Formulare / Reduzieren"
-    SUBTITLE      = "Formularfelder ausfuellen und einbetten."
+    SUBTITLE      = "Formularfelder ausfüllen und einbetten."
 
     def build_ui(self, layout):
         self._fields = {}
@@ -101,7 +101,7 @@ class FormsPanel(BasePanel):
         scroll.setWidget(self.form_box); scroll.setMinimumHeight(140)
         grp_vl.addWidget(scroll)
         layout.addWidget(grp)
-        self.flatten=QCheckBox(tr("Nach dem Speichern reduzieren (fuer Druck)"))
+        self.flatten=QCheckBox(tr("Nach dem Speichern reduzieren (für Druck)"))
         self.flatten.setChecked(True); layout.addWidget(self.flatten)
 
     def _load(self):
@@ -152,7 +152,7 @@ class FormsPanel(BasePanel):
         # The field values are read here; writing and the optional flatten —
         # which shells out to Ghostscript — go to a worker.
         src = self.require_pdf()
-        out = self.save_pdf("Ausgefuelltes Formular speichern als")
+        out = self.save_pdf("Ausgefülltes Formular speichern als")
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
         data = {name: ("/Yes" if (isinstance(w, QCheckBox) and w.isChecked()) else
                        "/Off" if isinstance(w, QCheckBox) else w.text())
@@ -168,8 +168,8 @@ class FormsPanel(BasePanel):
 
     def _form_done(self, result):
         out, n_fields = result
-        self.log.log(tr('Formular ausgefuellt ({p0} Felder)').format(p0=n_fields))
-        self.open_result(out, tr("Formular ausgefuellt"))
+        self.log.log(tr('Formular ausgefüllt ({p0} Felder)').format(p0=n_fields))
+        self.open_result(out, tr("Formular ausgefüllt"))
 
 
 def _read_fields(src, report):

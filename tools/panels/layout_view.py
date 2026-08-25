@@ -388,7 +388,7 @@ class _SheetColumn(QScrollArea):
         self._pdf_path = pdf_path
         self._cap.setText("")
         if not pdf_path or not os.path.isfile(pdf_path):
-            self._cap.setText(tr("Keine PDF geoeffnet") if not pdf_path
+            self._cap.setText(tr("Keine PDF geöffnet") if not pdf_path
                               else tr("Datei nicht mehr auffindbar"))
             self._lay.addWidget(self._cap)
             self._lay.addStretch(1)
@@ -1275,7 +1275,7 @@ class LayoutPanel(BasePanel):
         else:
             pages = self._get_target_pages()
             if not pages:
-                raise ValueError(tr("Keine Seiten ausgewaehlt."))
+                raise ValueError(tr("Keine Seiten ausgewählt."))
             target_origs = {pos for pos, _ in pages}
 
         plan = self._build_plan(src_path, out_path, n_total,

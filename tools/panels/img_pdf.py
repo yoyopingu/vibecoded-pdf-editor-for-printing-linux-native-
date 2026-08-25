@@ -17,7 +17,7 @@ class ImgPdfPanel(BasePanel):
 
     def build_ui(self, layout):
         tb = QGroupBox(tr("BILDER  nach  PDF")); tl = QVBoxLayout(tb)
-        tl.addWidget(make_label(tr("Bilder hinzufuegen. Reihenfolge per Drag & Drop."), dim=True))
+        tl.addWidget(make_label(tr("Bilder hinzufügen. Reihenfolge per Drag & Drop."), dim=True))
         self.img_list = FileDropList(extensions=("*.png","*.jpg","*.jpeg","*.tiff","*.tif","*.bmp","*.webp"))
         tl.addWidget(self.img_list)
         br = QHBoxLayout()
@@ -29,11 +29,11 @@ class ImgPdfPanel(BasePanel):
         cb.clicked.connect(self._to_pdf); tl.addWidget(cb)
         layout.addWidget(tb)
 
-        fb = QGroupBox(tr("PDF  nach  BILDER  (aktuell geoeffnete PDF)")); fl = QVBoxLayout(fb)
+        fb = QGroupBox(tr("PDF  nach  BILDER  (aktuell geöffnete PDF)")); fl = QVBoxLayout(fb)
         self.fmt = QComboBox(); self.fmt.addItems(["PNG","JPEG","TIFF"])
         fl.addLayout(row(tr("Ausgabeformat:"), self.fmt))
         self.dpi = QSpinBox(); self.dpi.setRange(72,600); self.dpi.setValue(300); self.dpi.setSuffix(" dpi")
-        fl.addLayout(row(tr("Aufloesung:"), self.dpi))
+        fl.addLayout(row(tr("Auflösung:"), self.dpi))
         eb = QPushButton(tr("  Seiten als Bilder exportieren...")); eb.setObjectName("actionBtn")
         eb.clicked.connect(self._to_img); fl.addWidget(eb)
         layout.addWidget(fb)
@@ -58,7 +58,7 @@ class ImgPdfPanel(BasePanel):
         # respond mid-convert, so Stop can only catch it before or after, not
         # during — no worse than before, where there was no Stop at all.
         paths = self.img_list.get_paths()
-        if not paths: self.log.log(tr("Bilder hinzufuegen."), error=True); return
+        if not paths: self.log.log(tr("Bilder hinzufügen."), error=True); return
         out = self.save_pdf("Als PDF speichern")
         if not out: return
         self.log.clear_log()
@@ -99,7 +99,7 @@ def _images_to_pdf(paths, out, report):
     """Encode `paths` into one PDF at `out`, on a worker thread. Returns
     (out, n_images)."""
     import img2pdf
-    report(tr("Bilder werden zusammengefuehrt …"))
+    report(tr("Bilder werden zusammengeführt …"))
     with open(out, "wb") as f:
         f.write(img2pdf.convert(paths))
     return out, len(paths)

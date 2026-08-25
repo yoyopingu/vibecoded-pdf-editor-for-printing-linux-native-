@@ -12,9 +12,13 @@ from tools.viewer.tab import PdfTab
 from tools.plugin_manager import PluginManagerPanel, discover_plugins
 from tools.panels.colour_profile import ColourProfilePanel
 from tools.panels.compress import CompressPanel
+from tools.panels.crop_resize import CropResizePanel
 from tools.panels.forms import FormsPanel
+from tools.panels.img_pdf import ImgPdfPanel
+from tools.panels.impose import ImposePanel
 from tools.panels.grayscale import GrayscalePanel
 from tools.panels.layout_view import LayoutPanel
+from tools.panels.nup import NUpPanel
 from tools.panels.ocr import OcrPanel
 from tools.panels.page_numbers import PageNumbersPanel
 from tools.panels.pdfx import PdfxPanel
@@ -28,13 +32,9 @@ from tools.shell.tools_toggle import ToolsToggle
 
 
 # The tool list, grouped by what each tool acts on. Layout is not in it:
-# N-Up, Broschüre and Zuschneiden/Skalieren became stages of the Layout view
-# (tools/panels/layout_view.py), which runs the same functions they do. Their
-# panels still exist and still work — they are simply not a sidebar entry any
-# more, because the view does all three together and previews the result.
-#
-# Bild ↔ PDF is likewise absent: an image opened becomes a PDF on the way in,
-# and the other direction is an export.
+# the standalone N-Up, Broschüre and Zuschneiden/Skalieren panels were
+# brought back as sidebar tools (Batch B); the Layout view still offers the
+# same operations as staging stages.
 TOOL_GROUPS = [
     ("Farbe", [
         ("Graustufen",              GrayscalePanel),
@@ -44,6 +44,12 @@ TOOL_GROUPS = [
         ("Seitenzahlen",            PageNumbersPanel),
         ("Formulare / Reduzieren",  FormsPanel),
         ("OCR — Texterkennung",     OcrPanel),
+        ("Zuschneiden / Skalieren", CropResizePanel),
+        ("Bild zu/von PDF",         ImgPdfPanel),
+    ]),
+    ("Layout", [
+        ("N-Up Layout",             NUpPanel),
+        ("Broschüre / Ausschießen", ImposePanel),
     ]),
     ("Ausgabe", [
         ("Druckvorstufenprüfung",   PreflightPanel),
@@ -66,6 +72,10 @@ TOOL_ICONS = {
     "Seitenzahlen":          "num",
     "Formulare / Reduzieren": "form",
     "OCR — Texterkennung":   "eye",
+    "Zuschneiden / Skalieren": "crop",
+    "Bild zu/von PDF":       "doc",
+    "N-Up Layout":           "grid",
+    "Broschüre / Ausschießen": "split",
     "Druckvorstufenprüfung": "shield",
     "PDF/X-Export":          "export",
     "Komprimieren":          "zip",

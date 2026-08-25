@@ -5,7 +5,7 @@ Tools run on a PDF, but the page manager keeps the document's state — page
 order, rotations, pages pulled in from other tabs, inserted blanks — in an
 in-memory PageModel that only writes through on save. A tool that read the
 file on disk saw the original order and the unrotated pages, and "Leere Seite
-einfuegen" (which appends the blank to the end of the file and only records
+einfügen" (which appends the blank to the end of the file and only records
 where it should appear) put that blank on the back of the cover. This module
 flattens the model's view into a temp PDF so a tool reads what the user sees.
 
@@ -134,7 +134,7 @@ def ensure_view_snapshot(base_path: str) -> str:
     order, the rotations, pages pulled in from other tabs and inserted blanks in
     an in-memory PageModel — the file only catches up when the user saves. A
     booklet built from a document whose pages had been reordered was therefore
-    imposed from the *old* order, and "Leere Seite einfuegen" (which appends the
+    imposed from the *old* order, and "Leere Seite einfügen" (which appends the
     blank to the end of the file and only records where it should appear) put
     that blank on the back of the cover.
 

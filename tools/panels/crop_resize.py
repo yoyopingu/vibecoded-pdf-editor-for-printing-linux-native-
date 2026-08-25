@@ -131,7 +131,7 @@ def crop_scale_pdf(src_path, out_path, target_origs, margins_pt,
 class CropResizePanel(BasePanel):
     TITLE         = "Zuschneiden / Skalieren"
     SUBTITLE      = ""
-    RUN_LABEL     = "Ausfuehren"
+    RUN_LABEL     = "Ausführen"
 
     def _setup(self):
         outer = QVBoxLayout(self)
@@ -198,7 +198,7 @@ class CropResizePanel(BasePanel):
         layout.addWidget(fmt_grp)
 
         # ── Randfelder ───────────────────────────────────────────────
-        crop_grp = QGroupBox(tr("Raender  [+ schneiden / - erweitern]"))
+        crop_grp = QGroupBox(tr("Ränder  [+ schneiden / - erweitern]"))
         cg = QVBoxLayout(crop_grp); cg.setSpacing(4); cg.setContentsMargins(6,8,6,6)
         _rows = [(tr("Oben"), self.ct), (tr("Unten"), self.cb2),
                  (tr("Links"), self.cl2), (tr("Rechts"), self.cr)]
@@ -240,7 +240,7 @@ class CropResizePanel(BasePanel):
         self.scale_pct.valueChanged.connect(self._on_pct_edited)
         pct_row.addWidget(self.scale_pct); pct_row.addStretch()
         sg.addLayout(pct_row)
-        self._pct_hint = QLabel(tr("Zeigt, wie gross die Seite durch Format und Raender wird. Eingabe skaliert die ganze Seite zentriert auf diesen Wert."))
+        self._pct_hint = QLabel(tr("Zeigt, wie gross die Seite durch Format und Ränder wird. Eingabe skaliert die ganze Seite zentriert auf diesen Wert."))
         self._pct_hint.setObjectName("dimLabel"); self._pct_hint.setWordWrap(True)
         sg.addWidget(self._pct_hint)
 
@@ -515,7 +515,7 @@ class CropResizePanel(BasePanel):
         pdf_path = self.current_pdf()
         if not pdf_path:
             self._sel_info.setText("")
-            return None, tr("Keine PDF geoeffnet")
+            return None, tr("Keine PDF geöffnet")
         if not os.path.isfile(pdf_path):
             # Same distinction the run makes: a document is open, its file is
             # not there any more. "No PDF open" describes a different problem
@@ -538,7 +538,7 @@ class CropResizePanel(BasePanel):
             # ordinary crop branch instead, at zero margins, and report
             # success on a file that was really just copied unchanged: no
             # marks, no error, nothing to say something was still needed.
-            return None, tr("Bitte zuerst ein Format waehlen.")
+            return None, tr("Bitte zuerst ein Format wählen.")
 
         # Render the page ONCE at a fixed base resolution (cached per page). Every
         # resize / zoom / margin / format change then only re-scales this cached
@@ -677,7 +677,7 @@ class CropResizePanel(BasePanel):
             # bearbeitet." on a file that was really just copied unchanged —
             # no marks, no error — is what this looked like before the guard.
             raise ValueError(tr(
-                "Bitte zuerst ein Format waehlen, um Schnittmarken zu setzen."))
+                "Bitte zuerst ein Format wählen, um Schnittmarken zu setzen."))
         out = self.save_pdf("PDF speichern als")
         if not out: raise ValueError(tr("Kein Ausgabepfad."))
 
@@ -686,7 +686,7 @@ class CropResizePanel(BasePanel):
             target_origs = set(range(len(PdfReader(src_path, strict=False).pages)))
         else:
             target_pages = self._get_target_pages()
-            if not target_pages: raise ValueError(tr("Keine Seiten ausgewaehlt."))
+            if not target_pages: raise ValueError(tr("Keine Seiten ausgewählt."))
             # Positions in the displayed document, which is what src_path holds
             # — see _get_target_pages.
             target_origs = {pos for pos, _ in target_pages}

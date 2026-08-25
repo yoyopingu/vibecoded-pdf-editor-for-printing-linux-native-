@@ -123,7 +123,7 @@ class ManagePanel(QWidget):
         bp_layout.setContentsMargins(0, 0, 0, 0)
         bp_layout.setSpacing(0)
         for text, tip, fn in (
-                (tr("Alle"),  tr("Alle auswaehlen") + "  (Strg+A)",  self.grid.select_all),
+                (tr("Alle"),  tr("Alle auswählen") + "  (Strg+A)",  self.grid.select_all),
                 (tr("Keine"), tr("Auswahl aufheben") + "  (Strg+D)", self.grid.deselect_all)):
             b = QPushButton(text)
             b.setObjectName("btnpairBtn")
@@ -147,8 +147,8 @@ class ManagePanel(QWidget):
         self._zoom_btns = []
         for ico, tip, slot in (
                 ("minus", "Thumbnails verkleinern", lambda: self._zoom_grid(-1)),
-                ("plus", "Thumbnails vergroessern", lambda: self._zoom_grid(+1)),
-                ("fit", "Zoom zuruecksetzen",      lambda: self._zoom_grid(0))):
+                ("plus", "Thumbnails vergrößern", lambda: self._zoom_grid(+1)),
+                ("fit", "Zoom zurücksetzen",      lambda: self._zoom_grid(0))):
             b = QPushButton()
             b.setFixedSize(28, 26)
             b.setToolTip(tr(tip))
@@ -181,14 +181,14 @@ class ManagePanel(QWidget):
         layout.addLayout(view_row)
 
         self._section(layout, tr("OPERATIONEN"))
-        layout.addWidget(self._listbtn(tr("Loeschen"),     self._delete,          "trash",    "Entf"))
+        layout.addWidget(self._listbtn(tr("Löschen"),     self._delete,          "trash",    "Entf"))
         layout.addWidget(self._listbtn(tr("Kopieren"),     self._copy,            "copy",     "Strg+C"))
-        layout.addWidget(self._listbtn(tr("Einfuegen"),    self._paste,           "paste",    "Strg+V"))
-        layout.addWidget(self._listbtn(tr("Rueckgaengig"), self._undo,            "undo",     "Strg+Z"))
+        layout.addWidget(self._listbtn(tr("Einfügen"),    self._paste,           "paste",    "Strg+V"))
+        layout.addWidget(self._listbtn(tr("Rückgängig"), self._undo,            "undo",     "Strg+Z"))
         layout.addWidget(self._listbtn(tr("Extrahieren..."),           self._extract,          "scissors"))
-        layout.addWidget(self._listbtn(tr("Als neuen Tab oeffnen"),    self._open_as_tab,      "doc"))
-        layout.addWidget(self._listbtn(tr("Leere Seite einfuegen"),    self._insert_blank,     "fileplus"))
-        layout.addWidget(self._listbtn(tr("Aus Datei(en) einfuegen..."), self._insert_from_file, "files"))
+        layout.addWidget(self._listbtn(tr("Als neuen Tab öffnen"),    self._open_as_tab,      "doc"))
+        layout.addWidget(self._listbtn(tr("Leere Seite einfügen"),    self._insert_blank,     "fileplus"))
+        layout.addWidget(self._listbtn(tr("Aus Dateien einfügen..."), self._insert_from_file, "files"))
 
         self._section(layout, tr("TRENNEN"))
         layout.addWidget(self._listbtn(tr("Auswahl als Datei speichern"), self._split_selection, "save"))
@@ -338,16 +338,16 @@ class ManagePanel(QWidget):
 
     def _delete(self):
         if not self.model.selected:
-            AppState.get().status_message.emit(tr("Zuerst Seiten auswaehlen."))
+            AppState.get().status_message.emit(tr("Zuerst Seiten auswählen."))
             return
         n = len(self.model.selected)
         self.grid.delete_selected()
         AppState.get().status_message.emit(
-            tr('{p0} Seite(n) geloescht.  Strg+Z = Rueckgaengig.').format(p0=n))
+            tr('{p0} Seite(n) gelöscht.  Strg+Z = Rückgängig.').format(p0=n))
 
     def _copy(self):
         if not self.model.selected:
-            AppState.get().status_message.emit(tr("Zuerst Seiten auswaehlen."))
+            AppState.get().status_message.emit(tr("Zuerst Seiten auswählen."))
             return
         ManagePanel._shared_clipboard = []
         for u in self.model.order:
@@ -357,22 +357,22 @@ class ManagePanel(QWidget):
                 ManagePanel._shared_clipboard.append((path, orig, rot))
         n = len(ManagePanel._shared_clipboard)
         AppState.get().status_message.emit(
-            tr('{p0} Seite(n) kopiert.  Strg+V = Einfuegen (auch in anderen Tabs).').format(p0=n))
+            tr('{p0} Seite(n) kopiert.  Strg+V = Einfügen (auch in anderen Tabs).').format(p0=n))
 
     def _cut(self):
         if not self.model.selected:
-            AppState.get().status_message.emit(tr("Zuerst Seiten auswaehlen."))
+            AppState.get().status_message.emit(tr("Zuerst Seiten auswählen."))
             return
         self._copy()
         n = len(self.model.selected)
         self.grid.delete_selected()
         AppState.get().status_message.emit(
-            tr('{p0} Seite(n) ausgeschnitten.  Strg+V = Einfuegen.').format(p0=n))
+            tr('{p0} Seite(n) ausgeschnitten.  Strg+V = Einfügen.').format(p0=n))
 
     def _paste(self):
         if not ManagePanel._shared_clipboard:
             AppState.get().status_message.emit(
-                tr("Nichts zum Einfuegen.  Zuerst Strg+C."))
+                tr("Nichts zum Einfügen.  Zuerst Strg+C."))
             return
         self._save_history()
         if self.model.selected:
@@ -394,16 +394,16 @@ class ManagePanel(QWidget):
         self.grid._rebuild(); self.grid.order_changed.emit()
         n = len(ManagePanel._shared_clipboard)
         AppState.get().status_message.emit(
-            tr('{p0} Seite(n) eingefuegt.').format(p0=n))
+            tr('{p0} Seite(n) eingefügt.').format(p0=n))
 
     def _undo(self):
         tab = self._owning_tab()
         if tab is None or not tab.undo():
-            AppState.get().status_message.emit(tr("Nichts zum Rueckgaengig."))
+            AppState.get().status_message.emit(tr("Nichts zum Rückgängig."))
             return
         self.pdf_path = tab.pdf_path
         AppState.get().status_message.emit(
-            tr("Rueckgaengig.  Strg+Y = Wiederholen."))
+            tr("Rückgängig.  Strg+Y = Wiederholen."))
 
     def _redo(self):
         tab = self._owning_tab()
@@ -420,7 +420,7 @@ class ManagePanel(QWidget):
 
     def _extract(self):
         if not self.model.selected:
-            AppState.get().status_message.emit(tr("Zuerst Seiten auswaehlen."))
+            AppState.get().status_message.emit(tr("Zuerst Seiten auswählen."))
             return
         path, _ = QFileDialog.getSaveFileName(
             self, tr("Extrahieren als"), "", tr("PDF (*.pdf)"))
@@ -450,11 +450,11 @@ class ManagePanel(QWidget):
     def _open_as_tab(self):
         from PyQt6.QtWidgets import QMessageBox
         if not self.model.selected:
-            AppState.get().status_message.emit(tr("Zuerst Seiten auswaehlen."))
+            AppState.get().status_message.emit(tr("Zuerst Seiten auswählen."))
             return
         box = QMessageBox(self)
-        box.setWindowTitle(tr("Als neuen Tab oeffnen"))
-        box.setText(tr('{p0} Seite(n) in einem neuen Tab oeffnen.').format(
+        box.setWindowTitle(tr("Als neuen Tab öffnen"))
+        box.setText(tr('{p0} Seite(n) in einem neuen Tab öffnen.').format(
             p0=len(self.model.selected)))
         box.setInformativeText(tr("Sollen die Seiten hier ebenfalls bleiben?"))
         keep = box.addButton(tr("Kopieren  (hier behalten)"),
@@ -494,7 +494,7 @@ class ManagePanel(QWidget):
             AppState.get().status_message.emit(
                 (tr('{p0} Seite(n) in neuen Tab verschoben.')
                  if box.clickedButton() is move
-                 else tr('{p0} Seite(n) als neuer Tab geoeffnet.')).format(p0=n))
+                 else tr('{p0} Seite(n) als neuer Tab geöffnet.')).format(p0=n))
         except Exception as e:
             logging.exception("manage: _open_as_tab failed")
             AppState.get().status_message.emit(tr('Fehler: {p0}').format(p0=e))
@@ -543,14 +543,14 @@ class ManagePanel(QWidget):
             self.model.order.insert(insert_at, new_uid)
             self._swap_source(tmp)
             self.grid._rebuild(); self.grid.order_changed.emit()
-            AppState.get().status_message.emit(tr("Leere Seite eingefuegt."))
+            AppState.get().status_message.emit(tr("Leere Seite eingefügt."))
         except Exception as e:
             logging.exception("manage: _insert_blank failed")
             AppState.get().status_message.emit(tr('Fehler: {p0}').format(p0=e))
 
     def _insert_from_file(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, tr("PDF(s) einfuegen"), "", tr("PDF Dateien (*.pdf)"))
+            self, tr("PDF(s) einfügen"), "", tr("PDF Dateien (*.pdf)"))
         if not paths: return
         try:
             from pypdf import PdfReader, PdfWriter
@@ -590,7 +590,7 @@ class ManagePanel(QWidget):
             self._swap_source(tmp)
             self.grid._rebuild(); self.grid.order_changed.emit()
             AppState.get().status_message.emit(
-                tr('{p0} Seite(n) eingefuegt.').format(p0=n_ins))
+                tr('{p0} Seite(n) eingefügt.').format(p0=n_ins))
         except Exception as e:
             logging.exception("manage: _insert_from_file failed")
             AppState.get().status_message.emit(tr('Fehler: {p0}').format(p0=e))
@@ -598,7 +598,7 @@ class ManagePanel(QWidget):
     def _split_selection(self):
         from pypdf import PdfReader, PdfWriter
         if not self.model.selected:
-            AppState.get().status_message.emit(tr("Zuerst Seiten auswaehlen."))
+            AppState.get().status_message.emit(tr("Zuerst Seiten auswählen."))
             return
         path, _ = QFileDialog.getSaveFileName(
             self, tr("Auswahl speichern als"), "", tr("PDF (*.pdf)"))
@@ -626,7 +626,7 @@ class ManagePanel(QWidget):
 
     def _split_each(self):
         from pypdf import PdfReader, PdfWriter
-        out_dir = QFileDialog.getExistingDirectory(self, tr("Zielordner waehlen"))
+        out_dir = QFileDialog.getExistingDirectory(self, tr("Zielordner wählen"))
         if not out_dir: return
         try:
             readers = {}
@@ -655,7 +655,7 @@ class ManagePanel(QWidget):
         n, ok = QInputDialog.getInt(self, tr("Seiten pro Teil"),
                                     tr("Wie viele Seiten pro Datei?"), 1, 1, 9999)
         if not ok: return
-        out_dir = QFileDialog.getExistingDirectory(self, tr("Zielordner waehlen"))
+        out_dir = QFileDialog.getExistingDirectory(self, tr("Zielordner wählen"))
         if not out_dir: return
         try:
             readers = {}

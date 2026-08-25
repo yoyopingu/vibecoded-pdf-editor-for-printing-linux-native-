@@ -17,24 +17,24 @@ from tools.render.document_cache import open_document as _open_pdf
 # PREFLIGHT
 # ══════════════════════════════════════════════════════════════════════════════
 class PreflightPanel(BasePanel):
-    TITLE    = "Druckvorstufenpruefung"
-    SUBTITLE = "PDF auf Drucktauglichkeit pruefen."
+    TITLE    = "Druckvorstufenprüfung"
+    SUBTITLE = "PDF auf Drucktauglichkeit prüfen."
 
     def build_ui(self, layout):
-        cb=QGroupBox(tr("PRUEFUNGEN")); cl=QVBoxLayout(cb)
-        self.size_combo=QComboBox(); self.size_combo.addItem(tr("Beliebige Groesse"))
+        cb=QGroupBox(tr("PRÜFUNGEN")); cl=QVBoxLayout(cb)
+        self.size_combo=QComboBox(); self.size_combo.addItem(tr("Beliebige Größe"))
         self.size_combo.addItems(list(_paper_sizes_pt().keys()))
         cl.addLayout(row(tr("Erwartetes Format:"), self.size_combo))
         self.chk_size=QCheckBox(tr("Seitenformat korrekt")); self.chk_size.setChecked(True); cl.addWidget(self.chk_size)
         self.chk_orient=QCheckBox(tr("Einheitliche Ausrichtung")); self.chk_orient.setChecked(True); cl.addWidget(self.chk_orient)
         self.chk_colour=QCheckBox(tr("Farbige Seiten erkennen")); self.chk_colour.setChecked(True); cl.addWidget(self.chk_colour)
-        self.chk_enc=QCheckBox(tr("Nicht passwortgeschuetzt")); self.chk_enc.setChecked(True); cl.addWidget(self.chk_enc)
+        self.chk_enc=QCheckBox(tr("Nicht passwortgeschützt")); self.chk_enc.setChecked(True); cl.addWidget(self.chk_enc)
         layout.addWidget(cb)
 
         # What decides whether the file can go on a press at all, and what the
         # PDF/X export will have to do to it. Separate group because these are
         # about the file's fitness, not about it matching an expected format.
-        xb = QGroupBox(tr("DRUCKFAEHIGKEIT")); xl = QVBoxLayout(xb)
+        xb = QGroupBox(tr("DRUCKFÄHIGKEIT")); xl = QVBoxLayout(xb)
         self.chk_bleed = QCheckBox(tr("Anschnitt / Endformat (TrimBox)"))
         self.chk_bleed.setChecked(True); xl.addWidget(self.chk_bleed)
         self.chk_fonts = QCheckBox(tr("Schriften eingebettet"))
@@ -70,7 +70,7 @@ class PreflightPanel(BasePanel):
         self.run_async(
             lambda report: _preflight(src, checks, target, MIN_PRESS_DPI, report),
             on_done=self._preflight_done,
-            busy_label="Pruefung laeuft …",
+            busy_label="Prüfung läuft …",
         )
         return None
 
@@ -138,7 +138,7 @@ def _press_readiness(src, checks, min_dpi, report):
             # nothing for the cutter's tolerance.
             (oks if low >= 2.0 else issues).append(
                 where if low >= 2.0 else
-                tr('{p0} — knapp, ueblich sind 3 mm').format(p0=where))
+                tr('{p0} — knapp, üblich sind 3 mm').format(p0=where))
 
     if checks.get("fonts"):
         report(tr("Schriften …"))
@@ -174,21 +174,21 @@ def _press_readiness(src, checks, min_dpi, report):
                 'Transparenz auf {p0} Seite(n) — PDF/X-3 kann sie nicht '
                 'darstellen, diese Seiten werden in Pixel umgewandelt '
                 '(Vektoren gehen dort verloren) und der Export dauert '
-                'entsprechend laenger: {p1}').format(
+                'entsprechend länger: {p1}').format(
                     p0=len(pages), p1=", ".join(str(p) for p in pages[:10])))
         else:
             oks.append(tr(
-                'Transparenz auf {p0} Seite(n) — PDF/X-4 behaelt sie, '
+                'Transparenz auf {p0} Seite(n) — PDF/X-4 behält sie, '
                 'nichts wird gerastert').format(p0=len(pages)))
 
     if checks.get("layers"):
         on, off = _prepress.layer_summary(src)
         if on or off:
             oks.append(tr('Ebenen: {p0} sichtbar, {p1} ausgeschaltet — beim '
-                          'PDF/X-Export wird beides aufgeloest').format(
+                          'PDF/X-Export wird beides aufgelöst').format(
                               p0=len(on), p1=len(off)))
             for name in off[:6]:
-                oks.append(tr('   ✗ {p0} — ausgeschaltet, entfaellt').format(p0=name))
+                oks.append(tr('   ✗ {p0} — ausgeschaltet, entfällt').format(p0=name))
     return issues, oks
 
 
@@ -202,7 +202,7 @@ def _preflight(src, checks, target, min_dpi, report):
     try:
         reader = PdfReader(src, strict=False)
     except Exception as e:
-        raise RuntimeError(tr("PDF konnte nicht geoeffnet werden: {p0}").format(p0=e))
+        raise RuntimeError(tr("PDF konnte nicht geöffnet werden: {p0}").format(p0=e))
     # See grayscale._scan_pages: PIL from to_pil() can be collected by cyclic GC
     # on the render worker's thread, firing pdfium finalizers without the lock.
     gc.disable()
@@ -217,8 +217,8 @@ def _preflight(src, checks, target, min_dpi, report):
         try:
             n = len(reader.pages); issues = []; oks = []
             if checks["enc"]:
-                if reader.is_encrypted: issues.append(tr("PDF ist passwortgeschuetzt"))
-                else: oks.append(tr("Nicht verschluesselt"))
+                if reader.is_encrypted: issues.append(tr("PDF ist passwortgeschützt"))
+                else: oks.append(tr("Nicht verschlüsselt"))
             orients = []; colour_pages = []
             for i in range(n):
                 report(tr('Seite {i} / {total}…').format(i=i + 1, total=n))
