@@ -372,6 +372,9 @@ class MainWindow(QMainWindow):
         # width, same rhythm, a different job depending on the view.
         self._btns.append(None)          # index 0 — the viewer
         self._layout_panel = TOOLS[0][1]()
+        self._layout_panel.set_single_source(
+            lambda: self.viewer._current().single
+            if self.viewer._current() else None)
         self._stack.addWidget(self._layout_panel.preview_widget)
         self._btns.append(None)          # index 1 — Layout
 
@@ -510,6 +513,9 @@ class MainWindow(QMainWindow):
         self.viewer.show_status = lambda msg: notify(msg)
         # Re-sync the bar's readings whenever the active tab or view changes.
         self.viewer.tabs.currentChanged.connect(self._resync_statusbar)
+        # A tab switch while Layout is showing has to re-point the shared rail
+        # (and its sheet column) at the newly active tab.
+        self.viewer.tabs.currentChanged.connect(self._sync_layout_rail)
 
         self._switch(0)
 
@@ -587,9 +593,84 @@ class MainWindow(QMainWindow):
         # viewer's enter/exit-manage calls.
         if idx == 1:
             self._sidebar_host.mount("layout", self._layout_panel.controls_widget)
+            # The shared navigation rail is a child of the active tab's body,
+            # which is NOT visible in the layout view — reparent it into the
+            # layout's rail host, and hand the rail back when we leave.
+            self._sync_layout_rail()
         else:
+            self._unmount_layout_rail()
             self._sidebar_host.mount("tool_list")
         self._sync_view_switch()
+
+    def _sync_layout_rail(self, *_args):
+        """Keep the shared rail + sheet column pointed at the active tab while
+        Layout is showing. Called when entering Layout and on every tab switch."""
+        if self._stack.currentIndex() != 1:
+            return
+        cur = self.viewer._current()
+        if cur is self._layout_rail_tab():
+            return
+        self._detach_layout_rail(self._layout_rail_tab())
+        self._attach_layout_rail(cur)
+
+    def _layout_rail_tab(self):
+        return getattr(self, "_layout_rail_tab_ref", None)
+
+    def _attach_layout_rail(self, tab):
+        lp = self._layout_panel
+        self._layout_rail_tab_ref = tab
+        # Clear any column left in the host by a tab that closed while mounted
+        # (its SinglePageView is gone, so its nav column cannot be returned to it).
+        host_lay = lp.rail_host.layout()
+        while host_lay.count():
+            it = host_lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None)
+        if tab is None or getattr(tab, "_nav_col", None) is None:
+            lp.rail_host.setVisible(False)
+            lp.sheet_rail.single = None
+            lp._sheetwrap.rebuild()
+            return
+        lp.sheet_rail.single = tab.single
+        host_lay.addWidget(tab._nav_col)
+        lp.rail_host.setVisible(True)
+        tab.single.rail_delegate = lp.sheet_rail
+        tab.single.nav_scroll_mode(True)
+        self._layout_bar_conn = lp._sheetwrap.verticalScrollBar().valueChanged.connect(
+            lp.sheet_rail.sync)
+        lp.sheet_rail.sync()
+        lp.sheet_rail.rail_go_to(tab.single.current_page + 1)
+        lp._sheetwrap.rebuild()
+
+    def _detach_layout_rail(self, tab):
+        """Hand the rail back to `tab`'s own layout, and the preview's rail
+        delegate back to the single-page view."""
+        if tab is None:
+            return
+        lp = self._layout_panel
+        try:
+            lp._sheetwrap.verticalScrollBar().valueChanged.disconnect(
+                self._layout_bar_conn)
+        except (TypeError, AttributeError):
+            pass
+        try:
+            tab.single.rail_delegate = None
+            tab.single.nav_scroll_mode(tab.single._continuous)
+        except RuntimeError:
+            return    # tab already closed while Layout was showing
+        if getattr(tab, "_nav_col", None) is not None:
+            try:
+                tab._nav_col.setParent(tab)
+                tab.layout().addWidget(tab._nav_col)
+            except RuntimeError:
+                pass
+
+    def _unmount_layout_rail(self):
+        """Leaving the Layout view entirely: detach whatever tab is mounted."""
+        self._detach_layout_rail(self._layout_rail_tab())
+        self._layout_rail_tab_ref = None
+        self._layout_panel.rail_host.setVisible(False)
 
     def _sync_view_switch(self):
         """Keep the segmented control showing where we actually are.

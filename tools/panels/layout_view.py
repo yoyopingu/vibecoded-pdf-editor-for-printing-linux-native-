@@ -25,8 +25,8 @@ import tempfile
 
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QWidget, QLabel,
                              QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox,
-                             QGridLayout, QFrame)
-from PyQt6.QtCore import Qt, pyqtSignal
+                             QGridLayout, QFrame, QScrollArea)
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 
 from tools.panels.base import BasePanel, CurrentFileBar, ToolScrollArea
@@ -40,7 +40,7 @@ from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
 from tools.theme import INK, PAPER, _TV, _register_themed
 
 from tools.panels._cropmarks import _crop_mark_segments
-from tools.panels._shared import (MM_TO_PT, PaperFormatSelector, PreviewPane,
+from tools.panels._shared import (MM_TO_PT, PaperFormatSelector,
                                   _visible_size, row)
 from tools.panels.crop_resize import crop_scale_pdf, stamp_crop_marks_pdf
 from tools.panels.impose import _booklet_sides
@@ -114,6 +114,384 @@ def _hint(text):
     return lb
 
 
+class _Sheet(QWidget):
+    """One output sheet in the layout view's column: the paper, its slots and
+    the page pictures in them, plus a caption naming which pages it holds.
+
+    Paints at fit-width — a column of thumbs, not one zoomed single page — so
+    every sheet of a long document reads at a glance. It carries its own
+    `slot_pages` list because it cannot paint from a single current page: the
+    page that belongs to slot 3 of sheet 4 is not the page the viewer is on.
+
+    Page images land via `set_pixmap(page, pm)` once the shared render queue
+    has produced them (see _SheetColumn._schedule_visible); a slot whose page
+    is still pending is drawn as an empty well.
+    """
+    def __init__(self, number, slot_pages, params, eff_w, eff_h, pw, ph,
+                 full, booklet, marks_on, parent=None):
+        super().__init__(parent)
+        self.number     = number
+        self.slot_pages = slot_pages
+        self.params     = params
+        self.eff_w, self.eff_h = eff_w, eff_h
+        self.pw, self.ph       = pw, ph
+        self.full, self.booklet = full, booklet
+        self.marks_on = marks_on
+        self._pixmaps = {}
+        (self.out_w, self.out_h, self.mt, self.mb, self.ml, self.mr,
+         self.gh, self.gv, self.slot_w, self.slot_h, self.cols,
+         self.rows) = params
+        self.n_slot = self.cols * self.rows
+        self._caption = self._build_caption()
+        self._recalc()
+
+    def _build_caption(self):
+        pages = sorted({p + 1 for p in self.slot_pages if p is not None})
+        head = tr("Bogen {p0}").format(p0=self.number)
+        if pages:
+            head += " · " + tr("Seiten {p0}").format(
+                p0=self._format_pages(pages))
+        return head
+
+    @staticmethod
+    def _format_pages(pages):
+        if len(pages) == 1:
+            return str(pages[0])
+        if pages == list(range(pages[0], pages[-1] + 1)):
+            return "{}–{}".format(pages[0], pages[-1])
+        return ", ".join(str(x) for x in pages)
+
+    def set_pixmap(self, page, pm):
+        self._pixmaps[page] = pm
+        self.update()
+
+    def _recalc(self):
+        w = self.width()
+        margin = 18
+        sheet_w = max(10, w - 2 * margin)
+        sheet_h = max(10, int(sheet_w * self.out_h / self.out_w))
+        self._sheet_w, self._sheet_h = sheet_w, sheet_h
+        self._cs = sheet_w / self.out_w
+        self.setFixedHeight(10 + sheet_h + 26)
+
+    def resizeEvent(self, e):
+        self._recalc()
+        super().resizeEvent(e)
+
+    def paintEvent(self, _e):
+        t = _TV
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        sheet_w, sheet_h, cs = self._sheet_w, self._sheet_h, self._cs
+        x0, y0 = 18, 10
+        p.setBrush(QBrush(QColor(PAPER)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRect(x0, y0, sheet_w - 1, sheet_h - 1)
+
+        for i in range(self.n_slot):
+            col_i = i % self.cols; row_i = i // self.cols
+            sx = x0 + int((self.ml + col_i * (self.slot_w + self.gh)) * cs)
+            sy = y0 + int((self.mt + row_i * (self.slot_h + self.gv)) * cs)
+            sw = max(1, int(self.slot_w * cs)); sh = max(1, int(self.slot_h * cs))
+            p.setBrush(QBrush(QColor(200, 210, 230, 60)))
+            p.setPen(QPen(QColor(120, 140, 180, 120), 1))
+            p.drawRect(sx, sy, sw, sh)
+            pg = self.slot_pages[i] if i < len(self.slot_pages) else None
+            pm = self._pixmaps.get(pg) if pg is not None else None
+            if pm is None or pm.isNull():
+                continue
+            scale = 1.0 if self.full else min(self.slot_w / self.eff_w,
+                                              self.slot_h / self.eff_h)
+            tw = max(1, int(self.eff_w * scale * cs))
+            th = max(1, int(self.eff_h * scale * cs))
+            sc = pm.scaled(tw, th, Qt.AspectRatioMode.KeepAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
+            ox = sx + (sw - sc.width()) // 2
+            oy = sy + (sh - sc.height()) // 2
+            p.drawPixmap(ox, oy, sc)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(t['acc']), 1))
+            p.drawRect(ox, oy, sc.width() - 1, sc.height() - 1)
+
+        if self.marks_on:
+            p.setPen(QPen(QColor(INK), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            for a, b, c, d in _crop_mark_segments(
+                    _nup_slot_rects(self.params, self.n_slot)):
+                p.drawLine(int(x0 + a * cs), int(y0 + (self.out_h - b) * cs),
+                           int(x0 + c * cs), int(y0 + (self.out_h - d) * cs))
+
+        p.setPen(QPen(QColor(120, 160, 255, 180), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(x0, y0, sheet_w - 1, sheet_h - 1)
+
+        p.setPen(QColor(t['dim']))
+        f = p.font(); f.setPointSize(8); p.setFont(f)
+        p.drawText(x0, y0 + sheet_h + 4, sheet_w, 18,
+                   Qt.AlignmentFlag.AlignCenter, self._caption)
+        p.end()
+
+
+class _SheetColumn(QScrollArea):
+    """The `.sheetwrap`: a scrollable vertical column of every output sheet.
+
+    Own scrollbar is switched off — the shared navigation rail (mounted into
+    the layout view's rail host by MainWindow) is this column's scrollbar, the
+    same bargain PageGrid makes in "Seiten verwalten". Sheets are rendered
+    lazily for whatever is on screen, exactly like PageGrid._schedule_visible,
+    so a 500-page imposition does not queue a render per sheet.
+    """
+    def __init__(self, panel, parent=None):
+        super().__init__(parent)
+        self._panel = panel
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._content = QWidget()
+        self._content.setObjectName("sheetwrap")
+        self._lay = QVBoxLayout(self._content)
+        self._lay.setContentsMargins(0, 8, 0, 8)
+        self._lay.setSpacing(6)
+        self._cap = QLabel("")
+        self._cap.setObjectName("sheetCap")
+        self._cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._cap.setWordWrap(True)
+        self.setWidget(self._content)
+        self._sheets = []
+        # Computed state shared by rebuild and the lazy render.
+        self._pdf_path = None
+        self._pw = self._ph = self._eff_w = self._eff_h = 0
+        self._render_w = 160
+        self._params = None
+        self._booklet = self._full = False
+        self.verticalScrollBar().valueChanged.connect(self._schedule_visible)
+        # A new file or a picked page can change the sheet sizing; rebuild.
+        AppState.get().pdf_changed.connect(lambda *_: self.rebuild())
+        AppState.get().current_page_changed.connect(lambda *_: self.rebuild())
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+
+    def rebuild(self):
+        _render_queue.cancel_queued(1)
+        panel = self._panel
+        panel._thumb_pending.clear()
+        while self._lay.count():
+            it = self._lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+        self._sheets = []
+        self._params = None
+        self._reset_scroll()
+
+        pdf_path = panel.current_pdf()
+        self._pdf_path = pdf_path
+        self._cap.setText("")
+        if not pdf_path or not os.path.isfile(pdf_path):
+            self._cap.setText(tr("Keine PDF geoeffnet") if not pdf_path
+                              else tr("Datei nicht mehr auffindbar"))
+            self._lay.addWidget(self._cap)
+            self._lay.addStretch(1)
+            return
+        try:
+            _idx, pw, ph, n_total = panel._page_dims(pdf_path)
+        except Exception:
+            self._cap.setText(tr("Datei nicht lesbar"))
+            self._lay.addWidget(self._cap)
+            self._lay.addStretch(1)
+            return
+        sheets, params, eff_w, eff_h, pw, ph, problem, render_w = \
+            panel._compute_sheets(pdf_path, n_total, pw, ph)
+        if sheets is None:
+            self._cap.setText(problem or tr("Anordnung nicht möglich"))
+            self._lay.addWidget(self._cap)
+            self._lay.addStretch(1)
+            return
+        self._pw, self._ph = pw, ph
+        self._eff_w, self._eff_h = eff_w, eff_h
+        self._render_w = render_w
+        self._params = params
+        self._booklet = panel.mode.currentIndex() == MODE_BOOKLET
+        self._full = (panel.st_arr.enabled() and panel.full_scale.isChecked()
+                      and not self._booklet)
+        marks_on = panel.st_marks.enabled() and panel.cut_marks.isChecked()
+
+        for number, slot_pages in enumerate(sheets, start=1):
+            sheet = _Sheet(number, slot_pages, params, eff_w, eff_h, pw, ph,
+                           self._full, self._booklet, marks_on)
+            self._lay.addWidget(sheet)
+            self._sheets.append(sheet)
+        self._cap.setText(self._summary(marks_on))
+        self._lay.addWidget(self._cap)
+        self._lay.addStretch(1)
+        QTimer.singleShot(0, self._schedule_visible)
+
+    def _summary(self, marks_on):
+        out_w, out_h = self._params[0], self._params[1]
+        parts = [f"{out_w/MM_TO_PT:.0f} × {out_h/MM_TO_PT:.0f} mm"]
+        if self._panel.st_arr.enabled():
+            cols, rows = self._params[10], self._params[11]
+            if self._booklet:
+                parts.append(tr("Broschüre 2×1 = 2 Slots"))
+            else:
+                parts.append(tr("Raster {p0}×{p1} = {p2} Slots").format(
+                    p0=cols, p1=rows, p2=cols * rows))
+        if self._full:
+            parts.append(tr("Originalgröße"))
+        parts.append(tr("Schnittmarken an") if marks_on
+                     else tr("Schnittmarken aus"))
+        return " · ".join(parts)
+
+    def refresh(self):
+        """Re-request visible renders after a thumbnail lands (or a theme
+        change repaints). Cheaper than rebuild: the sheets stay as they are."""
+        self._schedule_visible()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._schedule_visible()
+
+    def apply_theme(self):
+        t = _TV
+        self._content.setStyleSheet(
+            f"QWidget#sheetwrap{{background:{t['viewer_bg']};}}")
+        self.setStyleSheet(
+            f"QScrollArea{{background:{t['viewer_bg']};border:none;}}")
+        self._cap.setStyleSheet(
+            f"QLabel#sheetCap{{color:{t['dim']};font-size:11px;"
+            f"padding:6px 12px;}}")
+        for sheet in self._sheets:
+            sheet.update()
+
+    def _reset_scroll(self):
+        bar = self.verticalScrollBar()
+        bar.blockSignals(True)
+        bar.setValue(0)
+        bar.blockSignals(False)
+
+    # ── lazy rendering ───────────────────────────────────────────────────────
+
+    def _schedule_visible(self, _=None):
+        """Submit thumb requests for the slots that are (or are near) on screen.
+        A one-viewport buffer above and two below, as PageGrid does, so
+        scrolling feels instant. Already-cached pages land immediately."""
+        panel = self._panel
+        if not self._sheets or not self._pdf_path:
+            return
+        # Only render when actually on screen — rebuild also fires from the
+        # AppState page/pdf signals while the viewer (not this view) is showing.
+        if not self.isVisible():
+            return
+        bar = self.verticalScrollBar()
+        sy = bar.value()
+        vp = self.viewport().height() or 600
+        top = sy - vp
+        bot = sy + 2 * vp
+        visible_sheets = [s for s in self._sheets
+                          if not (s.y() + (s.height() or 0) < top or s.y() > bot)]
+        # Render each distinct page once, then give the pixmap to every sheet
+        # that holds it — a page repeated across sheets/slots would otherwise
+        # only ever paint the first occurrence (the old `seen` short-circuit).
+        needed = {}
+        for sheet in visible_sheets:
+            for pg in sheet.slot_pages:
+                if pg is not None and pg not in needed:
+                    img = panel._page_image(self._pdf_path, pg, self._render_w)
+                    needed[pg] = (panel._staged_pixmap(
+                        QPixmap.fromImage(img), self._pw, self._ph)
+                        if img is not None else None)
+        for sheet in visible_sheets:
+            for pg in sheet.slot_pages:
+                if pg is not None and needed.get(pg) is not None:
+                    sheet.set_pixmap(pg, needed[pg])
+
+    def sheets(self):
+        return list(self._sheets)
+
+
+class _SheetRail:
+    """Drives the shared navigation rail while the layout sheets are showing.
+
+    The clone of `_GridRail` (tools/viewer/tab.py): the thumb maps onto the
+    column's scroll range, the arrows step it, and every scroll pushes the
+    position back to the rail. Where the page manager maps the rail onto
+    *cards*, this maps it onto *sheets* — the rail reports which sheet, not
+    which page, is current.
+    """
+    def __init__(self, column, panel):
+        self._column = column
+        self._panel  = panel
+        self.single  = None    # the active tab's SinglePageView, set at mount
+
+    def _bar(self):
+        return self._column.verticalScrollBar()
+
+    def _single(self):
+        if self.single is not None:
+            return self.single
+        cb = getattr(self._panel, "_single_source", None)
+        return cb() if cb is not None else None
+
+    def rail_prev(self):
+        self._nudge(-1)
+
+    def rail_next(self):
+        self._nudge(1)
+
+    def _nudge(self, direction):
+        bar = self._bar()
+        step = max(60, int(self._column.viewport().height() * 0.85))
+        bar.setValue(bar.value() + direction * step)
+
+    def rail_wheel(self, dy_px):
+        bar = self._bar()
+        bar.setValue(bar.value() + int(dy_px))
+
+    def rail_go_to(self, sheet):
+        n = len(self._column.sheets())
+        if not n:
+            return
+        i = max(0, min(int(sheet) - 1, n - 1))
+        self._bar().setValue(max(0, int(self._column.sheets()[i].y()) - 8))
+
+    def rail_drag_to(self, frac):
+        bar = self._bar()
+        bar.setValue(round(float(frac) * bar.maximum()))
+
+    def rail_prompt_goto(self):
+        n = len(self._column.sheets())
+        if n <= 0:
+            return
+        from PyQt6.QtWidgets import QInputDialog
+        sheet, ok = QInputDialog.getInt(
+            self._column, tr("Gehe zu Bogen"),
+            tr('Bogen (1 – {p0}):').format(p0=n),
+            self.page(), 1, n)
+        if ok:
+            self.rail_go_to(sheet)
+
+    def page(self):
+        n = len(self._column.sheets())
+        if n <= 1:
+            return max(1, n)
+        bar = self._bar()
+        vmax = bar.maximum()
+        frac = (bar.value() / vmax) if vmax > 0 else 0.0
+        return max(1, min(n, int(round(frac * (n - 1))) + 1))
+
+    def sync(self):
+        """Scrollbar position → rail thumb and sheet number."""
+        single = self._single()
+        if single is None:
+            return
+        bar = self._bar()
+        vmax = bar.maximum()
+        frac = (bar.value() / vmax) if vmax > 0 else 0.0
+        single.nav_set_document(len(self._column.sheets()), self.page())
+        single.nav_set_fraction(frac)
+
+
 class LayoutPanel(BasePanel):
     TITLE     = "Layout"
     SUBTITLE  = ""
@@ -126,7 +504,15 @@ class LayoutPanel(BasePanel):
         self._thumb_pending = set()
         self._thumb_signals = _ThumbSignals()
         self._thumb_signals.ready.connect(self._on_thumb_ready)
+        # Resolves the active tab's SinglePageView, for the rail's delegate when
+        # the layout view is showing (set by MainWindow._build). None while no
+        # tab is open — the sheet column then says so and the rail stays hidden.
+        self._single_source = None
         super().__init__(parent)
+
+    def set_single_source(self, cb):
+        """Give the panel a callable resolving the active tab's SinglePageView."""
+        self._single_source = cb
 
     # ── construction ─────────────────────────────────────────────────────────
     #
@@ -192,8 +578,9 @@ class LayoutPanel(BasePanel):
         return scroll
 
     def _build_preview(self):
-        """The main area: the options for whatever is switched on, and the
-        preview of the result."""
+        """The main area: the options for whatever is switched on, the column
+        of all output sheets, and the rail host that the shared navigation rail
+        is reparented into while this view shows (see MainWindow)."""
         outer = QWidget()
         lay = QHBoxLayout(outer)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -225,13 +612,21 @@ class LayoutPanel(BasePanel):
         self._opts_scroll.setFixedWidth(300)
         lay.addWidget(self._opts_scroll)
 
-        right_w = self.build_tool_right_panel()
-        right_l = right_w.layout()
-        self._pane = PreviewPane(self._render_preview, header=tr("Vorschau"))
-        self._preview      = self._pane.label
-        self._preview_info = self._pane.info
-        right_l.addWidget(self._pane)
-        lay.addWidget(right_w, 1)
+        # The sheet column owns the centre: a lazy scroll of every output sheet.
+        self._sheetwrap = _SheetColumn(self)
+        lay.addWidget(self._sheetwrap, 1)
+
+        # The narrow host the shared rail is parked in while Layout is showing.
+        # Hidden until MainWindow attaches a tab's rail into it.
+        self.rail_host = QWidget()
+        rh = QVBoxLayout(self.rail_host)
+        rh.setContentsMargins(0, 0, 0, 0)
+        rh.setSpacing(0)
+        self.rail_host.setFixedWidth(40)
+        self.rail_host.setVisible(False)
+        lay.addWidget(self.rail_host)
+
+        self.sheet_rail = _SheetRail(self._sheetwrap, self)
         return outer
 
     def _apply_theme(self):
@@ -241,14 +636,12 @@ class LayoutPanel(BasePanel):
             f"QWidget#layoutControlsW{{background:{t['sidebar_bg']};}}")
         self.controls_widget.setStyleSheet(
             f"QScrollArea{{background:{t['sidebar_bg']};border:none;}}")
-        self._tool_right_w.setStyleSheet(
-            f"QWidget#toolRightPanel{{background:{t['viewer_bg']};}}")
-        self._preview.setStyleSheet(f"background:{t['card_bg']};")
         self._opts_content.setStyleSheet(
             f"QWidget#layoutOptions{{background:{t['panel_bg']};"
             f"border-right:1px solid {t['border']};}}")
         self._opts_scroll.setStyleSheet(
             f"QScrollArea{{background:{t['panel_bg']};border:none;}}")
+        self._sheetwrap.apply_theme()
         # Full text colour, at the size the rest of the app writes at — these
         # are the pipeline itself, not captions about it, and they were being
         # drawn dim-grey at 11 px as though they were hints. The box is 16 px:
@@ -268,15 +661,15 @@ class LayoutPanel(BasePanel):
                 f"QLabel#optGroup{{color:{t['acc']};font-size:11px;"
                 f"font-weight:bold;letter-spacing:1px;"
                 f"border-bottom:1px solid {t['border']};padding-bottom:5px;}}")
-        self._pane.refresh()
+        self._sheetwrap.refresh()
 
     def _update_preview(self):
         # build_ui() runs inside _build_controls(), before _setup() has made
-        # the pane — and it settles the initial control state, which fires the
-        # same handlers a user edit does.
-        pane = getattr(self, "_pane", None)
-        if pane is not None:
-            pane.refresh()
+        # the sheet column — and it settles the initial control state, which
+        # fires the same handlers a user edit does.
+        wrap = getattr(self, "_sheetwrap", None)
+        if wrap is not None:
+            wrap.rebuild()
         any_on = (self.st_crop.enabled() or self.st_arr.enabled()
                   or self.st_marks.enabled())
         # Ausführen stays truly inert, not merely styled to look that way,
@@ -604,6 +997,64 @@ class LayoutPanel(BasePanel):
         slot_h = (out_h - mt - mb - gv * (rows - 1)) / rows
         return out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows
 
+    def _arrange_sheets(self, n_total, n_slot, booklet, src_seq):
+        """The slot-pages list of every output sheet — the one layout the
+        preview and the run share, so the column cannot lie about the result.
+
+        This is exactly the chunking `_build_plan.run` feeds `_build_nup`: a
+        booklet is one sheet per `_booklet_sides` pair; grid "der Reihe nach"
+        packs consecutive pages (filling a single-page document across the
+        sheet, padding the last one with blanks); grid "jede Seite wiederholt"
+        repeats each page to fill its own sheet."""
+        if booklet:
+            sides = _booklet_sides(n_total)
+            return [list(side) for side in sides] if sides else [[None, None]]
+        if src_seq:
+            src_pages = list(range(n_total))
+        else:
+            src_pages = [p for p in range(n_total) for _ in range(n_slot)]
+        if len(src_pages) == 1:
+            src_pages = src_pages * n_slot
+        while len(src_pages) % n_slot:
+            src_pages.append(None)
+        return [src_pages[i:i + n_slot] for i in range(0, len(src_pages), n_slot)]
+
+    def _compute_sheets(self, pdf_path, n_total, pw, ph):
+        """The full sheet set, sized from the representative page.
+
+        Returns ``(sheets, params, eff_w, eff_h, pw, ph, problem, render_w)``.
+        On any staging problem `sheets` and `params` are None and `problem`
+        carries the sentence (the column shows it); otherwise `problem` is None
+        and `sheets` is the list of per-sheet slot_pages."""
+        eff_w, eff_h = self._staged_page_size(pw, ph)
+        if eff_w < 1.0 or eff_h < 1.0:
+            return (None, None, eff_w, eff_h, pw, ph,
+                    tr("Ränder zu groß — von der Seite bleibt nichts übrig."), 160)
+        if not self.st_arr.enabled():
+            # Anordnung is off — the run applies crop/marks 1-up per page, so
+            # the preview must show one full-bleed sheet per page, not the
+            # 2×1 grid the arrangement controls would otherwise describe.
+            sheets = [[i] for i in range(n_total)]
+            params = (eff_w, eff_h, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                      eff_w, eff_h, 1, 1)
+            render_w = max(120, min(800, int(min(eff_w, eff_h))))
+            return sheets, params, eff_w, eff_h, pw, ph, None, render_w
+        params = self._layout_params(eff_w, eff_h)
+        if params[8] <= 1.0 or params[9] <= 1.0:
+            return (None, None, eff_w, eff_h, pw, ph,
+                    tr("Abstände zu groß — kein Platz für Inhalt."), 160)
+        booklet = self.mode.currentIndex() == MODE_BOOKLET
+        full = self.full_scale.isChecked() and not booklet
+        if full:
+            problem = _full_scale_problem(eff_w, eff_h, params)
+            if problem:
+                return (None, None, eff_w, eff_h, pw, ph, problem, 160)
+        n_slot = params[10] * params[11]
+        src_seq = self.src_mode.currentIndex() == 0
+        sheets = self._arrange_sheets(n_total, n_slot, booklet, src_seq)
+        render_w = max(120, min(800, int(min(params[8], eff_w))))
+        return sheets, params, eff_w, eff_h, pw, ph, None, render_w
+
     def _get_target_pages(self):
         """(position, uid) of the pages stage 1 acts on — positions in the
         document as displayed, matching current_pdf()'s flattened snapshot."""
@@ -621,7 +1072,9 @@ class LayoutPanel(BasePanel):
 
     def _on_thumb_ready(self, *_):
         self._thumb_pending.clear()
-        self._pane.refresh()
+        wrap = getattr(self, "_sheetwrap", None)
+        if wrap is not None:
+            wrap.refresh()
 
     def _page_dims_safe(self):
         path = self.current_pdf()
@@ -689,182 +1142,6 @@ class LayoutPanel(BasePanel):
                          max(0, sx), max(0, sy), out_w, out_h)
         p.end()
         return out
-
-    # ── preview ──────────────────────────────────────────────────────────────
-
-    def _render_preview(self, avail_w, avail_h, zoom):
-        pdf_path = self.current_pdf()
-        if not pdf_path:
-            return None, tr("Keine PDF geoeffnet")
-        if not os.path.isfile(pdf_path):
-            return None, tr("Datei nicht mehr auffindbar")
-
-        page_idx, pw, ph, n_total = self._page_dims(pdf_path)
-        eff_w, eff_h = self._staged_page_size(pw, ph)
-        if eff_w < 1.0 or eff_h < 1.0:
-            return None, tr("Ränder zu groß — von der Seite bleibt nichts übrig.")
-
-        if not (self.st_crop.enabled() or self.st_arr.enabled()
-                or self.st_marks.enabled()):
-            info = tr("Nichts aktiv — Ausführen ändert nichts.")
-        else:
-            info = None
-
-        if self.st_arr.enabled():
-            return self._render_sheet(pdf_path, page_idx, n_total,
-                                      eff_w, eff_h, pw, ph,
-                                      avail_w, avail_h, zoom, info)
-        return self._render_single(pdf_path, page_idx, eff_w, eff_h, pw, ph,
-                                   avail_w, avail_h, zoom, info)
-
-    def _render_single(self, pdf_path, page_idx, eff_w, eff_h, pw, ph,
-                       avail_w, avail_h, zoom, info):
-        cs = min(avail_w / eff_w, avail_h / eff_h) * zoom
-        cw = max(1, int(eff_w * cs)); chh = max(1, int(eff_h * cs))
-        result = QPixmap(cw, chh)
-        result.fill(QColor(_TV['card_bg']))
-        p = QPainter(result)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(QColor(PAPER)))
-        p.drawRect(0, 0, cw - 1, chh - 1)
-
-        render_w = max(160, min(900, int(eff_w)))
-        img = self._page_image(pdf_path, page_idx, render_w)
-        pending = img is None
-        if img is not None:
-            pm = self._staged_pixmap(QPixmap.fromImage(img), pw, ph)
-            sc = pm.scaled(cw, chh, Qt.AspectRatioMode.KeepAspectRatio,
-                           Qt.TransformationMode.SmoothTransformation)
-            p.drawPixmap((cw - sc.width()) // 2, (chh - sc.height()) // 2, sc)
-
-        marks_rect = self._page_marks_rect(eff_w, eff_h)
-        if marks_rect is not None:
-            p.setPen(QPen(QColor(INK), 1))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            for a, b, c, d in _crop_mark_segments([marks_rect]):
-                p.drawLine(int(a * cs), int((eff_h - b) * cs),
-                           int(c * cs), int((eff_h - d) * cs))
-
-        p.setPen(QPen(QColor(_TV['acc']), 2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(0, 0, cw - 1, chh - 1)
-        p.end()
-
-        txt = info or f"{eff_w/MM_TO_PT:.0f}×{eff_h/MM_TO_PT:.0f} mm"
-        if pending:
-            txt += "  ·  " + tr("rendert …")
-        return result, txt
-
-    def _page_marks_rect(self, eff_w, eff_h):
-        """The rectangle page-level cut marks are drawn on, or None.
-
-        Only when the arrangement stage is off: with it on, the marks belong to
-        the slots and N-Up draws them. `— Wie Seite —` marks the page itself,
-        which is what an operator means by "mark where this gets cut" when the
-        page is already the finished size.
-        """
-        if not (self.st_marks.enabled() and self.cut_marks.isChecked()):
-            return None
-        if self.st_arr.enabled():
-            return None
-        size = self.mark_fmt.target_size_pt()
-        tw, th = size if size is not None else (eff_w, eff_h)
-        x0 = (eff_w - tw) / 2
-        y0 = (eff_h - th) / 2
-        return (x0, y0, x0 + tw, y0 + th)
-
-    def _render_sheet(self, pdf_path, page_idx, n_total, eff_w, eff_h, pw, ph,
-                      avail_w, avail_h, zoom, info):
-        params = self._layout_params(eff_w, eff_h)
-        (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
-        if slot_w <= 1.0 or slot_h <= 1.0:
-            return None, tr("Abstände zu groß — kein Platz für Inhalt.")
-        booklet = self.mode.currentIndex() == MODE_BOOKLET
-        full = self.full_scale.isChecked() and not booklet
-        if full:
-            problem = _full_scale_problem(eff_w, eff_h, params)
-            if problem:
-                return None, problem
-
-        cs = min(avail_w / out_w, avail_h / out_h) * zoom
-        cw = max(1, int(out_w * cs)); chh = max(1, int(out_h * cs))
-
-        n_slot = cols * rows
-        if booklet:
-            sides = _booklet_sides(n_total)
-            slot_pages = sides[0] if sides else [None, None]
-        elif self.src_mode.currentIndex() == 1:
-            slot_pages = [page_idx] * n_slot
-        else:
-            slot_pages = [(page_idx + s if page_idx + s < n_total else None)
-                          for s in range(n_slot)]
-
-        render_w = max(120, min(800, int(min(slot_w, eff_w))))
-        pms = {}
-        pending = False
-        for pg in {p for p in slot_pages if p is not None}:
-            img = self._page_image(pdf_path, pg, render_w)
-            if img is None:
-                pending = True
-                pms[pg] = None
-            else:
-                pms[pg] = self._staged_pixmap(QPixmap.fromImage(img), pw, ph)
-
-        result = QPixmap(cw, chh)
-        result.fill(QColor(_TV['card_bg']))
-        p = QPainter(result)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setBrush(QBrush(QColor(PAPER)))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRect(0, 0, cw - 1, chh - 1)
-
-        for i in range(n_slot):
-            col_i = i % cols; row_i = i // cols
-            sx = int((ml + col_i * (slot_w + gh)) * cs)
-            sy = int((mt + row_i * (slot_h + gv)) * cs)
-            sw = max(1, int(slot_w * cs)); sh = max(1, int(slot_h * cs))
-            p.setBrush(QBrush(QColor(200, 210, 230, 60)))
-            p.setPen(QPen(QColor(120, 140, 180, 120), 1))
-            p.drawRect(sx, sy, sw, sh)
-            pg = slot_pages[i] if i < len(slot_pages) else None
-            pm = pms.get(pg) if pg is not None else None
-            if pm is None:
-                continue
-            scale = 1.0 if full else min(slot_w / eff_w, slot_h / eff_h)
-            tw = max(1, int(eff_w * scale * cs))
-            th = max(1, int(eff_h * scale * cs))
-            sc = pm.scaled(tw, th, Qt.AspectRatioMode.KeepAspectRatio,
-                           Qt.TransformationMode.SmoothTransformation)
-            ox = sx + (sw - sc.width()) // 2
-            oy = sy + (sh - sc.height()) // 2
-            p.drawPixmap(ox, oy, sc)
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(QColor(_TV['acc']), 1))
-            p.drawRect(ox, oy, sc.width() - 1, sc.height() - 1)
-
-        if self.st_marks.enabled() and self.cut_marks.isChecked():
-            p.setPen(QPen(QColor(INK), 1))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            for a, b, c, d in _crop_mark_segments(_nup_slot_rects(params, n_slot)):
-                p.drawLine(int(a * cs), int((out_h - b) * cs),
-                           int(c * cs), int((out_h - d) * cs))
-
-        p.setPen(QPen(QColor(120, 160, 255, 180), 1))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(0, 0, cw - 1, chh - 1)
-        p.end()
-
-        if info:
-            txt = info
-        elif booklet:
-            txt = (f"{out_w/MM_TO_PT:.0f}×{out_h/MM_TO_PT:.0f} mm  |  "
-                   + tr("Broschüre"))
-        else:
-            txt = (f"{out_w/MM_TO_PT:.0f}×{out_h/MM_TO_PT:.0f} mm  |  "
-                   f"{cols}×{rows} = {n_slot} Slots")
-        if pending:
-            txt += "  ·  " + tr("rendert …")
-        return result, txt
 
     # ── the run ──────────────────────────────────────────────────────────────
 
@@ -967,18 +1244,10 @@ class LayoutPanel(BasePanel):
             if do_arr:
                 report(tr("Anordnen …"))
                 nxt = os.path.join(tmpdir, "2_arrange.pdf")
-                if booklet:
-                    sides = _booklet_sides(n_total)
-                    src_pages = [i for side in sides for i in side]
-                else:
-                    if src_seq:
-                        src_pages = list(range(n_total))
-                    else:
-                        src_pages = [p for p in range(n_total) for _ in range(n_slot)]
-                    if len(src_pages) == 1:
-                        src_pages = src_pages * n_slot
-                    while len(src_pages) % n_slot:
-                        src_pages.append(None)
+                # Same sheet set the preview column shows (see _arrange_sheets),
+                # flattened back into _build_nup's packed page list.
+                sheets = self._arrange_sheets(n_total, n_slot, booklet, src_seq)
+                src_pages = [p for sheet in sheets for p in sheet]
                 _build_nup(src, nxt, src_pages, params, n_slot, report,
                            crop_marks=do_marks,
                            fixed_scale=1.0 if full else None)

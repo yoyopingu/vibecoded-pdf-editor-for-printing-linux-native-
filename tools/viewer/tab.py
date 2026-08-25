@@ -149,9 +149,13 @@ class PdfTab(PdfTabBase):
         self._manage_panel  = None
         self._manage_rail   = None
 
-        rail = self.single.take_nav_rail()
+        # The shared navigation rail. It stays stored here so the layout view
+        # (Phase 4.4) can reparent it into its own rail host while it is
+        # showing, and hand it back on exit — without ever building a second
+        # one (see MainWindow._attach_layout_rail / _detach_layout_rail).
+        self._nav_col = self.single.take_nav_rail()
         layout.addWidget(self._stack, 1)
-        layout.addWidget(rail)
+        layout.addWidget(self._nav_col)
 
     def cancel_render_work(self):
         """Stop everything this tab has on the render queue.
