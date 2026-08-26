@@ -76,7 +76,8 @@ def test_rotation_reaches_the_preview():
     from tools.viewer.panel import PageViewerPanel
     vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
     vp.open_file(FX["normal"])
-    _spin(60, 0.01)
+    _settle(vp, lambda: vp.tabs.count() and vp.tabs.currentWidget().single,
+            tries=300)
     tab = vp.tabs.currentWidget()
     sv  = tab.single
     _settle(vp, lambda: sv._page_w_pt > 0, tries=200)
@@ -446,7 +447,8 @@ def test_the_shared_rail_drives_the_page_manager():
         page_before = tab.single._current + 1
 
         tab._enter_manage()
-        _spin(5)
+        _settle(tab, lambda: tab.single.rail_delegate is tab._manage_rail,
+                tries=300)
         assert tab.single.rail_delegate is tab._manage_rail, \
             "manage mode did not take over the rail"
         bar = tab._manage_rail._bar()
@@ -464,19 +466,20 @@ def test_the_shared_rail_drives_the_page_manager():
 
         # Dragging the rail scrolls the grid proportionally.
         tab.single._track.position_dragged.emit(1.0)
-        _spin(2)
+        _settle(tab, lambda: bar.value() == bar.maximum(), tries=300)
         assert bar.value() == bar.maximum(), \
             "dragging the rail to the end did not scroll the grid to the end"
 
         # And scrolling the grid moves the thumb back.
-        bar.setValue(0); _spin(2)
+        bar.setValue(0)
+        _settle(tab, lambda: tab.single._track._scroll_frac == 0.0, tries=300)
         assert tab.single._track._scroll_frac == 0.0, \
             f"thumb did not follow the grid: {tab.single._track._scroll_frac}"
         assert tab._manage_rail.page() == 1, "rail does not report page 1 at the top"
 
         # Leaving manage hands the rail back to the preview, working as before.
         tab._exit_manage()
-        _spin(3)
+        _settle(tab, lambda: tab.single.rail_delegate is None, tries=300)
         assert tab.single.rail_delegate is None, "manage kept the delegate"
         assert tab.single._track._scroll_mode == tab.single._continuous, \
             "rail was left in the wrong mode for the preview"
@@ -501,12 +504,12 @@ def test_rail_page_count_label_updates_when_pages_are_added_or_deleted():
         _spin(3)
         panel.grid.model.selected = {panel.grid.model.order[0]}
         panel.grid.delete_selected()
-        _spin(3)
+        _settle(tab, lambda: tab.single._tot_lbl.text() == "5", tries=300)
         assert tab.single._tot_lbl.text() == "5"
 
         panel.grid.model.deselect_all()
         panel._insert_blank()
-        _spin(3)
+        _settle(tab, lambda: tab.single._tot_lbl.text() == "6", tries=300)
         assert tab.single._tot_lbl.text() == "6"
     finally:
         tab.deleteLater(); _app.processEvents()

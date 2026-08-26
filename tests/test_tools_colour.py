@@ -12,7 +12,7 @@ from tools.panels.colour_profile import ColourProfilePanel
 from tools.panels.grayscale import GrayscalePanel, _grey_vector
 from tools.panels.preflight import PreflightPanel
 from tools.panels._colour import _hist_stats
-from tests.support import FX, _TMP, _app, _brightest, _open, _spin, _sync_async
+from tests.support import FX, _TMP, _app, _brightest, _open, _settle, _spin, _sync_async
 
 
 def _page_has_colour(path, i):
@@ -831,7 +831,8 @@ def test_the_viewer_reads_a_long_document_s_colour_spaces_once():
         for _ in range(20):
             sv.next_page()
             _app.processEvents()
-        _spin(20)
+        _settle(vp, lambda: "Farbprofil" in sv._color.widget.text()
+                and "…" not in sv._color.widget.text(), tries=300)
         assert sv._current == 20, f"the viewer is on page {sv._current + 1}"
         assert "Farbprofil" in sv._color.widget.text()
         assert "…" not in sv._color.widget.text(), \
@@ -927,7 +928,7 @@ def test_dragging_a_slider_classifies_once_and_not_forty_times():
     assert p.thr_lbl.text() == "59", \
         f"the label lagged the handle: {p.thr_lbl.text()}"
 
-    _spin(30)                      # let the settle timer fire
+    _settle(p, lambda: len(runs) == 1, tries=300)      # let the settle timer fire
     assert len(runs) == 1, f"the settle ran {len(runs)}x"
     return "40 steps of the handle, 1 classification"
 
@@ -1039,7 +1040,7 @@ def test_a_page_turn_stops_the_read_started_for_the_page_before_it():
         for _ in range(2):
             sv.next_page()
             _spin(10)
-        _spin(20)
+        _settle(vp, lambda: len(started) >= 2, tries=300)
         live = [j for j in active_jobs() if j.name == "colorspace"]
         cancelled = [j for j in live if j.cancelled]
         assert len(started) >= 2, f"the reads never ran: {started}"

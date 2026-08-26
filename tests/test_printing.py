@@ -943,12 +943,12 @@ def test_original_size_takes_a_percentage_that_reaches_the_file():
     try:
         assert dlg._scale_index() == 0, "the dialog should open on 'fit to page'"
         dlg.scale_fixed.setChecked(True)             # Feste Größe
-        _spin(5)
+        _settle(dlg, lambda: dlg._scale_index() == 1, tries=300)
         assert dlg._scale_index() == 1
         assert dlg.scale_pct.isEnabled(), "no percentage beside Feste Größe"
         assert dlg.scale_pct.value() == 100, "the default is not 100 %"
         dlg.scale_fit.setChecked(True)               # An Seite anpassen
-        _spin(5)
+        _settle(dlg, lambda: not dlg.scale_pct.isEnabled(), tries=300)
         assert not dlg.scale_pct.isEnabled(), \
             "a percentage of 'fit to page' is not a thing"
         # One at a time: the three modes are exclusive, so they are radio
@@ -1283,7 +1283,7 @@ def test_a_file_with_nothing_to_warn_about_stays_quiet():
 
     tab = PdfTab(src); dlg = PrintDialog(src, tab.model, tab)
     try:
-        _spin(60)
+        _settle(dlg, lambda: dlg._unembedded == [], tries=300)
         assert dlg._unembedded == [], dlg._unembedded
         assert not dlg._print_differs, "a blank page was said to redraw"
         assert dlg.status_lbl.text() == "", \

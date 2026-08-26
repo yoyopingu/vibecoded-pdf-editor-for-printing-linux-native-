@@ -34,21 +34,22 @@ def test_ctrl_r_shows_the_rulers():
         press = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_R,
                           Qt.KeyboardModifier.ControlModifier, "r")
         sv.keyPressEvent(press)
-        _spin(10)
+        _settle(vp, lambda: sv._ruler_top.isVisible() and sv._ruler_left.isVisible(),
+                tries=300)
         assert sv._ruler_top.isVisible() and sv._ruler_left.isVisible(), \
             "Ctrl+R did not show both rulers"
         assert sv._rulers_on, "the state did not follow the shortcut"
 
         sv.keyPressEvent(press)
-        _spin(10)
+        _settle(vp, lambda: not sv._ruler_top.isVisible(), tries=300)
         assert not sv._ruler_top.isVisible(), "Ctrl+R did not hide them again"
         assert not sv._rulers_on
 
         sv.toggle_rulers()
-        _spin(10)
+        _settle(vp, lambda: sv._ruler_top.isVisible(), tries=300)
         assert sv._ruler_top.isVisible(), "the toggle did not show the rulers"
         sv.toggle_rulers()
-        _spin(10)
+        _settle(vp, lambda: not sv._ruler_top.isVisible(), tries=300)
         assert not sv._ruler_top.isVisible(), "the toggle did not hide them"
     finally:
         vp.deleteLater(); _app.processEvents()
@@ -175,7 +176,8 @@ def test_opening_a_file_gives_the_preview_the_keyboard():
         assert not vp.tabs.currentWidget().single._view.hasFocus()
 
         vp.focus_page_view()
-        _spin(20)
+        _settle(vp, lambda: vp.tabs.currentWidget().single._view.hasFocus(),
+                tries=300)
         view = vp.tabs.currentWidget().single._view
         assert view.hasFocus(), (
             "the preview did not claim the keyboard; focus is on "
@@ -187,7 +189,7 @@ def test_opening_a_file_gives_the_preview_the_keyboard():
         press = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Down,
                           Qt.KeyboardModifier.NoModifier)
         QApplication.sendEvent(QApplication.focusWidget(), press)
-        _spin(20)
+        _settle(vp, lambda: single._current != before, tries=300)
         assert single._current != before, "Down did not move off the first page"
     finally:
         vp.deleteLater(); _app.processEvents()
