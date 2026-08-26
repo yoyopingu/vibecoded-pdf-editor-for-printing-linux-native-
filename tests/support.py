@@ -76,6 +76,28 @@ MM = 2.8346456693
 _TMP = tempfile.mkdtemp(prefix="copyshop_tests_")
 
 
+def shutdown_app_background():
+    """Stop every thread that would otherwise still be touching Qt objects
+    while the interpreter tears the QApplication down at exit.
+
+    The app wires this to QApplication.aboutToQuit, which never fires in the
+    tests because no test runs an event loop — so the render thread and the
+    global job pool stay live, and Qt destroying the QApplication out from
+    under them segfaults the process after the results are printed (green run,
+    exit 139, roughly three times in eight). tests/conftest.py calls the same
+    thing at pytest_sessionfinish; this is the runner's equivalent so
+    tests/run.py can stop the threads instead of os._exit()ing past them.
+
+    What it stops: the render worker thread, every pending/cancellable job on
+    Qt's global QThreadPool (and it waits for the pool to drain), and the open
+    pdfium document handles. Each stage is wrapped in its own try/except and
+    the whole thing is idempotent — safe to call more than once, and safe when
+    Qt has already begun its own teardown.
+    """
+    from tools.render.queue import shutdown_render_queue
+    shutdown_render_queue()
+
+
 def _make_fixtures():
     W, H = A4
     # normal: 5 pages, black text

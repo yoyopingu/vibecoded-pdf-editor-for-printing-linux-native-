@@ -114,9 +114,12 @@ def main(patterns):
     print(f"\n{passed} passed, {failed} failed")
     shutil.rmtree(support._TMP, ignore_errors=True)
     sys.stdout.flush()
-    # Skip Qt / daemon-thread teardown, which segfaults harmlessly on the way
-    # out and would turn a green run into a non-zero exit.
-    os._exit(0 if failed == 0 else 1)
+    # Stop the render thread and the job pool before the interpreter tears Qt
+    # down. The old os._exit() skipped all of this and segfaulted its way out;
+    # stopping the background work first is what lets the QApplication be
+    # destroyed cleanly (see tests/conftest.py's pytest_sessionfinish).
+    support.shutdown_app_background()
+    raise SystemExit(0 if failed == 0 else 1)
 
 
 if __name__ == "__main__":
