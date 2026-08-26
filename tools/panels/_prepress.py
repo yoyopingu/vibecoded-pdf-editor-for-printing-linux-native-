@@ -41,7 +41,7 @@ MAX_PAGES = 200
 # 1.3 file would be a version string outrunning its own document.
 PDFX_STANDARDS = {
     "x4": ("PDF/X-4", "PDF/X-4 — moderne Pressen, Transparenz bleibt erhalten"),
-    "x3": ("PDF/X-3:2002", "PDF/X-3 — aeltere RIPs, Transparenz wird reduziert"),
+    "x3": ("PDF/X-3:2002", "PDF/X-3 — ältere RIPs, Transparenz wird reduziert"),
 }
 DEFAULT_STANDARD = "x4"
 

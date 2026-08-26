@@ -237,17 +237,30 @@ class AppearanceDialog(QDialog):
         _dlg_section(outer, "DARSTELLUNG")
 
         theme_row = QHBoxLayout()
-        theme_row.setSpacing(20)
+        theme_row.setSpacing(12)
         lbl = QLabel(tr("Farbschema:"))
-        lbl.setMinimumWidth(160)
+        lbl.setMinimumWidth(140)
         theme_row.addWidget(lbl)
+        # Two tiny rectangles, one per theme, so the choice is visible before
+        # it is saved — a dark and a light preview beside the radios they stand
+        # for.
+        def _swatch(bg, border):
+            w = QLabel()
+            w.setFixedSize(20, 20)
+            w.setStyleSheet(
+                f"background:{bg}; border:1px solid {border}; border-radius:4px;")
+            return w
+        dark_sw = _swatch("#14181f", "#3a4356")
+        light_sw = _swatch("#f7f8fa", "#b8c0ce")
         self._dark_rb  = QRadioButton(tr("Dunkel"))
         self._light_rb = QRadioButton(tr("Hell"))
         if self._s.theme() == "light":
             self._light_rb.setChecked(True)
         else:
             self._dark_rb.setChecked(True)
+        theme_row.addWidget(dark_sw)
         theme_row.addWidget(self._dark_rb)
+        theme_row.addWidget(light_sw)
         theme_row.addWidget(self._light_rb)
         theme_row.addStretch()
         outer.addLayout(theme_row)
@@ -301,7 +314,9 @@ class PerformanceDialog(QDialog):
 
         self._prerender_cb = QCheckBox(tr("Seiten im Hintergrund vorab rendern"))
         self._prerender_cb.setChecked(self._s.prerender())
-        form.addRow(tr("Vorab-Rendering:"), self._prerender_cb)
+        prerender_lbl = QLabel(tr("Vorab-Rendering:"))
+        prerender_lbl.setMinimumWidth(140)
+        form.addRow(prerender_lbl, self._prerender_cb)
 
         self._ram_spin = QSpinBox()
         self._ram_spin.setRange(5, 80)
@@ -317,7 +332,9 @@ class PerformanceDialog(QDialog):
         cache_col.setSpacing(2)
         cache_col.addWidget(self._ram_spin)
         cache_col.addWidget(self._ram_hint)
-        form.addRow(tr("Seitenspeicher:"), cache_col)
+        ram_lbl = QLabel(tr("Seitenspeicher:"))
+        ram_lbl.setMinimumWidth(140)
+        form.addRow(ram_lbl, cache_col)
 
         outer.addLayout(form)
         note = QLabel(tr(
@@ -392,7 +409,8 @@ class PrepressDialog(QDialog):
             if key == current_std:
                 self._std_combo.setCurrentIndex(self._std_combo.count() - 1)
         self._std_combo.setMaximumWidth(400)
-        form.addRow(tr("Standard:"), self._std_combo)
+        std_lbl = QLabel(tr("Standard:")); std_lbl.setMinimumWidth(140)
+        form.addRow(std_lbl, self._std_combo)
 
         self._cond_combo = QComboBox()
         # Capped: the profile labels carry their paper and use-case, and an
@@ -404,7 +422,8 @@ class PrepressDialog(QDialog):
             if label == current:
                 self._cond_combo.setCurrentIndex(self._cond_combo.count() - 1)
         self._cond_combo.currentIndexChanged.connect(self._update_profile_hint)
-        form.addRow(tr("Ausgabebedingung:"), self._cond_combo)
+        cond_lbl = QLabel(tr("Ausgabebedingung:")); cond_lbl.setMinimumWidth(140)
+        form.addRow(cond_lbl, self._cond_combo)
 
         self._dpi_spin = QSpinBox()
         self._dpi_spin.setRange(72, 2400)
@@ -412,7 +431,8 @@ class PrepressDialog(QDialog):
         self._dpi_spin.setValue(self._s.pdfx_image_dpi())
         self._dpi_spin.setSuffix("  dpi")
         self._dpi_spin.setMaximumWidth(140)
-        form.addRow(tr("Bildauflösung:"), self._dpi_spin)
+        dpi_lbl = QLabel(tr("Bildauflösung:")); dpi_lbl.setMinimumWidth(140)
+        form.addRow(dpi_lbl, self._dpi_spin)
         outer.addLayout(form)
 
         self._prof_hint = QLabel()
@@ -444,8 +464,11 @@ class PrepressDialog(QDialog):
             "Formate erscheinen überall, wo ein Format gewählt wird.")))
         outer.addWidget(self._build_paper_list())
 
-        add_row = QHBoxLayout()
-        add_row.setSpacing(6)
+        # The "add a paper" form, on two lines so the fields keep their width
+        # even at the dialog's minimum width: the name + dimensions on the
+        # first, the two actions on the second.
+        add_fields = QHBoxLayout()
+        add_fields.setSpacing(6)
         self._paper_name = QLineEdit()
         self._paper_name.setPlaceholderText(tr("Name"))
         self._paper_name.setMaximumWidth(150)
@@ -453,17 +476,27 @@ class PrepressDialog(QDialog):
         self._paper_w.setValue(320); self._paper_w.setSuffix(" mm")
         self._paper_h = QSpinBox(); self._paper_h.setRange(1, 5000)
         self._paper_h.setValue(450); self._paper_h.setSuffix(" mm")
+        add_fields.addWidget(self._paper_name)
+        add_fields.addWidget(self._paper_w)
+        add_fields.addWidget(QLabel("×"))
+        add_fields.addWidget(self._paper_h)
+        add_fields.addStretch()
+        outer.addLayout(add_fields)
+
+        add_actions = QHBoxLayout()
+        add_actions.setSpacing(6)
         add_btn = QPushButton(tr("Hinzufügen"))
         add_btn.setObjectName("secondaryBtn")
         add_btn.clicked.connect(self._add_paper)
         del_btn = QPushButton(tr("Eigenes entfernen"))
         del_btn.setObjectName("secondaryBtn")
         del_btn.clicked.connect(self._remove_paper)
-        for w in (self._paper_name, self._paper_w, QLabel("×"), self._paper_h,
-                  add_btn, del_btn):
-            add_row.addWidget(w)
-        add_row.addStretch()
-        outer.addLayout(add_row)
+        del_btn.setEnabled(False)   # greyed until a custom size is selected
+        self._paper_del_btn = del_btn
+        add_actions.addWidget(add_btn)
+        add_actions.addWidget(del_btn)
+        add_actions.addStretch()
+        outer.addLayout(add_actions)
         self._paper_msg = QLabel("")
         self._paper_msg.setObjectName("dimLabel")
         self._paper_msg.setWordWrap(True)
@@ -496,6 +529,8 @@ class PrepressDialog(QDialog):
             if name in custom:
                 item.setToolTip(tr("Eigenes Format"))
             self._paper_list.addItem(item)
+        self._paper_list.currentItemChanged.connect(self._update_remove_state)
+        self._update_remove_state()
         return self._paper_list
 
     def _reload_paper_list(self):
@@ -514,6 +549,20 @@ class PrepressDialog(QDialog):
                 item.setToolTip(tr("Eigenes Format"))
             self._paper_list.addItem(item)
         self._paper_list.setCurrentRow(min(row, self._paper_list.count() - 1))
+        self._update_remove_state()
+
+    def _update_remove_state(self):
+        """`Eigenes entfernen` only works on the shop's own sizes.
+
+        Enabled exactly when a custom (user-added) size is selected; a built-in
+        is hidden with its tick, never deleted, so picking one greys the button.
+        """
+        import tools.paper as paper
+        item = self._paper_list.currentItem()
+        name = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        btn = getattr(self, "_paper_del_btn", None)
+        if btn is not None:
+            btn.setEnabled(name is not None and name in paper.custom_sizes())
 
     def _add_paper(self):
         import tools.paper as paper

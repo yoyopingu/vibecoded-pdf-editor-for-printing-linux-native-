@@ -9,7 +9,7 @@ control surface over it.
 import logging
 import os
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QApplication, QLineEdit
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
 from tools.app_state import AppState, theme_color
 from tools.i18n import tr
 from tools.shell.icons import icon
@@ -79,6 +79,11 @@ class ManagePanel(QWidget):
         self._filter    = None
         self._op_btns   = []
         self._pair_btns = []
+        self._hint_shown = False
+        self._sel_err_timer = QTimer(self)
+        self._sel_err_timer.setSingleShot(True)
+        self._sel_err_timer.timeout.connect(
+            lambda: self._apply_sel_edit_style(False))
         self.setMinimumWidth(220)
         self._setup()
         self._apply_theme()
@@ -213,6 +218,11 @@ class ManagePanel(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
+        # One-time affordance hint: the grid's drag-to-reorder is otherwise
+        # discoverable only by grabbing a card.
+        if not self._hint_shown:
+            self._hint_shown = True
+            AppState.get().status_message.emit(tr("Ziehen zum Sortieren"))
         if self._filter is None:
             self._filter = ThumbGridShortcutFilter(
                 self.isVisible, self.grid, self._delete, self._copy,
@@ -301,13 +311,7 @@ class ManagePanel(QWidget):
                 f"color:{t['text']};}}")
 
         if hasattr(self, 'sel_edit'):
-            # Scoped to the object name so the global QLineEdit rule cannot
-            # override it — the field must always read as a bordered input.
-            self.sel_edit.setStyleSheet(
-                f"QLineEdit#selEdit{{background:{t['input_bg']};color:{t['text']};"
-                f"border:1px solid {t['input_brd']};border-radius:3px;"
-                f"padding:3px 6px;font-size:12px;}}"
-                f"QLineEdit#selEdit:focus{{border:1px solid {t['acc']};}}")
+            self._apply_sel_edit_style(False)
 
     def _section(self, layout, text):
         lbl = QLabel(text)
@@ -328,10 +332,37 @@ class ManagePanel(QWidget):
 
     _positions_to_str = staticmethod(_positions_to_str)
 
+    _ERR_BORDER = "#e74c3c"
+
+    def _apply_sel_edit_style(self, invalid=False):
+        """The Auswahl field's QSS. Scoped to the object name so the global
+        QLineEdit rule cannot override it — the field must always read as a
+        bordered input. `invalid` swaps the border (and focus ring) to red for
+        validation feedback."""
+        if not hasattr(self, 'sel_edit'):
+            return
+        t = _TV
+        brd   = self._ERR_BORDER if invalid else t['input_brd']
+        focus = self._ERR_BORDER if invalid else t['acc']
+        self.sel_edit.setStyleSheet(
+            f"QLineEdit#selEdit{{background:{t['input_bg']};color:{t['text']};"
+            f"border:1px solid {brd};border-radius:3px;"
+            f"padding:3px 6px;font-size:12px;}}"
+            f"QLineEdit#selEdit:focus{{border:1px solid {focus};}}")
+
+    def _flash_field_error(self):
+        self._apply_sel_edit_style(True)
+        self._sel_err_timer.start(1500)
+
+    def _clear_field_error(self):
+        self._sel_err_timer.stop()
+        self._apply_sel_edit_style(False)
+
     def _apply_sel_edit(self):
         text = self.sel_edit.text()
         positions = _parse_positions(text, len(self.model.order))
         if positions:
+            self._clear_field_error()
             self.model.selected = {self.model.order[i] for i in positions}
             self.grid._update_selection()
             self.grid.selection_changed.emit()
@@ -339,9 +370,11 @@ class ManagePanel(QWidget):
             # Nothing parsed from a real input — the user typed something the
             # field cannot make sense of (abc, 0, 99 on a 4-page file…).
             # Leaving the selection alone silently reads as the input being
-            # ignored, so say what happened.
+            # ignored, so say what happened, and flash the field so the eye
+            # lands on the offending input, not the status bar.
             AppState.get().status_message.emit(
                 tr("Keine gültige Seitenangabe."))
+            self._flash_field_error()
         self.update_info()
 
     def _owning_tab(self):

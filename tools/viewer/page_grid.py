@@ -98,10 +98,21 @@ def paint_card(widget, pixmap, caption, card_w, card_h, selected,
         p.drawText(x, y, card_w, card_h,
                    int(Qt.AlignmentFlag.AlignCenter), placeholder)
 
+    # Selection tint over the thumbnail well: the sel_bg fill above only shows
+    # on the margins/caption, so the page itself would read unselected. A
+    # translucent accent wash over the well makes the pick unmistakable at a
+    # glance while the 2px frame above keeps the card's outline sharp. A
+    # rotated/flipped page still carries the tint because it rides the well,
+    # not the thumbnails orientation.
+    if selected:
+        tint = QColor(t['acc'])
+        tint.setAlpha(40)
+        p.fillRect(x, y, card_w - 1, card_h - 1, tint)
+
     if caption:
-        p.setPen(QColor(t['dim']))
+        p.setPen(QColor(t['text']))
         f = p.font()
-        f.setPixelSize(max(9, min(13, card_w // 10)))
+        f.setPixelSize(11)
         p.setFont(f)
         p.drawText(x, y + card_h + CARD_SPACING, card_w, CARD_CAPTION,
                    int(Qt.AlignmentFlag.AlignCenter), caption)
@@ -143,6 +154,13 @@ def paint_file_card(widget, pixmap, name, meta, card_w, card_h, selected,
         p.drawText(x, y, card_w, card_h,
                    int(Qt.AlignmentFlag.AlignCenter), placeholder)
 
+    # Selection tint over the file well — same treatment as paint_card so the
+    # merge view's selection reads the same way as the page manager's.
+    if selected:
+        tint = QColor(t['acc'])
+        tint.setAlpha(40)
+        p.fillRect(x, y, card_w - 1, card_h - 1, tint)
+
     # Filename over page count — the file-list twin of the page-number caption.
     cy = y + card_h + CARD_SPACING
     p.setPen(QColor(t['text']))
@@ -174,7 +192,7 @@ class PageCard(QFrame):
         self._card_w     = card_w
         self._card_h     = card_h
         self.setFixedSize(*card_size(card_w, card_h))
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._selected            = False
         self._drag_pos            = None
         self._pending_ctrl_click  = False
@@ -209,6 +227,18 @@ class PageCard(QFrame):
         if sel != self._selected:
             self._selected = sel
             self.update()
+
+    def _ghost(self, pm):
+        """A semi-transparent drag ghost: the drop slot the pointer is over
+        stays visible beneath the card being carried, so reordering reads as
+        "put it here" rather than "a card is gone"."""
+        ghost = QPixmap(pm.size())
+        ghost.fill(Qt.GlobalColor.transparent)
+        p = QPainter(ghost)
+        p.setOpacity(0.55)
+        p.drawPixmap(0, 0, pm)
+        p.end()
+        return ghost
 
     def paintEvent(self, _e):
         paint_card(self, self._pixmap, self._caption,
@@ -277,7 +307,7 @@ class PageCard(QFrame):
             label = tr('+{p0} Seiten').format(p0=n_sel) if ctrl else tr('{p0} Seiten').format(p0=n_sel)
             p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, label)
             p.end()
-            drag.setPixmap(pm)
+            drag.setPixmap(self._ghost(pm))
         else:
             pm = QPixmap(self.size())
             self.render(pm)
@@ -288,7 +318,7 @@ class PageCard(QFrame):
                 p.drawText(pm.rect().adjusted(0, 0, -4, -4),
                            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, "+")
                 p.end()
-            drag.setPixmap(pm)
+            drag.setPixmap(self._ghost(pm))
 
         drag.setHotSpot(e.position().toPoint())
         actions = Qt.DropAction.CopyAction | Qt.DropAction.MoveAction

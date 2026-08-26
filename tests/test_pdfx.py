@@ -529,7 +529,7 @@ def test_transparency_is_flattened_and_said_so_beforehand():
     assert "Vektoren gehen dort verloren" in reports["x3"], reports["x3"]
     assert "PROBLEME" in reports["x3"], "X-3 flattening was not raised as an issue"
 
-    assert "PDF/X-4 behaelt sie" in reports["x4"], reports["x4"]
+    assert "PDF/X-4 behält sie" in reports["x4"], reports["x4"]
     assert "PROBLEME" not in reports["x4"], \
         "X-4 was warned about a cost it does not have"
 

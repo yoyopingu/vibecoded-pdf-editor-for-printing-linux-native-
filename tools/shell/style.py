@@ -63,6 +63,11 @@ def _build_style(dark: bool) -> str:
     _LSTRONG = c["LINE_STRONG"]
     _IB    = c["INPUT_BG"];     _IBD     = c["INPUT_BORDER"]
     _LB    = c["LIST_BORDER"]
+    # Input-field borders. Light reuses the generic LINE elsewhere (buttons,
+    # separators), but fields were too faint at 1.2:1 against their SURFACE_3
+    # ground — darkened a step to #cbd5e1. Dark keeps its own LINE, which is
+    # already the right contrast.
+    _IBORD = _LINE if dark else "#cbd5e1"
     _SEL   = c["SELECTION"];    _LHOV    = c["LIST_HOVER"]
     _TAB_B = c["TAB_BAR"];      _TAB_P   = c["TAB_PANE"]
     _SCB   = c["SCROLL_BAR"];   _SCT     = c["SCROLL_TRACK"]
@@ -317,7 +322,7 @@ QPushButton#secondaryBtn:pressed {{ background: {_SEL}; }}
 /* ── Input fields ───────────────────────────────────────── */
 QLineEdit {{
     background: {_S3}; color: {_TEXT};
-    border: 1px solid {_LINE}; border-radius: 7px;
+    border: 1px solid {_IBORD}; border-radius: 7px;
     padding: 5px 10px; min-height: 28px;
     selection-background-color: {_SEL};
 }}
@@ -341,7 +346,7 @@ QLineEdit:disabled {{
    scrolled to reach the second option. */
 QComboBox {{
     background: {_S3}; color: {_TEXT};
-    border: 1px solid {_LINE}; border-radius: 7px;
+    border: 1px solid {_IBORD}; border-radius: 7px;
     padding: 0px 10px; min-height: 38px;
     selection-background-color: {_SEL};
 }}
@@ -375,7 +380,7 @@ QComboBox QAbstractItemView::item:selected {{ background: {_SEL}; color: {_TEXT}
    Colours + an explicit button width keep the theme AND the real arrows. */
 QSpinBox, QDoubleSpinBox {{
     background: {_S3}; color: {_TEXT};
-    border: 1px solid {_LINE}; border-radius: 7px;
+    border: 1px solid {_IBORD}; border-radius: 7px;
     padding-left: 10px; min-height: 36px;
     selection-background-color: {_SEL};
 }}
@@ -405,9 +410,12 @@ QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
 /* ── Lists & views ──────────────────────────────────────── */
 QListWidget, QListView, QTreeView, QTableView {{
     background: {_S2}; color: {_TEXT};
-    border: 1px solid {_LB}; border-radius: 8px;
+    border: 1px solid {_IBORD}; border-radius: 8px;
     padding: 3px; outline: none;
     alternate-background-color: {_LHOV};
+}}
+QListWidget:focus, QListView:focus, QTreeView:focus, QTableView:focus {{
+    border: 2px solid {_ACC};
 }}
 QListWidget::item, QListView::item, QTreeView::item, QTableView::item {{
     padding: 4px 4px; border-radius: 5px;

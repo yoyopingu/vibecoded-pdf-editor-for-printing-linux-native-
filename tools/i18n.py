@@ -452,6 +452,7 @@ _EN: dict[str, str] = {
     "Auswahl als Datei speichern": "Save selection as file",
     "Zuerst Seiten auswählen.": "Select pages first.",
     "Keine gültige Seitenangabe.": "No valid page range.",
+    "Ziehen zum Sortieren": "Drag to reorder",
     "Auswahl speichern als": "Save selection as",
     "Zielordner wählen": "Choose target folder",
     "Seite(n) gespeichert.": "page(s) saved.",
@@ -688,7 +689,6 @@ _EN: dict[str, str] = {
     "Seiten: nach Konvertierung bekannt": "Pages: known after conversion",
     # Plugin manager
     "WIE PLUGINS FUNKTIONIEREN": "HOW PLUGINS WORK",
-    "INSTALLIERTE PLUGINS": "INSTALLED PLUGINS",
     "Plugin-Ordner öffnen": "Open plugin folder",
     "Plugin auswählen für Details...": "Select a plugin for details...",
     "Plugin installieren (.py)...": "Install plugin (.py)...",
@@ -915,7 +915,7 @@ _EN: dict[str, str] = {
         'Applies to two things: images above this value are downsampled (those below\nare left alone), and — under PDF/X-3 only — pages with transparency are\nconverted to pixels at this resolution. Vectors and type are unaffected and\nstay sharp at any size. Higher means larger files and longer exports.',
     'PDF/X-4 — moderne Pressen, Transparenz bleibt erhalten':
         'PDF/X-4 — modern presses, transparency preserved',
-    'PDF/X-3 — aeltere RIPs, Transparenz wird reduziert':
+    'PDF/X-3 — ältere RIPs, Transparenz wird reduziert':
         'PDF/X-3 — older RIPs, transparency flattened',
     'Druckfertige PDF/X-Datei erzeugen.':
         'Produce a press-ready PDF/X file.',
@@ -1068,6 +1068,7 @@ _EN: dict[str, str] = {
     "Nicht unterstützt: {p0}": "Not supported: {p0}",
     "Verarbeite: {p0}": "Processing: {p0}",
     # Plugin manager
+    "Installierte Plugins:": "Installed plugins:",
     "Installiert. Nach Neustart aktiv.": "Installed. Active after restart.",
     "Buttons oben verwenden.": "Use the buttons above.",
     "Plugin-Ordner:  {p0}": "Plugin folder:  {p0}",
@@ -1153,7 +1154,6 @@ _EN: dict[str, str] = {
     # ── Settings dialog ───────────────────────────────────────────────────────
     "Leistung": "Performance",
     "Design:": "Theme:",
-    "Design wechseln": "Switch theme",
     "Hell": "Light",
     "Dunkel": "Dark",
     "Vorschau-Threads:": "Preview threads:",
@@ -1517,9 +1517,6 @@ _EN: dict[str, str] = {
     "Nichts aktiv — bitte zuerst eine Stufe einschalten.":
         "Nothing switched on — turn a stage on first.",
     "Layout speichern als": "Save layout as",
-    "Layout anwenden ({p0})": "Apply layout ({p0})",
-    "{p0} Stufe": "{p0} stage",
-    "{p0} Stufen": "{p0} stages",
     "Layout läuft …": "Layout running …",
     "Zuschneiden / Skalieren …": "Cropping / scaling …",
     "Anordnen …": "Arranging …",
@@ -1540,8 +1537,7 @@ _EN: dict[str, str] = {
     "Am Originalpfad speichern": "Save to the original path",
     "Zuletzt gespeichert {p0}": "Last saved {p0}",
     "Verkleinern": "Zoom out",
-    "Vergrößern": "Zoom in",
-    "Vergrößern auf 100 %": "Zoom to 100 %",
+    "Vergrössern": "Zoom in",
     "Ganze Seite": "Fit page",
     "Vorherige Seite": "Previous page",
     "Nächste Seite": "Next page",
@@ -1554,6 +1550,7 @@ _EN: dict[str, str] = {
     "Suche schliessen": "Close the search",
     "Suche läuft…": "Searching…",
     "Keine Treffer": "No matches",
+    "{p0} Treffer": "{p0} matches",
     "Druckvorstufe …": "Prepress …",
     "Druckvorstufe OK": "Prepress OK",
     "1 Hinweis": "1 note",

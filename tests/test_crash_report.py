@@ -154,9 +154,9 @@ def test_the_cause_is_named_for_the_failures_this_app_actually_has():
     an encrypted document."""
     d = tempfile.mkdtemp(dir=_TMP)
     cases = [
-        ("raise OSError(28, 'No space left on device')", "Datentraeger"),
+        ("raise OSError(28, 'No space left on device')", "Datenträger"),
         ("raise FileNotFoundError(2, \"No such file\", 'tesseract')", "Tesseract"),
-        ("raise ValueError('PdfError: damaged file')",   "beschaedigt"),
+        ("raise ValueError('PdfError: damaged file')",   "beschädigt"),
         ("raise RuntimeError('wrapped C/C++ object of type QLabel has been deleted')",
          "Qt"),
     ]

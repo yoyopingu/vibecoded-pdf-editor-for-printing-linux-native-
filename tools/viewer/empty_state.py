@@ -10,14 +10,13 @@ as a dialog, so opening a file fills this window instead of rearranging it.
 import datetime
 import os
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
                              QWidget)
 
 from tools.i18n import get_language, tr
 from tools.multi_open import classify
-from tools.shell.style import app_icon
 from tools.theme import PAPER, PAPER_LINE, PAPER_LINE2, _TV, _register_themed
 
 MAX_RECENT = 4
@@ -47,6 +46,38 @@ def _page_glyph() -> QPixmap:
     p.setBrush(QColor(PAPER_LINE))
     for y in (25, 33, 41, 49):
         p.drawRect(9, y, 42, 3)
+    p.end()
+    return pm
+
+
+def _illustration(size: int = 48) -> QPixmap:
+    """The themed hero illustration: a rounded card in the live surface colour
+    holding a sheet of paper, drawn from _TV so it follows the theme switch.
+    Painted here (not the fixed brand `app_icon`) so the empty state is never a
+    dark-navy block in the light theme."""
+    t = _TV
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    # geometry in pixel units for the 48 px design, scaled for other sizes
+    def px(v: float) -> int:
+        return int(round(size * v / 48.0))
+
+    s = size
+    p.setPen(QPen(QColor(t['line_strong']), 1))
+    p.setBrush(QColor(t['card_bg']))
+    p.drawRoundedRect(0, 0, s, s, 10, 10)
+    # the sheet of paper with a header bar and body lines
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(t['surface_3']))
+    p.drawRoundedRect(px(12), px(8), px(25), px(31), 2, 2)
+    p.setBrush(QColor(t['acc']))
+    p.drawRoundedRect(px(15), px(12), px(16), px(5), 2, 2)
+    p.setBrush(QColor(t['dim']))
+    for i in range(3):
+        y = px(20 + i * 6)
+        p.drawRoundedRect(px(15), y, px(16), px(3), 2, 2)
     p.end()
     return pm
 
@@ -141,15 +172,17 @@ class EmptyStateWidget(QWidget):
         outer.addStretch(2)
 
         col = QWidget()
+        col.setObjectName("dropZone")
         col.setFixedWidth(400)
+        self._drop_col = col
         cl = QVBoxLayout(col)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(7)
 
-        icon_lbl = QLabel()
-        icon_lbl.setPixmap(app_icon().pixmap(QSize(44, 44)))
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(icon_lbl)
+        self._icon_lbl = QLabel()
+        self._icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cl.addWidget(self._icon_lbl)
+        cl.addSpacing(12)
 
         self._headline = QLabel(tr("PDF, Bild oder Office-Datei hierher ziehen"))
         self._headline.setObjectName("emptyHeadline")
@@ -162,20 +195,21 @@ class EmptyStateWidget(QWidget):
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setWordWrap(True)
         cl.addWidget(sub)
+        cl.addSpacing(24)
 
         cta = QHBoxLayout()
         cta.setSpacing(8)
-        open_btn = QPushButton(tr("Datei öffnen…"))
-        open_btn.setObjectName("actionBtn")
-        open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        open_btn.clicked.connect(self.open_requested.emit)
-        merge_btn = QPushButton(tr("Mehrere zusammenführen…"))
-        merge_btn.setObjectName("secondaryBtn")
-        merge_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        merge_btn.clicked.connect(self.merge_requested.emit)
+        self._open_btn = QPushButton(tr("Datei öffnen…"))
+        self._open_btn.setObjectName("actionBtn")
+        self._open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._open_btn.clicked.connect(self.open_requested.emit)
+        self._merge_btn = QPushButton(tr("Mehrere zusammenführen…"))
+        self._merge_btn.setObjectName("secondaryBtn")
+        self._merge_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._merge_btn.clicked.connect(self.merge_requested.emit)
         cta.addStretch()
-        cta.addWidget(open_btn)
-        cta.addWidget(merge_btn)
+        cta.addWidget(self._open_btn)
+        cta.addWidget(self._merge_btn)
         cta.addStretch()
         cl.addLayout(cta)
 
@@ -223,6 +257,16 @@ class EmptyStateWidget(QWidget):
         t = _TV
         self._headline.setStyleSheet(
             f"color:{t['text']};font-size:14px;font-weight:600;background:transparent;")
+        self._icon_lbl.setPixmap(_illustration())
+        # The secondary action styled locally so it never collapses into the
+        # window colour: a real border and text lifted off the surface, plus a
+        # hover that echoes the accent. Mirrored for light.
+        self._merge_btn.setStyleSheet(
+            f"QPushButton{{color:{t['text']};background:{t['card_bg']};"
+            f"border:1px solid {t['line_strong']};border-radius:7px;"
+            f"padding:6px 14px;min-height:28px;font-size:12px;}}"
+            f"QPushButton:hover{{border-color:{t['acc']};"
+            f"background:{t['hover']};}}")
         for c in self._cards:
             c.setStyleSheet(
                 f"QWidget#recentCard{{border:1px solid {t['border']};"
@@ -231,6 +275,25 @@ class EmptyStateWidget(QWidget):
             name = c.findChild(QLabel, "recentName")
             if name is not None:
                 name.setStyleSheet(f"color:{t['text']};font-size:10.5px;background:transparent;")
+        self.update()
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        # A rounded dashed frame around the drop area — the affordance that this
+        # whole block is where a file lands. Follows the theme.
+        col = getattr(self, "_drop_col", None)
+        if col is None or not col.isVisible():
+            return
+        r = col.geometry().adjusted(-14, -14, 14, 14)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(_TV['line_strong']), 1)
+        pen.setDashPattern([5, 4])
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(r, 14, 14)
+        p.end()
 
     # ── drag & drop ──────────────────────────────────────────────────────────
 

@@ -600,11 +600,11 @@ class PageViewerPanel(QWidget):
         lay.addWidget(self._viewer_info)
 
         self._find = FindBar(self, act)
-        # The find box sits in the doc row too, between the search icon and
-        # Bearbeiten, so it expands inline rather than swallowing a separate
-        # row. Phase 3.1: the doc row is no longer a cornerWidget of a single
-        # QTabWidget — we add the find box directly to its layout.
-        lay.addWidget(self._find.box)
+        # The find box floats over the right end of the document row instead
+        # of riding in the doc-actions layout: opening it must not shove
+        # Speichern/Drucken across the row, and it must never push past the
+        # window's right edge at the narrowest width. It takes no layout space.
+        self._find.attach_doc_row(self.doc_row)
 
         self._edit_btn = act("", tr("Bearbeiten"), None, icon=True)
         self._edit_btn.setIcon(icon("edit", colour=theme_color("DIM"), size=16))

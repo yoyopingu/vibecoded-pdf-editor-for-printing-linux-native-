@@ -224,7 +224,7 @@ def test_compress_refuses_a_damaged_result():
     for patch, expect in (
             (lambda pdf: pdf.pages.__delitem__(1), "Seitenzahl"),
             (lambda pdf: pdf.pages[1].contents_add(
-                pikepdf.Stream(pdf, b"0 g 0 0 3000 3000 re f")), "beschaedigt")):
+                pikepdf.Stream(pdf, b"0 g 0 0 3000 3000 re f")), "beschädigt")):
         try:
             compress(patch, tag="bad")
             assert False, "a damaged compression was accepted"
