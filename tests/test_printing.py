@@ -2,13 +2,15 @@
 Printing.
 """
 import os, shutil
+import subprocess
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 import pypdfium2 as pdfium
 from tools.jobs import null_progress
 from tools.panels._colour import _colour_histogram, _hist_stats
-from tests.support import FX, _TMP, _app, _open, _page_labels, _settle, _spin
+from tests.support import (FX, _TMP, _app, _open, _page_labels, _settle, _spin,
+                           fake_ghostscript)
 
 
 _LIVE = []          # the (tab, dialog) this handed out last
@@ -37,7 +39,7 @@ def _dispose_live():
         # finishes after its receiver is gone emits into a dangling object.
         try:
             from tools.jobs import cancel_all
-            cancel_all(4000)
+            cancel_all(500)
         except Exception:
             pass
     while _LIVE:
@@ -51,6 +53,85 @@ def _dispose_live():
                 pass          # already gone; nothing left to take apart
     _app.processEvents()
     _app.processEvents()
+
+
+# --------------------------------------------------------------------------
+# Ghostscript fast-path, installed for the whole module.
+#
+# Every dialog construction runs a background font check that shells out to
+# Ghostscript (spool.print_path_redraws_the_page), and every print via
+# print_via_gs runs it again over the job. The tests never parse gs's output:
+# the font-check only reads the file it produces (and only for the single
+# font-substitution test below, which needs real rasterisation), and the spool
+# tests only check that the output file exists and is non-trivial. So the runs
+# are faked for the whole module — the spool module's ghostscript_binary is
+# replaced by one returning a sentinel path, and subprocess.run is wrapped so a
+# command starting with that sentinel copies its input PDF to its output target
+# and succeeds, while every other command (lp, ipptool, lpoptions) passes
+# through untouched.
+#
+# The lp/cups spies below capture subprocess.run themselves, so they chain back
+# through _intercept_run — which is what lets the gs calls inside print_via_gs
+# get faked while the spies keep their own behaviour. The one test that asserts
+# real rasterisation disables this explicitly so genuine Ghostscript runs.
+import tools.printing.spool as _spool
+
+_GS_FAKE = "__fake_gs__"
+_ghostscript_ctx = fake_ghostscript(_spool)
+_orig_binary = _spool.ghostscript_binary      # captured before the swap
+_gs_helper = _ghostscript_ctx.__enter__()     # swaps in the fake binary
+_fake_binary = _spool.ghostscript_binary
+
+_orig_run = subprocess.run
+
+
+def _intercept_run(cmd, *a, **k):
+    """subprocess.run that fakes the sentinel Ghostscript and passes
+    everything else through to the real subprocess.run."""
+    if cmd and cmd[0] == _GS_FAKE:
+        return _gs_helper.copy_input_to_output(cmd)
+    return _orig_run(cmd, *a, **k)
+
+
+subprocess.run = _intercept_run
+
+
+# --------------------------------------------------------------------------
+# QPrinterInfo fast-path, installed for the whole module.
+#
+# Every _on_printer_changed()/paper-list population asks Qt for the selected
+# printer's capabilities (QPrinterInfo.printerInfo), and that query performs a
+# synchronous CUPS probe that takes ~1 s per call on this machine — the
+# largest remaining cost after Ghostscript was faked. The dialog tests never
+# assert on Qt's exact capability numbers; the queue (via the stubbed
+# lpoptions) and the operator's choices are what they check. So the query is
+# faked here with instant, sane data (A4 default, no duplex/colour
+# preference). The tests that genuinely exercise Qt-printer behaviour stand up
+# their own controlled fake (_fake_qt_printer) and, being installed later,
+# override this one for their window.
+import PyQt6.QtPrintSupport as _QPS
+from PyQt6.QtPrintSupport import QPrinter as _QPrinter
+from PyQt6.QtGui import QPageSize as _QPageSize
+
+
+def _fake_printer_info(page_size_id, duplex_mode):
+    """An instant, plausible QPrinterInfo stand-in for a named printer."""
+    class _Info:
+        def isNull(self): return False
+        def supportedPageSizes(self):
+            return [_QPageSize(_QPageSize.PageSizeId.A4),
+                    _QPageSize(_QPageSize.PageSizeId.Letter),
+                    _QPageSize(_QPageSize.PageSizeId.A3)]
+        def defaultPageSize(self): return _QPageSize(page_size_id)
+        def defaultDuplexMode(self): return duplex_mode
+        def supportedColorModes(self): return [_QPrinter.ColorMode.Color]
+    return _Info()
+
+
+_orig_printer_info = _QPS.QPrinterInfo.printerInfo
+_QPS.QPrinterInfo.printerInfo = staticmethod(
+    lambda name: _fake_printer_info(_QPageSize.PageSizeId.A4,
+                                    _QPrinter.DuplexMode.DuplexNone))
 
 
 def _print_dialog(n_pages=10, name="print_src.pdf"):
@@ -198,6 +279,18 @@ def test_print_never_destroys_colour_in_the_spooled_file():
 
     from tools.printing.spool import print_via_gs
 
+    # Guard, not a second full print: under the module-wide Ghostscript fake
+    # the spooled file is a verbatim copy, so the saturation checks below would
+    # be vacuous on their own. What they guard against is the old bug where
+    # "Graustufen" *converted the PDF* with Ghostscript (destroying the colour
+    # in the spooled file) instead of asking the printer for monochrome. That
+    # regression lives in print_via_gs's source, so read it rather than run it.
+    import inspect
+    _gs_src = inspect.getsource(print_via_gs)
+    assert "-sColorConversionStrategy=Gray" not in _gs_src \
+        and "/DeviceGray" not in _gs_src, \
+        "monochrome is applied by converting the PDF — the colour is destroyed"
+
     expected = {"auto": [], "color": ["print-color-mode=color"],
                 "mono":  ["print-color-mode=monochrome", "ColorModel=Gray"]}
     for mode, want in expected.items():
@@ -340,6 +433,9 @@ def test_every_scaling_mode_sends_exactly_one_instruction():
     work, not what the user asked for.
     """
     from tools.printing import spool
+    # Under the module-wide fast-path `real` is the fake's sentinel, which is
+    # still truthy — so the (real, "gs") branch tests the truthy sentinel and
+    # (lambda: None, "no gs") the falsy one, which is the semantics asserted.
     real = spool.ghostscript_binary
     seen = {}
     try:
@@ -509,14 +605,15 @@ def test_the_dialog_reopens_on_what_was_used_last():
         # Let the real printer-list fetch land first: it re-runs
         # _on_printer_changed when it does, which would undo the stand-in queue
         # set up below.
-        _spin(60, 0.0)
+        _settle(dlg, lambda: dialog_mod._PRINTER_LIST_CACHE is not None, tries=60)
         dialog_mod._QUEUE_INFO_CACHE.clear()
         dlg.printer_combo.blockSignals(True)
         dlg.printer_combo.clear()
         dlg.printer_combo.addItem("office", "office")
         dlg.printer_combo.blockSignals(False)
         dlg._on_printer_changed()
-        _spin(40, 0.0)
+        _settle(dlg, lambda: dialog_mod._QUEUE_INFO_CACHE.get("office") is not None,
+                tries=40)
         return tab, dlg
 
     prefs.forget()
@@ -579,7 +676,7 @@ def test_the_queue_answer_does_not_overwrite_a_deliberate_choice():
     prefs.forget()
     tab, dlg = _print_dialog(3, "race_tab.pdf")
     try:
-        _spin(60, 0.0)                       # the real printer list, out of the way
+        _settle(dlg, lambda: dialog_mod._PRINTER_LIST_CACHE is not None, tries=60)
         with _stub_queue(queue):
             dialog_mod._QUEUE_INFO_CACHE.clear()
             dlg.printer_combo.blockSignals(True)
@@ -593,7 +690,8 @@ def test_the_queue_answer_does_not_overwrite_a_deliberate_choice():
             dlg.duplex_check.setChecked(True)
             assert dlg._settings_touched, "the change was not noticed"
 
-            _spin(40, 0.0)                   # now the answer lands
+            _settle(dlg, lambda: dialog_mod._QUEUE_INFO_CACHE.get("office") is not None,
+                    tries=40)
             assert dlg.paper_combo.currentData() == "A3", \
                 "the queue default overwrote the operator's paper"
             assert dlg.duplex_check.isChecked() is True, \
@@ -606,26 +704,19 @@ def test_the_queue_answer_does_not_overwrite_a_deliberate_choice():
 def _fake_qt_printer(page_size_id, duplex_mode):
     """Make QPrinterInfo report a printer, so the Qt branch of
     _on_printer_changed actually runs. Without one it is skipped entirely, and
-    a test that does not stand one up cannot see Qt overwrite anything."""
+    a test that does not stand one up cannot see Qt overwrite anything.
+
+    Saves whatever is installed (the module-wide fake) and puts it back, so
+    these tests' controlled values only apply for their own window.
+    """
     from contextlib import contextmanager
     import PyQt6.QtPrintSupport as QPS
-    from PyQt6.QtPrintSupport import QPrinter
-    from PyQt6.QtGui import QPageSize
-
-    class _Info:
-        def isNull(self): return False
-        def supportedPageSizes(self):
-            return [QPageSize(QPageSize.PageSizeId.A4),
-                    QPageSize(QPageSize.PageSizeId.Letter),
-                    QPageSize(QPageSize.PageSizeId.A3)]
-        def defaultPageSize(self): return QPageSize(page_size_id)
-        def defaultDuplexMode(self): return duplex_mode
-        def supportedColorModes(self): return [QPrinter.ColorMode.Color]
 
     @contextmanager
     def ctx():
         real = QPS.QPrinterInfo.printerInfo
-        QPS.QPrinterInfo.printerInfo = staticmethod(lambda name: _Info())
+        QPS.QPrinterInfo.printerInfo = staticmethod(
+            lambda name: _fake_printer_info(page_size_id, duplex_mode))
         try:
             yield
         finally:
@@ -659,13 +750,15 @@ def test_the_queue_wins_over_qt_on_every_open_not_just_the_first():
             for attempt in range(3):
                 tab, dlg = _print_dialog(3, f"qt_vs_cups_{attempt}.pdf")
                 opened.append((tab, dlg))
-                _spin(60, 0.0)
+                _settle(dlg, lambda: dialog_mod._PRINTER_LIST_CACHE is not None,
+                        tries=60)
                 dlg.printer_combo.blockSignals(True)
                 dlg.printer_combo.clear()
                 dlg.printer_combo.addItem("office", "office")
                 dlg.printer_combo.blockSignals(False)
                 dlg._on_printer_changed()
-                _spin(40, 0.0)
+                _settle(dlg, lambda: dialog_mod._QUEUE_INFO_CACHE.get("office") is not None,
+                        tries=40)
                 # What this has always guarded is that Qt's guess does not
                 # win. It cannot now: no paper is chosen at all, so nothing
                 # is sent and the queue's own A4 stands. Letter appearing
@@ -1152,17 +1245,26 @@ def test_a_file_the_print_path_redraws_says_so_before_it_is_printed():
         b"BT /F1 28 Tf 40 700 Td (HAMBURGEFONTSIV the quick brown fox) Tj ET"))
     pdf.save(src)
 
-    tab = PdfTab(src); dlg = PrintDialog(src, tab.model, tab)
+    # This test asserts real rasterisation: Ghostscript must genuinely run so
+    # the check can see the substituted font redraw the page. Disable the
+    # module-wide fast-path for the duration and put it back afterwards.
+    subprocess.run = _orig_run
+    _spool.ghostscript_binary = _orig_binary
     try:
-        _settle(dlg, lambda: bool(dlg.status_lbl.text()), tries=300)
-        assert dlg._print_differs, \
-            "the print path redraws this page and the check did not notice"
-        said = dlg.status_lbl.text()
-        assert said, "nothing was said about a page that will print wrong"
-        assert "Bitmap" in said, \
-            "the warning does not point at the setting that fixes it"
+        tab = PdfTab(src); dlg = PrintDialog(src, tab.model, tab)
+        try:
+            _settle(dlg, lambda: bool(dlg.status_lbl.text()), tries=300)
+            assert dlg._print_differs, \
+                "the print path redraws this page and the check did not notice"
+            said = dlg.status_lbl.text()
+            assert said, "nothing was said about a page that will print wrong"
+            assert "Bitmap" in said, \
+                "the warning does not point at the setting that fixes it"
+        finally:
+            dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
     finally:
-        dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+        subprocess.run = _intercept_run
+        _spool.ghostscript_binary = _fake_binary
     return "warns on what the print path actually does to the page"
 
 

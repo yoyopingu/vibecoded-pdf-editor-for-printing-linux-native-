@@ -87,7 +87,10 @@ def test_a_native_crash_is_reported_at_the_next_start():
     interpreter left to build a dialog with, which is exactly why faulthandler
     writes through a fd opened in advance. The next start is the first chance
     anyone has to say the last one died, and saying nothing is what made the
-    app look like it had simply vanished."""
+    app look like it had simply vanished.
+
+    And the report is a mailbox, not a log: left in place it would greet the
+    user on every start for ever, so the crash is shown once and consumed."""
     d = tempfile.mkdtemp(dir=_TMP)
     _crash(d)
     shown = _dialogs("pass", d)
@@ -95,15 +98,6 @@ def test_a_native_crash_is_reported_at_the_next_start():
     assert "Fatal Python error" in shown[0]["detail"], \
         "the report does not contain the native traceback"
     assert "unerwartet" in shown[0]["text"], shown[0]["text"]
-
-
-def test_a_crash_is_reported_once_and_not_at_every_start_afterwards():
-    """The report is a mailbox, not a log: left in place it would greet the
-    user on every start for ever, and the second showing is the one that
-    teaches them to dismiss it without reading."""
-    d = tempfile.mkdtemp(dir=_TMP)
-    _crash(d)
-    assert len(_dialogs("pass", d)) == 1, "first start did not report it"
     assert _dialogs("pass", d) == [], "the same crash was reported twice"
 
 
@@ -160,13 +154,19 @@ def test_the_cause_is_named_for_the_failures_this_app_actually_has():
         ("raise RuntimeError('wrapped C/C++ object of type QLabel has been deleted')",
          "Qt"),
     ]
-    for raise_stmt, expect in cases:
-        shown = _dialogs(
-            f"try: {raise_stmt}\n"
-            f"except Exception: sys.excepthook(*sys.exc_info())\n", d)
-        assert shown, f"no dialog for {raise_stmt}"
-        assert expect in shown[0]["cause"], \
-            f"{raise_stmt} -> {shown[0]['cause']!r}, wanted {expect!r}"
+    # One child runs a pair of cases in sequence, each with its own
+    # sys.excepthook → dialog, so four cases cost two imports of tools.app
+    # instead of four. Split in two because crash_report caps the dialogs it
+    # shows per process at _MAX_DIALOGS.
+    for group in (cases[:2], cases[2:]):
+        shown = _dialogs("\n".join(
+            f"try: {stmt}\nexcept Exception: sys.excepthook(*sys.exc_info())\n"
+            for stmt, _ in group), d)
+        assert len(shown) == len(group), \
+            f"expected {len(group)} dialogs, got {len(shown)}"
+        for (stmt, expect), dlg in zip(group, shown):
+            assert expect in dlg["cause"], \
+                f"{stmt} -> {dlg['cause']!r}, wanted {expect!r}"
 
 
 def test_a_guess_is_not_made_from_words_that_merely_look_like_a_program_name():
@@ -180,17 +180,15 @@ def test_a_guess_is_not_made_from_words_that_merely_look_like_a_program_name():
     d = tempfile.mkdtemp(dir=_TMP)
     shown = _dialogs(
         "try: raise ValueError('could not apply settings for this page')\n"
-        "except ValueError: sys.excepthook(*sys.exc_info())\n", d)
-    assert shown, "no dialog at all"
-    assert "Ghostscript" not in shown[0]["cause"], \
-        f'"settings" was read as Ghostscript: {shown[0]["cause"]!r}'
-
-    # And a real Ghostscript failure is still recognised.
-    d2 = tempfile.mkdtemp(dir=_TMP)
-    shown = _dialogs(
+        "except ValueError: sys.excepthook(*sys.exc_info())\n"
+        # And a real Ghostscript failure is still recognised.
         "try: raise RuntimeError('Ghostscript nicht gefunden.')\n"
-        "except RuntimeError: sys.excepthook(*sys.exc_info())\n", d2)
-    assert "Ghostscript" in shown[0]["cause"], shown[0]["cause"]
+        "except RuntimeError: sys.excepthook(*sys.exc_info())\n", d)
+    assert len(shown) == 2, f"expected two dialogs, got {len(shown)}"
+    settings, real_gs = shown
+    assert "Ghostscript" not in settings["cause"], \
+        f'"settings" was read as Ghostscript: {settings["cause"]!r}'
+    assert "Ghostscript" in real_gs["cause"], real_gs["cause"]
 
 
 def test_naming_a_program_is_not_read_as_that_program_being_missing():
@@ -202,18 +200,16 @@ def test_naming_a_program_is_not_read_as_that_program_being_missing():
     d = tempfile.mkdtemp(dir=_TMP)
     shown = _dialogs(
         "try: raise ValueError('qpdf returned an object id nobody expects')\n"
-        "except ValueError: sys.excepthook(*sys.exc_info())\n", d)
-    assert shown, "no dialog at all"
-    assert "installiert" not in shown[0]["cause"] and \
-           "installed separately" not in shown[0]["cause"], \
-        f"a working qpdf was reported as missing: {shown[0]['cause']!r}"
-
-    # The genuine article — same program named, but absent this time.
-    d2 = tempfile.mkdtemp(dir=_TMP)
-    shown = _dialogs(
+        "except ValueError: sys.excepthook(*sys.exc_info())\n"
+        # The genuine article — same program named, but absent this time.
         "try: raise FileNotFoundError(2, 'No such file or directory', 'qpdf')\n"
-        "except FileNotFoundError: sys.excepthook(*sys.exc_info())\n", d2)
-    assert "qpdf" in shown[0]["cause"], shown[0]["cause"]
+        "except FileNotFoundError: sys.excepthook(*sys.exc_info())\n", d)
+    assert len(shown) == 2, f"expected two dialogs, got {len(shown)}"
+    working, missing = shown
+    assert "installiert" not in working["cause"] and \
+           "installed separately" not in working["cause"], \
+        f"a working qpdf was reported as missing: {working['cause']!r}"
+    assert "qpdf" in missing["cause"], missing["cause"]
 
 
 def test_an_unrecognised_failure_says_so_rather_than_inventing_a_cause():
