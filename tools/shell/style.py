@@ -206,7 +206,6 @@ QWidget#sidebar {{
    the sidebar's own — the column came out two-tone, sidebar-coloured for the
    height of the view switch and window-coloured for the tool list below it. */
 QWidget#sidebarSlot, QWidget#toolList {{ background: transparent; }}
-QWidget#sidebarLogo {{ background: {_SB_LOGO}; }}
 
 /* ── Nav buttons ────────────────────────────────────────── */
 /* Tightened from 36 px rows: nine tools at 36 px spread the column down the
@@ -563,7 +562,7 @@ QTabWidget::pane {{
     background: {_TAB_P};
 }}
 QTabBar {{
-    background: {_TAB_B};
+    background: transparent;
     min-height: 40px; max-height: 40px;
 }}
 QTabBar::tab {{
@@ -603,7 +602,7 @@ QToolButton#tabCloseBtn:pressed {{ background: {_CLOSE_HOV}; }}
 /* ── The document row ───────────────────────────────────── */
 /* The tab bar IS the row: the actions ride in its right-hand corner, so one
    40 px strip carries what used to take a 46 px button bar above a tab strip. */
-QWidget#docActions {{ background: {_TAB_B}; }}
+QWidget#docActions {{ background: transparent; }}
 QWidget#docRow {{
     background: {_TAB_B};
     border-bottom: 1px solid {_LSTRONG};

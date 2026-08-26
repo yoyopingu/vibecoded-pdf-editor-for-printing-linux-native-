@@ -9,9 +9,9 @@ large PDF is hundreds of megabytes, so a tab that is gone must not keep one.
 import os, shutil, atexit, logging
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                              QTabBar, QStackedWidget, QFileDialog, QToolButton,
-                             QApplication, QLineEdit, QMenu)
+                             QApplication, QLineEdit)
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent, QTimer, QSize, QPoint
-from PyQt6.QtGui import QKeySequence, QShortcut, QCursor
+from PyQt6.QtGui import QKeySequence, QShortcut, QCursor, QAction
 from tools.app_state import AppState, theme_color
 from tools.branding import APP_NAME
 from tools.i18n import tr
@@ -609,21 +609,21 @@ class PageViewerPanel(QWidget):
         self._edit_btn = act("", tr("Bearbeiten"), None, icon=True)
         self._edit_btn.setIcon(icon("edit", colour=theme_color("DIM"), size=16))
         self._edit_btn.setIconSize(QSize(16, 16))
-        menu = QMenu(self._edit_btn)
-        self._act_undo = menu.addAction(tr("Rückgängig"))
+        # The Bearbeiten button is an inert placeholder now: it keeps its place
+        # in the row, its name and its enabled look, but no longer opens the
+        # edit menu — functions can be attached to it later. Undo/redo survive
+        # as the Ctrl+Z / Ctrl+Y shortcuts, which are shared with the shortcut
+        # system rather than with the (removed) menu.
+        self._act_undo = QAction(tr("Rückgängig"), self)
         self._act_undo.setShortcut(QKeySequence("Ctrl+Z"))
         self._act_undo.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self._act_undo.triggered.connect(self._undo)
-        self._act_redo = menu.addAction(tr("Wiederholen"))
+        self.addAction(self._act_undo)
+        self._act_redo = QAction(tr("Wiederholen"), self)
         self._act_redo.setShortcut(QKeySequence("Ctrl+Y"))
         self._act_redo.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self._act_redo.triggered.connect(self._redo)
-        menu.addSeparator()
-        a = menu.addAction(tr("Kopieren"))
-        a.triggered.connect(self._copy_selection)
-        a = menu.addAction(tr("Alles auswählen"))
-        a.triggered.connect(self._select_all_text)
-        self._edit_btn.setMenu(menu)
+        self.addAction(self._act_redo)
 
         self._save_btn = act(tr("Speichern"), tr("Am Originalpfad speichern"),
                              self._save_current, "Strg+S")
@@ -678,20 +678,6 @@ class PageViewerPanel(QWidget):
         AppState.get().status_message.emit(
             tr("Wiederholt.") if tab.redo() else tr("Nichts zum Wiederholen."))
         self._update_toolbar()
-
-    def _copy_selection(self):
-        self._on_canvas("_copy")
-
-    def _select_all_text(self):
-        self._on_canvas("_select_all")
-
-    def _on_canvas(self, method):
-        tab = self._current()
-        if tab is None:
-            return
-        fn = getattr(tab.single._view, method, None)
-        if fn is not None:
-            fn()
 
     def _tab_label(self, tab, name):
         """A tab's text: the file, shortened, with a dot while it has unsaved

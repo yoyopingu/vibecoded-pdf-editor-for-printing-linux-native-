@@ -156,8 +156,9 @@ class SidebarHost:
 
     The slot is the concept's single scroll surface (`.toolscroll`): a
     Werkzeuge toggle (shown only in manage/layout) above one QScrollArea whose
-    content holds either the list, the mounted widget, or the mounted widget
-    with the list APPENDED below it — never a second, nested scroll of its own.
+    content holds either the list, the mounted widget, or the tool list
+    INSERTED above the mounted widget (pushing it down) — never a second,
+    nested scroll of its own.
     """
 
     def __init__(self, slot, tool_list):
@@ -236,8 +237,8 @@ class SidebarHost:
         """Re-derive what the column shows from the current view and toggle.
 
         The content layout is rebuilt from scratch each time — it holds at most
-        two widgets (the mounted content and, when the toggle is open, the tool
-        list appended after it), so clearing and re-adding is the whole of it.
+        two widgets (the tool list and, when a view is mounted, the mounted
+        content beneath it), so clearing and re-adding is the whole of it.
         """
         clay = self._content.layout()
         while clay.count():
@@ -251,12 +252,16 @@ class SidebarHost:
         list_visible = (view in ("tool_list", "preview")
                         or (self._open and view in ("manage", "layout")))
 
-        if view in ("manage", "layout", "tool", "merge") and self._extra is not None:
-            clay.addWidget(self._extra)
-            self._extra.show()
+        # When the toggle is open the tool list sits immediately below the
+        # toggle row — ABOVE the mounted manage/layout controls, pushing them
+        # down. The list is therefore added first and the mounted widget after
+        # it; closing the toggle removes the list and the controls slide back.
         if list_visible:
             clay.addWidget(self._tool_list)
             self._tool_list.show()
+        if view in ("manage", "layout", "tool", "merge") and self._extra is not None:
+            clay.addWidget(self._extra)
+            self._extra.show()
 
 
 class MainWindow(QMainWindow):
@@ -460,6 +465,23 @@ class MainWindow(QMainWindow):
                     self._tool_panels[label] = panel
                     self._tool_btns[label] = btn
                     panel.back_requested.connect(self._back_to_tools)
+                    # Item 3: the standalone panel is a child of MainWindow and
+                    # its invisible "‹ Werkzeuge" back button would otherwise
+                    # intercept top-left clicks (click → back → preview). It is
+                    # never given mouse events; mounting reparents its
+                    # controls_widget into the sidebar host, so nothing the
+                    # panel itself does needs the mouse. NOT hide(): a hidden
+                    # wrapper survives into interpreter finalization and
+                    # segfaults in sip on shutdown.
+                    panel.setAttribute(
+                        Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                    # The standalone panel is a child of MainWindow and would
+                    # otherwise sit visible (default) at (0,0), where its
+                    # invisible "‹ Werkzeuge" back button intercepts top-left
+                    # clicks. Hiding it keeps it inert until a tool is mounted
+                    # (mounting shows controls_widget via the sidebar host, not
+                    # the panel itself). Safe: no behavior change to the mount
+                    # flow.
                 else:
                     # A tool without a controls_widget (e.g. Grayscale, a
                     # split-view tool) keeps the old full-page form as a stack
@@ -473,6 +495,8 @@ class MainWindow(QMainWindow):
         sep0.setFrameShape(QFrame.Shape.NoFrame)
         tl.addWidget(sep0)
         pm_panel = PluginManagerPanel(self)
+        pm_panel.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         pm_btn = NavBtn(tr("Plugin-Manager"), icon_name=TOOL_ICONS.get("Plugin-Manager"))
         pm_btn.clicked.connect(lambda c, p=pm_panel: self._mount_tool(p))
         tl.addWidget(pm_btn)

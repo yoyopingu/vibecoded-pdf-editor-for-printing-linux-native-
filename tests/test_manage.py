@@ -513,13 +513,15 @@ def test_rail_page_count_label_updates_when_pages_are_added_or_deleted():
     return "rail count label updates on add and delete"
 
 
-def test_tools_toggle_resets_on_mount_and_appends_the_list_when_open():
+def test_tools_toggle_resets_on_mount_and_inserts_the_list_below_the_toggle():
     """Phase 4.2: in manage/layout the Werkzeuge list is hidden behind the
-    ToolsToggle and only APPENDS to the sidebar's single scroll surface when
-    that toggle is open. A view switch is just another mount(), and every
-    mount() resets the toggle to closed so the list is never carried open
-    across a switch. (docs/gui-refactor-plan.md lines 113-114, 198-201 and
-    the SidebarHost.mount docstring in tools/shell/window.py.)"""
+    ToolsToggle and only INSERTS into the sidebar's single scroll surface
+    immediately below the toggle row when that toggle is open, pushing the
+    mounted manage/layout controls down. A view switch is just another
+    mount(), and every mount() resets the toggle to closed so the list is
+    never carried open across a switch. (docs/gui-refactor-plan.md lines
+    113-114, 198-201 and the SidebarHost.mount docstring in
+    tools/shell/window.py.)"""
     from PyQt6.QtWidgets import QWidget, QVBoxLayout
     from tools.shell.window import SidebarHost
 
@@ -543,11 +545,12 @@ def test_tools_toggle_resets_on_mount_and_appends_the_list_when_open():
         assert _content_widgets() == [extra], \
             "tool list must not append while the toggle is off"
 
-        # User opens Werkzeuge: list APPENDS behind the mounted widget.
+        # User opens Werkzeuge: list INSERTS right below the toggle, pushing
+        # the mounted widget down (tool_list comes first, then extra).
         host._toggle.setChecked(True)      # fires toggled -> _on_toggle synchronously
         assert host._open is True and host._toggle.isChecked() is True
-        assert _content_widgets() == [extra, tool_list], \
-            "tool list must append AFTER the mounted widget, not before it"
+        assert _content_widgets() == [tool_list, extra], \
+            "tool list must be inserted BEFORE the mounted widget, not after it"
 
         # A view switch is another mount(): the toggle must reset again,
         # and with it the list must be dropped from the scroll surface.
