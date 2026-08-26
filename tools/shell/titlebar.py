@@ -2,7 +2,7 @@
 The frameless window's own chrome — the menu bar, the drag-to-move, and
 the window buttons.
 """
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
+from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QPushButton, QLabel)
 from PyQt6.QtCore import Qt, QPoint, QSize
 from PyQt6.QtGui import QKeySequence, QAction
 from tools.app_state import theme_color
@@ -41,14 +41,19 @@ class TitleBar(QWidget):
         layout.setSpacing(0)
 
         # App title
-        title = QLabel(app_title())
-        title.setObjectName("titleBarLabel")
-        layout.addWidget(title)
+        self._title = QLabel(app_title())
+        self._title.setObjectName("titleBarLabel")
+        layout.addWidget(self._title)
 
         layout.addSpacing(16)
 
         # Menu bar embedded in title bar
         self.menu_bar = self._build_menu()
+        # Reserve the menu bar's full content width so it can never be squeezed
+        # below the width its three menus need. QMenuBar's own minimumSizeHint
+        # collapses to just the first item ("Datei"), which is what let the
+        # layout clip the label to "ei" when the window got tight.
+        self.menu_bar.setMinimumWidth(self.menu_bar.sizeHint().width())
         layout.addWidget(self.menu_bar)
 
         layout.addStretch()
@@ -59,7 +64,7 @@ class TitleBar(QWidget):
         # clicking it will switch TO (sun → light, moon → dark).
         self._theme_btn = QPushButton()
         self._theme_btn.setObjectName("themeBtn")
-        self._theme_btn.setToolTip(tr("Thema wechseln"))
+        self._theme_btn.setToolTip(tr("Design wechseln"))
         self._theme_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._theme_btn.setFixedSize(42, 42)
         self._theme_btn.clicked.connect(self._toggle_theme)
@@ -89,6 +94,15 @@ class TitleBar(QWidget):
         new = "light" if s.theme() == "dark" else "dark"
         s.set_theme(new)
         self._win._apply_theme(new)
+
+    def set_document_name(self, name):
+        """Show "Folio — <dateiname>" in the wordmark when a document is open,
+        and plain "Folio" in the empty state. Matches Acrobat's `App — file.pdf`
+        title convention; the dash is left untranslated."""
+        if name:
+            self._title.setText(f"{app_title()} \u2014 {name}")
+        else:
+            self._title.setText(app_title())
 
     def _sync_theme_icons(self):
         """Re-draw every drawn icon in the title bar for the live theme."""

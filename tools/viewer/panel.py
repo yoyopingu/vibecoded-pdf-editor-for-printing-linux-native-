@@ -335,6 +335,7 @@ class PageViewerPanel(QWidget):
         self.sync_view_switch = None  # lambda: reread which of the 3 views is current
         self.show_status            = None   # lambda msg: window-level status bar
         self.open_multi_dialog = None  # lambda: main._open_multi_dialog() — the "+" open
+        self.set_title_document = None  # lambda name: main._title_bar.set_document_name(name)
         self._pre_manage_idx    = None   # gespeicherter Stack-Index vor Manage-Modus
         self._pf_job      = None
         self._setup_ui()
@@ -1323,12 +1324,18 @@ class PageViewerPanel(QWidget):
             w.setEnabled(has_doc)
         if not has_doc:
             self.set_find_visible(False)
-        # Speichern lights only when there is something to save. It is the one
-        # question the old bar could not answer at all — it had no save button.
-        self._save_btn.setEnabled(bool(has_doc and tab.is_dirty()))
+        # Speichern is disabled only when there is no document at all. A doc
+        # that happens to have nothing new to save still shows an enabled,
+        # clickable button — the audit read a greyed-out Save as "can't save
+        # this file" (an inverted hierarchy next to the always-live Drucken).
+        self._save_btn.setEnabled(has_doc)
         self._act_undo.setEnabled(bool(has_doc and tab.can_undo()))
         self._act_redo.setEnabled(bool(has_doc and tab.can_redo()))
         self._sync_tab_label(tab)
+        # The title bar wordmark follows the current document ("Folio — file").
+        if self.set_title_document is not None:
+            self.set_title_document(
+                os.path.basename(tab.pdf_path) if has_doc else "")
 
     def _print_current(self):
         tab = self._current()

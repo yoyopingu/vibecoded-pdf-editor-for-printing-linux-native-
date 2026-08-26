@@ -21,25 +21,25 @@ class PageNumbersPanel(BasePanel):
         self.pos = QComboBox()
         self.pos.addItems([tr("Unten Mitte"), tr("Unten Links"), tr("Unten Rechts"),
                            tr("Oben Mitte"),  tr("Oben Links"),  tr("Oben Rechts")])
-        ol.addLayout(row(tr("Position:"), self.pos))
+        ol.addLayout(row(tr("Position:"), self.pos, label_w=160))
 
         self.prefix = QLineEdit(); self.prefix.setPlaceholderText(tr("z.B. Seite "))
-        ol.addLayout(row(tr("Präfix:"), self.prefix))
+        ol.addLayout(row(tr("Präfix:"), self.prefix, label_w=160))
 
         self.suffix = QLineEdit(); self.suffix.setPlaceholderText(tr("z.B.  / {gesamt}"))
-        ol.addLayout(row(tr("Suffix:"), self.suffix))
+        ol.addLayout(row(tr("Suffix:"), self.suffix, label_w=160))
 
         self.start_spin = QSpinBox(); self.start_spin.setRange(0,9999); self.start_spin.setValue(1)
-        ol.addLayout(row(tr("Startnummer:"), self.start_spin))
+        ol.addLayout(row(tr("Startnummer:"), self.start_spin, label_w=160))
 
         self.skip_spin = QSpinBox(); self.skip_spin.setRange(0,999); self.skip_spin.setValue(0)
-        ol.addLayout(row(tr("Erste N Seiten überspringen:"), self.skip_spin))
+        ol.addLayout(row(tr("Erste N Seiten überspringen:"), self.skip_spin, label_w=160))
 
         self.font_spin = QSpinBox(); self.font_spin.setRange(5,48); self.font_spin.setValue(10)
-        ol.addLayout(row(tr("Schriftgröße (pt):"), self.font_spin))
+        ol.addLayout(row(tr("Schriftgröße (pt):"), self.font_spin, label_w=160))
 
         self.margin_spin = QSpinBox(); self.margin_spin.setRange(5,100); self.margin_spin.setValue(20)
-        ol.addLayout(row(tr("Abstand vom Rand (pt):"), self.margin_spin))
+        ol.addLayout(row(tr("Abstand vom Rand (pt):"), self.margin_spin, label_w=160))
 
         layout.addWidget(ob)
 

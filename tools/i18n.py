@@ -688,6 +688,7 @@ _EN: dict[str, str] = {
     "Seiten: nach Konvertierung bekannt": "Pages: known after conversion",
     # Plugin manager
     "WIE PLUGINS FUNKTIONIEREN": "HOW PLUGINS WORK",
+    "INSTALLIERTE PLUGINS": "INSTALLED PLUGINS",
     "Plugin-Ordner öffnen": "Open plugin folder",
     "Plugin auswählen für Details...": "Select a plugin for details...",
     "Plugin installieren (.py)...": "Install plugin (.py)...",
@@ -1067,7 +1068,6 @@ _EN: dict[str, str] = {
     "Nicht unterstützt: {p0}": "Not supported: {p0}",
     "Verarbeite: {p0}": "Processing: {p0}",
     # Plugin manager
-    "Installierte Plugins:": "Installed plugins:",
     "Installiert. Nach Neustart aktiv.": "Installed. Active after restart.",
     "Buttons oben verwenden.": "Use the buttons above.",
     "Plugin-Ordner:  {p0}": "Plugin folder:  {p0}",
@@ -1153,6 +1153,7 @@ _EN: dict[str, str] = {
     # ── Settings dialog ───────────────────────────────────────────────────────
     "Leistung": "Performance",
     "Design:": "Theme:",
+    "Design wechseln": "Switch theme",
     "Hell": "Light",
     "Dunkel": "Dark",
     "Vorschau-Threads:": "Preview threads:",

@@ -31,7 +31,7 @@ class CompressPanel(BasePanel):
                               tr("Drucker (300 dpi)"),
                               tr("Vordruck (300 dpi)")])
         self.preset.setCurrentIndex(2)
-        gl.addLayout(row(tr("Qualitätsstufe:"), self.preset))
+        gl.addLayout(row(tr("Qualitätsstufe:"), self.preset, label_w=90))
         self.gs_check = QCheckBox(tr("Ghostscript verwenden (empfohlen)"))
         self.gs_check.setChecked(ghostscript_binary() is not None)
         gl.addWidget(self.gs_check)

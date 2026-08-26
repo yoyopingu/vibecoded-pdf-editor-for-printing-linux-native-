@@ -24,6 +24,7 @@ from tools.pdf_access import is_locked
 from tools.shell.protokoll import LogAdapter
 from tools.theme      import _TV
 from tools.snapshots  import ensure_view_snapshot
+from tools.panels._shared import combo_min_width
 
 
 class ToolScrollArea(QScrollArea):
@@ -57,6 +58,21 @@ def make_separator() -> QFrame:
     sep.setObjectName("separator")
     sep.setFrameShape(QFrame.Shape.HLine)
     return sep
+
+
+def section_header(title: str) -> QLabel:
+    """The one section-header token for every tool panel's field groups.
+
+    Acrobat's Tools pane heads each group with a small all-caps, dim label; the
+    panels had drifted into a mix of 10px group-box titles, 12px dim labels and
+    bold 13px titles. This is the single style they all share now: 10px all-caps
+    (the text is passed already uppercase), a quiet colour, and 12px of air above
+    so a header reads as heading what follows it rather than crowding the card
+    above."""
+    lbl = QLabel(title)
+    lbl.setObjectName("sectionHeader")
+    lbl.setContentsMargins(0, 12, 0, 0)
+    return lbl
 
 
 def _describe_os_error(exc):
@@ -207,10 +223,20 @@ class BasePanel(QWidget):
     def build_controls_widget(self) -> QWidget:
         """The settings panel a tool morphs the whole sidebar into when it is
         picked (Phase 5). Top to bottom: a "‹ Werkzeuge" back button, the tool
-        title, the current-file bar, the tool's own fields, and the action row.
-        No nested scroll — the SidebarHost's toolscroll is the one and only
-        scroll surface. Sets the attributes the helpers rely on (file_bar,
-        log, run_btn, stop_btn, back_btn)."""
+        title, the current-file bar, a scrollable body holding the tool's own
+        fields, and a pinned action row (Stopp + Ausführen).
+
+        The action row is pinned below a QScrollArea rather than sitting at the
+        bottom of one long stretch: with the whole widget inside the sidebar's
+        own scroll surface, a tall tool's fields ran the primary button off the
+        bottom of the sidebar — the auditor caught Ausführen half-clipped in
+        Seitenzahlen and Druckvorstufenprüfung. Content now scrolls *above* the
+        button, which is always on screen. This nested scroll is the one
+        deliberate exception to the "single scroll surface" rule: it is what
+        keeps the primary action reachable while the fields scroll.
+
+        Sets the attributes the helpers rely on (file_bar, log, run_btn,
+        stop_btn, back_btn)."""
         content = QWidget(self)
         lay = QVBoxLayout(content)
         lay.setContentsMargins(10, 8, 12, 10)
@@ -231,22 +257,57 @@ class BasePanel(QWidget):
         lay.addWidget(self.file_bar)
         lay.addWidget(make_separator())
 
-        self.build_ui(lay)
+        # The tool's own fields live in the scrollable body; the action row
+        # below is a sibling so it never scrolls away.
+        body = QWidget()
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(8)
+        self.build_ui(body_lay)
 
         # Let combo boxes shrink with the sidebar instead of demanding their
         # widest item's full width (which used to blow the sidebar past its cap
         # and clip the right-hand side of the controls). A combo's horizontal
         # size policy is Fixed by default, so it also needs to be told to
         # expand into the field row — otherwise it stays at its sizeHint and
-        # clips long item texts at the widget edge.
-        for combo in content.findChildren(QComboBox):
+        # clips long item texts at the widget edge. row() also gives every
+        # combo a minimum width from its longest item, so the value never
+        # overlaps the arrow.
+        for combo in body.findChildren(QComboBox):
             combo.setSizeAdjustPolicy(
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
             combo.setSizePolicy(QSizePolicy.Policy.Expanding,
                                 combo.sizePolicy().verticalPolicy())
+            combo.setMinimumWidth(max(combo.minimumWidth(),
+                                      combo_min_width(combo)))
 
-        lay.addStretch()
+        self._controls_scroll = ToolScrollArea()
+        self._controls_scroll.setWidgetResizable(True)
+        self._controls_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Keep it a single column; a horizontal bar would fight the sidebar.
+        self._controls_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # A QScrollArea's default minimum height is driven by its content, so a
+        # tall tool's fields inflated the body and the whole controls widget
+        # outgrew the sidebar — the pinned action row then scrolled off the
+        # bottom again. Ignored vertical policy drops the scroll from the
+        # widget's height hint so it just fills whatever the sidebar has left
+        # over (fields scroll above the pinned button), and letting it shrink
+        # to zero keeps that true on short windows.
+        self._controls_scroll.setMinimumHeight(0)
+        self._controls_scroll.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                            QSizePolicy.Policy.Ignored)
+        # The scroll body sits on the same ground as the rest of the controls
+        # column (the header above it), not on the sidebar's PANEL — so there is
+        # no horizontal seam where the scrollable area begins. The group-box
+        # cards inside still paint their own ground.
+        self._controls_scroll.setStyleSheet(
+            f"QScrollArea{{background:{theme_color('BG')};border:none;}}"
+            f"QScrollArea > QWidget > QWidget{{background:{theme_color('BG')};}}")
+        self._controls_scroll.setWidget(body)
+        lay.addWidget(self._controls_scroll, 1)
+
         lay.addWidget(make_separator())
 
         self.log = LogAdapter()
@@ -294,6 +355,8 @@ class BasePanel(QWidget):
             combo.setMinimumContentsLength(8)
             combo.setSizePolicy(QSizePolicy.Policy.Expanding,
                                 combo.sizePolicy().verticalPolicy())
+            combo.setMinimumWidth(max(combo.minimumWidth(),
+                                      combo_min_width(combo)))
 
         lay.addStretch()
         lay.addWidget(make_separator())

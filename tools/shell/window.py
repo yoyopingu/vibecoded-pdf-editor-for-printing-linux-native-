@@ -542,6 +542,9 @@ class MainWindow(QMainWindow):
         # The "+" button in the doc row is a multi-select open; it lives in the
         # panel but needs the window's handler, which owns the viewer switch.
         self.viewer.open_multi_dialog = self._open_multi_dialog
+        # The wordmark shows "Folio — <dateiname>" when a document is open; the
+        # panel knows which tab is current and reports it here.
+        self.viewer.set_title_document = self._title_bar.set_document_name
 
         # Wire the shared sidebar slot into the page viewer. One entry point —
         # SidebarHost.mount(view, widget) — replaces the three protocols that

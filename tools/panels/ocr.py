@@ -207,7 +207,7 @@ class OcrPanel(BasePanel):
             self.lang.addItem(tr("Deutsch (deu)"), "deu")
         idx = self.lang.findData("deu")
         if idx >= 0: self.lang.setCurrentIndex(idx)
-        ol.addLayout(row(tr("Sprache:"), self.lang))
+        ol.addLayout(row(tr("Sprache:"), self.lang, label_w=90))
         self.deskew = QCheckBox(tr("Seiten begradigen")); self.deskew.setChecked(True); ol.addWidget(self.deskew)
         self.skip   = QCheckBox(tr("Seiten mit Text überspringen")); self.skip.setChecked(True); ol.addWidget(self.skip)
         layout.addWidget(ob)

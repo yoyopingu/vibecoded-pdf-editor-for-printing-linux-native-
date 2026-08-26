@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QTextEdit, QFileDialog, QGroupBox, QLabel
 )
 from PyQt6.QtCore import Qt
-from tools.panels.base import BasePanel, make_label
+from tools.panels.base import BasePanel, make_label, section_header
 from tools.i18n import tr
 
 PLUGIN_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "plugins")
@@ -63,7 +63,7 @@ class PluginManagerPanel(BasePanel):
         ob = QPushButton(tr("Plugin-Ordner öffnen"))
         ob.setObjectName("secondaryBtn"); ob.clicked.connect(self._open_folder); il.addWidget(ob)
         layout.addWidget(ib)
-        layout.addWidget(make_label(tr("Installierte Plugins:"), dim=True))
+        layout.addWidget(section_header(tr("INSTALLIERTE PLUGINS")))
         self.plugin_list = QListWidget(); self.plugin_list.setMinimumHeight(120)
         self.plugin_list.currentItemChanged.connect(self._show_details)
         layout.addWidget(self.plugin_list)

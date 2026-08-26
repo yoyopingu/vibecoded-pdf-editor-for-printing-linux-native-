@@ -22,7 +22,20 @@ def _paper_sizes_pt():
     """
     from tools.paper import label, sizes
     return {label(name): size for name, size in sizes().items()}
-LABEL_W = 220   # Feste Label-Breite — passt alle deutschen Bezeichnungen
+LABEL_W = 150   # Feste Label-Breite — Labelspalte endet einheitlich in der Seitenleiste
+
+
+def combo_min_width(combo: QComboBox) -> int:
+    """The smallest width that shows every item's full text without the arrow
+    overlapping it: the widest item plus the field's left/right padding (QSS
+    `padding: 0px 10px`) and a 24px arrow gutter. Applying this to a combo in a
+    field row stops Qt's Fixed/AdjustToMinimumContentsLength sizing from
+    squashing the value to "Drucker (300 dj" or "Beliebige Groe"."""
+    fm = combo.fontMetrics()
+    longest = 0
+    for i in range(combo.count()):
+        longest = max(longest, fm.horizontalAdvance(combo.itemText(i)))
+    return longest + 20 + 24      # 10px padding each side + 24px arrow gutter
 
 
 def _inherited_rotate(page) -> int:
@@ -109,6 +122,14 @@ def row(label_text: str, widget, stretch=1, label_w: int = LABEL_W) -> QHBoxLayo
     lbl.setFixedWidth(label_w)
     lbl.setObjectName("dimLabel")
     h.addWidget(lbl)
+    if isinstance(widget, QComboBox):
+        # A combo in a row must always be wide enough for its longest value —
+        # nothing else gives the value room in a narrow sidebar once the label
+        # has taken its share. Expanding policy then stretches it to the row's
+        # right edge, so every combo in a group ends at the same x. max() keeps
+        # any minimum a panel set deliberately (e.g. Farbprofil's 210px).
+        widget.setMinimumWidth(max(widget.minimumWidth(),
+                                   combo_min_width(widget)))
     h.addWidget(widget, stretch)
     return h
 

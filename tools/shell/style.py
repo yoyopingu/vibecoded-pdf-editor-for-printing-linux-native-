@@ -2,11 +2,44 @@
 How the application looks: the palette, the two stylesheets built from it,
 the theme switch, and the window icon.
 """
+import os
+import tempfile
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import (QPixmap, QPainter, QColor, QPen, QBrush,
                          QIcon, QPolygon)
 from tools.theme import SHELL_KEYS, set_viewer_theme, shell_colours
+
+
+def _spin_arrow_files(dark: bool):
+    """PNG paths for the spin box's up/down arrows, written once.
+
+    Qt draws a QSpinBox's subcontrols itself the moment a stylesheet touches
+    them, and its stock Fusion arrows then render wrong (a width rule alone
+    ended up drawing only the up arrow in the full sheet). Giving the
+    subcontrols our own arrow images restores both, drawn as a small filled
+    triangle in a grey that reads on either theme. The files land in the user's
+    temp dir; two 12-byte PNGs are cheap, and the QSS needs a real path.
+    """
+    d = os.path.join(tempfile.gettempdir(), "copyshop_ui")
+    os.makedirs(d, exist_ok=True)
+    up = os.path.join(d, "spin_up.png" if not dark else "spin_up_d.png")
+    dn = os.path.join(d, "spin_dn.png" if not dark else "spin_dn_d.png")
+    if os.path.exists(up) and os.path.exists(dn):
+        return up, dn
+    ink = QColor("#5b687b" if not dark else "#aab3c2")
+    for path, pts in ((up, ((7, 2), (13, 8), (1, 8))),
+                      (dn, ((7, 8), (13, 2), (1, 2)))):
+        pm = QPixmap(14, 10)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(ink))
+        p.drawPolygon(QPolygon([QPoint(*pt) for pt in pts]))
+        p.end()
+        pm.toImage().save(path, "PNG")
+    return up, dn
 
 
 def _build_style(dark: bool) -> str:
@@ -77,6 +110,7 @@ def _build_style(dark: bool) -> str:
     # Light is darkened a step past FAINT to clear WCAG AA on the near-white
     # sidebar (FAINT-light reads 4.15:1).
     _BETA              = "#8792a7" if dark else "#5b687b"
+    _SPIN_UP, _SPIN_DN = _spin_arrow_files(dark)
 
     return f"""
 * {{
@@ -97,6 +131,12 @@ QLabel#formLabel {{
     qproperty-wordWrap: true;
 }}
 QLabel#sectionLabel {{
+    color: {_FAINT}; font-size: 10px; font-weight: bold; letter-spacing: 2px;
+}}
+/* The tool panels' one section-header token (base.section_header): the same
+   small all-caps dim heading the group boxes already draw, floated above the
+   field group it heads. */
+QLabel#sectionHeader {{
     color: {_FAINT}; font-size: 10px; font-weight: bold; letter-spacing: 2px;
 }}
 QLabel#currentFileLabel {{ color: {_TEXT}; font-size: 12px; }}
@@ -340,12 +380,27 @@ QSpinBox, QDoubleSpinBox {{
     selection-background-color: {_SEL};
 }}
 QSpinBox:focus, QDoubleSpinBox:focus {{ border: 2px solid {_ACC}; }}
-/* Width only — nothing else. Any paint property here (a background, even a
-   transparent one) makes the stylesheet engine draw the buttons itself, and it
-   has no arrow to draw: they came out as two blank slivers you could barely
-   hit. With just a width the style keeps drawing its own arrows. */
+/* The up/down buttons get our own arrow images. Once any rule touches these
+   subcontrols Qt renders them itself, and its stock arrows come out wrong in
+   the full sheet (only the up arrow drew with a bare width rule — the pair
+   read as one misaligned block). The buttons are a quiet 20px column with a
+   hairline seam between them and the field; the arrows inside are small drawn
+   triangles (see _spin_arrow_files). */
 QSpinBox::up-button, QDoubleSpinBox::up-button,
-QSpinBox::down-button, QDoubleSpinBox::down-button {{ width: 20px; }}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    width: 20px;
+    border-left: 1px solid {_LINE};
+    background: transparent;
+}}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    border-top: 1px solid {_LINE};
+}}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+    image: url("{_SPIN_UP}"); width: 8px; height: 6px;
+}}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+    image: url("{_SPIN_DN}"); width: 8px; height: 6px;
+}}
 
 /* ── Lists & views ──────────────────────────────────────── */
 QListWidget, QListView, QTreeView, QTableView {{
@@ -553,7 +608,14 @@ QPushButton#docBtn {{
 }}
 QPushButton#docBtn:hover {{ background: {_S3}; border-color: {_ACC}; }}
 QPushButton#docBtn:pressed {{ background: {_S3}; }}
-QPushButton#docBtn:disabled {{ color: {_BTN_DIS_T}; background: transparent; border-color: transparent; }}
+/* A truly-disabled doc-row button (only the empty state has one — Speichern
+   and Drucken are both live as soon as a document is open). It stays pill
+   shaped so it still reads as a button, just faded to ~40% of the enabled
+   fill+text rather than vanishing to a bare grey label. */
+QPushButton#docBtn:disabled {{
+    color: {_BTN_DIS_T}; background: {_BTN_DIS};
+    border: 1px solid {_DIS_LINE};
+}}
 /* No arrow of our own: the label already ends in one, and Qt's indicator would
    sit a second caret beside it. */
 QPushButton#docBtn::menu-indicator {{ image: none; width: 0; }}
