@@ -32,6 +32,10 @@ class _ListBtn(QPushButton):
         self._icon = QLabel()
         self._icon.setObjectName("listbtnIcon")
         self._icon.setFixedSize(18, 18)
+        # The 16px glyph is centred in an 18px box; raise it ~2px so its visual
+        # centre aligns with the label text (cap/x-height) rather than sitting
+        # low against it.
+        self._icon.setContentsMargins(0, -2, 0, 2)
         lay.addWidget(self._icon)
         self._label = QLabel(label)
         lay.addWidget(self._label, 1)
@@ -259,7 +263,9 @@ class ManagePanel(QWidget):
         _list = (f"QPushButton#listbtn{{background:transparent;color:{t['text']};"
                  f"border:none;border-radius:0;padding:0;text-align:left;}}"
                  f"QPushButton#listbtn:hover{{background:{t['surface_3']};"
-                 f"border:1px solid {t['border']};}}")
+                 f"border:1px solid {t['border']};}}"
+                 f"QPushButton#listbtn:pressed{{background:{t['surface_3']};"
+                 f"border:1px solid {t['acc']};}}")
         for b in self._op_btns:
             b.setStyleSheet(_list)
             if hasattr(b, '_paint_icon'):
@@ -280,7 +286,9 @@ class ManagePanel(QWidget):
 
         _pill_btn = (f"QPushButton#pillBtn{{background:transparent;color:{t['vdim']};"
                      f"border:none;border-radius:6px;font-size:13px;}}"
-                     f"QPushButton#pillBtn:hover{{background:{t['surface_3']};}}")
+                     f"QPushButton#pillBtn:hover{{background:{t['surface_3']};}}"
+                     f"QPushButton#pillBtn:pressed{{background:{t['surface_3']};"
+                     f"color:{t['acc']};}}")
         for b in self.findChildren(QPushButton):
             if b.objectName() == "pillBtn":
                 b.setStyleSheet(_pill_btn)
@@ -308,6 +316,8 @@ class ManagePanel(QWidget):
                 f"color:{t['vdim']};border:none;{left}"
                 f"font-size:12px;min-height:29px;}}"
                 f"QPushButton#btnpairBtn:hover{{background:{t['surface_3']};"
+                f"color:{t['text']};}}"
+                f"QPushButton#btnpairBtn:pressed{{background:{t['surface_3']};"
                 f"color:{t['text']};}}")
 
         if hasattr(self, 'sel_edit'):

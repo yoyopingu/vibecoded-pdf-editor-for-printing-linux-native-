@@ -469,7 +469,7 @@ class MainWindow(QMainWindow):
                     idx += 1
 
         sep0 = QFrame(); sep0.setObjectName("separator")
-        sep0.setFrameShape(QFrame.Shape.HLine)
+        sep0.setFrameShape(QFrame.Shape.NoFrame)
         tl.addWidget(sep0)
         pm_panel = PluginManagerPanel(self)
         pm_btn = NavBtn(tr("Plugin-Manager"), icon_name=TOOL_ICONS.get("Plugin-Manager"))
@@ -485,7 +485,7 @@ class MainWindow(QMainWindow):
         plugins = discover_plugins()
         if plugins:
             sep = QFrame(); sep.setObjectName("separator")
-            sep.setFrameShape(QFrame.Shape.HLine); tl.addWidget(sep)
+            sep.setFrameShape(QFrame.Shape.NoFrame); tl.addWidget(sep)
             pl = QLabel(tr("PLUGINS")); pl.setObjectName("navGroup")
             pl.setContentsMargins(16, 13, 0, 3); tl.addWidget(pl)
             for plabel, PCls in plugins:

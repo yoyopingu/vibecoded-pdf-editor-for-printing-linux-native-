@@ -180,17 +180,20 @@ QMenu::item:selected {{ background: {_S3}; }}
 QMenu::separator {{ height: 1px; background: {_LINE}; margin: 4px 10px; }}
 QPushButton#titleBarBtn {{
     background: transparent; color: {_DIM};
-    border: none; border-radius: 7px;
+    border: none; border-radius: 6px;
     font-size: 14px; min-width: 42px;
 }}
 QPushButton#titleBarBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
+QPushButton#titleBarBtn:pressed {{ background: {_S3}; color: {_TEXT}; }}
 QPushButton#titleBarBtn:last-child:hover {{ background: {_CLOSE}; color: {_ON_ACC}; }}
+QPushButton#titleBarBtn:last-child:pressed {{ background: {_CLOSE}; color: {_ON_ACC}; }}
 QPushButton#themeBtn {{
     background: transparent; color: {_DIM};
-    border: none; border-radius: 7px;
+    border: none; border-radius: 6px;
     min-width: 42px; margin-right: 2px;
 }}
 QPushButton#themeBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
+QPushButton#themeBtn:pressed {{ background: {_S3}; color: {_TEXT}; }}
 
 /* ── Sidebar ────────────────────────────────────────────── */
 QWidget#sidebar {{
@@ -215,7 +218,7 @@ QPushButton#navBtn {{
     background: transparent; color: {_NB_TEXT};
     border: none; border-left: 3px solid transparent;
     padding: 5px 14px 5px 21px; text-align: left;
-    font-size: 12px; border-radius: 7px; min-height: 26px;
+    font-size: 12px; border-radius: 6px; min-height: 26px;
 }}
 /* The tool-list group headings — FARBE, INHALT, AUSGABE. Their own name, not
    the shared #sectionLabel: that one is 9 px with 3 px of letter-spacing, which
@@ -229,6 +232,9 @@ QLabel#navGroup {{
 }}
 QPushButton#navBtn:hover {{
     background: {_NB_HOV}; color: {_NB_ACT_TEXT};
+}}
+QPushButton#navBtn:pressed {{
+    background: {_S3}; color: {_NB_ACT_TEXT};
 }}
 QPushButton#navBtn[active="true"] {{
     background: {_ACC_SOFT}; color: {_NB_ACT_TEXT};
@@ -249,6 +255,7 @@ QPushButton#viewSeg {{
     padding: 6px 2px; font-size: 11px; min-height: 26px;
 }}
 QPushButton#viewSeg:hover {{ color: {_NB_ACT_TEXT}; }}
+QPushButton#viewSeg:pressed {{ background: {_S3}; }}
 /* No accent fill on the checked segment — the raised surface says it, and the
    extra width of a bold label pushed "Seiten verwalten" past the 224 px column
    and clipped it. */
@@ -273,12 +280,13 @@ QPushButton#viewerBtn {{
     border-radius: 0; min-height: 40px;
 }}
 QPushButton#viewerBtn:hover {{ background: {_VB_HOV}; }}
+QPushButton#viewerBtn:pressed {{ background: {_VB_HOV}; }}
 QPushButton#viewerBtn[active="true"] {{ background: {_VB_HOV}; }}
 
 /* ── Buttons ────────────────────────────────────────────── */
 QPushButton#actionBtn {{
     background: {_ACC}; color: {_ON_ACC}; border: none;
-    border-radius: 7px; padding: 8px 20px;
+    border-radius: 6px; padding: 8px 20px;
     font-weight: bold; font-size: 13px; min-height: 32px;
     letter-spacing: 0.3px;
 }}
@@ -287,7 +295,7 @@ QPushButton#actionBtn:pressed {{ background: {_ACC_PRS}; }}
 QPushButton#actionBtn:disabled {{ background: {_BTN_DIS}; color: {_BTN_DIS_T}; }}
 QPushButton#secondaryBtn {{
     background: {_S2}; color: {_TEXT};
-    border: 1px solid {_LINE}; border-radius: 7px;
+    border: 1px solid {_LINE}; border-radius: 6px;
     padding: 6px 14px; min-height: 28px;
 }}
 /* Small square icon buttons (the zoom −/+/⟳ above a preview). They are fixed to
@@ -295,7 +303,7 @@ QPushButton#secondaryBtn {{
    they rendered as three empty rectangles. */
 QPushButton#iconBtn {{
     background: transparent; color: {_DIM};
-    border: none; border-radius: 7px;
+    border: none; border-radius: 6px;
     padding: 0px; min-height: 0px; min-width: 0px;
     font-size: 13px;
 }}
@@ -309,7 +317,7 @@ QPushButton#iconBtn:disabled {{ color: {_BTN_DIS_T}; background: transparent; }}
    against the sheet. */
 QPushButton#sbIconBtn {{
     background: transparent; color: {_DIM};
-    border: none; border-radius: 5px;
+    border: none; border-radius: 6px;
     min-width: 24px; min-height: 24px; padding: 0px;
 }}
 QPushButton#sbIconBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
@@ -354,6 +362,7 @@ QComboBox:focus {{
     border: 2px solid {_ACC};
     padding: 0px 9px;
 }}
+QComboBox:hover {{ border-color: {_ACC}; }}
 /* No ::drop-down override here: giving it `border:none` and no arrow image left
    every combo box looking like a plain text field, with nothing to show it can
    be opened. Without the rule the style draws its own arrow. */
@@ -373,6 +382,7 @@ QComboBox QAbstractItemView::item {{
     border-radius: 3px;
 }}
 QComboBox QAbstractItemView::item:selected {{ background: {_SEL}; color: {_TEXT}; }}
+QComboBox QAbstractItemView::item:hover {{ background: {_LHOV}; color: {_TEXT}; }}
 
 /* Spin boxes are styled separately from the fields above: as soon as their
    padding/min-height came from that shared rule, Qt took over drawing the
@@ -460,6 +470,7 @@ QCheckBox::indicator {{
     border: 1px solid {_LSTRONG}; background: {_S3};
 }}
 QCheckBox::indicator:hover {{ border-color: {_ACC}; }}
+QCheckBox::indicator:pressed {{ border-color: {_ACC}; background: {_LHOV}; }}
 QCheckBox::indicator:checked {{
     background: {_ACC}; border: 1px solid {_ACC};
 }}
@@ -469,12 +480,13 @@ QRadioButton::indicator {{
     border: 1px solid {_LSTRONG}; background: {_S3};
 }}
 QRadioButton::indicator:hover {{ border-color: {_ACC}; }}
+QRadioButton::indicator:pressed {{ border-color: {_ACC}; background: {_LHOV}; }}
 QRadioButton::indicator:checked {{ background: {_ACC}; border: 2px solid {_ACC}; }}
 
 /* ── Group boxes ────────────────────────────────────────── */
 QGroupBox {{
     background: {_GB};
-    border: 1px solid {_LINE}; border-radius: 9px;
+    border: 1px solid {_LINE}; border-radius: 8px;
     margin-top: 22px; padding: 10px 8px 8px 8px;
 }}
 QGroupBox::title {{
@@ -604,14 +616,14 @@ QWidget#docRow {{
    LINE_STRONG edge give it a card that actually reads as clickable. */
 QPushButton#newtabBtn {{
     background: {_S3}; color: {_DIM};
-    border: 1px solid {_LSTRONG}; border-radius: 7px;
+    border: 1px solid {_LSTRONG}; border-radius: 6px;
     font-size: 14px; min-width: 26px; min-height: 26px;
 }}
 QPushButton#newtabBtn:hover {{ background: {_NEWTAB_HOV}; border-color: {_ACC}; color: {_TEXT}; }}
 QPushButton#newtabBtn:pressed {{ background: {_SEL}; }}
 QPushButton#docBtn {{
     background: {_S2}; color: {_TEXT};
-    border: 1px solid {_LINE}; border-radius: 7px;
+    border: 1px solid {_LINE}; border-radius: 6px;
     padding: 0 13px; font-size: 12.5px; min-height: 30px;
 }}
 QPushButton#docBtn:hover {{ background: {_S3}; border-color: {_ACC}; }}
@@ -632,7 +644,7 @@ QPushButton#docBtn::menu-indicator {{ image: none; width: 0; }}
 QPushButton#docIconBtn::menu-indicator {{ image: none; width: 0; }}
 QPushButton#docIconBtn {{
     background: transparent; color: {_DIM};
-    border: none; border-radius: 7px;
+    border: none; border-radius: 6px;
     padding: 0; font-size: 14px;
 }}
 QPushButton#docIconBtn:hover {{ background: {_S3}; color: {_TEXT}; }}
