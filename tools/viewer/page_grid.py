@@ -218,6 +218,21 @@ class PageCard(QFrame):
                                  Qt.TransformationMode.SmoothTransformation)
         self.update()
 
+    def set_zoom(self, card_w, card_h):
+        """Resize an existing card for a new zoom — no widget recreation.
+
+        The stored pixmap is re-scaled as a stand-in; a fresh render at the
+        new width is queued separately by _schedule_visible."""
+        self._card_w = card_w
+        self._card_h = card_h
+        self.setFixedSize(*card_size(card_w, card_h))
+        if self._pixmap is not None and not self._pixmap.isNull():
+            self._pixmap = self._pixmap.scaled(
+                card_w, card_h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation)
+        self.update()
+
     def set_image(self, image: QImage):
         """Called from the GUI thread with a freshly rendered QImage."""
         self.set_pixmap(QPixmap.fromImage(image))
@@ -348,6 +363,12 @@ class PageGrid(QWidget):
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
         self._resize_timer.timeout.connect(self._rebuild)
+        # Debounce timer for zoom: re-laying out and re-queuing renders is only
+        # worth doing once a wheel-zoom gesture stops, not once per notch.
+        self._zoom_timer = QTimer(self)
+        self._zoom_timer.setSingleShot(True)
+        self._zoom_timer.timeout.connect(self._apply_zoom)
+        self._zooming = False  # re-entrancy guard for _apply_zoom
         self._scroll_connected = False  # connect scrollbar only once
         self.setAcceptDrops(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -355,24 +376,90 @@ class PageGrid(QWidget):
         _register_themed(self)
 
     def _apply_theme(self):
-        self._rebuild()
+        # The cards read _TV at paint time, so a theme switch only needs a
+        # repaint. Rebuilding here used to destroy and recreate every card and
+        # re-queue all thumbnail renders on every toggle — the "super duper
+        # slow" dark/light switch.
+        for card in self._cards:
+            card.update()
+        self.update()
+
+    def _set_zoom(self, card_w, card_h):
+        self._card_w = card_w
+        self._card_h = card_h
+        # Resize the existing cards in place synchronously — cheap (~0.1 ms) and
+        # what callers and tests expect to have happened by the time zoom_in
+        # returns. Only the render pass is deferred to the debounce timer, so a
+        # wheel-zoom gesture doesn't re-queue every thumbnail once per notch.
+        for card in self._cards:
+            card.set_zoom(card_w, card_h)
+        self._relayout()
+        self._zoom_timer.start(80)
 
     def zoom_in(self):
         step = 20 if self._card_w < 300 else 40 if self._card_w < 600 else 80
-        self._card_w = min(1400, self._card_w + step)
-        self._card_h = int(self._card_w * (CARD_H / CARD_W))
-        self._rebuild()
+        new_w = min(1400, self._card_w + step)
+        self._set_zoom(new_w, int(new_w * (CARD_H / CARD_W)))
 
     def zoom_out(self):
         step = 20 if self._card_w <= 300 else 40 if self._card_w <= 600 else 80
-        self._card_w = max(60, self._card_w - step)
-        self._card_h = int(self._card_w * (CARD_H / CARD_W))
-        self._rebuild()
+        new_w = max(60, self._card_w - step)
+        self._set_zoom(new_w, int(new_w * (CARD_H / CARD_W)))
 
     def zoom_reset(self):
-        self._card_w = CARD_W
-        self._card_h = CARD_H
-        self._rebuild()
+        self._set_zoom(CARD_W, CARD_H)
+
+    def _apply_zoom(self):
+        """Render pass for a zoom: refresh thumbnails at the new card width.
+
+        The cards were already resized synchronously by _set_zoom; this only
+        re-queues renders for the visible ones once the gesture pauses, so a
+        wheel-zoom doesn't submit every thumbnail's render once per notch."""
+        if getattr(self, "_zooming", False):
+            return
+        self._zooming = True
+        try:
+            if not self._cards:
+                self._rebuild()
+                return
+            for t in self._thumb_tasks:
+                t.cancel()
+            self._thumb_tasks.clear()
+            self._thumb_gen += 1
+
+            # Recompute the render width per card (aspect-correct for the new
+            # zoom, and the single-page mode's card width tracks the widget).
+            self._card_render_widths.clear()
+            per_row   = self._per_row()
+            is_single = (per_row == 1)
+            grid_w    = max(100, self.width() or 800)
+            for i, card in enumerate(self._cards):
+                if is_single:
+                    uid = card.orig_idx
+                    src_path, orig = self.model.page_source(uid, self.pdf_path)
+                    rot            = self.model.get_rotation(uid)
+                    c_w = max(60, grid_w - 2*MARGIN - 16)
+                    pw, ph = _FullPageCache.get_dims(src_path, orig, rot)
+                    if pw <= 0 or ph <= 0:
+                        pw_pt, ph_pt = _cached_page_size_pt(src_path, orig)
+                        if pw_pt and ph_pt:
+                            pw, ph = ((ph_pt, pw_pt) if rot % 180 == 90
+                                      else (pw_pt, ph_pt))
+                    if pw > 0 and ph > 0:
+                        c_h = int(c_w * ph / pw)
+                    else:
+                        c_h = int(c_w * CARD_H / CARD_W)
+                    render_w = _thumb_render_width(c_w * 1.5)
+                    card.set_zoom(c_w, c_h)
+                else:
+                    render_w = _thumb_render_width(max(self._card_w * 2, 200))
+                self._card_render_widths.append(render_w)
+
+            self._relayout()
+            # Kick off thumbnail loading for currently visible cards only.
+            QTimer.singleShot(0, self._schedule_visible)
+        finally:
+            self._zooming = False
 
     def wheelEvent(self, e):
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:

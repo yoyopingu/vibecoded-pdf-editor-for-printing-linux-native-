@@ -157,6 +157,16 @@ class SinglePageView(QWidget):
         self._strip       = []     # [(page_pos, y_top, w_px, h_px)] in the strip
         self._strip_h     = 0.0
         self._strip_key   = None   # what _strip was built for
+        # Continuous zoom gesture. _apply_zoom defers the strip rebuild (which
+        # is O(pages) plus a re-queue of every visible render) to the settle
+        # timer, showing the existing sheets scaled as a stand-in per notch.
+        # The pending scroll is applied once _render_continuous rebuilds the
+        # strip, so the point under the cursor stays anchored exactly as the
+        # synchronous build used to.
+        self._zoom_pending_y = None   # target _doc_scroll at the new scale
+        self._zoom_pending_x = None   # target _scroll_x at the new scale
+        self._preview_ratio  = 0.0    # >0 while a zoom stand-in is pending
+        self._preview_anchor = (0.0, 0.0)
         # The page the continuous fit is measured against: zoom 1.0 shows this
         # page whole, and every other sheet shares its pixels-per-point so the
         # strip keeps one scale. Re-resolved on load, mode change and Ctrl+0.
@@ -493,6 +503,18 @@ class SinglePageView(QWidget):
         # The goal follows the same clamp, or a zoom that shortens the strip
         # would leave the animator pulling towards an offset off the end.
         self._scroll_goal = max(0.0, min(self._scroll_goal, max_scroll))
+        # A deferred zoom just settled: the strip is now at the new scale, so
+        # land the scroll exactly where the gesture anchored the cursor (the
+        # O(pages) rebuild was deferred out of _apply_zoom for this).
+        if self._zoom_pending_y is not None:
+            self._jump_scroll(self._zoom_pending_y)
+            max_sx = 0.0
+            for _p, _t, w_px, _h in self._strip:
+                max_sx = max(max_sx, max(0.0, w_px - avail_w))
+            self._scroll_x = max(0.0,
+                                 min(self._zoom_pending_x or 0.0, max_sx))
+            self._zoom_pending_y = None
+            self._zoom_pending_x = None
         top = self._doc_scroll
         bot = top + avail_h
         prefetch = avail_h * self.STRIP_PREFETCH_SCREENS
@@ -625,6 +647,14 @@ class SinglePageView(QWidget):
                 self._strip_pending.discard(key)
                 self._strip_tasks.pop(key, None)
         if self._continuous:
+            if self._zoom_pending_y is not None or self._preview_ratio > 0:
+                # A zoom gesture is in flight and the strip is being shown as a
+                # scaled stand-in. This render arrived at the pre-gesture scale,
+                # so repainting the whole strip with it would rebuild and
+                # re-queue every visible page on every arrival — the per-tick
+                # cost this fix removes. Drop it: the settle rebuild asks for
+                # the right scale and this page (now in the cache) is found.
+                return
             ds = self._display_scale(self._zoom)
             if ds is not None:
                 self._render_continuous(ds, self._view.width(),
@@ -805,15 +835,21 @@ class SinglePageView(QWidget):
                 content_y = self._doc_scroll + my
                 content_x = self._scroll_x + mx
                 ratio = new_scale / old_scale
-                self._strip_key = None
-                self._strip_pm.clear()
-                self._cancel_strip_tasks()
-                self._build_strip(new_scale)
-                self._jump_scroll(content_y * ratio - my)
-                max_sx = 0.0
-                for _p, _t, w_px, _h in self._strip:
-                    max_sx = max(max_sx, max(0.0, w_px - avail_w))
-                self._scroll_x = max(0.0, min(content_x * ratio - mx, max_sx))
+                if self._zoom_pending_y is None:
+                    # First notch of the gesture: stop the strip's stale renders
+                    # so a task in flight at the old scale cannot land and force
+                    # a rebuild mid-gesture. The rebuild itself is deferred to
+                    # the settle timer — per-notch it used to clear the strip,
+                    # cancel in-flight work and re-queue every visible render,
+                    # which is the O(pages) cost this fixes.
+                    self._cancel_strip_tasks()
+                # Remember where to land after the deferred rebuild. The strip
+                # is still at the old scale here, so the anchor is the point
+                # under the cursor at the old scale, scaled to the new one.
+                self._zoom_pending_y = content_y * ratio - my
+                self._zoom_pending_x = content_x * ratio - mx
+                self._preview_ratio  = ratio
+                self._preview_anchor = (mx, my)
             return
 
         if self._last_pm is None or self._last_zoom <= 0:
@@ -1471,6 +1507,53 @@ class SinglePageView(QWidget):
         self._blit_region()
         QTimer.singleShot(0, self._color.update)
 
+    def _continuous_zoom_preview(self, ratio, mx, my):
+        """Scale the strip that is already on screen as a zoom stand-in.
+
+        The cheap analogue of the paged stand-in (_region_preview): no rebuild,
+        no render-queue traffic. Each already-drawn sheet is cropped to the
+        part inside the viewport and that slice is resized by `ratio` and
+        repositioned about the cursor anchor (mx, my), so the point under the
+        pointer reads as staying put while the document zooms and the scale is
+        bounded to a screenful — scaling the *whole* sheet pixmap, which grows
+        without bound as the zoom climbs, was the freeze (the same over-zoom
+        the paged path fixed with _region_preview). The exact render is the
+        settle timer's job — _render_continuous rebuilds the strip once the
+        gesture stops.
+        """
+        avail_w = float(self._view.width())
+        avail_h = float(self._view.height())
+        sheets = getattr(self._view, "_sheets", None)
+        if not sheets or avail_w < 1 or avail_h < 1:
+            return
+        out = []
+        for pm, x, y, w, h in sheets:
+            w = float(w); h = float(h)
+            # The slice of this sheet inside the viewport, in sheet pixels.
+            vx0 = max(0.0, -x); vy0 = max(0.0, -y)
+            vx1 = min(w, avail_w - x); vy1 = min(h, avail_h - y)
+            if vx1 <= vx0 or vy1 <= vy0 or pm is None:
+                # Off-screen or unrendered: a blank sheet of the scaled size.
+                out.append((None,
+                            (x - mx) * ratio + mx,
+                            (y - my) * ratio + my,
+                            w * ratio, h * ratio))
+                continue
+            cw = vx1 - vx0; ch = vy1 - vy0
+            nw = max(1, int(round(cw * ratio)))
+            nh = max(1, int(round(ch * ratio)))
+            # Crop before scaling, so the resize input is a screenful, not the
+            # whole page pixmap that grows with the zoom.
+            crop = pm.copy(int(vx0), int(vy0), int(cw), int(ch))
+            spm = crop.scaled(nw, nh,
+                              Qt.AspectRatioMode.IgnoreAspectRatio,
+                              Qt.TransformationMode.FastTransformation)
+            out.append((spm,
+                        (x - mx) * ratio + mx + vx0 * ratio,
+                        (y - my) * ratio + my + vy0 * ratio,
+                        nw, nh))
+        self._view.set_sheets(out, [], keep_selection=False)
+
     def _render_preview(self, schedule_settle=True):
         """Schnelle Qt-Skalierung als Vorschau während Zoom-Debounce.
 
@@ -1495,6 +1578,16 @@ class SinglePageView(QWidget):
         # Continuous keeps its own strip paint path. The single-page stand-in
         # below calls set_page and wipes the multi-sheet canvas mid-scroll.
         if self._continuous and scale is not None:
+            if self._preview_ratio > 0:
+                # A zoom gesture is in flight: scale what is on screen for the
+                # immediate feedback and defer the strip rebuild/render to the
+                # settle timer — the expensive per-notch work this fix removes.
+                self._continuous_zoom_preview(self._preview_ratio,
+                                              *self._preview_anchor)
+                self._preview_ratio = 0.0
+                if schedule_settle:
+                    self._schedule_settle()
+                return
             self._render_continuous(scale, avail_w, avail_h)
             if schedule_settle:
                 self._schedule_settle()

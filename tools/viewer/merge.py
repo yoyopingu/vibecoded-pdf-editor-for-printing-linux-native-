@@ -119,6 +119,18 @@ class FileCard(QFrame):
             Qt.TransformationMode.SmoothTransformation)
         self.update()
 
+    def set_zoom(self, card_w, card_h):
+        """Resize an existing card for a new zoom — no widget recreation."""
+        self._card_w = card_w
+        self._card_h = card_h
+        self.setFixedSize(*card_size(card_w, card_h))
+        if self._pixmap is not None and not self._pixmap.isNull():
+            self._pixmap = self._pixmap.scaled(
+                card_w, card_h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation)
+        self.update()
+
     def set_image(self, image: QImage):
         """Called from the GUI thread with a freshly rendered QImage (same entry
         point as PageCard, so the shared render queue can drive both)."""
@@ -224,30 +236,63 @@ class FileGrid(QWidget):
         self._thumb_signals  = _ThumbSignals()
         self._thumb_signals.ready.connect(self._on_thumb_ready)
         self._scroll_connected = False
+        self._zoom_timer = QTimer(self)
+        self._zoom_timer.setSingleShot(True)
+        self._zoom_timer.timeout.connect(self._apply_zoom)
+        self._zooming = False
         self.setAcceptDrops(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._rebuild()
         _register_themed(self)
 
     def _apply_theme(self):
-        self._rebuild()
+        # Cards read _TV at paint time — repaint, don't rebuild (rebuilding
+        # recreated every card and re-queued every render on each theme toggle).
+        for card in self._cards:
+            card.update()
+        self.update()
 
     # ── zoom (same steps and limits as PageGrid) ──────────────────────────────
+    def _set_zoom(self, card_w, card_h):
+        self._card_w = card_w; self._card_h = card_h
+        # Resize existing cards in place synchronously (cheap); only the render
+        # pass is deferred to the debounce timer.
+        for card in self._cards:
+            card.set_zoom(card_w, card_h)
+        self._relayout()
+        self._zoom_timer.start(80)
+
     def zoom_in(self):
         step = 20 if self._card_w < 300 else 40 if self._card_w < 600 else 80
-        self._card_w = min(1400, self._card_w + step)
-        self._card_h = int(self._card_w * (CARD_H / CARD_W))
-        self._rebuild()
+        new_w = min(1400, self._card_w + step)
+        self._set_zoom(new_w, int(new_w * (CARD_H / CARD_W)))
 
     def zoom_out(self):
         step = 20 if self._card_w <= 300 else 40 if self._card_w <= 600 else 80
-        self._card_w = max(60, self._card_w - step)
-        self._card_h = int(self._card_w * (CARD_H / CARD_W))
-        self._rebuild()
+        new_w = max(60, self._card_w - step)
+        self._set_zoom(new_w, int(new_w * (CARD_H / CARD_W)))
 
     def zoom_reset(self):
-        self._card_w = CARD_W; self._card_h = CARD_H
-        self._rebuild()
+        self._set_zoom(CARD_W, CARD_H)
+
+    def _apply_zoom(self):
+        """Render pass for a zoom: re-queue thumbnails at the new card width.
+
+        Cards were already resized synchronously by _set_zoom; this only
+        re-queues renders for the visible ones once the gesture pauses."""
+        if getattr(self, "_zooming", False):
+            return
+        self._zooming = True
+        try:
+            if not self._cards:
+                self._rebuild(); return
+            for t in self._thumb_tasks: t.cancel()
+            self._thumb_tasks.clear()
+            self._thumb_gen += 1
+            self._relayout()
+            QTimer.singleShot(0, self._schedule_visible)
+        finally:
+            self._zooming = False
 
     def wheelEvent(self, e):
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
