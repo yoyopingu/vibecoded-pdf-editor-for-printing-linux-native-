@@ -14,12 +14,12 @@ through the setters, and the zoom/ruler/message clicks leave as signals.
 """
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer
 from PyQt6.QtGui import QFontMetrics
-from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QPushButton,
+from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QPushButton,
                              QSizePolicy, QWidget)
 
 from tools.app_state import AppState, theme_color
 from tools.i18n import tr
-from tools.shell.icons import icon, rotated
+from tools.shell.icons import icon
 from tools.theme import _TV, _register_themed
 
 _ZOOMER_H = 28          # the concept's zoomer pill height
@@ -27,7 +27,6 @@ _ZOOM_BTN_W = 24
 _ZOOM_VAL_W = 46
 _MSG_HOLD_MS = 6000     # how long a transient message stays before the
                         # view default returns
-_NAV_FIELD_W = 34       # the status bar's current-page input
 
 
 class _MessageLabel(QLabel):
@@ -45,6 +44,7 @@ class _MessageLabel(QLabel):
         self.setObjectName("sbMsg")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(tr("Protokoll öffnen"))
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._full = ""
 
@@ -92,9 +92,6 @@ class StatusBar(QWidget):
     zoom_in_requested = pyqtSignal()
     zoom_fit_requested = pyqtSignal()
     zoom_actual_requested = pyqtSignal()
-    page_prev_requested = pyqtSignal()
-    page_next_requested = pyqtSignal()
-    page_go_to_requested = pyqtSignal(int)
     ruler_toggled = pyqtSignal(bool)
     message_clicked = pyqtSignal()
     preflight_requested = pyqtSignal()
@@ -110,10 +107,6 @@ class StatusBar(QWidget):
         self._pf_state = "unknown"
         self._pf_issues = []
         self._counts = None          # (colour, grey) or None
-        # Page nav state, fed by the window on resync and kept live by the bus.
-        self._page_current = 1
-        self._page_total = 0
-        self._page_enabled = False
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 0, 10, 0)
@@ -135,7 +128,7 @@ class StatusBar(QWidget):
         # Green when the document could go on a press, amber for what is worth
         # knowing first, hidden until there is an answer. The findings travel
         # in the tooltip; the click asks for the full check. Held with the
-        # readings on the left so it does not unbalance the page-nav centre.
+        # readings on the left so it stays with them.
         self._pf_btn = QWidget()
         self._pf_btn.setObjectName("pfLight")
         self._pf_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -154,45 +147,17 @@ class StatusBar(QWidget):
         self._pf_issues = []
         lay.addWidget(self._pf_btn)
 
-        # ── Page nav (centre) ────────────────────────────────────────────────
-        # Acrobat's bottom bar: ◂ n / N ▸. The current page is an editable
-        # field (type a page and press Enter); the arrows step one page. The
-        # window drives the same rail the preview uses, so this stays correct
-        # in every view and is merely disabled where the preview is not shown.
-        # Symmetric stretches either side keep it genuinely centred.
+        # ── Message (centre) ────────────────────────────────────────────────
+        # The app's mouth, genuinely centred between the readings and the right
+        # end: the concept's sb-msg is flex:1 — it fills the middle — with its
+        # text centred inside it. Equal stretches either side let it float in
+        # the middle of whatever width is spare; the Expanding size policy makes
+        # it take all of that middle. Click it for the Protokoll.
         lay.addStretch()
-        self._nav_box = QWidget()
-        self._nav_box.setObjectName("sbPageNav")
-        nl = QHBoxLayout(self._nav_box)
-        nl.setContentsMargins(0, 0, 0, 0)
-        nl.setSpacing(6)
-        self._nav_prev = self._nav_btn(tr("Vorherige Seite"),
-                                       self.page_prev_requested.emit)
-        self._nav_field = QLineEdit("1")
-        self._nav_field.setObjectName("sbPageField")
-        self._nav_field.setFixedWidth(_NAV_FIELD_W)
-        self._nav_field.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._nav_field.setToolTip(tr("Gehe zu Seite"))
-        self._nav_field.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._nav_field.returnPressed.connect(self._page_field_go)
-        self._nav_total = QLabel("/ 0")
-        self._nav_total.setObjectName("sbNavTotal")
-        self._nav_next = self._nav_btn(tr("Nächste Seite"),
-                                       self.page_next_requested.emit)
-        nl.addWidget(self._nav_prev)
-        nl.addWidget(self._nav_field)
-        nl.addWidget(self._nav_total)
-        nl.addWidget(self._nav_next)
-        lay.addWidget(self._nav_box)
-        lay.addStretch()
-
-        # ── Message ───────────────────────────────────────────────────────────
-        # The app's mouth, held on the right (capped so a long message cannot
-        # shove the page-nav centre out of the middle).
         self._msg = _MessageLabel()
         self._msg.clicked.connect(self.message_clicked.emit)
-        self._msg.setMaximumWidth(400)
-        lay.addWidget(self._msg)
+        lay.addWidget(self._msg, 1)
+        lay.addStretch()
 
         self._msg_timer = QTimer()
         self._msg_timer.setSingleShot(True)
@@ -241,22 +206,18 @@ class StatusBar(QWidget):
         self.set_preflight("unknown")
         self._render_counts()
         self._subscribe()
-        self._update_page_nav()
         _register_themed(self)
         self._apply_theme()
 
     def _subscribe(self):
         """The readings arrive on the status bus. Whoever owns the current
         value — the active tab's view, the greyscale tool's scan — publishes
-        by emitting; the bar has no idea who that is and never needs to.
-        The page number stays live on every turn through current_page_changed;
-        the total and the enabled state come from the window on resync."""
+        by emitting; the bar has no idea who that is and never needs to."""
         bus = AppState.get()
         bus.zoom_changed.connect(self.set_zoom_percent)
         bus.page_metrics_changed.connect(self.set_metrics)
         bus.colorspace_changed.connect(self.set_colorspace)
         bus.preflight_changed.connect(self.set_preflight)
-        bus.current_page_changed.connect(self._on_bus_page_changed)
         bus.colour_counts_changed.connect(self._on_counts)
         bus.ruler_changed.connect(self.set_rulers_checked)
         bus.app_message_requested.connect(self.show_message)
@@ -287,81 +248,6 @@ class StatusBar(QWidget):
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(fn)
         return btn
-
-    def _nav_btn(self, tip, fn):
-        """One of the ◂ / ▸ arrows. 24 px hit target, chevron glyph set in
-        _apply_theme so it follows the shell theme."""
-        btn = QPushButton()
-        btn.setObjectName("sbIconBtn")
-        btn.setFixedSize(24, 24)
-        btn.setToolTip(tip)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.clicked.connect(fn)
-        return btn
-
-    # ── page nav ──────────────────────────────────────────────────────────────
-
-    def set_page_nav(self, current, total, enabled):
-        """Feed the centred page-nav cluster. `current`/`total` are 1-based;
-        `enabled` says whether the preview is showing (arrows live then, and
-        are merely disabled otherwise). Hides entirely with no document."""
-        self._page_current = max(1, int(current))
-        self._page_total = max(0, int(total))
-        self._page_enabled = bool(enabled)
-        self._update_page_nav()
-
-    def _on_bus_page_changed(self, idx):
-        """A page turn anywhere in the active tab keeps the field live."""
-        if self._page_total <= 0:
-            return
-        self._page_current = max(1, min(int(idx) + 1, self._page_total))
-        self._update_page_nav()
-
-    def _page_field_go(self):
-        """Enter in the current-page field: jump to the typed page."""
-        try:
-            page = int(self._nav_field.text().strip())
-        except ValueError:
-            page = self._page_current
-        self.page_go_to_requested.emit(max(1, page))
-
-    def _nav_disabled_colour(self):
-        """The chevrons' colour when the arrow is inert (page 1, or any arrow
-        in a non-preview view). The QSS `:disabled` recolours text but not a
-        pixmap icon, so the arrow has to be re-stroked with the disabled grey —
-        otherwise it keeps full brightness while disabled."""
-        from tools.theme import shell_colours as _sc
-        dark = theme_color("BG") == _sc("dark")["BG"]
-        # A step darker than the generic BTN_DISABLED_TEXT so the inert arrow
-        # clearly recedes from the enabled DIM tone (#949cad) — the audit found
-        # the old #667080 sat too close to it. Light keeps the faded FAINT grey.
-        return "#566070" if dark else _sc("light")["BTN_DISABLED_TEXT"]
-
-    def _refresh_nav_icons(self):
-        """Re-draw the ◂ / ▸ chevrons, dimmed where the arrow is disabled."""
-        for btn, use_prev in ((self._nav_prev, True), (self._nav_next, False)):
-            colour = (theme_color("DIM") if btn.isEnabled()
-                      else self._nav_disabled_colour())
-            chev = icon("chev", colour=colour, size=16)
-            btn.setIcon(rotated(chev, 180) if use_prev else chev)
-            btn.setIconSize(QSize(16, 16))
-
-    def _update_page_nav(self):
-        total = self._page_total
-        visible = total > 0
-        self._nav_box.setVisible(visible)
-        if not visible:
-            return
-        current = max(1, min(self._page_current, total))
-        self._page_current = current
-        self._nav_field.setText(str(current))
-        self._nav_total.setText(f"/ {total}")
-        can_prev = self._page_enabled and current > 1
-        can_next = self._page_enabled and current < total
-        self._nav_prev.setEnabled(can_prev)
-        self._nav_next.setEnabled(can_next)
-        self._nav_field.setEnabled(self._page_enabled)
-        self._refresh_nav_icons()
 
     # ── readings ──────────────────────────────────────────────────────────────
 
@@ -498,7 +384,6 @@ class StatusBar(QWidget):
         self._zoom_out_btn.setIcon(icon("minus", colour=dim, size=16))
         self._zoom_in_btn.setIcon(icon("plus", colour=dim, size=16))
         self._zoom_fit_btn.setIcon(icon("fit", colour=dim, size=16))
-        self._refresh_nav_icons()
         for b in (self._ruler_btn, self._zoom_out_btn, self._zoom_in_btn,
                   self._zoom_fit_btn):
             b.setIconSize(QSize(16, 16))

@@ -5,6 +5,7 @@ tool panels.
 import sys, os
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox, QPushButton, QScrollArea
 from PyQt6.QtCore import Qt, pyqtSignal
+from tools.app_state import AppState
 from tools.i18n import tr, set_language, get_language
 from tools.branding import APP_NAME, APP_TAGLINE, app_title, versioned
 from tools.viewer.panel import PageViewerPanel
@@ -578,12 +579,6 @@ class MainWindow(QMainWindow):
             lambda: self._active_view_do("_zoom_fit"))
         self._status_bar.zoom_actual_requested.connect(
             lambda: self._active_view_do("_zoom_actual_size"))
-        # Page nav drives the same rail the preview uses (and the delegate the
-        # page manager hands it while managing) — one source of truth for where
-        # a page turn lands, whatever view is up.
-        self._status_bar.page_prev_requested.connect(self._status_page_prev)
-        self._status_bar.page_next_requested.connect(self._status_page_next)
-        self._status_bar.page_go_to_requested.connect(self._status_page_goto)
         self._status_bar.ruler_toggled.connect(self._on_status_ruler_toggled)
         self._status_bar.preflight_requested.connect(
             lambda: self._active_view_do("_show_preflight"))
@@ -596,6 +591,9 @@ class MainWindow(QMainWindow):
         self.viewer.show_status = lambda msg: notify(msg)
         # Re-sync the bar's readings whenever the active tab or view changes.
         self.viewer.tabs.currentChanged.connect(self._resync_statusbar)
+        # While the page manager is up, a completed background colour scan or a
+        # model change re-aggregates the profile reading over every page.
+        AppState.get().colour_counts_changed.connect(self._on_bus_colour_counts)
         # A tab switch while Layout is showing has to re-point the shared rail
         # (and its sheet column) at the newly active tab.
         self.viewer.tabs.currentChanged.connect(self._sync_layout_rail)
@@ -628,42 +626,38 @@ class MainWindow(QMainWindow):
         if tab is not None:
             tab.single.publish_status()
             self._status_bar.set_rulers_checked(tab.single._rulers_on)
+            # In the page manager the colour-profile reading aggregates over
+            # every page in the document, not the one page of the preview.
+            if tab.in_manage_mode():
+                self._publish_manage_colorspace(tab)
         self._status_bar.set_default_message(self._view_default_message(tab))
         # A held tool result must not outlive the tool that produced it: the
         # view switch / back button is the tool exit, so the default returns
         # here even though set_default_message above honours the held flag.
         self._status_bar.clear_message()
-        self._sync_page_nav(tab)
 
-    def _sync_page_nav(self, tab=None):
-        """Feed the status bar's centred page nav for the current view.
-
-        Enabled only while the single-page preview is actually showing (stack
-        0, not manage) on a tab with a document — so manage, layout and merge
-        leave it visible but inert, and the empty state hides it entirely."""
+    def _publish_manage_colorspace(self, tab=None):
+        """The status bar's colour-profile reading in the page manager: the
+        distinct profiles across every page currently in the document, joined
+        with " + " (the user asked for how many profiles are present across all
+        the pages). Pages the background scan has not reached yet are skipped;
+        a later colour-counts publish (below) refreshes the answer."""
         if tab is None:
             tab = self._active_tab()
-        enabled = bool(tab is not None and tab.model is not None
-                       and self._stack.currentIndex() == 0
-                       and not tab.in_manage_mode())
-        total = tab.page_count() if tab is not None else 0
-        current = (tab.single.current_page + 1) if tab is not None else 1
-        self._status_bar.set_page_nav(current, total, enabled)
+        if tab is None or tab.model is None:
+            return
+        from tools.colorspace import document_profile_summary
+        profiles = document_profile_summary(tab.pdf_path, tab.model)
+        self._status_bar.set_colorspace(
+            " + ".join(sorted(profiles)) if profiles else "")
 
-    def _status_page_prev(self):
-        tab = self.viewer._current()
-        if tab is not None:
-            tab.single._rail_handler().rail_prev()
-
-    def _status_page_next(self):
-        tab = self.viewer._current()
-        if tab is not None:
-            tab.single._rail_handler().rail_next()
-
-    def _status_page_goto(self, page):
-        tab = self.viewer._current()
-        if tab is not None:
-            tab.single._rail_handler().rail_go_to(page)
+    def _on_bus_colour_counts(self, *_args):
+        """A completed background colour scan or a model change fills more of
+        the cache while the page manager is showing; re-aggregate its profile
+        reading. Outside manage mode the per-page label's own publish stands."""
+        tab = self._active_tab()
+        if tab is not None and tab.in_manage_mode():
+            self._publish_manage_colorspace(tab)
 
     def _active_tab(self):
         idx = self.viewer.tabs.currentIndex()
@@ -682,6 +676,11 @@ class MainWindow(QMainWindow):
         if idx == 0:
             if tab is not None and tab.in_manage_mode():
                 return tr("Seiten auswählen — Aktionen links, Entf zum Löschen.")
+            # Preview (and the empty state): the full filename, the one place it
+            # lives now that the title bar is just the wordmark. Empty when no
+            # document is open.
+            if tab is not None and tab.model is not None and tab.pdf_path:
+                return os.path.basename(tab.pdf_path)
             return ""
         if idx == 1:
             return tr("Vorschau zeigt Zuschneiden + Anordnung — Ausführen wendet beide an.")

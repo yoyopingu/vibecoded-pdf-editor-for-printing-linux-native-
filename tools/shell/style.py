@@ -678,27 +678,6 @@ QWidget#sbZoomer {{
 QLabel#sbZoomVal {{ color: {_DIM}; font-size: 11px; background: transparent;
     font-variant-numeric: tabular-nums; }}
 QWidget#sbZoomDiv {{ background: {_LINE}; }}
-/* The centred page-nav cluster: the current page as a compact input, the
-   total as a dim reading. The arrows reuse the icon-button look (grey, no
-   border) and share its disabled state. */
-QWidget#sbPageNav {{ background: transparent; }}
-QLineEdit#sbPageField {{
-    color: {_TEXT}; background: {_S3}; border: 1px solid {_LINE};
-    border-radius: 5px; padding: 2px 0; font-size: 12px;
-    min-height: 0px;
-}}
-QLineEdit#sbPageField:focus {{ border: 2px solid {_ACC}; }}
-/* The page-nav field's inert state (Batch F): in dark the number dims a step
-   past the generic disabled text and the border vanishes so the field reads as
-   "off", not merely quieter (the audit: the old #667080 text + #28303f border
-   kept it looking live against SURFACE_3). Light keeps the generic faded look,
-   which the auditor already verified. */
-QLineEdit#sbPageField:disabled {{
-    color: {"#566070" if dark else _BTN_DIS_T};
-    background: {_BTN_DIS};
-    border: {"none" if dark else "1px solid " + _DIS_LINE};
-}}
-QLabel#sbNavTotal {{ color: {_DIM}; font-size: 12px; background: transparent; }}
 /* The zoomer's buttons and the ruler switch share the icon-button look; the
    ruler is the only checkable one, and checked means the accent-soft ground
    every other active control sits on. */

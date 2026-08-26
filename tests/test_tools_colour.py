@@ -476,6 +476,41 @@ def test_an_unreadable_page_is_not_called_grey():
     assert not is_grey_only(frozenset())
 
 
+def test_describe_reports_combo_profiles():
+    """A page carrying more than one colour profile must be reported as the
+    combination, not by whichever single space happened to be checked first.
+    The greyscale combos keep the user's exact (lower-case) wording."""
+    from tools.colorspace import describe
+    G, R, C = "/DeviceGray", "/DeviceRGB", "/DeviceCMYK"
+    assert describe(frozenset({R, C})) == "RGB + CMYK"
+    assert describe(frozenset({G, R})) == "greyscale + RGB"
+    assert describe(frozenset({G, C})) == "greyscale + CMYK"
+    # All three still reads as the colour combo, which is checked first.
+    assert describe(frozenset({G, R, C})) == "RGB + CMYK"
+    # The singles are untouched.
+    assert describe(frozenset({R})) == "RGB"
+    assert describe(frozenset({C})) == "CMYK"
+    assert describe(frozenset({G})) == "Grayscale"
+    assert describe(frozenset()) == "—"
+
+
+def test_document_profile_summary_aggregates_every_page():
+    """In the page manager the status bar's profile reading is the set of
+    profiles across every page of the document — grey, then RGB, then grey —
+    not the one page of the preview."""
+    from tools.colorspace import document_profile_summary, scan_document, _cache
+    from tools.viewer.model import PageModel
+
+    src = _mixed_pages_pdf()      # grey, RGB, grey
+    _cache.clear()
+    scan_document(src)            # fill the per-page cache
+    model = PageModel(3)          # one file, three pages
+    assert document_profile_summary(src, model) == {"Grayscale", "RGB"}
+    # A document no page has been read for yet aggregates to nothing, not a lie.
+    _cache.clear()
+    assert document_profile_summary(src, model) == set()
+
+
 def test_farbprofil_report_names_every_colour_space_present():
     """What the operator reads has to be right — it is what decides whether a
     file gets converted before it goes to a professional press.

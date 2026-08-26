@@ -455,9 +455,18 @@ def is_grey_only(names):
 
 
 def describe(names):
-    """The one-line answer the viewer puts under the page."""
+    """The one-line answer the viewer puts under the page.
+
+    Combos first — a page that carries more than one profile is reported as
+    the combination rather than by whichever single space was checked first.
+    The two greyscale combos keep the user's exact (lower-case) wording.
+    """
     if has_rgb(names) and has_cmyk(names):
         return "RGB + CMYK"
+    if has_gray(names) and has_rgb(names):
+        return "greyscale + RGB"
+    if has_gray(names) and has_cmyk(names):
+        return "greyscale + CMYK"
     if has_cmyk(names):
         return "CMYK"
     if has_rgb(names):
@@ -465,6 +474,24 @@ def describe(names):
     if has_gray(names):
         return "Grayscale"
     return "—"
+
+
+def document_profile_summary(pdf_path, model):
+    """The distinct colour-profile readings across every page in `model`.
+
+    Walks ``model.order`` and, for each page that has already been read into the
+    cache, collects its :func:`describe` label; pages the background document
+    scan has not reached yet are skipped rather than guessed at, so the answer
+    grows as the scan fills the cache. The caller joins the set with " + " for
+    the page manager's status-bar reading.
+    """
+    profiles = set()
+    for uid in model.order:
+        src_path, orig = model.page_source(uid, pdf_path)
+        names = cached_page_colorspaces(src_path, orig)
+        if names is not None:
+            profiles.add(describe(names))
+    return profiles
 
 
 # The greyscale tool's pixel-accurate page counts for a file it has analysed,

@@ -96,13 +96,11 @@ class TitleBar(QWidget):
         self._win._apply_theme(new)
 
     def set_document_name(self, name):
-        """Show "Folio — <dateiname>" in the wordmark when a document is open,
-        and plain "Folio" in the empty state. Matches Acrobat's `App — file.pdf`
-        title convention; the dash is left untranslated."""
-        if name:
-            self._title.setText(f"{app_title()} \u2014 {name}")
-        else:
-            self._title.setText(app_title())
+        """The title bar is just the Folio wordmark (concept, gui-concept.html
+        638-642); the filename lives in the status bar, not here. The call site
+        is kept because the panel reports the current document to the window,
+        but the wordmark never shows the name — calling this is a no-op."""
+        self._title.setText(app_title())
 
     def _sync_theme_icons(self):
         """Re-draw every drawn icon in the title bar for the live theme."""
