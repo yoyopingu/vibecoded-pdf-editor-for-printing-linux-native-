@@ -751,6 +751,7 @@ def test_a_printer_appearing_later_shows_up_without_a_restart():
         _settings_touched = False
         def __init__(self): self.printer_combo = _Combo(); self.changed = 0
         def _on_printer_changed(self): self.changed += 1
+        def _populate_paper_list(self): pass
 
     old_cache = D._PRINTER_LIST_CACHE
     old_last = D.prefs.last_printer
@@ -812,6 +813,7 @@ def test_a_refresh_never_undoes_a_deliberate_choice():
             self.printer_combo = _Combo(); self.changed = 0
             self._settings_touched = False
         def _on_printer_changed(self): self.changed += 1
+        def _populate_paper_list(self): pass
 
     old_cache, old_last = D._PRINTER_LIST_CACHE, D.prefs.last_printer
     try:

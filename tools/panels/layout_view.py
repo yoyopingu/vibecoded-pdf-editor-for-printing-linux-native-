@@ -26,7 +26,7 @@ import tempfile
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QWidget, QLabel,
                              QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox,
                              QGridLayout, QFrame, QScrollArea)
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRectF
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 
 from tools.panels.base import BasePanel, CurrentFileBar, ToolScrollArea
@@ -52,21 +52,74 @@ MODE_GRID    = 0
 MODE_BOOKLET = 1
 
 
+class _StageCheck(QWidget):
+    """A small hand-painted checkbox for a stage card.
+
+    The old switch was a QCheckBox styled as a plain pill: checked and
+    unchecked both read as a solid blue block, so three cards that looked
+    identical told nobody which stages were on. This is an explicit checkbox —
+    accent fill + white check when on, a bare grey outline when off — so the
+    on/off state is unmistakable in both themes. `toggled` carries the new
+    state; the card's logical QCheckBox (`Stage.check`) stays the source of
+    truth and this widget just mirrors it.
+    """
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._on = False
+        self.setFixedSize(20, 20)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_on(self, on):
+        on = bool(on)
+        if on != self._on:
+            self._on = on
+            self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.toggled.emit(not self._on)
+            e.accept()
+        else:
+            super().mousePressEvent(e)
+
+    def paintEvent(self, _e):
+        t = _TV
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        box = QRectF(1.5, 1.5, self.width() - 3, self.height() - 3)
+        if self._on:
+            p.setBrush(QBrush(QColor(t['acc'])))
+            p.setPen(QPen(QColor(t['acc']), 1))
+            p.drawRoundedRect(box, 4, 4)
+            p.setPen(QPen(QColor(PAPER), 2.2, Qt.PenStyle.SolidLine,
+                          Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            p.drawLine(5, 10, 9, 14)
+            p.drawLine(9, 14, 15, 6)
+        else:
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(t['line_strong']), 1.6))
+            p.drawRoundedRect(box, 4, 4)
+        p.end()
+
+
 class Stage(QWidget):
     """One switchable step of the pipeline.
 
     `self` is the switch — a full-width clickable *card* — and lives in the
     224 px column with the other two cards, so the whole pipeline can be read
     at a glance. The card carries an icon, the stage's name and a one-line
-    description, and a toggle switch on the right. `panel` holds the controls
+    description, and a real checkbox on the right. `panel` holds the controls
     that switch governs and is placed in the wider options column beside it,
     because a paper-size dropdown and four margin fields do not fit in 224 px.
 
-    `self.check` is the switch itself, a checkable widget styled as a pill.
-    The tests and the run logic read/write it through isChecked()/setChecked(),
-    and the card as a whole toggles it too. A stage that is off shows no panel
-    at all, so the options column only ever carries the settings that are
-    actually going to be applied.
+    `self.check` is a hidden logical QCheckBox that owns the state; the visible
+    `_StageCheck` checkbox next to the title mirrors it and toggles it. The
+    tests and the run logic read/write `self.check` through isChecked()/
+    setChecked(), and the card as a whole toggles it too. A stage that is off
+    shows no panel at all, so the options column only ever carries the
+    settings that are actually going to be applied.
     """
     changed = pyqtSignal()
 
@@ -74,6 +127,7 @@ class Stage(QWidget):
         super().__init__(parent)
         self.setObjectName("stage")
         self._icon_name = icon_name
+        self.title = title
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 8)
@@ -102,14 +156,16 @@ class Stage(QWidget):
         col.addWidget(self.desc_lbl)
         lay.addLayout(col, 1)
 
-        # Toggle switch (right).
+        # Logical switch (hidden, owns the state) + the visible checkbox that
+        # drives it. The card itself stays clickable to expand the options.
         self.check = QCheckBox()
         self.check.setObjectName("stageSwitch")
-        self.check.setFixedSize(34, 19)
-        self.check.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.check.setVisible(False)
         self.check.toggled.connect(self._on_toggled)
+        self._switch = _StageCheck()
+        self._switch.toggled.connect(self.check.setChecked)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        lay.addWidget(self.check, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self._switch, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # The options block, placed in the wide column by _build_preview.
         self.panel = QWidget()
@@ -142,6 +198,7 @@ class Stage(QWidget):
         self.panel.setVisible(False)
 
     def _on_toggled(self, _on):
+        self._switch.set_on(self.check.isChecked())
         self.setProperty("on", "true" if self.check.isChecked() else "false")
         self.style().unpolish(self)
         self.style().polish(self)
@@ -170,15 +227,8 @@ class Stage(QWidget):
             f"QLabel#stageTitle{{color:{t['text']};font-size:12px;"
             f"font-weight:600;background:transparent;}}"
             f"QLabel#stageDesc{{color:{t['dim']};font-size:10px;"
-            f"background:transparent;}}"
-            f"QCheckBox#stageSwitch{{background:transparent;}}"
-            f"QCheckBox#stageSwitch::indicator{{width:30px;height:17px;"
-            f"border-radius:9px;border:none;"
-            f"background:{t['line_strong']};}}"
-            f"QCheckBox#stageSwitch::indicator:hover{{"
-            f"background:{t['acc']};}}"
-            f"QCheckBox#stageSwitch::indicator:checked{{"
-            f"background:{t['acc']};}}")
+            f"background:transparent;}}")
+        self._switch.update()
         self.panel.setStyleSheet(
             f"QWidget#optCard{{background:{t['surface_3']};"
             f"border:1px solid {t['border']};border-radius:10px;}}"
@@ -227,7 +277,7 @@ class _Sheet(QWidget):
     is still pending is drawn as an empty well.
     """
     def __init__(self, number, slot_pages, params, eff_w, eff_h, pw, ph,
-                 full, booklet, marks_on, parent=None):
+                 full, booklet, marks_on, fmt_label="", parent=None):
         super().__init__(parent)
         self.number     = number
         self.slot_pages = slot_pages
@@ -236,6 +286,7 @@ class _Sheet(QWidget):
         self.pw, self.ph       = pw, ph
         self.full, self.booklet = full, booklet
         self.marks_on = marks_on
+        self._fmt_label = fmt_label
         self._pixmaps = {}
         (self.out_w, self.out_h, self.mt, self.mb, self.ml, self.mr,
          self.gh, self.gv, self.slot_w, self.slot_h, self.cols,
@@ -250,7 +301,12 @@ class _Sheet(QWidget):
         if pages:
             head += " · " + tr("Seiten {p0}").format(
                 p0=self._format_pages(pages))
-        return head
+        # The sheet's physical size in mm, with the paper-format label when it
+        # resolves to one (e.g. "Bogen 1 — 420×297 mm (A3)").
+        w = self.out_w / MM_TO_PT
+        h = self.out_h / MM_TO_PT
+        size = f" {w:.0f}×{h:.0f} mm{self._fmt_label}"
+        return head + " —" + size
 
     @staticmethod
     def _format_pages(pages):
@@ -426,10 +482,12 @@ class _SheetColumn(QScrollArea):
         self._full = (panel.st_arr.enabled() and panel.full_scale.isChecked()
                       and not self._booklet)
         marks_on = panel.st_marks.enabled() and panel.cut_marks.isChecked()
+        fmt_label = self._fmt_label()
 
         for number, slot_pages in enumerate(sheets, start=1):
             sheet = _Sheet(number, slot_pages, params, eff_w, eff_h, pw, ph,
-                           self._full, self._booklet, marks_on)
+                           self._full, self._booklet, marks_on,
+                           fmt_label=fmt_label)
             self._lay.addWidget(sheet)
             self._sheets.append(sheet)
         self._cap.setText(self._summary(marks_on))
@@ -437,9 +495,23 @@ class _SheetColumn(QScrollArea):
         self._lay.addStretch(1)
         QTimer.singleShot(0, self._schedule_visible)
 
+    def _fmt_label(self):
+        """The paper-format name in parentheses, e.g. "(A3)", when the sheet
+        format resolves to a named size — else "" (custom or a pseudo-entry
+        like "— Kein —" / the auto size). The dropdown label carries the
+        measurements after the name ("A3  (297x420mm)") — shown again next to
+        the already-printed sheet size that would be redundant, so only the
+        name is used."""
+        fmt = self._panel.sheet_fmt
+        if not fmt.is_custom() and fmt.special() is None:
+            return " (" + fmt.current_text().split("  (")[0] + ")"
+        return ""
+
     def _summary(self, marks_on):
         out_w, out_h = self._params[0], self._params[1]
-        parts = [f"{out_w/MM_TO_PT:.0f} × {out_h/MM_TO_PT:.0f} mm"]
+        size = f"{out_w/MM_TO_PT:.0f}×{out_h/MM_TO_PT:.0f} mm"
+        size += self._fmt_label()
+        parts = [size]
         if self._panel.st_arr.enabled():
             cols, rows = self._params[10], self._params[11]
             if self._booklet:
@@ -660,6 +732,14 @@ class LayoutPanel(BasePanel):
 
         self.log = LogAdapter()
 
+        # Summary chips above the run row: which stages are switched on, so the
+        # "Layout anwenden (n Stufen)" button's count is not the only place a
+        # glance can confirm what is about to be applied.
+        self._stage_summary = QLabel("")
+        self._stage_summary.setObjectName("stageSummary")
+        self._stage_summary.setWordWrap(True)
+        lay.addWidget(self._stage_summary)
+
         # The run row, card-aligned: Ausführen stretches to fill the width, a
         # narrow Stop sits beside it and only appears while a job runs.
         self.run_row = QWidget()
@@ -757,6 +837,10 @@ class LayoutPanel(BasePanel):
         self._opts_scroll.setStyleSheet(
             f"QScrollArea{{background:{t['panel_bg']};border:none;}}")
         self._sheetwrap.apply_theme()
+        # The summary chips above the run row read as a light, dimmed hint.
+        self._stage_summary.setStyleSheet(
+            f"QLabel#stageSummary{{color:{t['dim']};font-size:10px;"
+            f"padding:4px 2px 0 2px;background:transparent;}}")
         # The run row: a hairline above it sets it apart from the cards above,
         # so it reads as the row that acts on all of them.
         self.run_row.setStyleSheet(
@@ -777,17 +861,33 @@ class LayoutPanel(BasePanel):
         wrap = getattr(self, "_sheetwrap", None)
         if wrap is not None:
             wrap.rebuild()
-        any_on = (self.st_crop.enabled() or self.st_arr.enabled()
-                  or self.st_marks.enabled())
+        stages = [getattr(self, n, None)
+                  for n in ("st_crop", "st_arr", "st_marks")]
+        any_on = any(s is not None and s.enabled() for s in stages)
         # Ausführen stays truly inert, not merely styled to look that way,
         # while every stage is off — matching the preview's own "ändert
         # nichts" message instead of just echoing it.
         if hasattr(self, "run_btn"):
             self.run_btn.setEnabled(any_on)
+            self.run_btn.setText(self._stage_button_label())
+        if hasattr(self, "_stage_summary"):
+            on = [s.title for s in (self.st_crop, self.st_arr, self.st_marks)
+                  if s.enabled()]
+            self._stage_summary.setText(" · ".join(on))
+            self._stage_summary.setVisible(bool(on))
         # With nothing staged there are no settings to show, and 300 px of
         # empty column beside the preview is 300 px the preview should have.
         if hasattr(self, "_opts_scroll"):
             self._opts_scroll.setVisible(any_on)
+
+    def _enabled_stage_count(self):
+        return sum(s.enabled() for s in (self.st_crop, self.st_arr, self.st_marks))
+
+    def _stage_button_label(self):
+        n = self._enabled_stage_count()
+        count = tr("{p0} Stufe").format(p0=n) if n == 1 \
+            else tr("{p0} Stufen").format(p0=n)
+        return tr("Layout anwenden ({p0})").format(p0=count)
 
     def build_ui(self, layout):
         self._syncing = False
@@ -824,14 +924,43 @@ class LayoutPanel(BasePanel):
         self.crop_fmt.changed.connect(self._on_crop_format)
         self.st_crop.add(r(tr("Format"), self.crop_fmt))
 
-        # One margin per row, not the two-per-row grid the wide sidebar tools
-        # use: two labelled 64px spinboxes side by side do not fit in 224px,
-        # and this column already scrolls sideways as a last resort — better
-        # not to lean on that for four fields every stage opens with.
+        def margin_grid(pairs):
+            """Four labelled mm spins as a 2×2 grid (Oben|Unten / Links|Rechts)
+            instead of four stacked rows, with the sync checkbox below."""
+            g = QGridLayout()
+            g.setHorizontalSpacing(8)
+            g.setVerticalSpacing(6)
+            for i, (label, w) in enumerate(pairs):
+                r_, c_ = divmod(i, 2)
+                lb = QLabel(label); lb.setObjectName("dimLabel")
+                lb.setFixedWidth(54)
+                lb.setAlignment(Qt.AlignmentFlag.AlignRight
+                                | Qt.AlignmentFlag.AlignVCenter)
+                w.setFixedWidth(76)
+                g.addWidget(lb, r_, c_ * 2)
+                g.addWidget(w, r_, c_ * 2 + 1)
+            g.setColumnStretch(3, 1)
+            return g
+
+        # ── Section heading ────────────────────────────────────────────────
+        sec = QLabel(tr("Druckstufen"))
+        sec.setObjectName("sectionLabel")
+        sec.setContentsMargins(2, 4, 0, 2)
+        layout.addWidget(sec)
+
+        # ── Stage 1 · Zuschneiden / Skalieren ────────────────────────────────
+        self.st_crop = Stage(tr("Zuschneiden / Skalieren"),
+                             tr("Format · Ränder · Skalierung"), "crop")
+        self.st_crop.changed.connect(self._update_preview)
+
+        self.crop_fmt = PaperFormatSelector(before=[tr("— Kein —")])
+        self.crop_fmt.changed.connect(self._on_crop_format)
+        self.st_crop.add(r(tr("Format"), self.crop_fmt))
+
         self.ct, self.cb, self.cl, self.cr = mm(), mm(), mm(), mm()
-        for label, w in ((tr("Oben"), self.ct), (tr("Unten"), self.cb),
-                         (tr("Links"), self.cl), (tr("Rechts"), self.cr)):
-            self.st_crop.add(r(label, w))
+        self.st_crop.add(margin_grid(
+            ((tr("Oben"), self.ct), (tr("Unten"), self.cb),
+             (tr("Links"), self.cl), (tr("Rechts"), self.cr))))
 
         self.crop_sync = QCheckBox(tr("Alle Ränder gleich"))
         self.crop_sync.toggled.connect(self._on_crop_sync)
@@ -849,7 +978,7 @@ class LayoutPanel(BasePanel):
         self.st_crop.add(r(tr("Skalierung"), self.scale_pct))
 
         self.fit_content = QCheckBox(tr("Inhalt einpassen"))
-        self.fit_content.toggled.connect(self._update_preview)
+        self.fit_content.toggled.connect(self._on_fit_toggled)
         self.keep_ratio = QCheckBox(tr("Proportionen behalten"))
         self.keep_ratio.setChecked(True)
         self.keep_ratio.toggled.connect(self._update_preview)
@@ -859,6 +988,9 @@ class LayoutPanel(BasePanel):
         self.apply_all.toggled.connect(self._update_preview)
         for w in (self.fit_content, self.keep_ratio, self.apply_all):
             self.st_crop.add(w)
+        # Proportionen behalten only makes sense while Inhalt einpassen is on
+        # (it picks the scaling mode between the two aspect-ratio behaviours).
+        self._on_fit_toggled(self.fit_content.isChecked())
         layout.addWidget(self.st_crop)
 
         # ── Stage 2 · Anordnung ──────────────────────────────────────────────
@@ -904,12 +1036,14 @@ class LayoutPanel(BasePanel):
         self.mt, self.mb = mm(5, lo=0), mm(5, lo=0)
         self.ml, self.mr = mm(5, lo=0), mm(5, lo=0)
         self.gh, self.gv = mm(3, lo=0), mm(3, lo=0)
-        # No "Rand " prefix: they sit under the Anordnung heading already, and
-        # the repeated word cost more of a 224px row than it explained.
-        for label, w in ((tr("Oben"), self.mt), (tr("Unten"), self.mb),
-                         (tr("Links"), self.ml), (tr("Rechts"), self.mr),
-                         (tr("Abstand H"), self.gh), (tr("Abstand V"), self.gv)):
-            self.st_arr.add(r(label, w))
+        # The four margins as a 2×2 grid (Oben|Unten / Links|Rechts); the two
+        # gaps stay as single rows beneath. No "Rand " prefix: they sit under
+        # the Anordnung heading already.
+        self.st_arr.add(margin_grid(
+            ((tr("Oben"), self.mt), (tr("Unten"), self.mb),
+             (tr("Links"), self.ml), (tr("Rechts"), self.mr))))
+        self.st_arr.add(r(tr("Abstand H"), self.gh))
+        self.st_arr.add(r(tr("Abstand V"), self.gv))
 
         self.sync_margins = QCheckBox(tr("Alle Ränder gleich"))
         self.sync_gaps    = QCheckBox(tr("Beide Abstände gleich"))
@@ -973,6 +1107,15 @@ class LayoutPanel(BasePanel):
             w = self._src_row.itemAt(i).widget()
             if w is not None:
                 w.setVisible(not booklet)
+        self._update_preview()
+
+    def _on_fit_toggled(self, on):
+        # Proportionen behalten only makes sense while content is being fit:
+        # it picks between keep-aspect and stretch. Turn it off and disable it
+        # when Inhalt einpassen goes off.
+        if not on:
+            self.keep_ratio.setChecked(False)
+        self.keep_ratio.setEnabled(on)
         self._update_preview()
 
     def _on_crop_sync(self, on):

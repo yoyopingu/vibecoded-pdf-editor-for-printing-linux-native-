@@ -769,6 +769,12 @@ class MergeOrderWidget(QWidget):
         b.setMinimumHeight(28)
         return b
 
+    def _chevron(self, up, colour):
+        """The reorder arrow glyph in a colour — the up variant is the down
+        chevron turned round."""
+        ic = icon("chev", colour=colour)
+        return rotated(ic, 180) if up else ic
+
     def _setup(self, file_paths):
         # The layout below mirrors ManagePanel exactly (fixed title bar, scrollable
         # sidebar with the same margins/sections/helpers, grid on the right) — this
@@ -991,9 +997,20 @@ class MergeOrderWidget(QWidget):
         if hasattr(self, "_zoom_hint_lbl"):
             self._zoom_hint_lbl.setStyleSheet(
                 f"color:{t['vdim']};font-size:9px;background:transparent;")
+        # Hoch/Runter must LOOK disabled: a flat ground, dimmed text and a
+        # quiet border that match the sidebar, and an icon dimmed to match. The
+        # shared #secondaryBtn QSS has no :disabled rule, so without this a
+        # disabled reorder button rendered identically to an enabled one.
+        if hasattr(self, "_btn_up"):
+            _mv = (f"QPushButton#secondaryBtn:disabled{{"
+                   f"background:{t['sidebar_bg']};color:{t['vdim']};"
+                   f"border:1px solid {t['border']};border-radius:7px;}}")
+            for b, up in ((self._btn_up, True), (self._btn_down, False)):
+                b.setStyleSheet(_mv)
+                b.setIcon(self._chevron(up, t['dim'] if b.isEnabled() else t['vdim']))
         if hasattr(self, "status"):
             self.status.setStyleSheet(
-                f"color:{t['vdim']};font-size:9px;min-height:20px;background:transparent;")
+                f"color:{t['dim']};font-size:9px;min-height:20px;background:transparent;")
 
     FILE_KINDS = {
         ".pdf":"PDF",".jpg":"JPEG",".jpeg":"JPEG",".png":"PNG",
@@ -1026,6 +1043,8 @@ class MergeOrderWidget(QWidget):
             return
         self._btn_up.setEnabled(min(sel) > 0)
         self._btn_down.setEnabled(max(sel) < n - 1)
+        for b, up in ((self._btn_up, True), (self._btn_down, False)):
+            b.setIcon(self._chevron(up, _TV['dim'] if b.isEnabled() else _TV['vdim']))
 
     def _apply_sel_edit(self):
         positions = _parse_positions(self.sel_edit.text(), len(self._grid.get_paths()))

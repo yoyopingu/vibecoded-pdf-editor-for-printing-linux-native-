@@ -232,7 +232,9 @@ class PrintDialog(QDialog):
             "QWidget#printSettingsPane{background:transparent;}")
         scroll.setWidget(right)
         rl = QVBoxLayout(right)
-        rl.setContentsMargins(18, 14, 18, 14)
+        # Extra bottom padding (~20px) so the last row (AUSGABE/Duplex) can
+        # scroll fully clear of the viewport edge instead of clipping halfway.
+        rl.setContentsMargins(18, 14, 18, 34)
         rl.setSpacing(4)
 
         n = len(self.model.order)
@@ -1128,6 +1130,13 @@ class PrintDialog(QDialog):
         self.printer_combo.blockSignals(False)
 
         self.printer_combo.currentIndexChanged.connect(self._on_printer_changed)
+        # The paper list is populated unconditionally once the printer (or
+        # "none") is known — not only on a selection change. On a cold start
+        # with no printers installed the placeholder "Drucker werden geladen…"
+        # and the "Kein Drucker gefunden" entry both carry item-data "none", so
+        # the change-check below would find nothing moved and skip the paper
+        # combo entirely, leaving it empty on the first open.
+        self._populate_paper_list()
         # Only when the selection actually moved, and only if the user has not
         # already made a choice. A refresh that finds the same printer selected
         # has nothing to apply; one that finds the selected printer gone would
@@ -1151,75 +1160,94 @@ class PrintDialog(QDialog):
         from tools.paper import label, sizes
         return [(label(name), name) for name in sizes()]
 
+    def _populate_paper_list(self):
+        """Füllt die Papier-Auswahl für den aktuell gewählten Drucker.
+
+        Läuft jedes Mal, sobald der Drucker (oder "none") bekannt ist — auch
+        wenn sich die Auswahl nicht geändert hat. Vorher blieb die Liste beim
+        ersten Öffnen ohne installierte Drucker leer, weil der Platzhalter
+        "Drucker werden geladen…" und "Kein Drucker gefunden" beide die Daten
+        "none" trugen und der Änderungs-Check in _apply_printer_list übersprungen
+        wurde. Auch bei "none" wird die eingebaute Liste angeboten, damit das
+        Feld nie leer ist.
+        """
+        from PyQt6.QtPrintSupport import QPrinterInfo
+        from PyQt6.QtGui import QPageSize
+
+        printer_name = self.printer_combo.currentData()
+        have_info = printer_name and printer_name not in ("lp", "none")
+        info = QPrinterInfo.printerInfo(printer_name) if have_info else None
+        valid = info is not None and not info.isNull()
+        _qt_to_lp = {v: k for k, v in _qt_page_sizes().items()}
+
+        prev_paper = self.paper_combo.currentData()
+        self.paper_combo.blockSignals(True)
+        self.paper_combo.clear()
+
+        # First, and selected by default: leave the paper alone. A press
+        # with SRA3 loaded was being told "media=A4" on every job, because
+        # this list had no way to say "the one that is already in there" —
+        # and, for a driverless queue that reports no sizes at all, no way
+        # to name SRA3 either. The colour control has worked this way all
+        # along; the paper had no equivalent.
+        # Not "Drucker-Standard": that reads as "look up the printer's
+        # default size and send it", which is the thing this exists to
+        # stop — and was, until recently, exactly what happened.
+        self.paper_combo.addItem(tr("Wie im Drucker eingestellt"),
+                                 PAPER_PRINTER_DEFAULT)
+
+        populated = False
+        if valid:
+            try:
+                supported = info.supportedPageSizes()
+                if supported:
+                    seen = set()
+                    for ps in supported:
+                        key = _qt_to_lp.get(ps.id(), ps.name())
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        mm = ps.size(QPageSize.Unit.Millimeter)
+                        label = f"{ps.name()}  ({mm.width():.0f} × {mm.height():.0f} mm)"
+                        self.paper_combo.addItem(label, key)
+                    populated = True
+            except Exception:
+                logging.debug("printer reported no usable page sizes; "
+                              "falling back to the built-in list", exc_info=True)
+
+        if not populated:
+            for label, key in self._FALLBACK_PAPERS:
+                self.paper_combo.addItem(label, key)
+
+        # Last: a size no list here has. A driverless press reports nothing
+        # to enumerate, so without this there is no way to name the sheet
+        # it is actually running.
+        self.paper_combo.addItem(tr("Benutzerdefiniert…"), self.PAPER_CUSTOM)
+
+        # Stay on whatever was chosen before; otherwise leave the paper to
+        # the printer, which is the first entry. Qt's defaultPageSize() is
+        # deliberately not consulted any more — it answered A4 for a queue
+        # that reports no page sizes whatsoever, which is a guess wearing
+        # the printer's authority.
+        target_paper = prev_paper
+        if target_paper:
+            idx = self.paper_combo.findData(target_paper)
+            if idx >= 0:
+                self.paper_combo.setCurrentIndex(idx)
+        self.paper_combo.blockSignals(False)
+
     def _on_printer_changed(self):
         """Aktualisiert Papierformat, Duplex und Farbe basierend auf dem gewählten Drucker."""
         try:
             from PyQt6.QtPrintSupport import QPrinterInfo, QPrinter
-            from PyQt6.QtGui import QPageSize
 
             printer_name = self.printer_combo.currentData()
             have_info = printer_name and printer_name not in ("lp", "none")
             info = QPrinterInfo.printerInfo(printer_name) if have_info else None
             valid = info is not None and not info.isNull()
 
-            _qt_to_lp = {v: k for k, v in _qt_page_sizes().items()}
-
             # ── Paper sizes ───────────────────────────────────────────────────
-            prev_paper = self.paper_combo.currentData()
-            self.paper_combo.blockSignals(True)
-            self.paper_combo.clear()
-
-            # First, and selected by default: leave the paper alone. A press
-            # with SRA3 loaded was being told "media=A4" on every job, because
-            # this list had no way to say "the one that is already in there" —
-            # and, for a driverless queue that reports no sizes at all, no way
-            # to name SRA3 either. The colour control has worked this way all
-            # along; the paper had no equivalent.
-            # Not "Drucker-Standard": that reads as "look up the printer's
-            # default size and send it", which is the thing this exists to
-            # stop — and was, until recently, exactly what happened.
-            self.paper_combo.addItem(tr("Wie im Drucker eingestellt"),
-                                     PAPER_PRINTER_DEFAULT)
-
-            populated = False
-            if valid:
-                try:
-                    supported = info.supportedPageSizes()
-                    if supported:
-                        seen = set()
-                        for ps in supported:
-                            key = _qt_to_lp.get(ps.id(), ps.name())
-                            if key in seen:
-                                continue
-                            seen.add(key)
-                            mm = ps.size(QPageSize.Unit.Millimeter)
-                            label = f"{ps.name()}  ({mm.width():.0f} × {mm.height():.0f} mm)"
-                            self.paper_combo.addItem(label, key)
-                        populated = True
-                except Exception:
-                    logging.debug("printer reported no usable page sizes; "
-                                  "falling back to the built-in list", exc_info=True)
-
-            if not populated:
-                for label, key in self._FALLBACK_PAPERS:
-                    self.paper_combo.addItem(label, key)
-
-            # Last: a size no list here has. A driverless press reports nothing
-            # to enumerate, so without this there is no way to name the sheet
-            # it is actually running.
-            self.paper_combo.addItem(tr("Benutzerdefiniert…"), self.PAPER_CUSTOM)
-
-            # Stay on whatever was chosen before; otherwise leave the paper to
-            # the printer, which is the first entry. Qt's defaultPageSize() is
-            # deliberately not consulted any more — it answered A4 for a queue
-            # that reports no page sizes whatsoever, which is a guess wearing
-            # the printer's authority.
-            target_paper = prev_paper
-            if target_paper:
-                idx = self.paper_combo.findData(target_paper)
-                if idx >= 0:
-                    self.paper_combo.setCurrentIndex(idx)
-            self.paper_combo.blockSignals(False)
+            self._populate_paper_list()
 
             # ── Duplex ────────────────────────────────────────────────────────
             # Qt's supportedDuplexModes()/defaultDuplexMode() is UNRELIABLE for
