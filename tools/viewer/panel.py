@@ -8,10 +8,10 @@ large PDF is hundreds of megabytes, so a tab that is gone must not keep one.
 """
 import os, shutil, atexit, logging
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-                             QTabBar, QStackedWidget, QFileDialog,
+                             QTabBar, QStackedWidget, QFileDialog, QToolButton,
                              QApplication, QLineEdit, QMenu)
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent, QTimer, QSize
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent, QTimer, QSize, QPoint
+from PyQt6.QtGui import QKeySequence, QShortcut, QCursor
 from tools.app_state import AppState, theme_color
 from tools.branding import APP_NAME
 from tools.i18n import tr
@@ -71,11 +71,60 @@ class _TabHost(QObject):
         self._bar = bar
         self._pages = pages
         bar.currentChanged.connect(self._on_current_changed)
+        # The per-tab close cross is a real QToolButton (styling the
+        # QTabBar::close-button subcontrol makes Qt render nothing). It is shown
+        # on the active tab and on hover; this filter keeps that in step with the
+        # pointer. The bar is only ever filtered once; each button gets the same
+        # filter so a pointer sitting on the button itself still counts as
+        # hovering its tab.
+        bar.installEventFilter(self)
+        bar.currentChanged.connect(self._refresh_close_visibility)
 
     def _on_current_changed(self, idx):
         self.currentChanged.emit(idx)
         if 0 <= idx < self._pages.count():
             self._pages.setCurrentIndex(idx)
+        self._refresh_close_visibility()
+
+    def eventFilter(self, obj, event):
+        if obj is self._bar or isinstance(obj, QToolButton):
+            if event.type() in (QEvent.Type.Enter, QEvent.Type.Leave,
+                                QEvent.Type.MouseMove):
+                self._refresh_close_visibility()
+        return super().eventFilter(obj, event)
+
+    def _hovered_tab(self):
+        """The tab under the pointer, -1 when none. Works whether the pointer
+        rests on the bar or on a close button (a child, still inside the bar's
+        rect), so tabAt resolves it either way."""
+        pos = self._bar.mapFromGlobal(QCursor.pos())
+        if not self._bar.rect().contains(pos):
+            return -1
+        return self._bar.tabAt(pos)
+
+    def _refresh_close_visibility(self):
+        """Close cross: always on the active tab, on hover elsewhere."""
+        cur = self._bar.currentIndex()
+        hover = self._hovered_tab()
+        for i in range(self._bar.count()):
+            b = self._bar.tabButton(i, QTabBar.ButtonPosition.RightSide)
+            if b is not None:
+                b.setVisible(i == cur or i == hover)
+
+    def _mk_close_button(self):
+        """A 16 px close cross for one tab. It closes whichever tab it currently
+        sits on (tabAt at click time), so it stays correct through reorders and
+        removals without any index bookkeeping."""
+        btn = QToolButton(self._bar)
+        btn.setObjectName("tabCloseBtn")
+        btn.setIcon(icon("close", colour="#8892a4", size=14))
+        btn.setIconSize(QSize(14, 14))
+        btn.setFixedSize(18, 18)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(lambda: self._bar.tabCloseRequested.emit(
+            self._bar.tabAt(btn.mapTo(self._bar, QPoint(0, 0)))))
+        btn.installEventFilter(self)
+        return btn
 
     # surface -----------------------------------------------------------------
 
@@ -92,6 +141,9 @@ class _TabHost(QObject):
         # expect of QTabWidget: the tab they just added is the active page.
         self._pages.setCurrentIndex(idx)
         self._bar.setTabData(idx, w)
+        self._bar.setTabButton(idx, QTabBar.ButtonPosition.RightSide,
+                               self._mk_close_button())
+        self._refresh_close_visibility()
         return idx
     def removeTab(self, i):
         w = self._pages.widget(i)
@@ -102,6 +154,7 @@ class _TabHost(QObject):
         if i < self._pages.count():
             self._pages.removeWidget(w)
         self._bar.removeTab(i)
+        self._refresh_close_visibility()
     def setTabText(self, i, t): self._bar.setTabText(i, t)
     def tabText(self, i): return self._bar.tabText(i)
     def setMovable(self, b): self._bar.setMovable(b)
@@ -446,8 +499,8 @@ class PageViewerPanel(QWidget):
         self._new_btn.setObjectName("newtabBtn")
         self._new_btn.setIcon(icon("plus", colour=theme_color("DIM"), size=16))
         self._new_btn.setIconSize(QSize(16, 16))
-        self._new_btn.setFixedSize(30, 30)
-        self._new_btn.setToolTip(tr("Datei öffnen") + "  (Strg+O)")
+        self._new_btn.setFixedSize(28, 28)
+        self._new_btn.setToolTip(tr("Neuer Tab"))
         self._new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._new_btn.clicked.connect(self._open_multi_dialog)
         dr_lay.addWidget(self._new_btn)

@@ -49,6 +49,24 @@ def _build_style(dark: bool) -> str:
     # stage sits on. Dark needs more of it than light to read against its
     # surface.
     _ACC_SOFT = f"rgba({_r},{_g},{_b},{0.16 if dark else 0.12})"
+    # A disabled input's border fades toward its own ground — the enabled line
+    # is already near the field background in dark, so a brighter grey (which
+    # was used once) only made a disabled field MORE outlined than a live one.
+    _DIS_LINE = "#28303f" if dark else "#e6eaf2"
+    # The tab strip's own four colours, theme-specific so the ACTIVE tab is
+    # unmistakable (the audit found active vs inactive ~4% luminance apart in
+    # dark and inactive text ~3.2:1): a clearly lighter raised fill for the
+    # active tab, a brighter inactive text that clears WCAG AA, and neutral
+    # hover fills that never read as the active one.
+    _TAB_INACTIVE_TEXT = "#aab3c2" if dark else "#4b5466"
+    _TAB_HOV           = "#242b38" if dark else "#e4e8ef"
+    _TAB_ACTIVE        = "#38445a" if dark else "#ffffff"
+    _CLOSE_HOV         = "#2c3442" if dark else "#d7dce5"
+    # The "+" new-tab button's hover fill: clearly lighter than its SURFACE_3
+    # ground in dark and clearly darker in light, so it responds under the
+    # pointer in either theme. A dedicated value — no existing surface sits
+    # far enough off SURFACE_3 in both directions.
+    _NEWTAB_HOV        = "#343e52" if dark else "#dde2ea"
 
     return f"""
 * {{
@@ -241,6 +259,16 @@ QLineEdit:focus {{
     border: 2px solid {_ACC};
     padding: 4px 9px;
 }}
+/* A disabled field must LOOK disabled: its text and placeholder dim to a
+   mid-grey and its border fades toward the field ground. Without this the
+   QSS colour/border above override the palette's Disabled group, so a
+   disabled QLineEdit rendered identically to an enabled one — which is
+   exactly what the print dialog's range field looked like. */
+QLineEdit:disabled {{
+    color: {_BTN_DIS_T};
+    background: {_BTN_DIS};
+    border: 1px solid {_DIS_LINE};
+}}
 /* Combo boxes get their height from min-height, NEVER from vertical padding:
    Qt sizes the drop-down list from the combo's content height, so padding here
    made every popup exactly one row too short — a two-option dropdown had to be
@@ -430,11 +458,11 @@ QTabWidget::pane {{
 }}
 QTabBar {{
     background: {_TAB_B};
-    min-height: 44px; max-height: 44px;
+    min-height: 40px; max-height: 40px;
 }}
 QTabBar::tab {{
-    background: {_S2}; color: {_DIM};
-    padding: 0px 10px 0px 16px;
+    background: {_S2}; color: {_TAB_INACTIVE_TEXT};
+    padding: 0px 12px 0px 12px;
     border: none;
     border-top: 2px solid transparent;
     border-top-left-radius: 0px;
@@ -443,27 +471,28 @@ QTabBar::tab {{
     border-bottom-right-radius: 9px;
     margin-left: 3px;
     min-width: 90px; font-size: 12.5px;
-    min-height: 42px;
+    min-height: 34px;
 }}
 QTabBar::tab:first {{ margin-left: 0; }}
 /* Inactive tabs are a raised surface of their own so they read as tabs, not
    as part of the docbar band behind them (user issue #8 — previously the
    inactive fill was the rail's own colour and the tabs merged with it). */
-QTabBar::tab:hover:!selected {{ background: {_S3}; color: {_TEXT}; }}
+QTabBar::tab:hover:!selected {{ background: {_TAB_HOV}; color: {_TEXT}; }}
 QTabBar::tab:selected {{
-    background: {_S3}; color: {_TEXT};
+    background: {_TAB_ACTIVE}; color: {_TEXT};
     font-weight: 700;
     border-top: 2px solid {_ACC};
 }}
-QTabBar::close-button {{
-    subcontrol-position: right;
-    width: 20px; height: 20px;
-    border-radius: 5px;
+/* The per-tab close cross is a real QToolButton mounted on each tab (not the
+   QSS subcontrol: styling QTabBar::close-button makes Qt draw only what the
+   sheet specifies and, with no image, render nothing). It is shown on the
+   active tab and on hover by the tab host. */
+QToolButton#tabCloseBtn {{
+    border: none; border-radius: 4px;
     background: transparent;
-    margin-left: 4px;
 }}
-QTabBar::close-button:hover {{ background: {_S3}; }}
-QTabBar::close-button:pressed {{ background: {_S3}; }}
+QToolButton#tabCloseBtn:hover {{ background: {_CLOSE_HOV}; }}
+QToolButton#tabCloseBtn:pressed {{ background: {_CLOSE_HOV}; }}
 
 /* ── The document row ───────────────────────────────────── */
 /* The tab bar IS the row: the actions ride in its right-hand corner, so one
@@ -473,12 +502,19 @@ QWidget#docRow {{
     background: {_TAB_B};
     border-bottom: 1px solid {_LSTRONG};
 }}
+/* The "+" new-tab button sits on the doc row beside the last tab and has to
+   read as a button there. Its earlier SURFACE_2 fill + LINE border were within
+   a few percent of the row's TAB_BAR in both themes (1.09:1 dark, 1.08:1 light)
+   and the sheet-edge equalled the fill, so it rendered as a bare glyph on the
+   row. A raised SURFACE_3 fill (one step off the row) and a strong 1px
+   LINE_STRONG edge give it a card that actually reads as clickable. */
 QPushButton#newtabBtn {{
-    background: transparent; color: {_DIM};
-    border: none; border-radius: 7px;
-    font-size: 14px; min-width: 30px;
+    background: {_S3}; color: {_DIM};
+    border: 1px solid {_LSTRONG}; border-radius: 7px;
+    font-size: 14px; min-width: 26px; min-height: 26px;
 }}
-QPushButton#newtabBtn:hover {{ background: {_S3}; color: {_TEXT}; }}
+QPushButton#newtabBtn:hover {{ background: {_NEWTAB_HOV}; border-color: {_ACC}; color: {_TEXT}; }}
+QPushButton#newtabBtn:pressed {{ background: {_SEL}; }}
 QPushButton#docBtn {{
     background: {_S2}; color: {_TEXT};
     border: 1px solid {_LINE}; border-radius: 7px;

@@ -530,6 +530,7 @@ _EN: dict[str, str] = {
     "PDF (*.pdf)": "PDF (*.pdf)",
     "Python-Dateien (*.py)": "Python files (*.py)",
     "Mehrere PDFs öffnen": "Open multiple PDFs",
+    "Neuer Tab": "New tab",
     "Datei öffnen": "Open file",
     "PDF(s) einfügen": "Insert PDF(s)",
     "PDFs einfügen": "Insert PDFs",
