@@ -113,7 +113,8 @@ class PrintDialog(QDialog):
         self.pdf_path = pdf_path
         self.model    = model
         self._progress = None       # transfer-progress popup while a job spools
-        self.setWindowTitle(tr("Drucken"))
+        self.setWindowTitle(tr("Drucken — {name}").format(
+            name=os.path.basename(self.pdf_path)))
         # The minimum must fit the settings pane's natural height above the
         # pinned action bar. Set too short, the bottom rows (Kopien, Farbe)
         # land below the scroll viewport and sit hidden behind the footer —
@@ -239,8 +240,10 @@ class PrintDialog(QDialog):
 
         n = len(self.model.order)
 
-        # Title — filename, truncated with ellipsis if too long
-        title = QLabel(os.path.basename(self.pdf_path))
+        # Title — "Drucken — <filename>" (the concept's dialog title), the
+        # filename truncated with ellipsis if too long.
+        title = QLabel(tr("Drucken — {name}").format(
+            name=os.path.basename(self.pdf_path)))
         title.setStyleSheet(
             f"font-size:13px;font-weight:bold;color:{_TV['text']};"
             f"background:transparent;")
@@ -327,13 +330,12 @@ class PrintDialog(QDialog):
 
         # ── SEITENHANDHABUNG ─────────────────────────────────────────────────
         rl.addWidget(_sec(tr("SEITENHANDHABUNG")))
-        pg = QGridLayout()
-        pg.setHorizontalSpacing(8)
-        pg.setVerticalSpacing(4)
-        pg.setColumnMinimumWidth(0, 145)
-        pg.setColumnStretch(1, 1)
 
-        pg.addWidget(_lbl(tr("Skalierung:")), 0, 0)
+        # Skalierung: label + the three modes stacked (Feste Größe carries %).
+        scale_row = QHBoxLayout()
+        scale_row.setContentsMargins(0, 0, 0, 0)
+        scale_row.setSpacing(8)
+        scale_row.addWidget(_lbl(tr("Skalierung:")))
 
         # On show, not behind a dropdown: three settings that decide how big the
         # job prints, one click each instead of two. Radiopills rather than tick
@@ -375,27 +377,43 @@ class PrintDialog(QDialog):
         fixed_row.addStretch()
         scale_col.addLayout(fixed_row)
         scale_col.addWidget(self.scale_shrink)
-        pg.addLayout(scale_col, 0, 1)
+        scale_row.addLayout(scale_col, 1)
         self._scale_group.idToggled.connect(lambda _i, _on: self._sync_scale_pct())
         self._sync_scale_pct()
+        rl.addLayout(scale_row)
 
         self._margin_lbl = QLabel("")
         self._margin_lbl.setStyleSheet(
             f"font-size:10px;color:{_TV['dim']};background:transparent;")
         self._margin_lbl.setWordWrap(True)
         self._margin_lbl.setMinimumHeight(28)
-        pg.addWidget(self._margin_lbl, 1, 0, 1, 2)
+        rl.addWidget(self._margin_lbl)
 
-        pg.addWidget(_lbl(tr("Ausrichtung:")), 2, 0)
-        self.orient_combo = QComboBox()
-        self.orient_combo.addItems(
-            [tr("Automatisch"), tr("Hochformat"), tr("Querformat")])
-        pg.addWidget(self.orient_combo, 2, 1)
+        # The concept's two-column form rows: two labelled controls side by side
+        # (Papier|Fach, Kopien|Farbe, Ausrichtung). A right-hand cell may be
+        # empty — the concept pairs Ausrichtung with a blank slot.
+        def _two_row(left_lbl, left_w, right_lbl, right_w):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(12)
+            for lbl, w in ((left_lbl, left_w), (right_lbl, right_w)):
+                g = QGridLayout()
+                g.setContentsMargins(0, 0, 0, 0)
+                g.setHorizontalSpacing(8); g.setVerticalSpacing(4)
+                g.setColumnMinimumWidth(0, 70); g.setColumnStretch(1, 1)
+                g.addWidget(_lbl(lbl), 0, 0)
+                if w is not None:
+                    g.addWidget(w, 0, 1)
+                row.addLayout(g, 1)
+            return row
 
-        pg.addWidget(_lbl(tr("Papier:")), 3, 0)
-        paper_row = QHBoxLayout()
-        paper_row.setContentsMargins(0, 0, 0, 0)
-        paper_row.setSpacing(8)
+        # Papier | Fach (tray) — the tray sits beside the paper, not on its own
+        # line below, per the concept's dlg-2col.
+        paper_wrap = QWidget()
+        paper_wrap.setStyleSheet("background:transparent;")
+        pw = QHBoxLayout(paper_wrap)
+        pw.setContentsMargins(0, 0, 0, 0)
+        pw.setSpacing(8)
         self.paper_combo = QComboBox()
         self.paper_combo.setToolTip(tr(
             "Drucker-Standard lässt das Papier so, wie die Warteschlange es "
@@ -404,7 +422,7 @@ class PrintDialog(QDialog):
             "Eine Größe hier zu wählen überschreibt das. Wird eine "
             "kleinere genannt als eingelegt ist, wird nur diese Fläche "
             "bedruckt; wird eine größere genannt, verkleinert der Drucker."))
-        paper_row.addWidget(self.paper_combo, 1)
+        pw.addWidget(self.paper_combo, 1)
         # Two boxes for a size nobody's list has. Hidden until "Benutzer-
         # definiert" is chosen, because that is the only time they mean
         # anything and the row is tight enough already.
@@ -417,18 +435,14 @@ class PrintDialog(QDialog):
         self._paper_x = QLabel("×")
         for w in (self.paper_w_mm, self._paper_x, self.paper_h_mm):
             w.setVisible(False)
-            paper_row.addWidget(w)
+            pw.addWidget(w)
         self.paper_combo.currentIndexChanged.connect(self._sync_custom_paper)
         for box in (self.paper_w_mm, self.paper_h_mm):
             box.valueChanged.connect(self._sync_preview)
-        pg.addLayout(paper_row, 3, 1)
 
         # Which tray to draw from. The choices come from the queue itself, and
-        # a printer that offers only one is not asked about — see
-        # _apply_paper_sources. "Drucker-Standard" sends no tray at all, the
-        # same convention the colour selector uses and the one every native
-        # dialog follows.
-        pg.addWidget(_lbl(tr("Papierfach:")), 4, 0)
+        # a printer that offers only one is not asked about. "Drucker-Standard"
+        # sends no tray at all, the same convention the colour selector uses.
         self.source_combo = QComboBox()
         self.source_combo.addItem(tr("Drucker-Standard"), None)
         self.source_combo.setToolTip(tr(
@@ -437,43 +451,28 @@ class PrintDialog(QDialog):
             "entscheidet."))
         self.source_combo.setEnabled(False)
         self._source_keyword = None      # set once the queue has been asked
-        pg.addWidget(self.source_combo, 4, 1)
 
-        # Asking CUPS what the queue defaults to happens in the background, and
-        # the user may well have changed something by the time it answers. This
-        # says whether they have, so the answer fills in blanks rather than
-        # overwriting a deliberate choice. _applying suppresses it while the
-        # dialog is setting the same widgets itself.
-        self._settings_touched = False
-        self._applying = False
+        rl.addLayout(_two_row(tr("Papier:"), paper_wrap,
+                              tr("Fach:"), self.source_combo))
 
-        rl.addLayout(pg)
-
-        # Kopien + Farbe: a two-column row (the concept's Seitenhandhabung
-        # 2-col) — Kopien moved up out of AUSGABE to sit near the top.
-        kf = QGridLayout()
-        kf.setHorizontalSpacing(8)
-        kf.setVerticalSpacing(4)
-        kf.setColumnMinimumWidth(0, 145)
-        kf.setColumnStretch(1, 1)
-
-        kf.addWidget(_lbl(tr("Kopien:")), 0, 0)
-        copies_row = QHBoxLayout()
-        copies_row.setContentsMargins(0, 0, 0, 0)
-        copies_row.setSpacing(8)
+        # Kopien | Farbe — a two-column row; Kopien carries the collate box.
+        copies_wrap = QWidget()
+        copies_wrap.setStyleSheet("background:transparent;")
+        cw = QHBoxLayout(copies_wrap)
+        cw.setContentsMargins(0, 0, 0, 0)
+        cw.setSpacing(8)
         self.copies_spin = QSpinBox()
         self.copies_spin.setRange(1, 999)
         self.copies_spin.setValue(1)
         self.copies_spin.setFixedWidth(60)
-        copies_row.addWidget(self.copies_spin)
-        self.collate_check = QCheckBox(tr("Sortieren"))
-        self.collate_check.setToolTip(tr("1,2,3 – 1,2,3 (sortiert) statt 1,1,1 – 2,2,2 (gebündelt)"))
+        cw.addWidget(self.copies_spin)
+        self.collate_check = QCheckBox(tr("Sortieren (1,2,3 / 1,2,3)"))
+        self.collate_check.setToolTip(tr(
+            "1,2,3 – 1,2,3 (sortiert) statt 1,1,1 – 2,2,2 (gebündelt)"))
         self.collate_check.setChecked(True)
-        copies_row.addWidget(self.collate_check)
-        copies_row.addStretch()
-        kf.addLayout(copies_row, 0, 1)
+        cw.addWidget(self.collate_check)
+        cw.addStretch()
 
-        kf.addWidget(_lbl(tr("Farbe:")), 1, 0)
         self.color_combo = QComboBox()
         # "Drucker-Standard" sends no colour option at all, so the queue's own
         # setting decides — that is what lets a job be re-routed or configured
@@ -485,9 +484,24 @@ class PrintDialog(QDialog):
             "Drucker-Standard: keine Vorgabe senden — der Drucker bzw. die "
             "Warteschlange entscheidet.\n"
             "Die Farbinformation bleibt in jedem Fall in der Datei erhalten."))
-        kf.addWidget(self.color_combo, 1, 1)
 
-        rl.addLayout(kf)
+        rl.addLayout(_two_row(tr("Kopien:"), copies_wrap,
+                              tr("Farbe:"), self.color_combo))
+
+        # Ausrichtung — its own two-column row (right half empty, per concept).
+        self.orient_combo = QComboBox()
+        self.orient_combo.addItems(
+            [tr("Automatisch"), tr("Hochformat"), tr("Querformat")])
+        rl.addLayout(_two_row(tr("Ausrichtung:"), self.orient_combo, "", None))
+
+        # Asking CUPS what the queue defaults to happens in the background, and
+        # the user may well have changed something by the time it answers. This
+        # says whether they have, so the answer fills in blanks rather than
+        # overwriting a deliberate choice. _applying suppresses it while the
+        # dialog is setting the same widgets itself.
+        self._settings_touched = False
+        self._applying = False
+
         rl.addWidget(_sep())
 
         # ── AUSGABE (Duplex) ─────────────────────────────────────────────────
@@ -537,6 +551,25 @@ class PrintDialog(QDialog):
         # actually need; the bar is this tall either way, empty or not.
         self.status_lbl.setMinimumHeight(30)
         bl.addWidget(self.status_lbl)
+
+        # Printer-status line with a status dot — the concept's footer dots
+        # ("Drucker bereit", "Fach 2 leer", dpi warning). This holds the single
+        # printer-status light; the font/range warnings live in status_lbl above.
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(6)
+        self._status_dot = QLabel("")
+        self._status_dot.setFixedSize(8, 8)
+        self._status_dot.setStyleSheet(
+            f"background:{_TV['dim']};border-radius:4px;")
+        status_row.addWidget(self._status_dot)
+        self.printer_status_lbl = QLabel("")
+        self.printer_status_lbl.setStyleSheet(
+            f"color:{_TV['dim']};background:transparent;font-size:11px;")
+        status_row.addWidget(self.printer_status_lbl)
+        status_row.addStretch()
+        bl.addLayout(status_row)
+        self.printer_status_lbl.setText(tr("Drucker werden geladen…"))
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
@@ -751,9 +784,10 @@ class PrintDialog(QDialog):
         color = self.color_combo.currentText()
         sides = (tr("beidseitig") if self.duplex_check.isChecked()
                  else tr("einseitig"))
+        cw = tr("Kopie") if copies == 1 else tr("Kopien")
         self.summary_lbl.setText(tr(
-            "{pages} Seiten · {copies} Kopie(n) · {color} · {sides}").format(
-                pages=count, copies=copies, color=color, sides=sides))
+            "{pages} Seiten · {copies} {cw} · {color} · {sides}").format(
+                pages=count, copies=copies, cw=cw, color=color, sides=sides))
 
     def _load_printers(self):
         """Populate the printer combo.
@@ -1146,6 +1180,25 @@ class PrintDialog(QDialog):
         if (self.printer_combo.currentData() != was_selected
                 and not self._settings_touched):
             self._on_printer_changed()
+        # The status dot lives only on the real dialog; the printer-list unit
+        # test drives _apply_printer_list on a minimal double that has no footer.
+        if hasattr(self, "_status_dot"):
+            self._update_printer_status()
+
+    def _update_printer_status(self):
+        """The footer's status dot + line, mirroring the concept.
+
+        A printer is present and selectable -> green "Drucker bereit"; only the
+        "none" placeholder (nothing installed) shows the amber no-printer note.
+        """
+        if self.printer_combo.currentData() == "none":
+            self._status_dot.setStyleSheet(
+                f"background:{_TV['warn']};border-radius:4px;")
+            self.printer_status_lbl.setText(tr("Kein Drucker gefunden"))
+        else:
+            self._status_dot.setStyleSheet(
+                f"background:{_TV['ok']};border-radius:4px;")
+            self.printer_status_lbl.setText(tr("Drucker bereit"))
 
     # Fallback paper list used when printer reports no supported sizes
     @property

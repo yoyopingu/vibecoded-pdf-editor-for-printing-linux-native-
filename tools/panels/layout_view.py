@@ -277,7 +277,8 @@ class _Sheet(QWidget):
     is still pending is drawn as an empty well.
     """
     def __init__(self, number, slot_pages, params, eff_w, eff_h, pw, ph,
-                 full, booklet, marks_on, fmt_label="", parent=None):
+                 full, booklet, marks_on, fmt_label="", preview_scale=None,
+                 parent=None):
         super().__init__(parent)
         self.number     = number
         self.slot_pages = slot_pages
@@ -288,6 +289,9 @@ class _Sheet(QWidget):
         self.marks_on = marks_on
         self._fmt_label = fmt_label
         self._pixmaps = {}
+        # Pixels per point from the active tab's Preview (see LayoutPanel.
+        # _preview_scale). None → fall back to fit-the-column.
+        self._preview_scale = preview_scale
         (self.out_w, self.out_h, self.mt, self.mb, self.ml, self.mr,
          self.gh, self.gv, self.slot_w, self.slot_h, self.cols,
          self.rows) = params
@@ -321,10 +325,18 @@ class _Sheet(QWidget):
         self.update()
 
     def _recalc(self):
-        w = self.width()
         margin = 18
-        sheet_w = max(10, w - 2 * margin)
-        sheet_h = max(10, int(sheet_w * self.out_h / self.out_w))
+        scale = self._preview_scale
+        if scale and scale > 0:
+            # Default: the same pixels-per-point the active tab's Preview shows
+            # a page at, so a sheet reads at the same size in Layout as there.
+            sheet_w = max(10, int(self.out_w * scale))
+            sheet_h = max(10, int(self.out_h * scale))
+        else:
+            # No active preview to borrow a scale from: fit the column.
+            w = self.width()
+            sheet_w = max(10, w - 2 * margin)
+            sheet_h = max(10, int(sheet_w * self.out_h / self.out_w))
         self._sheet_w, self._sheet_h = sheet_w, sheet_h
         self._cs = sheet_w / self.out_w
         self.setFixedHeight(10 + sheet_h + 26)
@@ -484,10 +496,11 @@ class _SheetColumn(QScrollArea):
         marks_on = panel.st_marks.enabled() and panel.cut_marks.isChecked()
         fmt_label = self._fmt_label()
 
+        preview_scale = panel._preview_scale()
         for number, slot_pages in enumerate(sheets, start=1):
             sheet = _Sheet(number, slot_pages, params, eff_w, eff_h, pw, ph,
                            self._full, self._booklet, marks_on,
-                           fmt_label=fmt_label)
+                           fmt_label=fmt_label, preview_scale=preview_scale)
             self._lay.addWidget(sheet)
             self._sheets.append(sheet)
         self._cap.setText(self._summary(marks_on))
@@ -695,6 +708,19 @@ class LayoutPanel(BasePanel):
     def set_single_source(self, cb):
         """Give the panel a callable resolving the active tab's SinglePageView."""
         self._single_source = cb
+
+    def _preview_scale(self):
+        """Pixels per point the active tab's Preview shows a page at, or None
+        when there is no active tab/preview to read the scale from (the sheet
+        column then falls back to fit-the-column sizing)."""
+        cb = getattr(self, "_single_source", None)
+        single = cb() if cb is not None else None
+        if single is None:
+            return None
+        try:
+            return single._display_scale(single._zoom)
+        except Exception:
+            return None
 
     # ── construction ─────────────────────────────────────────────────────────
     #

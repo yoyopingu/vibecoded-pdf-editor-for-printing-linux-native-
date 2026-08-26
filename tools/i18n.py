@@ -285,6 +285,13 @@ _EN: dict[str, str] = {
     "DRUCKER": "PRINTER",
     "SEITEN": "PAGES",
     "SEITENHANDHABUNG": "PAGE HANDLING",
+    "Drucken — {name}": "Print — {name}",
+    "Drucker bereit": "Printer ready",
+    "Sortieren (1,2,3 / 1,2,3)": "Collate (1,2,3 / 1,2,3)",
+    "Kopie": "copy",
+    "Kopien": "copies",
+    "{pages} Seiten · {copies} {cw} · {color} · {sides}":
+        "{pages} pages · {copies} {cw} · {color} · {sides}",
     "Alle Seiten  (1 – {n})": "All pages  (1 – {n})",
     "Aktuelle Seite": "Current page",
     "z.B.  1-3, 5, 7-9": "e.g.  1-3, 5, 7-9",
@@ -973,7 +980,7 @@ _EN: dict[str, str] = {
     "Ghostscript hat keine Ausgabedatei erzeugt.": "Ghostscript produced no output file.",
     "Konvertierte Seiten prüfen …": "Verifying converted pages …",
     "Drucker-Standard": "Printer default",
-    "Papierfach:": "Paper source:",
+    "Fach:": "Tray:",
     "  (Standard)": "  (default)",
     "Aus welchem Schacht das Papier gezogen wird.\nDrucker-Standard: keine Vorgabe senden — die Warteschlange entscheidet.":
         "Which tray the paper is drawn from.\nPrinter default: send no preference — the queue decides.",
