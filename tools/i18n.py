@@ -1124,6 +1124,8 @@ _EN: dict[str, str] = {
     "Seiten:  {p0}": "Pages:  {p0}",
     "Seiten: {p0}  |  {p1} KB": "Pages: {p0}  |  {p1} KB",
     "Größe: {p0:.0f} KB": "Size: {p0:.0f} KB",
+    "Typ: {p0}": "Type: {p0}",
+    "{p0:.0f} KB": "{p0:.0f} KB",
     "Masse: {p0:.0f} × {p1:.0f} mm": "Size: {p0:.0f} × {p1:.0f} mm",
     "Farbprofil: {p0}": "Color profile: {p0}",
     "{p0} Datei": "{p0} file",

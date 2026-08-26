@@ -206,6 +206,13 @@ QWidget#sidebar {{
    the sidebar's own — the column came out two-tone, sidebar-coloured for the
    height of the view switch and window-coloured for the tool list below it. */
 QWidget#sidebarSlot, QWidget#toolList {{ background: transparent; }}
+/* The sidebar's own scroll surface must stay the sidebar's colour (SB), not the
+   window BG. The blanket QWidget rule paints the QScrollArea and its viewport
+   with the window colour, which equals SCROLL_TRACK, so the whole tool column
+   read as a grey track even when no scrollbar was showing, and the BETA gutter
+   differed from views whose content covered the surface. */
+QScrollArea#sidebarScroll {{ background: transparent; }}
+QScrollArea#sidebarScroll > QWidget > QWidget {{ background: transparent; }}
 
 /* ── Nav buttons ────────────────────────────────────────── */
 /* Tightened from 36 px rows: nine tools at 36 px spread the column down the

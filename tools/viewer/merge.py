@@ -803,15 +803,10 @@ class MergeOrderWidget(QWidget):
         self._on_order_changed()
         self.status.setText(tr("Wiederhergestellt."))
 
-    def _sep(self):
-        f = QFrame()
-        f.setFrameShape(QFrame.Shape.HLine)
-        f.setStyleSheet(f"color:{_TV['border']};margin:3px 0;")
-        return f
-
     def _section(self, layout, text):
         lbl = QLabel(text)
         lbl.setObjectName("sectionLabel")
+        lbl.setFixedHeight(13)
         layout.addWidget(lbl)
 
     def _btn(self, text, fn, _icon=None):
@@ -858,10 +853,11 @@ class MergeOrderWidget(QWidget):
         self._left_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._left_content = QWidget(); self._left_content.setObjectName("mergeLeftContent")
-        ll = QVBoxLayout(self._left_content); ll.setContentsMargins(10, 8, 22, 10); ll.setSpacing(5)
+        ll = QVBoxLayout(self._left_content); ll.setContentsMargins(10, 2, 14, 4); ll.setSpacing(2)
         self._left_scroll.setWidget(self._left_content)
         cw.addWidget(self._left_scroll, 1)
 
+        # Auswahl field — the view's own selection box, compact at the top.
         sel_lbl = QLabel(tr("Auswahl  (z.B. 1, 3, 5-8)"))
         sel_lbl.setObjectName("sectionLabel")
         ll.addWidget(sel_lbl)
@@ -872,7 +868,7 @@ class MergeOrderWidget(QWidget):
         self._info = QLabel(tr("Keine Auswahl"))
         self._info.setWordWrap(True)
         self._info.setObjectName("dimLabel")
-        ll.addWidget(self._info); ll.addWidget(self._sep())
+        ll.addWidget(self._info)
 
         # Zoom only. The reset button used to be labelled "↺", which is the page
         # manager's rotate-left icon — so it read as "turn this thumbnail", an
@@ -885,45 +881,61 @@ class MergeOrderWidget(QWidget):
                 ("−",   "Thumbnails verkleinern",  lambda: self._grid.zoom_out()),
                 ("+",   "Thumbnails vergrößern", lambda: self._grid.zoom_in()),
                 ("1:1", "Zoom zurücksetzen",      lambda: self._grid.zoom_reset())]:
-            b = QPushButton(text); b.setFixedSize(32, 26)
+            b = QPushButton(text); b.setFixedSize(32, 24)
             b.setToolTip(tr(tip))
             b.clicked.connect(fn)
             zoom_row.addWidget(b); self._zoom_btns.append(b)
         self._zoom_hint_lbl = QLabel(tr("Thumbnails"))
         zoom_row.addWidget(self._zoom_hint_lbl); zoom_row.addStretch()
         ll.addLayout(zoom_row)
-        ll.addWidget(self._sep())
 
+        # AUSWAHL — Alle | Keine side by side, like the page manager's pair.
         self._section(ll, tr("AUSWAHL"))
-        ll.addWidget(self._btn(tr("Alle auswählen  (Strg+A)"),  lambda: self._grid.select_all()))
-        ll.addWidget(self._btn(tr("Auswahl aufheben  (Strg+D)"), lambda: self._grid.deselect_all()))
-        ll.addWidget(self._sep())
+        pair_row = QHBoxLayout(); pair_row.setSpacing(4)
+        self._btn_all  = self._btn(tr("Alle"),  lambda: self._grid.select_all())
+        self._btn_none = self._btn(tr("Keine"), lambda: self._grid.deselect_all())
+        self._btn_all.setObjectName("mergePairBtn")
+        self._btn_none.setObjectName("mergePairBtn")
+        pair_row.addWidget(self._btn_all); pair_row.addWidget(self._btn_none)
+        ll.addLayout(pair_row)
 
+        # REIHENFOLGE — Hoch | Runter on one row (was two stacked full-width rows).
         self._section(ll, tr("REIHENFOLGE"))
+        reorder_row = QHBoxLayout(); reorder_row.setSpacing(4)
         self._btn_up   = self._btn(tr("Hoch"),   self._move_up,
                                    _icon=rotated(icon("chev", colour=theme_color("DIM")), 180))
         self._btn_down = self._btn(tr("Runter"), self._move_down,
                                    _icon=icon("chev", colour=theme_color("DIM")))
         self._btn_up.setObjectName("btnUp")
         self._btn_down.setObjectName("btnDown")
-        ll.addWidget(self._btn_up); ll.addWidget(self._btn_down)
-        ll.addWidget(self._sep())
+        reorder_row.addWidget(self._btn_up); reorder_row.addWidget(self._btn_down)
+        ll.addLayout(reorder_row)
 
         self._section(ll, tr("OPERATIONEN"))
-        ll.addWidget(self._btn(tr("Entfernen  (Entf)"),       self._remove))
-        ll.addWidget(self._btn(tr("Kopieren  (Strg+C)"),      self._copy))
-        ll.addWidget(self._btn(tr("Ausschneiden  (Strg+X)"),  self._cut))
-        ll.addWidget(self._btn(tr("Einfügen  (Strg+V)"),     self._paste))
-        ll.addWidget(self._btn(tr("Rückgängig  (Strg+Z)"),  self._undo))
-        ll.addWidget(self._sep())
+        for b in (self._btn(tr("Entfernen  (Entf)"),      self._remove),
+                  self._btn(tr("Kopieren  (Strg+C)"),     self._copy),
+                  self._btn(tr("Ausschneiden  (Strg+X)"), self._cut),
+                  self._btn(tr("Einfügen  (Strg+V)"),    self._paste),
+                  self._btn(tr("Rückgängig  (Strg+Z)"), self._undo)):
+            # Compact rows: the shared #secondaryBtn QSS pins min-height:28px,
+            # which pushed the column past the fold. Give these their own name
+            # so a slimmer rule (styling in _apply_theme) wins, and the whole
+            # column fits without a right-side scrollbar.
+            b.setObjectName("mergeOpBtn")
+            ll.addWidget(b)
 
+        # DATEI-INFO — two rows: the filename and one dim summary line. The four
+        # old rows (name, type, pages, size) are folded into those two so the
+        # column stops short of a right-side scrollbar.
         self._section(ll, tr("DATEI-INFO"))
-        self._inf_name = QLabel("—"); self._inf_name.setWordWrap(True)
+        self._inf_name = QLabel("—")
         self._inf_name.setObjectName("currentFileLabel")
+        self._inf_name.setWordWrap(True)
         ll.addWidget(self._inf_name)
-        self._inf_type = QLabel(""); self._inf_pages = QLabel(""); self._inf_size = QLabel("")
-        for w in [self._inf_type, self._inf_pages, self._inf_size]:
-            w.setObjectName("dimLabel"); ll.addWidget(w)
+        self._inf_meta = QLabel("")
+        self._inf_meta.setObjectName("dimLabel")
+        self._inf_meta.setWordWrap(False)
+        ll.addWidget(self._inf_meta)
         ll.addStretch()
 
         # ── The two ways out, pinned below the scroll area ───────────────
@@ -1008,14 +1020,37 @@ class MergeOrderWidget(QWidget):
         # view over.
         self._on_order_changed()
 
-        # Enter merges, the way Enter runs a tool in every panel.
+        # Enter merges, the way Enter runs a tool in every panel. The default
+        # WindowShortcut context fires only when the owning widget's own window
+        # has focus — but in the app the merge view is a main-area page: the
+        # grid and the controls are mounted out into the main window and `self`
+        # is never a shown window, so a shortcut on `self` went dead regardless
+        # of context. Parent it to `preview_widget`, which is the part of the
+        # view that IS in the live window, and use ApplicationShortcut so it
+        # fires wherever in the app focus sits (the card grid, a sidebar
+        # button). `_enter_pressed` still checks the view is the live one (and
+        # lets the selection box keep Enter for itself).
         from PyQt6.QtGui import QKeySequence, QShortcut
         for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            QShortcut(QKeySequence(key), self).activated.connect(
-                self._enter_pressed)
+            _s = QShortcut(QKeySequence(key), self.preview_widget)
+            _s.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            _s.activated.connect(self._enter_pressed)
 
         _register_themed(self)
         self._apply_theme()
+
+    def _is_active(self):
+        """True when this merge view is the thing the app is showing right now
+        and safe to act on: visible (self, or its mounted controls, in the app
+        the object itself is never shown — only its two parts are mounted out),
+        not busy, and no modal dialog owns the keys."""
+        from PyQt6.QtWidgets import QApplication as _QA
+        if _QA.activeModalWidget() is not None:
+            return False
+        return (self.isVisible()
+                or getattr(self, "controls_widget", self).isVisible()
+                or getattr(self, "preview_widget", self).isVisible()) \
+            and not self._busy
 
     def _enter_pressed(self):
         """Enter merges — except in the selection box, which asked for it first.
@@ -1026,6 +1061,8 @@ class MergeOrderWidget(QWidget):
         returnPressed, so merging on Enter unconditionally would have quietly
         broken the one thing the field tells the user to do.
         """
+        if not self._is_active():
+            return
         if self.sel_edit.hasFocus():
             self._apply_sel_edit()
             return
@@ -1054,6 +1091,24 @@ class MergeOrderWidget(QWidget):
         if hasattr(self, "_zoom_hint_lbl"):
             self._zoom_hint_lbl.setStyleSheet(
                 f"color:{t['vdim']};font-size:9px;background:transparent;")
+        # The compact OPERATIONEN rows (mergeOpBtn) — slimmer than #secondaryBtn
+        # so the column clears the fold, but the same bordered button chrome.
+        _op = (f"QPushButton#mergeOpBtn{{background:{t['btn_bg']};color:{t['text']};"
+               f"border:1px solid {t['btn_brd']};border-radius:4px;"
+               f"min-height:18px;padding:2px 8px;font-size:12px;text-align:left;}}"
+               f"QPushButton#mergeOpBtn:hover{{background:{t['hover']};}}"
+               f"QPushButton#mergeOpBtn:pressed{{background:{t['surface_3']};}}")
+        for b in self.findChildren(QPushButton):
+            if b.objectName() == "mergeOpBtn":
+                b.setStyleSheet(_op)
+        # The compact AUSWAHL pair (Alle | Keine) — same slim chrome.
+        _pair = (f"QPushButton#mergePairBtn{{background:{t['btn_bg']};color:{t['text']};"
+                 f"border:1px solid {t['btn_brd']};border-radius:4px;"
+                 f"min-height:22px;padding:2px 8px;font-size:12px;}}"
+                 f"QPushButton#mergePairBtn:hover{{background:{t['hover']};}}")
+        for b in self.findChildren(QPushButton):
+            if b.objectName() == "mergePairBtn":
+                b.setStyleSheet(_pair)
         # Hoch/Runter must LOOK disabled: a flat ground, dimmed text and a
         # quiet border that match the sidebar, and an icon dimmed to match. The
         # shared #secondaryBtn QSS has no :disabled rule, so without this a
@@ -1069,11 +1124,11 @@ class MergeOrderWidget(QWidget):
                 oid = b.objectName()
                 b.setStyleSheet(
                     f"QPushButton#{oid}{{background:{t['btn_bg']};color:{t['text']};"
-                    f"border:1px solid {t['btn_brd']};border-radius:7px;"
-                    f"padding:6px 14px;}}"
+                    f"border:1px solid {t['btn_brd']};border-radius:5px;"
+                    f"padding:3px 10px;min-height:22px;}}"
                     f"QPushButton#{oid}:hover{{background:{t['hover']};}}"
                     f"QPushButton#{oid}:disabled{{background:{dis_bg};"
-                    f"color:{dis_fg};border:1px solid {t['border']};border-radius:7px;}}")
+                    f"color:{dis_fg};border:1px solid {t['border']};border-radius:5px;}}")
                 b.setIcon(self._chevron(b is self._btn_up,
                                         t['text'] if b.isEnabled() else dis_fg))
         if hasattr(self, "status"):
@@ -1138,8 +1193,7 @@ class MergeOrderWidget(QWidget):
         self._update_move_buttons()
         path = self._grid.current_path()
         if not path:
-            self._inf_name.setText("—"); self._inf_type.setText("")
-            self._inf_pages.setText(""); self._inf_size.setText("")
+            self._inf_name.setText("—"); self._inf_meta.setText("")
             self._info.setText(tr("Keine Auswahl")); return
         # A multi-selection advertises how many files are picked; a single pick
         # says where in the list the file sits. get_selected_info() already
@@ -1151,16 +1205,22 @@ class MergeOrderWidget(QWidget):
             self._info.setText(self._grid.get_selected_info())
         ext = os.path.splitext(path)[1].lower()
         self._inf_name.setText(os.path.basename(path))
-        self._inf_type.setText(f"Typ: {self.FILE_KINDS.get(ext, ext.upper().lstrip('.'))}")
-        try: self._inf_size.setText(tr('Größe: {p0:.0f} KB').format(p0=os.path.getsize(path) / 1024))
-        except Exception: self._inf_size.setText("")
+        parts = [tr("Typ: {p0}").format(
+            p0=self.FILE_KINDS.get(ext, ext.upper().lstrip('.')))]
+        try:
+            parts.append(tr('{p0:.0f} KB').format(p0=os.path.getsize(path) / 1024))
+        except Exception:
+            pass
         if ext == ".pdf":
             try:
                 from pypdf import PdfReader
-                self._inf_pages.setText(tr('Seiten: {p0}').format(p0=len(PdfReader(path, strict=False).pages)))
-            except Exception: self._inf_pages.setText(tr("Seiten: ?"))
+                parts.append(tr('{p0} Seiten').format(
+                    p0=len(PdfReader(path, strict=False).pages)))
+            except Exception:
+                parts.append(tr("Seiten: ?"))
         else:
-            self._inf_pages.setText(tr("Seiten: nach Konvertierung"))
+            parts.append(tr("Seiten: nach Konvertierung"))
+        self._inf_meta.setText(" · ".join(parts))
 
     def _move_up(self):
         if self._grid._selected: self._save_history()
