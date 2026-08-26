@@ -158,7 +158,10 @@ class _PageTrack(QWidget):
         rect = self._thumb_rect()
         if rect is not None:
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(_TV['acc']))
+            # A neutral grey thumb, never the blue accent: the rail is the
+            # grid's scrollbar, and a blue thumb read as a selection rather
+            # than a scroll control (Batch F). vdim is the palette's muted grey.
+            p.setBrush(QColor(_TV['vdim']))
             p.drawRoundedRect(rect, 2, 2)
         p.end()
 

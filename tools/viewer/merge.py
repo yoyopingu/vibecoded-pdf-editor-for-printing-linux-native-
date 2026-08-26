@@ -21,6 +21,16 @@ from tools.viewer.page_grid import (CARD_H, CARD_W, GAP, MARGIN,
 from tools.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
 
 
+def _fade(colour, toward, k=0.62):
+    """Dim `colour` part-way toward `toward`, so a disabled glyph/button sits
+    clearly below its enabled sibling in BOTH themes (the light theme's `dim`/
+    `vdim` pair is inverted, so using them raw made the disabled state look
+    identical to the enabled one)."""
+    c = QColor(colour); t = QColor(toward)
+    def m(a, b): return int(a + (b - a) * k)
+    return f"#{m(c.red(), t.red()):02x}{m(c.green(), t.green()):02x}{m(c.blue(), t.blue()):02x}"
+
+
 class FileCard(QFrame):
     """Thumbnail card for one file.
 
@@ -849,6 +859,8 @@ class MergeOrderWidget(QWidget):
                                    _icon=rotated(icon("chev", colour=theme_color("DIM")), 180))
         self._btn_down = self._btn(tr("Runter"), self._move_down,
                                    _icon=icon("chev", colour=theme_color("DIM")))
+        self._btn_up.setObjectName("btnUp")
+        self._btn_down.setObjectName("btnDown")
         ll.addWidget(self._btn_up); ll.addWidget(self._btn_down)
         ll.addWidget(self._sep())
 
@@ -1002,12 +1014,23 @@ class MergeOrderWidget(QWidget):
         # shared #secondaryBtn QSS has no :disabled rule, so without this a
         # disabled reorder button rendered identically to an enabled one.
         if hasattr(self, "_btn_up"):
-            _mv = (f"QPushButton#secondaryBtn:disabled{{"
-                   f"background:{t['sidebar_bg']};color:{t['vdim']};"
-                   f"border:1px solid {t['border']};border-radius:7px;}}")
-            for b, up in ((self._btn_up, True), (self._btn_down, False)):
-                b.setStyleSheet(_mv)
-                b.setIcon(self._chevron(up, t['dim'] if b.isEnabled() else t['vdim']))
+            # Muted grey plate for the disabled button: the fill is pulled
+            # part-way toward the theme's dim tone so it is a visibly different
+            # shade from the enabled fill in BOTH themes, and the glyph is
+            # dimmed toward the sidebar so it sits clearly below enabled.
+            dis_bg = _fade(t['btn_bg'], t['dim'], k=0.5)
+            dis_fg = _fade(t['text'], t['sidebar_bg'], k=0.55)
+            for b in (self._btn_up, self._btn_down):
+                oid = b.objectName()
+                b.setStyleSheet(
+                    f"QPushButton#{oid}{{background:{t['btn_bg']};color:{t['text']};"
+                    f"border:1px solid {t['btn_brd']};border-radius:7px;"
+                    f"padding:6px 14px;}}"
+                    f"QPushButton#{oid}:hover{{background:{t['hover']};}}"
+                    f"QPushButton#{oid}:disabled{{background:{dis_bg};"
+                    f"color:{dis_fg};border:1px solid {t['border']};border-radius:7px;}}")
+                b.setIcon(self._chevron(b is self._btn_up,
+                                        t['text'] if b.isEnabled() else dis_fg))
         if hasattr(self, "status"):
             self.status.setStyleSheet(
                 f"color:{t['dim']};font-size:9px;min-height:20px;background:transparent;")
@@ -1043,8 +1066,9 @@ class MergeOrderWidget(QWidget):
             return
         self._btn_up.setEnabled(min(sel) > 0)
         self._btn_down.setEnabled(max(sel) < n - 1)
+        dis_fg = _fade(_TV['text'], _TV['sidebar_bg'], k=0.55)
         for b, up in ((self._btn_up, True), (self._btn_down, False)):
-            b.setIcon(self._chevron(up, _TV['dim'] if b.isEnabled() else _TV['vdim']))
+            b.setIcon(self._chevron(up, _TV['text'] if b.isEnabled() else dis_fg))
 
     def _apply_sel_edit(self):
         positions = _parse_positions(self.sel_edit.text(), len(self._grid.get_paths()))
