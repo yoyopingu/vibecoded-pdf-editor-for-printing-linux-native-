@@ -67,6 +67,16 @@ def _build_style(dark: bool) -> str:
     # pointer in either theme. A dedicated value — no existing surface sits
     # far enough off SURFACE_3 in both directions.
     _NEWTAB_HOV        = "#343e52" if dark else "#dde2ea"
+    # The scrollbar thumb under the pointer — a neutral grey one step up from
+    # the resting thumb, never the blue accent (the audit: a blue hover on an
+    # 8 px grey bar read as a selection, not a scroll control).
+    _SCROLL_HOV        = "#4b5568" if dark else "#9aa4b8"
+    # The BETA chip text — readable (≥4.5:1) in both themes while staying a
+    # quiet mark rather than an announcement. Dark FAINT was 3.55:1 (border
+    # line) and light FAINT was 2.84:1 (too dim), so it gets its own values.
+    # Light is darkened a step past FAINT to clear WCAG AA on the near-white
+    # sidebar (FAINT-light reads 4.15:1).
+    _BETA              = "#8792a7" if dark else "#5b687b"
 
     return f"""
 * {{
@@ -201,10 +211,11 @@ QPushButton#viewSeg:checked {{
     background: {_S3}; color: {_TEXT}; font-weight: bold;
 }}
 /* The BETA chip under the sidebar slot — deliberately quiet: a small, dim,
-   monospace mark, not the accent-coloured announcement it used to be. */
+   monospace mark, not the accent-coloured announcement it used to be. Readable
+   (≥3.5:1 in both themes) with bottom padding so it does not sit flush. */
 QLabel#betaChip {{
-    color: {_FAINT}; font-family: 'JetBrains Mono','DejaVu Sans Mono',monospace;
-    font-size: 8px; letter-spacing: 1px;
+    color: {_BETA}; font-family: 'JetBrains Mono','DejaVu Sans Mono',monospace;
+    font-size: 11px; letter-spacing: 1px;
 }}
 QCheckBox#stageHead {{
     color: {_TEXT}; font-weight: bold; font-size: 12px; padding: 6px 0 2px;
@@ -245,6 +256,21 @@ QPushButton#iconBtn {{
 }}
 QPushButton#iconBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
 QPushButton#iconBtn:pressed {{ background: {_SEL}; }}
+QPushButton#iconBtn:disabled {{ color: {_BTN_DIS_T}; background: transparent; }}
+/* The status bar's own small icon buttons (the zoomer −/+/⛶, the page-nav
+   ◂/▸, the ruler). They differ from #iconBtn in one essential: #iconBtn's
+   `min-width:0px` lets the layout shrink a fixed-size button below its hit
+   target, so these get an explicit 24px floor instead of trusting setFixedSize
+   against the sheet. */
+QPushButton#sbIconBtn {{
+    background: transparent; color: {_DIM};
+    border: none; border-radius: 5px;
+    min-width: 24px; min-height: 24px; padding: 0px;
+}}
+QPushButton#sbIconBtn:hover {{ background: {_HOVER}; color: {_TEXT}; }}
+QPushButton#sbIconBtn:pressed {{ background: {_SEL}; }}
+QPushButton#sbIconBtn:disabled {{ color: {_BTN_DIS_T}; background: transparent; }}
+QPushButton#sbIconBtn:checked {{ background: {_ACC_SOFT}; }}
 QPushButton#secondaryBtn:hover {{ background: {_S3}; border-color: {_ACC}; }}
 QPushButton#secondaryBtn:pressed {{ background: {_SEL}; }}
 
@@ -398,32 +424,37 @@ QGroupBox::title {{
 }}
 
 /* ── Scrollbars ─────────────────────────────────────────── */
+/* 8 px, a neutral grey thumb (never the blue accent), square with no arrow
+   buttons. QScrollArea's AsNeeded policy hides the bar when the content fits,
+   so the grids/print settings only show it when there is actually more to see.
+   The thumb's hover is one grey step up so it still responds under the
+   pointer without ever reading as a selection. */
 QScrollBar:vertical {{
-    background: {_SCT}; width: 8px; border-radius: 4px; margin: 2px;
+    background: {_SCT}; width: 8px; margin: 2px;
 }}
 QScrollBar::handle:vertical {{
-    background: {_SCB}; border-radius: 4px; min-height: 24px;
+    background: {_SCB}; min-height: 24px;
 }}
-QScrollBar::handle:vertical:hover {{ background: {_ACC}; }}
+QScrollBar::handle:vertical:hover {{ background: {_SCROLL_HOV}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar:horizontal {{
-    background: {_SCT}; height: 8px; border-radius: 4px; margin: 2px;
+    background: {_SCT}; height: 8px; margin: 2px;
 }}
 QScrollBar::handle:horizontal {{
-    background: {_SCB}; border-radius: 4px; min-width: 24px;
+    background: {_SCB}; min-width: 24px;
 }}
-QScrollBar::handle:horizontal:hover {{ background: {_ACC}; }}
+QScrollBar::handle:horizontal:hover {{ background: {_SCROLL_HOV}; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 
 /* The sidebar's own scroll surface gets the same 8px scrollbar explicitly,
    so it is never left with Fusion's thin 2px thumb. */
 QScrollArea#sidebarScroll QScrollBar:vertical {{
-    background: {_SCT}; width: 8px; border-radius: 4px; margin: 2px;
+    background: {_SCT}; width: 8px; margin: 2px;
 }}
 QScrollArea#sidebarScroll QScrollBar::handle:vertical {{
-    background: {_SCB}; border-radius: 4px; min-height: 24px;
+    background: {_SCB};
 }}
-QScrollArea#sidebarScroll QScrollBar::handle:vertical:hover {{ background: {_ACC}; }}
+QScrollArea#sidebarScroll QScrollBar::handle:vertical:hover {{ background: {_SCROLL_HOV}; }}
 QScrollArea#sidebarScroll QScrollBar::add-line:vertical,
 QScrollArea#sidebarScroll QScrollBar::sub-line:vertical {{ height: 0; }}
 
@@ -565,6 +596,27 @@ QWidget#sbZoomer {{
 QLabel#sbZoomVal {{ color: {_DIM}; font-size: 11px; background: transparent;
     font-variant-numeric: tabular-nums; }}
 QWidget#sbZoomDiv {{ background: {_LINE}; }}
+/* The centred page-nav cluster: the current page as a compact input, the
+   total as a dim reading. The arrows reuse the icon-button look (grey, no
+   border) and share its disabled state. */
+QWidget#sbPageNav {{ background: transparent; }}
+QLineEdit#sbPageField {{
+    color: {_TEXT}; background: {_S3}; border: 1px solid {_LINE};
+    border-radius: 5px; padding: 2px 0; font-size: 12px;
+    min-height: 0px;
+}}
+QLineEdit#sbPageField:focus {{ border: 2px solid {_ACC}; }}
+/* The page-nav field's inert state (Batch F): in dark the number dims a step
+   past the generic disabled text and the border vanishes so the field reads as
+   "off", not merely quieter (the audit: the old #667080 text + #28303f border
+   kept it looking live against SURFACE_3). Light keeps the generic faded look,
+   which the auditor already verified. */
+QLineEdit#sbPageField:disabled {{
+    color: {"#566070" if dark else _BTN_DIS_T};
+    background: {_BTN_DIS};
+    border: {"none" if dark else "1px solid " + _DIS_LINE};
+}}
+QLabel#sbNavTotal {{ color: {_DIM}; font-size: 12px; background: transparent; }}
 /* The zoomer's buttons and the ruler switch share the icon-button look; the
    ruler is the only checkable one, and checked means the accent-soft ground
    every other active control sits on. */

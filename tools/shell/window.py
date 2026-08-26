@@ -375,7 +375,7 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(244)
         self._sidebar = sidebar
         sb = QVBoxLayout(sidebar)
-        sb.setContentsMargins(0, 6, 0, 0)
+        sb.setContentsMargins(0, 6, 0, 8)
         sb.setSpacing(0)
 
         self._btns  = []
@@ -522,7 +522,7 @@ class MainWindow(QMainWindow):
         # where somebody reporting a fault goes looking for it.
         beta = QLabel(tr("BETA"))
         beta.setObjectName("betaChip")
-        beta.setContentsMargins(14, 0, 0, 10)
+        beta.setContentsMargins(14, 0, 0, 12)
         sb.addWidget(beta)
 
         root.addWidget(sidebar)
@@ -573,6 +573,14 @@ class MainWindow(QMainWindow):
             lambda: self._active_view_do("_zoom_in"))
         self._status_bar.zoom_fit_requested.connect(
             lambda: self._active_view_do("_zoom_fit"))
+        self._status_bar.zoom_actual_requested.connect(
+            lambda: self._active_view_do("_zoom_actual_size"))
+        # Page nav drives the same rail the preview uses (and the delegate the
+        # page manager hands it while managing) — one source of truth for where
+        # a page turn lands, whatever view is up.
+        self._status_bar.page_prev_requested.connect(self._status_page_prev)
+        self._status_bar.page_next_requested.connect(self._status_page_next)
+        self._status_bar.page_go_to_requested.connect(self._status_page_goto)
         self._status_bar.ruler_toggled.connect(self._on_status_ruler_toggled)
         self._status_bar.preflight_requested.connect(
             lambda: self._active_view_do("_show_preflight"))
@@ -622,6 +630,37 @@ class MainWindow(QMainWindow):
         # view switch / back button is the tool exit, so the default returns
         # here even though set_default_message above honours the held flag.
         self._status_bar.clear_message()
+        self._sync_page_nav(tab)
+
+    def _sync_page_nav(self, tab=None):
+        """Feed the status bar's centred page nav for the current view.
+
+        Enabled only while the single-page preview is actually showing (stack
+        0, not manage) on a tab with a document — so manage, layout and merge
+        leave it visible but inert, and the empty state hides it entirely."""
+        if tab is None:
+            tab = self._active_tab()
+        enabled = bool(tab is not None and tab.model is not None
+                       and self._stack.currentIndex() == 0
+                       and not tab.in_manage_mode())
+        total = tab.page_count() if tab is not None else 0
+        current = (tab.single.current_page + 1) if tab is not None else 1
+        self._status_bar.set_page_nav(current, total, enabled)
+
+    def _status_page_prev(self):
+        tab = self.viewer._current()
+        if tab is not None:
+            tab.single._rail_handler().rail_prev()
+
+    def _status_page_next(self):
+        tab = self.viewer._current()
+        if tab is not None:
+            tab.single._rail_handler().rail_next()
+
+    def _status_page_goto(self, page):
+        tab = self.viewer._current()
+        if tab is not None:
+            tab.single._rail_handler().rail_go_to(page)
 
     def _active_tab(self):
         idx = self.viewer.tabs.currentIndex()
