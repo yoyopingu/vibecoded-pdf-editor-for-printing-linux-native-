@@ -33,14 +33,15 @@ class ColourProfilePanel(BasePanel):
         self.profile_combo = QComboBox()
         for label, cands, _oci, _condition in CMYK_PROFILES:
             self.profile_combo.addItem(tr(label), cands)
-        # The base combo loop caps this at minimumContentsLength=8 and the row's
-        # 220px label leaves it only ~130px wide, so "Standard (generisch)" — and
-        # every longer profile name — clipped at the arrow. Give it a minimum
-        # wide enough for the longest label ("PSO Uncoated v3 (FOGRA52)" ≈ 174px
-        # + arrow) and a slimmer field label so there is room for it in the
-        # sidebar instead of forcing it past the 420px cap.
-        self.profile_combo.setMinimumWidth(210)
-        cl.addLayout(row(tr("CMYK-Profil:"), self.profile_combo, label_w=130))
+        # The base combo loop caps this at minimumContentsLength=8; _shared.row()
+        # then raises it to the widest item's true width ("PSO Uncoated v3
+        # (FOGRA52)" ≈ 174px + arrow gutter ≈ 218px) so the value never clips
+        # at the arrow. The row's field-label column is sized to one line of
+        # "CMYK-Profil:" (≈69px + air): anything wider squeezed the combo and
+        # pushed the group box's minimum past both the sidebar's 420px grant
+        # ceiling (sizeHint+28) and the ~360px budget every sibling panel
+        # renders inside, clipping the hint text mid-word with no ellipsis.
+        cl.addLayout(row(tr("CMYK-Profil:"), self.profile_combo, label_w=76))
         cl.addWidget(make_label(tr(
             "Benannte Profile nutzen die passende .icc-Datei aus "
             "~/.local/share/copyshop_pdf_suite/icc/ — fehlt sie, wird generisch "
