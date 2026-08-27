@@ -116,10 +116,13 @@ class PrintDialog(QDialog):
         self.setWindowTitle(tr("Drucken — {name}").format(
             name=os.path.basename(self.pdf_path)))
         # The minimum must fit the settings pane's natural height above the
-        # pinned action bar. Set too short, the bottom rows (Kopien, Farbe)
-        # land below the scroll viewport and sit hidden behind the footer —
-        # which is exactly what happened at the old 820x540.
-        self.setMinimumSize(820, 660)
+        # pinned action bar. Set too short, the bottom rows land below the
+        # scroll viewport and sit hidden behind the footer — which happened
+        # twice now: first the old Kopien/Farbe rows at 820x540, then the new
+        # AUSGABE group at 820x660, whose added Sortieren row put its bottom
+        # edge at y=552 in the pane while the viewport showed 537 (measured).
+        # 684 = required 675 (552 viewport + 123 action bar) plus slack.
+        self.setMinimumSize(820, 684)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._setup()
 
@@ -335,7 +338,16 @@ class PrintDialog(QDialog):
         scale_row = QHBoxLayout()
         scale_row.setContentsMargins(0, 0, 0, 0)
         scale_row.setSpacing(8)
-        scale_row.addWidget(_lbl(tr("Skalierung:")))
+        # The label heads the pill stack instead of floating level with its
+        # middle line — otherwise the selected "Anpassen" pill reads as a
+        # stray control above the labelled row.
+        scale_lbl = QLabel(tr("Skalierung:"))
+        scale_lbl.setStyleSheet(
+            f"color:{_TV['text']};background:transparent;")
+        scale_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        scale_lbl.setContentsMargins(0, 7, 0, 0)
+        scale_row.addWidget(scale_lbl)
 
         # On show, not behind a dropdown: three settings that decide how big the
         # job prints, one click each instead of two. Radiopills rather than tick
@@ -455,7 +467,10 @@ class PrintDialog(QDialog):
         rl.addLayout(_two_row(tr("Papier:"), paper_wrap,
                               tr("Fach:"), self.source_combo))
 
-        # Kopien | Farbe — a two-column row; Kopien carries the collate box.
+        # Kopien | Farbe — a two-column row, two clean cells per the concept.
+        # The collate box used to be wedged in beside the spinbox here; it
+        # belongs to the AUSGABE group now, like the concept's checkrow after
+        # the Wendung options.
         copies_wrap = QWidget()
         copies_wrap.setStyleSheet("background:transparent;")
         cw = QHBoxLayout(copies_wrap)
@@ -466,11 +481,6 @@ class PrintDialog(QDialog):
         self.copies_spin.setValue(1)
         self.copies_spin.setFixedWidth(60)
         cw.addWidget(self.copies_spin)
-        self.collate_check = QCheckBox(tr("Sortieren (1,2,3 / 1,2,3)"))
-        self.collate_check.setToolTip(tr(
-            "1,2,3 – 1,2,3 (sortiert) statt 1,1,1 – 2,2,2 (gebündelt)"))
-        self.collate_check.setChecked(True)
-        cw.addWidget(self.collate_check)
         cw.addStretch()
 
         self.color_combo = QComboBox()
@@ -522,11 +532,30 @@ class PrintDialog(QDialog):
                "Kurze Seite: Rückseite ist um 180° gedreht "
                "(Bindung an der kurzen Kante, wie ein Notizblock)."))
         self.duplex_edge_combo.setEnabled(False)
-        # Edge selection only applies when duplex is enabled.
-        self.duplex_check.toggled.connect(self.duplex_edge_combo.setEnabled)
+        self.duplex_edge_combo.setVisible(False)
+        # Edge selection only applies when duplex is enabled — and, per the
+        # concept, it is not shown at all while duplex is off. One helper for
+        # every path that syncs it (queue info, prefs restore, Qt defaults,
+        # end-of-job) so they cannot drift apart.
+        self.duplex_check.toggled.connect(self._sync_duplex_edge)
         duplex_row.addWidget(self.duplex_edge_combo)
         duplex_row.addStretch()
         rl.addLayout(duplex_row)
+
+        # Sortieren — the concept's own checkrow at the end of this group
+        # (after the Wendung options), not a hitch-hiker on the Kopien row.
+        # Same widget, same state: the summary line and prefs restore read it
+        # exactly as before.
+        self.collate_check = QCheckBox(tr("Sortieren (1,2,3 / 1,2,3)"))
+        self.collate_check.setToolTip(tr(
+            "1,2,3 – 1,2,3 (sortiert) statt 1,1,1 – 2,2,2 (gebündelt)"))
+        self.collate_check.setChecked(True)
+        collate_row = QHBoxLayout()
+        collate_row.setContentsMargins(0, 10, 0, 0)
+        collate_row.setSpacing(8)
+        collate_row.addWidget(self.collate_check)
+        collate_row.addStretch()
+        rl.addLayout(collate_row)
 
         rl.addStretch(1)
 
@@ -647,8 +676,13 @@ class PrintDialog(QDialog):
 
         # Wide rows: printers and paper/tray/colour/combo rows must compress
         # inside their column rather than stretch the pane past the viewport.
+        # NOT the duplex-edge combo: "Ignored" tells the layout to disregard
+        # its sizeHint AND minimumSizeHint, so once addStretch() competes for
+        # the surplus the combo's row slot collapses to zero width — visible,
+        # enabled, and painted into nothing. Its two fixed, short entries can
+        # never push the pane wide anyway.
         for name in ("printer_combo", "orient_combo", "paper_combo",
-                     "source_combo", "color_combo", "duplex_edge_combo"):
+                     "source_combo", "color_combo"):
             self._shrinkable(getattr(self, name))
 
         self._make_enter_print(print_btn, cancel_btn)
@@ -687,6 +721,15 @@ class PrintDialog(QDialog):
         for btn in (print_btn, cancel_btn):
             btn.setAutoDefault(True)
         print_btn.setDefault(True)
+
+    def _sync_duplex_edge(self):
+        """The binding-edge selector follows the duplex checkbox in both
+        senses: it is enabled when duplex is on, and shown only then (the
+        concept hides its Wendung pills outright). One sync for every path
+        that touches the checkbox state, so none can leave it stale."""
+        on = self.duplex_check.isChecked()
+        self.duplex_edge_combo.setEnabled(on)
+        self.duplex_edge_combo.setVisible(on)
 
     def _current_page_pos(self):
         """Position of the page the viewer is showing, or None if unknown.
@@ -1053,7 +1096,7 @@ class PrintDialog(QDialog):
             ei = self.duplex_edge_combo.findData(defaults.get("duplex_edge", "long"))
             if ei >= 0:
                 self.duplex_edge_combo.setCurrentIndex(ei)
-            self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
+            self._sync_duplex_edge()
 
         self._restore_saved(printer_name)
         self._update_margin_label()
@@ -1113,7 +1156,7 @@ class PrintDialog(QDialog):
         if isinstance(saved.get("duplex"), bool):
             self.duplex_check.setChecked(saved["duplex"])
         _combo_by_data(self.duplex_edge_combo, saved.get("duplex_edge"))
-        self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
+        self._sync_duplex_edge()
         source = saved.get("paper_source")
         # Only if this queue still uses the same keyword: a tray remembered from
         # a driver queue means nothing on a driverless one.
@@ -1329,7 +1372,7 @@ class PrintDialog(QDialog):
             # Explicitly sync the edge combo to the checkbox — setChecked() only
             # emits toggled() when the state actually changes, so an unchanged
             # (still-unchecked) checkbox would otherwise leave the combo stale.
-            self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
+            self._sync_duplex_edge()
 
             # ── Color ─────────────────────────────────────────────────────────
             # Same lesson as duplex above: Qt's colour query is not to be trusted
@@ -1514,7 +1557,7 @@ class PrintDialog(QDialog):
         # The edge selector is only usable while duplex is on — re-sync it to
         # the checkbox after a job so it doesn't stay enabled when duplex is off.
         if not busy:
-            self.duplex_edge_combo.setEnabled(self.duplex_check.isChecked())
+            self._sync_duplex_edge()
             # Likewise the tray: a queue that offers no choice of one must not
             # come back from a job with an empty combo suddenly enabled.
             self.source_combo.setEnabled(self.source_combo.count() > 1)
