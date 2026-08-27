@@ -243,9 +243,6 @@ _EN: dict[str, str] = {
     "Auswahl 90° im Uhrzeigersinn drehen": "Rotate selection 90° clockwise",
     "OPERATIONEN": "OPERATIONS",
     "Löschen  (Entf)": "Delete  (Del)",
-    "Kopieren  (Strg+C)": "Copy  (Ctrl+C)",
-    "Einfügen  (Strg+V)": "Paste  (Ctrl+V)",
-    "Rückgängig  (Strg+Z)": "Undo  (Ctrl+Z)",
     "Extrahieren...": "Extract...",
     "Als neuen Tab öffnen": "Open as new tab",
     "Speichern unter…": "Save as…",
@@ -548,6 +545,8 @@ _EN: dict[str, str] = {
     "Gehe zu Datei": "Go to file",
     "Datei (1 – {p0}):": "File (1 – {p0}):",
     "Kopieren": "Copy",
+    "Ausschneiden": "Cut",
+    "Einfügen": "Paste",
     "Alles auswählen": "Select all",
     "VORSCHAU": "PREVIEW",
     "⚠ Inhalt wird beschnitten": "⚠ Content will be clipped",
@@ -593,7 +592,6 @@ _EN: dict[str, str] = {
         "Drag & drop to sort  ·  Ctrl/Shift for multiple",
     "Thumbnails": "Thumbnails",
     "DATEI-INFO": "FILE INFO",
-    "Entfernen  (Entf)": "Remove  (Del)",
     "✗  Abbrechen": "✗  Cancel",
     "{p0} Dateien": "{p0} files",
     "  Zusammenführen": "  Merge",
@@ -671,7 +669,6 @@ _EN: dict[str, str] = {
     # The OCR language names used to live here as tr() keys — moved into
     # OcrPanel._LANG_NAMES as (German, English) pairs, since a language name
     # is not a sentence and collided here with the "Deutsch" menu item below.
-    "Ausschneiden  (Strg+X)": "Cut  (Ctrl+X)",
     "Zuerst Dateien auswählen.": "Select files first.",
     "Zwischenablage ist leer.": "Clipboard is empty.",
     "Rückgängig.": "Undone.",
@@ -1065,8 +1062,6 @@ _EN: dict[str, str] = {
     "✓  Farbraum erfolgreich in CMYK konvertiert.": "✓  Color space successfully converted to CMYK.",
     "(Verifikation nicht möglich)": "(Verification not possible)",
     "REIHENFOLGE": "ORDER",
-    "▲  Hoch": "▲  Up",
-    "▼  Runter": "▼  Down",
     "✕  Entfernen  (Entf)": "✕  Remove  (Del)",
     "am Ende": "at the end",
     "  —  {p0} zu konvertieren": "  —  {p0} to convert",
@@ -1326,7 +1321,7 @@ _EN: dict[str, str] = {
     "Abstand vom Rand (pt):": "Distance from edge (pt):",
     "Alle gleich": "All equal",
     "Auf Null setzen": "Reset to zero",
-    "Skalieren": "Scale",
+    "SKALIEREN": "SCALE",
     "Skalierung": "Scale",
     "Zeigt, wie gross die Seite durch Format und Ränder wird. Eingabe skaliert die ganze Seite zentriert auf diesen Wert.":
         "Shows how big the page becomes from Format and margins. "
@@ -1458,9 +1453,10 @@ _EN: dict[str, str] = {
 
     # ── Crop/Scale panel ─────────────────────────────────────────────────────
     "Vorschau": "Preview",
+    "FORMAT": "FORMAT",
     "Format": "Format",
     "— Kein —": "— None —",
-    "Ränder  [+ schneiden / - erweitern]": "Margins  [+ crop / - expand]",
+    "RÄNDER  [+ SCHNEIDEN / - ERWEITERN]": "MARGINS  [+ CROP / - EXPAND]",
     "Oben": "Top",
     "Unten": "Bottom",
     "Links": "Left",

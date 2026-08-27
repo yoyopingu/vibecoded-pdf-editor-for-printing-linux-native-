@@ -841,6 +841,25 @@ class MergeOrderWidget(QWidget):
         b.setMinimumHeight(28)
         return b
 
+    def _op_btn(self, label, shortcut, fn):
+        """OPERATIONEN row in the page-manager style: the label on the left and
+        the shortcut dimmed and pushed to the right inside the same button —
+        not inline "(Strg+…)" text. The compact #mergeOpBtn QSS (min-height,
+        padding, text-align) still applies via the objectName the caller sets."""
+        b = QPushButton()
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QHBoxLayout(b)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lbl = QLabel(label)
+        lbl.setObjectName("mergeOpLabel")
+        lay.addWidget(lbl, 1)
+        kbd = QLabel(shortcut)
+        kbd.setObjectName("mergeOpKbd")
+        lay.addWidget(kbd)
+        b.clicked.connect(fn)
+        return b
+
     def _chevron(self, up, colour):
         """The reorder arrow glyph in a colour — the up variant is the down
         chevron turned round."""
@@ -933,11 +952,11 @@ class MergeOrderWidget(QWidget):
         ll.addLayout(reorder_row)
 
         self._section(ll, tr("OPERATIONEN"))
-        for b in (self._btn(tr("Entfernen  (Entf)"),      self._remove),
-                  self._btn(tr("Kopieren  (Strg+C)"),     self._copy),
-                  self._btn(tr("Ausschneiden  (Strg+X)"), self._cut),
-                  self._btn(tr("Einfügen  (Strg+V)"),    self._paste),
-                  self._btn(tr("Rückgängig  (Strg+Z)"), self._undo)):
+        for b in (self._op_btn(tr("Entfernen"),    "Entf",    self._remove),
+                  self._op_btn(tr("Kopieren"),     "Strg+C",  self._copy),
+                  self._op_btn(tr("Ausschneiden"), "Strg+X",  self._cut),
+                  self._op_btn(tr("Einfügen"),     "Strg+V",  self._paste),
+                  self._op_btn(tr("Rückgängig"),   "Strg+Z",  self._undo)):
             # Compact rows: the shared #secondaryBtn QSS pins min-height:28px,
             # which pushed the column past the fold. Give these their own name
             # so a slimmer rule (styling in _apply_theme) wins, and the whole
@@ -954,10 +973,12 @@ class MergeOrderWidget(QWidget):
         self._inf_name = QLabel("—")
         self._inf_name.setObjectName("currentFileLabel")
         self._inf_name.setWordWrap(True)
+        self._inf_name.setContentsMargins(0, 0, 0, 3)
         ll.addWidget(self._inf_name)
         self._inf_meta = QLabel("")
         self._inf_meta.setObjectName("dimLabel")
         self._inf_meta.setWordWrap(False)
+        self._inf_meta.setContentsMargins(0, 2, 0, 0)
         ll.addWidget(self._inf_meta)
         self._inf_widgets = [self._inf_sect, self._inf_name, self._inf_meta]
         self._set_file_info_visible(False)
@@ -1126,6 +1147,17 @@ class MergeOrderWidget(QWidget):
         for b in self.findChildren(QPushButton):
             if b.objectName() == "mergeOpBtn":
                 b.setStyleSheet(_op)
+        # Inside each compact op row: the label in the button's text colour and
+        # the shortcut dimmed, monospace and pushed right — the page-manager
+        # convention (manage.py's listbtnKbd), so the whole row reads as one
+        # affordance with the shortcut as a quiet hint.
+        for lbl in self.findChildren(QLabel):
+            if lbl.objectName() == "mergeOpKbd":
+                lbl.setStyleSheet(
+                    f"color:{t['vdim']};background:transparent;"
+                    f"font-family:monospace;font-size:10.5px;")
+            elif lbl.objectName() == "mergeOpLabel":
+                lbl.setStyleSheet(f"color:{t['text']};background:transparent;")
         # The compact AUSWAHL pair (Alle | Keine) — same slim chrome.
         _pair = (f"QPushButton#mergePairBtn{{background:{t['btn_bg']};color:{t['text']};"
                  f"border:1px solid {t['btn_brd']};border-radius:4px;"

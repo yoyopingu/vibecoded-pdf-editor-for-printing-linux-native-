@@ -180,7 +180,7 @@ class CropResizePanel(BasePanel):
         self.cl2 = mm(); self.cr  = mm()
 
         # ── DIN-Format Schnellauswahl ────────────────────────────────
-        fmt_grp = QGroupBox(tr("Format"))
+        fmt_grp = QGroupBox(tr("FORMAT"))
         fg = QVBoxLayout(fmt_grp); fg.setSpacing(4); fg.setContentsMargins(6,8,6,6)
         # Paper size, with the custom width x height row it brings with it.
         # Shared with N-Up so the two offer the same formats — see
@@ -198,7 +198,7 @@ class CropResizePanel(BasePanel):
         layout.addWidget(fmt_grp)
 
         # ── Randfelder ───────────────────────────────────────────────
-        crop_grp = QGroupBox(tr("Ränder  [+ schneiden / - erweitern]"))
+        crop_grp = QGroupBox(tr("RÄNDER  [+ SCHNEIDEN / - ERWEITERN]"))
         cg = QVBoxLayout(crop_grp); cg.setSpacing(4); cg.setContentsMargins(6,8,6,6)
         _rows = [(tr("Oben"), self.ct), (tr("Unten"), self.cb2),
                  (tr("Links"), self.cl2), (tr("Rechts"), self.cr)]
@@ -228,7 +228,7 @@ class CropResizePanel(BasePanel):
         # "skalieren" in its name did nothing at all on its own: the page came
         # out the size it went in, the preview did not move, and the run wrote
         # a copy of the original.
-        scale_grp = QGroupBox(tr("Skalieren"))
+        scale_grp = QGroupBox(tr("SKALIEREN"))
         sg = QVBoxLayout(scale_grp); sg.setSpacing(4); sg.setContentsMargins(6, 8, 6, 6)
 
         pct_row = QHBoxLayout(); pct_row.setSpacing(4)
