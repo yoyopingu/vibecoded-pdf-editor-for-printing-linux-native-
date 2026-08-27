@@ -136,7 +136,7 @@ QLineEdit#findEdit {{
 }}
 QPushButton#findNavBtn {{
     background: transparent; color: {dim};
-    border: 1px solid {line}; border-radius: 6px;
+    border: 1px solid {ibord}; border-radius: 6px;
     min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px;
     padding: 0;
 }}

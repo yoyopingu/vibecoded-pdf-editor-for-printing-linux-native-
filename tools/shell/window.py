@@ -5,7 +5,7 @@ tool panels.
 import sys, os
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox, QPushButton, QScrollArea
 from PyQt6.QtCore import Qt, pyqtSignal
-from tools.app_state import AppState
+from tools.app_state import AppState, theme_color
 from tools.i18n import tr, set_language, get_language
 from tools.branding import APP_NAME, APP_TAGLINE, app_title, versioned
 from tools.viewer.panel import PageViewerPanel
@@ -568,7 +568,11 @@ class MainWindow(QMainWindow):
         # where somebody reporting a fault goes looking for it.
         beta = QLabel(tr("BETA"))
         beta.setObjectName("betaChip")
-        beta.setContentsMargins(14, 0, 0, 12)
+        # Bottom-anchored footer: the chip's height sits above the fixed bottom
+        # edge, so the bottom content margin is what raises the label. The old
+        # 12px left BETA ~10px below the mounted panel's Komprimieren row; the
+        # taller 22px margin lifts it up to sit optically on that row's baseline.
+        beta.setContentsMargins(14, 0, 0, 22)
         sb.addWidget(beta)
 
         root.addWidget(sidebar)
@@ -972,7 +976,12 @@ class MainWindow(QMainWindow):
             self,
             tr("Über {p0}").format(p0=APP_NAME),
             f"<b>{versioned()}</b><br><br>"
-            + tr(APP_TAGLINE) + "<br><br>"
+            # The tagline is wrapped in a span coloured from the live shell text
+            # token at call time, so it clears ≥4.5:1 on both themes rather than
+            # inheriting the box's faint default. No tr() key changes — the
+            # translation is wrapped, not altered.
+            + f'<span style="color:{theme_color("TEXT")}">{tr(APP_TAGLINE)}</span>'
+            + "<br><br>"
             + tr("Entwickelt mit Python · PyQt6 · pypdfium2 · pikepdf · pypdf") + "<br><br>"
             "<i>" + tr("open source") + "</i>"
         )

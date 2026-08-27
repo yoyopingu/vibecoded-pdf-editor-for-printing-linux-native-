@@ -194,7 +194,12 @@ class StatusBar(QWidget):
                                            self.zoom_in_requested.emit)
         div = QWidget()
         div.setObjectName("sbZoomDiv")
-        div.setFixedSize(1, 14)
+        # A short, vertically-inset hairline reads as an internal separator of
+        # the one zoomer pill — not a full-height divider, which read as a
+        # group boundary splitting the fit button into a second group. The
+        # height sits well inside the pill's content row (28 - 2×2 margins =
+        # 24), leaving breathing room above and below the 1px line.
+        div.setFixedSize(1, 10)
         div.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._zoom_fit_btn = self._zoom_btn(tr("Anpassen") + "  (Strg+0)",
                                             self.zoom_fit_requested.emit)
