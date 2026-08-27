@@ -1668,6 +1668,7 @@ _READY_TWO_TRAYS = """
 def _lp_with_ready(paper_key, source, ready=_READY_TWO_TRAYS):
     """The -o options a job carries, with the printer answering `ready` when
     asked what paper is loaded."""
+    import shutil
     import subprocess
     from tools.printing import spool
     from tools.viewer.model import PageModel
@@ -1689,7 +1690,20 @@ def _lp_with_ready(paper_key, source, ready=_READY_TWO_TRAYS):
             return R()
         return real(cmd, *a, **k)
 
+    # spool.ready_media only asks the printer when ipptool is installed —
+    # without it the answer is "cannot say" and no media option is derived.
+    # The tray answers below must not depend on the CUPS tools of whatever
+    # machine runs this, so ipptool is injected the same way the job's lp call
+    # is spied: which() says it exists, run() answers for it.
+    real_which = shutil.which
+
+    def which(cmd, *a, **k):
+        if cmd == "ipptool":
+            return "/usr/bin/ipptool"
+        return real_which(cmd, *a, **k)
+
     subprocess.run = spy
+    shutil.which = which
     try:
         spool.print_via_gs(src, PageModel(n), [0], 1, "auto", False, False,
                            "long", 0, "press", 0, paper_key, 0,
@@ -1697,6 +1711,7 @@ def _lp_with_ready(paper_key, source, ready=_READY_TWO_TRAYS):
                            paper_source=("media-source", source) if source else None)
     finally:
         subprocess.run = real
+        shutil.which = real_which
     assert captured, "the job never reached lp"
     last = captured[-1]
     return [last[i + 1] for i, x in enumerate(last) if x == "-o"]

@@ -9,6 +9,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    env:
+      # Ubuntu's Ghostscript keeps its CMYK ICC profiles in
+      # /usr/share/color/icc/ghostscript/ — outside the paths its own SAFER
+      # sandbox permits. The PDF/X export's prologue opens the profile with
+      # PostScript `(profile) (r) file`, which then dies with
+      # /invalidfileaccess; gs prints only "Unrecoverable error, exit code 1"
+      # on stderr (the actual reason goes to stdout, which the tool discards
+      # when stderr is non-empty), so every PDF/X test failed as a bare
+      # "Ghostscript-Fehler:". The profiles are the distro's own read-only
+      # standard files; permitting them is the narrowest fix that does not
+      # weaken SAFER for anything else.
+      GS_OPTIONS: >-
+        --permit-file-read=/usr/share/ghostscript/*
+        --permit-file-read=/usr/share/color/icc/ghostscript/*
+
     steps:
       - uses: actions/checkout@v4
 

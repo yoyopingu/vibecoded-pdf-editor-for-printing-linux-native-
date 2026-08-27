@@ -10,6 +10,9 @@
 
 PyQt6>=6.6          # the entire UI; QtCore, QtGui, QtWidgets, QtNetwork, QtPrintSupport
 pypdf>=4.0          # page-level read/write: order, rotation, merge, split, save
+cryptography>=41.0  # pypdf needs it to decrypt AES — without it PdfReader.decrypt
+                    # raises and tools/pdf_access.py's encryption_state() answers
+                    # "open" for locked files (tests/app: the encryption guard)
 pikepdf>=8.0        # lower-level PDF surgery (linearise, layers, colour profiles)
 pypdfium2>=4.0      # page rasterising for the viewer, thumbnails and previews
 Pillow>=10.0        # image handling behind the renderers and converters
