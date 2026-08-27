@@ -493,11 +493,32 @@ class FileGrid(QWidget):
 
     def select_all(self):
         self._selected = set(range(len(self._paths)))
+        # Anchor the selection on a real card: this used to emit whatever
+        # _last_selected held — often -1, when nothing had been clicked yet —
+        # and the one selection handler then read that as "no current file"
+        # and left the "Keine Auswahl" label under a fully picked grid.
+        if not 0 <= self._last_selected < len(self._paths):
+            self._last_selected = 0
         self._update_selection(); self.selection_changed.emit(self._last_selected)
 
     def deselect_all(self):
         self._selected.clear(); self._last_selected = -1; self._last_click_pos = None
         self._update_selection(); self.selection_changed.emit(-1)
+
+    def select_positions(self, positions):
+        """Pick the parsed range-field positions and report whether any was
+        in bounds. The one mutation the grid takes from parsed text, so the
+        field's Enter and every other selection change flow through the same
+        signal → _on_select sync."""
+        pos_set = {i for i in positions if 0 <= i < len(self._paths)}
+        if not pos_set:
+            return False
+        self._selected = pos_set
+        self._last_selected = min(pos_set)
+        self._last_click_pos = self._last_selected
+        self._update_selection()
+        self.selection_changed.emit(self._last_selected)
+        return True
 
     def current_path(self):
         if 0 <= self._last_selected < len(self._paths):
@@ -808,6 +829,7 @@ class MergeOrderWidget(QWidget):
         lbl.setObjectName("sectionLabel")
         lbl.setFixedHeight(13)
         layout.addWidget(lbl)
+        return lbl
 
     def _btn(self, text, fn, _icon=None):
         b = QPushButton(text)
@@ -857,10 +879,12 @@ class MergeOrderWidget(QWidget):
         self._left_scroll.setWidget(self._left_content)
         cw.addWidget(self._left_scroll, 1)
 
-        # Auswahl field — the view's own selection box, compact at the top.
-        sel_lbl = QLabel(tr("Auswahl  (z.B. 1, 3, 5-8)"))
-        sel_lbl.setObjectName("sectionLabel")
-        ll.addWidget(sel_lbl)
+        # AUSWAHL — one section over the range field, its result line and the
+        # Alle | Keine pair. The field's example lives in its placeholder, so
+        # there is exactly one label, like the page manager's convention; a
+        # second "Auswahl  (z.B. …)" title used to sit directly above this
+        # group and repeat it.
+        self._section(ll, tr("AUSWAHL"))
         self.sel_edit = QLineEdit()
         self.sel_edit.setPlaceholderText(tr("z.B. 1, 3, 5-8, 12  →  Enter"))
         self.sel_edit.returnPressed.connect(self._apply_sel_edit)
@@ -869,6 +893,13 @@ class MergeOrderWidget(QWidget):
         self._info.setWordWrap(True)
         self._info.setObjectName("dimLabel")
         ll.addWidget(self._info)
+        pair_row = QHBoxLayout(); pair_row.setSpacing(4)
+        self._btn_all  = self._btn(tr("Alle"),  lambda: self._grid.select_all())
+        self._btn_none = self._btn(tr("Keine"), lambda: self._grid.deselect_all())
+        self._btn_all.setObjectName("mergePairBtn")
+        self._btn_none.setObjectName("mergePairBtn")
+        pair_row.addWidget(self._btn_all); pair_row.addWidget(self._btn_none)
+        ll.addLayout(pair_row)
 
         # Zoom only. The reset button used to be labelled "↺", which is the page
         # manager's rotate-left icon — so it read as "turn this thumbnail", an
@@ -888,16 +919,6 @@ class MergeOrderWidget(QWidget):
         self._zoom_hint_lbl = QLabel(tr("Thumbnails"))
         zoom_row.addWidget(self._zoom_hint_lbl); zoom_row.addStretch()
         ll.addLayout(zoom_row)
-
-        # AUSWAHL — Alle | Keine side by side, like the page manager's pair.
-        self._section(ll, tr("AUSWAHL"))
-        pair_row = QHBoxLayout(); pair_row.setSpacing(4)
-        self._btn_all  = self._btn(tr("Alle"),  lambda: self._grid.select_all())
-        self._btn_none = self._btn(tr("Keine"), lambda: self._grid.deselect_all())
-        self._btn_all.setObjectName("mergePairBtn")
-        self._btn_none.setObjectName("mergePairBtn")
-        pair_row.addWidget(self._btn_all); pair_row.addWidget(self._btn_none)
-        ll.addLayout(pair_row)
 
         # REIHENFOLGE — Hoch | Runter on one row (was two stacked full-width rows).
         self._section(ll, tr("REIHENFOLGE"))
@@ -926,8 +947,10 @@ class MergeOrderWidget(QWidget):
 
         # DATEI-INFO — two rows: the filename and one dim summary line. The four
         # old rows (name, type, pages, size) are folded into those two so the
-        # column stops short of a right-side scrollbar.
-        self._section(ll, tr("DATEI-INFO"))
+        # column stops short of a right-side scrollbar. The whole group is
+        # collapsed whenever nothing is picked (see _on_select) instead of
+        # showing a bare "—" stub under its own header.
+        self._inf_sect = self._section(ll, tr("DATEI-INFO"))
         self._inf_name = QLabel("—")
         self._inf_name.setObjectName("currentFileLabel")
         self._inf_name.setWordWrap(True)
@@ -936,6 +959,8 @@ class MergeOrderWidget(QWidget):
         self._inf_meta.setObjectName("dimLabel")
         self._inf_meta.setWordWrap(False)
         ll.addWidget(self._inf_meta)
+        self._inf_widgets = [self._inf_sect, self._inf_name, self._inf_meta]
+        self._set_file_info_visible(False)
         ll.addStretch()
 
         # ── The two ways out, pinned below the scroll area ───────────────
@@ -1172,13 +1197,7 @@ class MergeOrderWidget(QWidget):
 
     def _apply_sel_edit(self):
         positions = _parse_positions(self.sel_edit.text(), len(self._grid.get_paths()))
-        if positions:
-            self._grid._selected = set(positions)
-            self._grid._last_selected = min(positions)
-            self._grid._last_click_pos = self._grid._last_selected
-            self._grid._update_selection()
-            self._on_select(self._grid._last_selected)
-        else:
+        if not self._grid.select_positions(positions):
             self.update_info()
 
     def update_info(self):
@@ -1188,21 +1207,37 @@ class MergeOrderWidget(QWidget):
         self.sel_edit.setText(_positions_to_str(sorted(i+1 for i in self._grid._selected)))
         self.sel_edit.blockSignals(False)
 
+    def _set_file_info_visible(self, vis):
+        """Collapse / expand the whole DATEI-INFO group."""
+        for wdg in self._inf_widgets:
+            wdg.setVisible(vis)
+
     def _on_select(self, pos):
+        """The ONE owner of the selection UI: range field, the dim status line,
+        Hoch/Runter and the DATEI-INFO block. Every genuine mutation reaches
+        this through FileGrid.selection_changed; a caller may pass a position
+        outside the list (deselect_all sends -1), so `pos` falls back to a
+        picked index instead of being trusted — trusting it was what left the
+        label reading "Keine Auswahl" under a visibly picked grid."""
+        paths = self._grid.get_paths()
+        sel   = sorted(self._grid._selected)
+        if not (0 <= pos < len(paths)):
+            pos = sel[0] if sel else -1
         self.update_info()
         self._update_move_buttons()
-        path = self._grid.current_path()
-        if not path:
-            self._inf_name.setText("—"); self._inf_meta.setText("")
-            self._info.setText(tr("Keine Auswahl")); return
+        self._set_file_info_visible(bool(sel))
+        if not sel:
+            self._info.setText(tr("Keine Auswahl"))
+            return
         # A multi-selection advertises how many files are picked; a single pick
         # says where in the list the file sits. get_selected_info() already
         # branched on this, but the position line below used to clobber it.
-        if len(self._grid._selected) == 1:
+        if len(sel) == 1:
             self._info.setText(tr('Datei {p0} von {p1}').format(
-                p0=pos + 1, p1=len(self._grid.get_paths())))
+                p0=pos + 1, p1=len(paths)))
         else:
-            self._info.setText(self._grid.get_selected_info())
+            self._info.setText(tr('{p0} Dateien ausgewählt').format(p0=len(sel)))
+        path = paths[pos]
         ext = os.path.splitext(path)[1].lower()
         self._inf_name.setText(os.path.basename(path))
         parts = [tr("Typ: {p0}").format(
