@@ -139,7 +139,7 @@ class FileCard(QFrame):
     def paintEvent(self, _e):
         paint_file_card(self, self._pixmap, self._caption, self._page_count(),
                         self._card_w, self._card_h, self._selected,
-                        placeholder=self._icon)
+                        badge=self.pos + 1, placeholder=self._icon)
 
     def _load_local_preview(self):
         """Non-PDF files: images render from disk, everything else gets its icon.
@@ -849,7 +849,10 @@ class MergeOrderWidget(QWidget):
         b = QPushButton()
         b.setCursor(Qt.CursorShape.PointingHandCursor)
         lay = QHBoxLayout(b)
-        lay.setContentsMargins(0, 0, 0, 0)
+        # A right inset on the shortcut hint: with zero margins the dim kbd
+        # label sat flush against the row's right edge; a few pixels of air
+        # match the rhythm the label side reads against the column.
+        lay.setContentsMargins(0, 0, 6, 0)
         lay.setSpacing(6)
         lbl = QLabel(label)
         lbl.setObjectName("mergeOpLabel")

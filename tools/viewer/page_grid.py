@@ -58,14 +58,25 @@ def card_size(card_w, card_h):
     return card_w + 2 * CARD_MARGIN + 8, card_h + 2 * CARD_MARGIN + CARD_CAPTION + 4
 
 
-def paint_card(widget, pixmap, caption, card_w, card_h, selected,
+def _mix(a, b, k=0.6):
+    """Blend token colour `a` toward token colour `b` — a derived tone from
+    the live _TV palette, never a hardcoded hex, so it follows theme switches."""
+    ca, cb = QColor(a), QColor(b)
+    return QColor(int(ca.red() + (cb.red() - ca.red()) * k),
+                  int(ca.green() + (cb.green() - ca.green()) * k),
+                  int(ca.blue() + (cb.blue() - ca.blue()) * k))
+
+
+def paint_card(widget, pixmap, caption, card_w, card_h, selected, hover=False,
                placeholder=None):
     """Draw one card: selection frame, thumbnail well, thumbnail, caption.
 
     Shared by both grids so the merge view and the page manager cannot drift
     apart — they are the same card showing different things. `placeholder` is
     drawn large in the well when there is no thumbnail, which is how the merge
-    view shows a file type it cannot render a preview of.
+    view shows a file type it cannot render a preview of. `hover` paints the
+    pointer-over state (a wash of the theme's hover tone plus an outer border
+    tinted toward line_strong); it changes paint only, never geometry.
     """
     p = QPainter(widget)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -74,6 +85,14 @@ def paint_card(widget, pixmap, caption, card_w, card_h, selected,
     if selected:
         p.setPen(QPen(QColor(t['acc']), 2))
         p.setBrush(QColor(t['sel_bg']))
+        p.drawRoundedRect(rect, 5, 5)
+    elif hover:
+        # Subtle hover feedback: a wash of the theme's hover tone across the
+        # card and an outer border pulled toward line_strong, so the card
+        # reads as grabbable without competing with the selection ring.
+        p.fillRect(widget.rect(), QColor(t['hover']))
+        p.setPen(QPen(_mix(t['border'], t['line_strong']), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(rect, 5, 5)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
@@ -110,9 +129,13 @@ def paint_card(widget, pixmap, caption, card_w, card_h, selected,
         p.fillRect(x, y, card_w - 1, card_h - 1, tint)
 
     if caption:
+        # The selected card's caption sits over the sel_bg fill + accent tint,
+        # so it is drawn bold in the `text` token to hold its contrast; the
+        # unselected caption keeps its regular weight.
         p.setPen(QColor(t['text']))
         f = p.font()
         f.setPixelSize(11)
+        f.setBold(selected)
         p.setFont(f)
         p.drawText(x, y + card_h + CARD_SPACING, card_w, CARD_CAPTION,
                    int(Qt.AlignmentFlag.AlignCenter), caption)
@@ -120,13 +143,16 @@ def paint_card(widget, pixmap, caption, card_w, card_h, selected,
 
 
 def paint_file_card(widget, pixmap, name, meta, card_w, card_h, selected,
-                    placeholder=None):
+                    badge=None, placeholder=None):
     """Draw one file card: the same frame, well and selection ring as
     paint_card, but the caption is the filename (bold) over the page count
     (faint) rather than a page number, and the well holds the file's first page.
     A sibling of paint_card — the merge view is "Seiten verwalten" for files, so
     it shares the page grid's chrome while reading as a file list, not a page
-    list. `meta` is the page-count line, drawn only when it is known."""
+    list. `meta` is the page-count line, drawn only when it is known. `badge`
+    is the 1-based merge-order number drawn as the concept's .ord badge in the
+    card's top-left corner (merge file cards only — page-manager cards pass
+    nothing and stay unbudgeted for it)."""
     p = QPainter(widget)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     t = _TV
@@ -162,7 +188,12 @@ def paint_file_card(widget, pixmap, name, meta, card_w, card_h, selected,
         p.fillRect(x, y, card_w - 1, card_h - 1, tint)
 
     # Filename over page count — the file-list twin of the page-number caption.
-    cy = y + card_h + CARD_SPACING
+    # The block starts CARD_SPACING higher than before and the count line is a
+    # 10px row ending at card_h+29: drawn flush to the widget bottom its ink
+    # reached the last rows, where the selected card's 2px accent border cuts
+    # across it (the page card's single centred caption clears the border by
+    # ~16px and needs no such care).
+    cy = y + card_h
     p.setPen(QColor(t['text']))
     f = p.font(); f.setBold(True)
     f.setPixelSize(max(9, min(12, card_w // 14)))
@@ -173,11 +204,33 @@ def paint_file_card(widget, pixmap, name, meta, card_w, card_h, selected,
     if meta:
         p.setPen(QColor(t['dim']))
         f.setBold(False)
-        f.setPixelSize(max(8, min(11, card_w // 16)))
+        f.setPixelSize(max(8, min(10, card_w // 16)))
         p.setFont(f)
         meta = QFontMetrics(f).elidedText(meta, Qt.TextElideMode.ElideMiddle, card_w)
-        p.drawText(x, cy + 13, card_w, 11,
+        p.drawText(x, cy + 13, card_w, 10,
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), meta)
+
+    # The concept's .ord ordering badge (docs/gui-concept.html :481-484): a
+    # 19px rounded square on the card's top-left with the 1-based merge
+    # position — surface_3 on line_strong with a dim bold number, inverted to
+    # the accent with white text when the card is picked. The white is fixed
+    # like PAPER/INK: the contrast tone for the accent, which both themes
+    # share, not part of either palette.
+    if badge is not None:
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if selected:
+            p.setPen(QPen(QColor(t['acc']), 1))
+            p.setBrush(QColor(t['acc']))
+            num = QColor(Qt.GlobalColor.white)
+        else:
+            p.setPen(QPen(QColor(t['line_strong']), 1))
+            p.setBrush(QColor(t['surface_3']))
+            num = QColor(t['dim'])
+        p.drawRoundedRect(6, 6, 19, 19, 6, 6)
+        f = p.font(); f.setBold(True); f.setPixelSize(10)
+        p.setFont(f); p.setPen(num)
+        p.drawText(6, 6, 19, 19, int(Qt.AlignmentFlag.AlignCenter), str(badge))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
     p.end()
 
 
@@ -194,6 +247,7 @@ class PageCard(QFrame):
         self.setFixedSize(*card_size(card_w, card_h))
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._selected            = False
+        self._hovered             = False
         self._drag_pos            = None
         self._pending_ctrl_click  = False
 
@@ -243,6 +297,26 @@ class PageCard(QFrame):
             self._selected = sel
             self.update()
 
+    # Hover is per-card: enter/leave repaint only this card (paint_card reads
+    # the flag), never the grid, and there is no mouse tracking — tracking
+    # would fire mouseMoveEvents across every card a drag sweeps past.
+    def enterEvent(self, e):
+        self._hovered = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(e)
+
+    def hideEvent(self, e):
+        # A leave event can be lost when the cursor leaves while the card is
+        # being repainted or the grid rebuilt under it — clearing here keeps a
+        # stale hover wash from sticking to a card nobody points at.
+        self._hovered = False
+        super().hideEvent(e)
+
     def _ghost(self, pm):
         """A semi-transparent drag ghost: the drop slot the pointer is over
         stays visible beneath the card being carried, so reordering reads as
@@ -257,7 +331,8 @@ class PageCard(QFrame):
 
     def paintEvent(self, _e):
         paint_card(self, self._pixmap, self._caption,
-                   self._card_w, self._card_h, self._selected)
+                   self._card_w, self._card_h, self._selected,
+                   hover=self._hovered)
 
     def mousePressEvent(self, e):
         if e.button() != Qt.MouseButton.LeftButton:
