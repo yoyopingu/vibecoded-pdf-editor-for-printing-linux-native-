@@ -383,10 +383,13 @@ class PrepressDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(tr("Druckvorstufe"))
-        self.setMinimumWidth(560)
         self.setModal(True)
         self._s = AppSettings.get()
         self._build()
+        # An explicit width floor must be read AFTER _build: a hardcoded
+        # number below the layout's own minimum lets rows squeeze below their
+        # content — the Standard combo clipped its PDF/X-4 label at 560px.
+        self.setMinimumWidth(self.minimumSizeHint().width())
 
     def _build(self):
         from tools.panels._icc import CMYK_PROFILES, resolve_icc

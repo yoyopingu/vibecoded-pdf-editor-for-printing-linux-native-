@@ -27,7 +27,8 @@ APP_NAME = "Folio"
 # What it is, in one line — the about box and the desktop entry's comment.
 APP_TAGLINE = "PDF-Werkzeug für Copyshop und Druckvorstufe"
 
-APP_VERSION = "3"
+# Keep in sync with pyproject.toml's version field.
+APP_VERSION = "3.0.0"
 
 
 def app_title() -> str:
