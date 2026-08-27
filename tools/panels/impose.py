@@ -46,8 +46,7 @@ class ImposePanel(BasePanel):
 
         nb = QGroupBox(tr("SEITEN NORMALISIEREN")); nl = QVBoxLayout(nb)
         nl.addWidget(make_label(tr(
-            "Alle Seiten werden auf ihre Hälfte des Bogens gebracht\n"
-            "(Proportionen bleiben erhalten, Rand wird aufgefüllt)."), dim=True))
+            "Jede Seite wird auf ihre Bogenhälfte angepasst."), dim=True))
         self.norm_check = QCheckBox(tr("Vor dem Ausschießen normalisieren"))
         self.norm_check.setChecked(True); nl.addWidget(self.norm_check)
         layout.addWidget(nb)

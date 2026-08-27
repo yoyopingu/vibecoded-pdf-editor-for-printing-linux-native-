@@ -591,6 +591,11 @@ _EN: dict[str, str] = {
     "Drag & Drop sortiert · Strg/Shift mehrfach":
         "Drag & drop to sort  ·  Ctrl/Shift for multiple",
     "Thumbnails": "Thumbnails",
+    "Entf": "Del",
+    "Strg+C": "Ctrl+C",
+    "Strg+X": "Ctrl+X",
+    "Strg+V": "Ctrl+V",
+    "Strg+Z": "Ctrl+Z",
     "DATEI-INFO": "FILE INFO",
     "✗  Abbrechen": "✗  Cancel",
     "{p0} Dateien": "{p0} files",
@@ -1382,10 +1387,8 @@ _EN: dict[str, str] = {
     "darauf — A3 quer nimmt also zwei A4-Seiten auf.":
         "The sheet that goes through the printer. Two pages sit side by side "
         "on it — A3 landscape therefore takes two A4 pages.",
-    "Alle Seiten werden auf ihre Hälfte des Bogens gebracht\n"
-    "(Proportionen bleiben erhalten, Rand wird aufgefüllt).":
-        "Every page is fitted to its half of the sheet\n"
-        "(proportions are kept, the remainder is padded).",
+    "Jede Seite wird auf ihre Bogenhälfte angepasst.":
+        "Every page is fitted to its half of the sheet.",
     "Seiten in Falzreihenfolge auf größere Bögen ausschießen": "Impose pages onto larger sheets in folding order",
     "Vor dem Ausschießen normalisieren": "Normalize before imposing",
     "Die PDF hat keine Seiten.": "The PDF has no pages.",

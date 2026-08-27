@@ -955,11 +955,11 @@ class MergeOrderWidget(QWidget):
         ll.addLayout(reorder_row)
 
         self._section(ll, tr("OPERATIONEN"))
-        for b in (self._op_btn(tr("Entfernen"),    "Entf",    self._remove),
-                  self._op_btn(tr("Kopieren"),     "Strg+C",  self._copy),
-                  self._op_btn(tr("Ausschneiden"), "Strg+X",  self._cut),
-                  self._op_btn(tr("Einfügen"),     "Strg+V",  self._paste),
-                  self._op_btn(tr("Rückgängig"),   "Strg+Z",  self._undo)):
+        for b in (self._op_btn(tr("Entfernen"),    tr("Entf"),   self._remove),
+                  self._op_btn(tr("Kopieren"),     tr("Strg+C"), self._copy),
+                  self._op_btn(tr("Ausschneiden"), tr("Strg+X"), self._cut),
+                  self._op_btn(tr("Einfügen"),     tr("Strg+V"), self._paste),
+                  self._op_btn(tr("Rückgängig"),   tr("Strg+Z"), self._undo)):
             # Compact rows: the shared #secondaryBtn QSS pins min-height:28px,
             # which pushed the column past the fold. Give these their own name
             # so a slimmer rule (styling in _apply_theme) wins, and the whole
