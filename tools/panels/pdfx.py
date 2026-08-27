@@ -241,6 +241,41 @@ def _pdfx_defs(icc_path, oci, condition, version=None):
 """
 
 
+def _safer_permit_flag(icc):
+    """The --permit-file-read switch the gs command needs for `icc`, or None.
+
+    The prologue above opens the profile with `(path) (r) file`, and that open
+    goes through Ghostscript's default SAFER sandbox, which permits reads only
+    inside its own search paths (the -I path, the compiled-in resource
+    directories, the font paths) — verified against gs 10.07.1: the current
+    working directory is NOT on that list, contrary to what one might assume,
+    but a distro's ICC profile directory may be. Arch's package keeps
+    default_cmyk.icc under /usr/share/ghostscript/ (covered by the search
+    root); Ubuntu and Debian ship it in /usr/share/color/icc/ghostscript/
+    (package libgs-common), outside the versioned search root — so there the
+    open died with /invalidfileaccess before the export wrote a byte, and the
+    panel reported only "exit code 1" (the real PostScript error goes to
+    stdout, the bare line to stderr).
+
+    The switch grants exactly the directory the profile lives in, as a glob —
+    never the filesystem at large — and is derived from the same path string
+    the prologue will open, because SAFER matches the granted pattern against
+    the referenced path literally (an absolute reference needs an absolute
+    grant). A profile inside the working directory needs no grant and gets
+    none.
+    """
+    if not icc:
+        return None
+    icc_dir = os.path.dirname(icc)
+    if not icc_dir:
+        return None
+    cwd = os.path.realpath(os.getcwd())
+    real = os.path.realpath(icc_dir)
+    if real == cwd or real.startswith(cwd + os.sep):
+        return None
+    return f"--permit-file-read={icc_dir}/*"
+
+
 def _check_conformance(path, standard=DEFAULT_STANDARD, exact_version=True):
     """Raise unless `path` really carries what PDF/X requires.
 
@@ -535,6 +570,14 @@ def _export_pdfx(src, out, icc, oci, condition, dpi, standard, report):
                 "-dEmbedAllFonts=true",
                 "-dSubsetFonts=true",
             ]
+            # The ICC profile is opened by the pdfmark prologue, not named on
+            # the command line, so under the default SAFER sandbox it needs an
+            # explicit read permit wherever it lives outside gs's own search
+            # paths — see _safer_permit_flag for why Ubuntu/Debian exports
+            # died here with /invalidfileaccess while Arch never noticed.
+            permit = _safer_permit_flag(icc)
+            if permit:
+                cmd.append(permit)
             if not flattens:
                 cmd.append("-dCompatibilityLevel=1.6")
             if flattens:

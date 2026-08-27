@@ -11,7 +11,7 @@ from tools.panels._icc import CMYK_PROFILES, fallback_cmyk_icc, resolve_icc
 from tools.panels._prepress import highest_image_dpi, layer_summary
 from tools.panels.pdfx import (PDFX_STANDARDS, _boxes_survived,
                                _check_conformance, _export_pdfx, _pdfx_defs)
-from tests.support import FX, _TMP
+from tests.support import FX, _TMP, FakeCompletedProcess
 
 
 def _out(name):
@@ -157,6 +157,80 @@ def test_a_profile_path_cannot_break_out_of_the_postscript_prologue():
             bare = inner.replace(r"\(", "").replace(r"\)", "")
             assert "(" not in bare and ")" not in bare, line
     return "parentheses in a path or a condition name are escaped"
+
+
+# Where Ubuntu and Debian actually ship Ghostscript's generic CMYK profile
+# (package libgs-common) — the path this export used to die on with
+# /invalidfileaccess, because it is outside gs's SAFER search paths and the
+# command asked for no read permit.
+_UBUNTU_ICC = "/usr/share/color/icc/ghostscript/default_cmyk.icc"
+
+
+def _captured_pdfx_argv(icc):
+    """The gs argv a PDF/X export would run, without running Ghostscript.
+
+    Hooked on Progress.run rather than subprocess.run: the export shells out
+    through the progress object (tools/jobs.py), and a spy there sees the
+    command after every flag has been assembled. The fake completion leaves
+    the output file empty, so _export_pdfx stops at its own "no output" check
+    — the argv is what the test wants, not the file.
+    """
+    from tools.jobs import Progress
+
+    captured = []
+    real = Progress.run
+
+    def spy(self, cmd, *a, **k):
+        captured.append(list(cmd))
+        return FakeCompletedProcess(returncode=0)
+
+    Progress.run = spy
+    try:
+        try:
+            _export_pdfx(FX["normal"], _out("permit_argv"), icc, "Custom",
+                         "Generic CMYK", 150, "x4", null_progress())
+        except RuntimeError as e:
+            assert "Ausgabedatei" in str(e), \
+                f"stopped for an unexpected reason: {e}"
+        else:
+            raise AssertionError("the export ran to completion without gs output")
+    finally:
+        Progress.run = real
+    assert len(captured) == 1, f"expected one gs run, got {len(captured)}"
+    return captured[0]
+
+
+def test_the_gs_command_permits_reading_a_system_icc_profile():
+    """The prologue opens the ICC profile with `(path) (r) file`, and gs's
+    default SAFER sandbox permits reads only inside its own search paths.
+    Ubuntu/Debian ship the generic CMYK profile outside those — so without an
+    explicit permit the export died with /invalidfileaccess, reported to the
+    user as nothing but "exit code 1". The command has to grant exactly the
+    profile's directory, and grant it in the double-dash glob form gs 10.x
+    accepts (the single-dash spelling is rejected outright)."""
+    cmd = _captured_pdfx_argv(_UBUNTU_ICC)
+    permit = "--permit-file-read=/usr/share/color/icc/ghostscript/*"
+    assert permit in cmd, f"no read permit for the profile's directory: {cmd}"
+    # A permission switch is an option, not an input: it has to sit with the
+    # other flags, before the prologue and the document that get opened.
+    assert cmd.index(permit) < len(cmd) - 2, cmd
+    # Scoped to the one directory — never the filesystem at large.
+    assert not any(a.startswith("--permit-file-read=") and a != permit
+                   for a in cmd), cmd
+    return f"gs argv carries {permit}"
+
+
+def test_a_profile_next_to_the_app_needs_no_permit():
+    """The permit switch is for profiles the sandbox would refuse — one inside
+    the working directory does not need it, and asking for permissions the
+    run does not require is how a tool ends up blanket-permitted. (SAFER's
+    own default list varies by distro, so this pins the rule the code
+    applies: grant everything outside the working directory, nothing
+    inside it.)"""
+    local = os.path.join(os.getcwd(), "pdfx_no_permit_needed_9f2a.icc")
+    cmd = _captured_pdfx_argv(local)
+    assert not any(a.startswith("--permit-file-read=") for a in cmd), cmd
+    return "no permit switch for a cwd-local profile path"
 
 
 def _bleed_fixture():

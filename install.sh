@@ -253,6 +253,7 @@ info "Aktualisiere pip und wheel..."
 PIP_PACKAGES=(
     PyQt6
     pypdf
+    "cryptography>=41.0"  # pypdf needs it to decrypt AES — without it locked PDFs are treated as open
     pikepdf
     Pillow
     pypdfium2
@@ -422,6 +423,7 @@ import sys
 checks = [
     ("PyQt6.QtWidgets", "Qt6 GUI"),
     ("pypdf",           "pypdf"),
+    ("cryptography",    "cryptography (AES-Entschlüsselung für pypdf)"),
     ("pikepdf",         "pikepdf"),
     ("PIL",             "Pillow"),
     ("pypdfium2",       "pypdfium2"),
