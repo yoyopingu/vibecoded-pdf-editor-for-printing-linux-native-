@@ -390,10 +390,11 @@ def test_an_oversized_preview_does_not_drag_the_pane_out_with_it():
     label is; it is clipped to the space there is, which is also what zooming
     past the pane should do.
     """
-    from tests.support import _app, _spin
+    from tests.support import _app, _settle, _spin
     _open(FX["normal"])
     p = CropResizePanel(); p.resize(1200, 800); p.show()
-    _spin(20)
+    _settle(p, lambda: p._pane.label.width() > 100 and p._pane.label.height() > 100,
+            tries=300)
     label = p._pane.label
     started = (label.width(), label.height())
     assert started[0] > 100 and started[1] > 100, f"the pane never opened: {started}"

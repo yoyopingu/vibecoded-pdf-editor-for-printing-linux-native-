@@ -2,21 +2,23 @@
 """
 CopyShop regression suite — runs without pytest.
 
-    python3 tests/run.py               everything, one process per module
+    python3 tests/run.py               everything, one process per module, in parallel
     python3 tests/run.py quick         the fast subset (~45 s), one process per module
     python3 tests/run.py zoom render   only these, in this process
     python3 tests/run.py --one-process everything in a single process
 
-pytest works too, and is the nicer way to run one test or read a failure:
-
-    pytest tests/ -x -k thumbnail
+Full runs execute one process per module, launched in parallel: the number of
+workers = min(cpu count, module count) (override with FOLIO_TEST_WORKERS for
+memory-bound machines), and each module still runs in its own child process
+for heap-fault isolation. --one-process forces the serial in-process path through main(), the
+reproduction path for the fault.
 
 Both are kept. The system interpreter this app runs on has PyQt6, pypdfium2,
 pikepdf, reportlab and img2pdf but no pytest, so a suite that needed pytest
 would be a suite the app's own machine could not run.
 
 Why a process per module
-------------------------
+-------------------
 A full run in one process dies of a heap fault roughly three times in eight,
 deep in, after most of the tests have already reported PASS. Every test passes;
 a crashed run is one that got most of the way and fell over. A single module has
@@ -32,6 +34,7 @@ import pathlib
 import shutil
 import sys
 import traceback
+from concurrent.futures import ProcessPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -56,23 +59,35 @@ def modules(patterns):
             yield importlib.import_module(f"tests.{f.stem}")
 
 
-def isolated(mods=None):
-    """One child process per module. Returns the exit code."""
+def _run_module(stem):
+    """One child process per module. Returns the CompletedProcess."""
     import subprocess
+    return subprocess.run([sys.executable, "-u", __file__, stem],
+                          capture_output=True, text=True)
+
+
+def isolated(mods=None):
+    """One child process per module, launched in parallel. Returns the exit code."""
     if mods is None:
         mods = sorted(f.stem for f in HERE.glob("test_*.py"))
+    if not mods:
+        print("\n0 passed, 0 failed")
+        return 0
+    workers = max(1, min(os.cpu_count() or 1, len(mods)))
+    env_workers = os.environ.get("FOLIO_TEST_WORKERS")
+    if env_workers and env_workers.isdigit() and int(env_workers) > 0:
+        workers = min(int(env_workers), len(mods))
     passed = failed = crashed = 0
-    for stem in mods:
-        r = subprocess.run([sys.executable, "-u", __file__, stem],
-                           capture_output=True, text=True)
-        sys.stdout.write(r.stdout)
-        for line in r.stdout.splitlines():
-            if line.strip().endswith("failed") and " passed, " in line:
-                p, f = line.split(" passed, ")
-                passed += int(p.strip()); failed += int(f.split()[0])
-        if r.returncode != 0:
-            crashed += 1
-            sys.stdout.write(f"  !! {stem} exited {r.returncode}\n{r.stderr[-800:]}\n")
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        for stem, r in zip(mods, ex.map(_run_module, mods)):
+            sys.stdout.write(r.stdout)
+            for line in r.stdout.splitlines():
+                if line.strip().endswith("failed") and " passed, " in line:
+                    p, f = line.split(" passed, ")
+                    passed += int(p.strip()); failed += int(f.split()[0])
+            if r.returncode != 0:
+                crashed += 1
+                sys.stdout.write(f"  !! {stem} exited {r.returncode}\n{r.stderr[-800:]}\n")
     print(f"\n{passed} passed, {failed} failed"
           + (f", {crashed} module(s) crashed" if crashed else ""))
     return 0 if not (failed or crashed) else 1
@@ -99,9 +114,12 @@ def main(patterns):
     print(f"\n{passed} passed, {failed} failed")
     shutil.rmtree(support._TMP, ignore_errors=True)
     sys.stdout.flush()
-    # Skip Qt / daemon-thread teardown, which segfaults harmlessly on the way
-    # out and would turn a green run into a non-zero exit.
-    os._exit(0 if failed == 0 else 1)
+    # Stop the render thread and the job pool before the interpreter tears Qt
+    # down. The old os._exit() skipped all of this and segfaulted its way out;
+    # stopping the background work first is what lets the QApplication be
+    # destroyed cleanly (see tests/conftest.py's pytest_sessionfinish).
+    support.shutdown_app_background()
+    raise SystemExit(0 if failed == 0 else 1)
 
 
 if __name__ == "__main__":
@@ -110,8 +128,11 @@ if __name__ == "__main__":
     # A preset expands to its modules; several modules then run one process
     # each, the same way the full run does, rather than through main().
     stems = list(dict.fromkeys(s for a in args for s in PRESETS.get(a, [a])))
-    if not args:
+    if "--one-process" in raw:
+        main(stems)
+    elif not args:
         raise SystemExit(isolated())
-    if stems != args and "--one-process" not in raw:
+    elif stems != args:
         raise SystemExit(isolated(stems))
-    main(stems)
+    else:
+        main(stems)

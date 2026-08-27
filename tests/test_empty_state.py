@@ -70,7 +70,8 @@ def test_opening_the_first_file_hides_the_empty_state_and_renders():
     assert vp.tabs.isVisible() and not vp._empty_state.isVisible()
 
     vp._close_tab(0)
-    _spin(20, 0.01)
+    _settle(vp, lambda: vp._empty_state.isVisible() and not vp.tabs.isVisible(),
+            tries=300)
     assert vp._empty_state.isVisible() and not vp.tabs.isVisible(), \
         "closing the last tab should bring the empty state back"
     vp.deleteLater(); _app.processEvents()
@@ -113,9 +114,10 @@ def test_dropping_files_opens_one_or_previews_several():
     vp.deleteLater(); _app.processEvents()
 
     vp2 = PageViewerPanel(); vp2.resize(1000, 700); vp2.show()
-    vp2._empty_state.files_dropped.emit([FX["single"], FX["normal"]])
-    _spin(30, 0.01)
     from tools.viewer.merge import MergeOrderWidget
+    vp2._empty_state.files_dropped.emit([FX["single"], FX["normal"]])
+    _settle(vp2, lambda: isinstance(vp2._merge_widget, MergeOrderWidget),
+            tries=300)
     assert vp2.tabs.count() == 0      # the merge is a main-area view, not a tab
     assert isinstance(vp2._merge_widget, MergeOrderWidget), \
         "several dropped files should land in the merge preview, not open separately"

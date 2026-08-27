@@ -10,6 +10,8 @@ pytest every test that touched it failed on an empty dict before it began.
 Import order below is not arbitrary; see the note on main.
 """
 import os, sys, time, tempfile
+import subprocess
+from contextlib import contextmanager
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 # Before tools.app is imported below, because importing it is what configures
@@ -67,7 +69,33 @@ import tools.app as MAIN                                            # noqa: F401
 MM = 2.8346456693
 
 
+# _TMP must stay per-process unique (mkdtemp's random suffix is what does that):
+# the future parallel runner runs each test module in its own process with no
+# shared state, so a fixed name here would make modules stomp each other's
+# fixture files.
 _TMP = tempfile.mkdtemp(prefix="copyshop_tests_")
+
+
+def shutdown_app_background():
+    """Stop every thread that would otherwise still be touching Qt objects
+    while the interpreter tears the QApplication down at exit.
+
+    The app wires this to QApplication.aboutToQuit, which never fires in the
+    tests because no test runs an event loop — so the render thread and the
+    global job pool stay live, and Qt destroying the QApplication out from
+    under them segfaults the process after the results are printed (green run,
+    exit 139, roughly three times in eight). tests/conftest.py calls the same
+    thing at pytest_sessionfinish; this is the runner's equivalent so
+    tests/run.py can stop the threads instead of os._exit()ing past them.
+
+    What it stops: the render worker thread, every pending/cancellable job on
+    Qt's global QThreadPool (and it waits for the pool to drain), and the open
+    pdfium document handles. Each stage is wrapped in its own try/except and
+    the whole thing is idempotent — safe to call more than once, and safe when
+    Qt has already begun its own teardown.
+    """
+    from tools.render.queue import shutdown_render_queue
+    shutdown_render_queue()
 
 
 def _make_fixtures():
@@ -249,6 +277,8 @@ def _settle(vp, done, tries=600):
 
 
 def _spin(n=60, delay=0.02):
+    """A FIXED-duration pump: always runs all n iterations, no early exit.
+    _settle is the bounded variant that returns as soon as `done()` is true."""
     for _ in range(n):
         _app.processEvents(); time.sleep(delay)
 
@@ -306,3 +336,123 @@ class _LazyFX(dict):
 
 
 FX = _LazyFX(_make_fixtures())
+
+
+def _as_bytes(v):
+    """Coerce `v` to bytes: pass bytes through, encode str as utf-8."""
+    return v if isinstance(v, bytes) else v.encode("utf-8")
+
+
+class FakeCompletedProcess:
+    """A completed subprocess, hand-rolled so tests can fake code paths that
+    shell out via subprocess.run/Popen and inspect the result. No mocks.
+
+    Mirrors what call sites actually read from a CompletedProcess: returncode,
+    stdout, stderr. stdout/stderr are stored as bytes (str input is encoded
+    utf-8) so downstream parsing (page counts, "Error" lines) sees byte
+    content, matching the real subprocess default.
+    """
+    def __init__(self, returncode=0, stdout=b"", stderr=b""):
+        self.returncode = returncode
+        self.stdout = _as_bytes(stdout)
+        self.stderr = _as_bytes(stderr)
+
+    def check_returncode(self, cmd=None):
+        """Raise if returncode != 0, mirroring subprocess.CompletedProcess."""
+        if self.returncode:
+            raise subprocess.CalledProcessError(self.returncode, cmd)
+
+    def ok(self):
+        """True when the fake exited 0."""
+        return self.returncode == 0
+
+
+class _FakeHelper:
+    """The object `fake_ghostscript` yields: a place for the test's Pattern A
+    spy to record its (args, kwargs), and a canned way to turn a captured gs
+    argv into a successful FakeCompletedProcess by copying the input PDF to the
+    output target verbatim."""
+
+    def __init__(self, canned_stdout, copy_input_to_output=True):
+        self.calls = []
+        self._canned_stdout = canned_stdout
+        self._copy = copy_input_to_output
+
+    def copy_input_to_output(self, args):
+        """Given a gs argv, write the input PDF to the output target and
+        return a FakeCompletedProcess(returncode=0, stdout=canned_stdout).
+
+        The input is the positional file arg that follows -f, or the last
+        positional otherwise. The output target is parsed from the first of
+        -sOutputFile=/path, -sOutputFile /path, -o=/path or -o /path. With
+        copy_input_to_output=False this skips touching the filesystem and only
+        returns the fake — for failure-path tests that inspect the command
+        without producing output.
+        """
+        output = None
+        for i, a in enumerate(args):
+            if a in ("-sOutputFile", "-o") and i + 1 < len(args):
+                output = args[i + 1]
+            elif a.startswith(("-sOutputFile=", "-o=")):
+                output = a.split("=", 1)[1]
+            if output is not None:
+                break
+        if output is None:
+            raise ValueError(
+                "no output flag (-sOutputFile=/ -o) in gs argv: %r" % (args,))
+        pos = [a for a in args if not a.startswith("-") and a != output]
+        if "-f" in args:
+            i = args.index("-f")
+            src = args[i + 1] if i + 1 < len(args) else pos[-1] if pos else None
+        else:
+            src = pos[-1] if pos else None
+        if src is None:
+            raise ValueError("no input file in gs argv: %r" % (args,))
+        if self._copy:
+            parent = os.path.dirname(output)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(src, "rb") as f:
+                data = f.read()
+            with open(output, "wb") as f:
+                f.write(data)
+        return FakeGhostscript(returncode=0, stdout=self._canned_stdout)
+
+
+FakeGhostscript = FakeCompletedProcess
+
+
+@contextmanager
+def fake_ghostscript(module, *, canned_stdout=b"", copy_input_to_output=True):
+    """Swap `module.ghostscript_binary` for a fake returning a fake gs path.
+
+    Mirrors the hand-rolled save/replace/try/finally pattern at
+    test_printing.py:342-358 — the consumer module binds the FUNCTION
+    `ghostscript_binary` into its own namespace at import, so the fake must
+    replace the consumer module's attribute, not the one in tools/ghostscript.
+
+    The fake returns the truthy sentinel path "__fake_gs__" (the real function
+    returns a path or None, and callers do `if ghostscript_binary(): ...`
+    before building a subprocess command with it). A test that lets the gs
+    command actually execute must also stub subprocess.run (Pattern A) to
+    intercept it; `canned_stdout` defaults to b"" and callers override it with
+    whatever stdout their code path parses.
+
+    Yields a helper whose `.calls` records every (args, kwargs) tuple the
+    test's Pattern A spy appended, and whose `copy_input_to_output(args)` turns
+    a captured gs argv into a FakeCompletedProcess success while copying the
+    input PDF to the output file verbatim (pass copy_input_to_output=False to
+    skip that last behaviour, e.g. for failure-path tests that just inspect the
+    command without producing output).
+    """
+    real = getattr(module, "ghostscript_binary")
+    helper = _FakeHelper(canned_stdout, copy_input_to_output)
+
+    def fake(*args, **kwargs):
+        return "__fake_gs__"
+
+    try:
+        module.ghostscript_binary = fake
+        yield helper
+    finally:
+        module.ghostscript_binary = real

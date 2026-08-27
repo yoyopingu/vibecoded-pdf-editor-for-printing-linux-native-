@@ -54,7 +54,7 @@ def test_the_export_carries_everything_pdfx_requires():
     assert icc, "no CMYK ICC profile on this system to embed"
     out = _out("conform")
     result, dropped, _capped, _v = _export_pdfx(FX["color"], out, icc, "Custom",
-                                           "Generic CMYK", 300, "x3", null_progress())
+                                           "Generic CMYK", 150, "x3", null_progress())
     assert result == out and not dropped
 
     with pikepdf.open(out) as pdf:
@@ -190,7 +190,7 @@ def test_the_trim_the_source_declared_survives_the_export():
     src = _bleed_fixture()
     out = _out("bleed")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 300, "x3", null_progress())
+                 150, "x3", null_progress())
     with pikepdf.open(src) as s_pdf, pikepdf.open(out) as o_pdf:
         for i, (s_page, o_page) in enumerate(zip(s_pdf.pages, o_pdf.pages)):
             for key in ("/TrimBox", "/BleedBox"):
@@ -207,7 +207,7 @@ def test_a_file_without_a_trim_box_is_not_given_a_guessed_one():
     off every job that is genuinely that size."""
     out = _out("notrim")
     _export_pdfx(FX["color"], out, fallback_cmyk_icc(), "Custom",
-                 "Generic CMYK", 300, "x3", null_progress())
+                 "Generic CMYK", 150, "x3", null_progress())
     with pikepdf.open(out) as pdf:
         for i, page in enumerate(pdf.pages):
             media = [float(x) for x in page.obj["/MediaBox"]]
@@ -252,10 +252,10 @@ def test_images_come_down_to_press_resolution():
         for y in range(877):
             for x in range(620):
                 pixels[x, y] = (x * 7 % 256, y * 11 % 256, (x + y) % 256)
-        high = os.path.join(_TMP, "pdfx_600.png")
-        low = os.path.join(_TMP, "pdfx_200.png")
-        base.resize((4960, 7016)).save(high)     # ~600 dpi on A4
-        base.resize((1653, 2339)).save(low)      # ~200 dpi on A4
+        high = os.path.join(_TMP, "pdfx_600.jpg")
+        low = os.path.join(_TMP, "pdfx_200.jpg")
+        base.resize((3308, 4678)).save(high, quality=92)   # ~400 dpi on A4
+        base.resize((1653, 2339)).save(low, quality=92)    # ~200 dpi on A4
         c = canvas.Canvas(src, pagesize=A4)
         c.drawImage(high, 0, 0, w, h); c.showPage()
         c.drawImage(low, 0, 0, w, h); c.showPage()
@@ -288,7 +288,7 @@ def test_images_come_down_to_press_resolution():
                  2400, "x3", null_progress())
     small_kb, big_kb = os.path.getsize(out) // 1024, os.path.getsize(big) // 1024
     assert small_kb < big_kb, f"downsampling saved nothing ({small_kb} vs {big_kb} KB)"
-    return (f"600 dpi -> {after[0] / (595.28 / 72):.0f} dpi, 200 dpi untouched, "
+    return (f"400 dpi -> {after[0] / (595.28 / 72):.0f} dpi, 200 dpi untouched, "
             f"{big_kb} KB -> {small_kb} KB")
 
 
@@ -471,7 +471,7 @@ def test_vector_artwork_stays_vector():
 
     out = _out("vector")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 600, "x3", null_progress())
+                 300, "x3", null_progress())
     after_paths, after_images = _count(out)
     assert after_images == 0, f"{after_images} image(s) appeared in vector artwork"
     assert after_paths == before_paths, \
@@ -536,7 +536,7 @@ def test_transparency_is_flattened_and_said_so_beforehand():
     # And under X-3 it really is rasterised, which is what that warning is about.
     out = _out("trans")
     _export_pdfx(src, out, fallback_cmyk_icc(), "Custom", "Generic CMYK",
-                 600, "x3", null_progress())
+                 200, "x3", null_progress())
     _paths, images = _count(out)
     assert images >= 1, "a transparent page came through without being flattened"
     return "warned in preflight, and flattened to 1 image on export"
@@ -560,7 +560,7 @@ def test_the_raster_resolution_is_capped_so_the_result_can_be_opened():
         from reportlab.pdfgen import canvas
         c = canvas.Canvas(big, pagesize=(2384, 3370))
         c.setFillAlpha(0.4); c.setFillColorRGB(0.2, 0.4, 0.9)
-        c.circle(1200, 1700, 900, fill=1, stroke=0)
+        c.circle(1200, 1700, 400, fill=1, stroke=0)
         c.showPage(); c.save()
 
     dpi, capped = _flatten_dpi(big, 600)
@@ -620,7 +620,7 @@ def test_x4_keeps_transparent_artwork_as_artwork():
         out = _out(f"std_{standard}")
         started = time.time()
         _r, _dropped, _capped, version = _export_pdfx(
-            src, out, icc, "Custom", "Generic CMYK", 600, standard,
+            src, out, icc, "Custom", "Generic CMYK", 200, standard,
             null_progress())
         results[standard] = (_count(out), time.time() - started,
                              os.path.getsize(out), version)
@@ -652,14 +652,14 @@ def test_x4_may_keep_layers_and_x3_may_not():
 
     out4 = _out("layers_x4")
     _r, dropped4, _c, _v = _export_pdfx(src, out4, icc, "Custom",
-                                        "Generic CMYK", 600, "x4", null_progress())
+                                        "Generic CMYK", 300, "x4", null_progress())
     assert dropped4 == [], "X-4 reported dropping a layer it is allowed to keep"
     _check_conformance(out4, "x4")            # must not raise
 
     # The same file under the X-3 rules: layers gone, and reported.
     out3 = _out("layers_x3")
     _r, dropped3, _c, _v = _export_pdfx(src, out3, icc, "Custom",
-                                        "Generic CMYK", 600, "x3", null_progress())
+                                        "Generic CMYK", 300, "x3", null_progress())
     assert dropped3 == ["Stanzkontur"], dropped3
     with pikepdf.open(out3) as pdf:
         assert "/OCProperties" not in pdf.Root

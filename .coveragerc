@@ -1,0 +1,18 @@
+[run]
+# Measure the app under tools/, not the tests themselves.
+source = tools
+branch = True
+parallel = True
+
+[report]
+show_missing = True
+skip_covered = False
+exclude_lines =
+    # Skip common non-executable / opt-out patterns.
+    pragma: no cover
+    if TYPE_CHECKING:
+    if typing.TYPE_CHECKING:
+    @overload
+    raise NotImplementedError
+    def __repr__
+    def __str__

@@ -137,10 +137,12 @@ def _open_in_manage(path):
     from tools.viewer.panel import PageViewerPanel
     vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
     vp.open_file(path)
-    _spin(60, 0.01)
+    _settle(vp, lambda: vp.tabs.count() and vp.tabs.currentWidget().single,
+            tries=300)
     tab = vp.tabs.currentWidget()
     vp._toggle_manage()
-    _spin(40, 0.01)
+    _settle(vp, lambda: tab._manage_panel is not None and tab.in_manage_mode(),
+            tries=300)
     # Not findChild(): manage mode reparents the panel out of the tab and into
     # the viewer's splitter. The tab keeps its own reference.
     panel = tab._manage_panel
@@ -157,13 +159,13 @@ def test_inserted_blank_page_renders_in_the_preview():
     before = len(tab.model.order)
     tab.model.selected = {tab.model.order[1]}
     panel._insert_blank()
-    _spin(40, 0.01)
+    _settle(vp, lambda: len(tab.model.order) == before + 1, tries=300)
     assert len(tab.model.order) == before + 1, panel.status.text()
     assert tab.pdf_path == panel.pdf_path, \
         "the tab still points at the pre-insert file"
 
     vp._toggle_manage()                                      # back to preview
-    _spin(40, 0.01)
+    _settle(vp, lambda: not tab.in_manage_mode(), tries=300)
     sv = tab.single
     sv._current = 2                                          # the blank
     sv._render()
@@ -202,7 +204,7 @@ def test_save_as_honours_the_page_selection():
         "an export of part of the document must not retarget the tab"
 
     # Leaving the manager makes the stale selection irrelevant again.
-    vp._toggle_manage(); _spin(20, 0.01)
+    vp._toggle_manage(); _settle(vp, lambda: not tab.in_manage_mode(), tries=300)
     assert not tab.in_manage_mode()
     tab.model.order = list(reversed(tab.model.order))   # reorder, so a stale
     full = os.path.join(out_dir, "full.pdf")            # index mapping shows up
@@ -413,7 +415,7 @@ def test_opening_a_bad_file_reports_instead_of_crashing():
         for label, path in cases:
             before = len(said)
             vp.open_file(path)
-            _spin(10, 0.01)
+            _settle(vp, lambda: len(said) > before, tries=300)
             assert len(said) > before, f"{label}: opened with no message at all"
         assert vp.tabs.count() == 0, \
             f"{vp.tabs.count()} tab(s) opened for files that cannot be read"
@@ -452,12 +454,13 @@ def test_merge_preview_hides_the_app_sidebar():
     vp.mount_sidebar = lambda view, widget=None: shown.append(view)
 
     vp.show_merge_tab([FX["normal"], FX["single"]])
-    _spin(20, 0.01)
+    _settle(vp, lambda: isinstance(vp._merge_widget, MergeOrderWidget),
+            tries=300)
     assert isinstance(vp._merge_widget, MergeOrderWidget)
     assert shown and shown[-1] == "merge", f"sidebar not hidden ({shown})"
 
     vp._merge_widget._do_cancel()
-    _spin(20, 0.01)
+    _settle(vp, lambda: shown[-1] == "tool_list", tries=300)
     assert shown[-1] == "tool_list", f"sidebar not restored after cancel ({shown})"
 
     # …and it stays away only for that view. The merge is a main-area view, not
@@ -468,7 +471,8 @@ def test_merge_preview_hides_the_app_sidebar():
     vp.open_file(FX["single"]); _spin(30, 0.01)      # two tabs; current = single
     vp.show_merge_tab([FX["framed"], FX["mixed"]]); _spin(20, 0.01)
     assert shown[-1] == "merge", "sidebar not hidden for a second preview"
-    vp.tabs.setCurrentIndex(0); _spin(20, 0.01)       # switch to the first doc
+    vp.tabs.setCurrentIndex(0); _settle(vp, lambda: shown[-1] == "tool_list",
+                                        tries=300)  # switch to the first doc
     assert shown[-1] == "tool_list", "sidebar not restored when switching to a PDF tab"
     vp.deleteLater()
 
@@ -664,7 +668,8 @@ def test_closing_a_merge_tab_deletes_its_conversion_directory():
     vp = PageViewerPanel(); vp.resize(900, 700); vp.show()
     try:
         vp.show_merge_tab([FX["normal"], FX["single"]])
-        _spin(20, 0.01)
+        _settle(vp, lambda: isinstance(vp._merge_widget, MergeOrderWidget),
+                tries=300)
         w = vp._merge_widget
         assert isinstance(w, MergeOrderWidget)
         assert os.path.isdir(w.tmp_dir)

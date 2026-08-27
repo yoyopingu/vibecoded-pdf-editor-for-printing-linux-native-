@@ -751,7 +751,7 @@ def test_a_render_that_fails_is_retried_and_never_leaves_the_page_blank():
             sv._render()
             _settle(vp, lambda: sv._render_task is None and sv._region_task is None,
                     tries=400)
-            _spin(10)
+            _settle(vp, lambda: sv._view._pixmap is not None, tries=300)
             recovered = sv._view._pixmap is not None
         finally:
             Q.render_window = real
@@ -765,7 +765,7 @@ def test_a_render_that_fails_is_retried_and_never_leaves_the_page_blank():
             sv._render()
             _settle(vp, lambda: sv._render_task is None and sv._region_task is None,
                     tries=400)
-            _spin(10)
+            _settle(vp, lambda: sv._view._pixmap is not None, tries=300)
             shown = sv._view._pixmap
         finally:
             Q.render_window = real
@@ -874,7 +874,8 @@ def test_continuous_wheel_eases_and_touchpad_does_not_lag():
         mid = sv._doc_scroll
         assert mid < sv._scroll_goal or abs(mid - sv._scroll_goal) < 1, \
             "notch jumped straight to the goal instead of easing"
-        _spin(30)
+        _settle(vp, lambda: abs(sv._doc_scroll - sv._scroll_goal) < 1.0,
+                tries=300)
         assert abs(sv._doc_scroll - sv._scroll_goal) < 1.0, \
             "eased scroll never settled on the goal"
 
@@ -884,7 +885,7 @@ def test_continuous_wheel_eases_and_touchpad_does_not_lag():
         for _ in range(20):
             wheel(120)
             _spin(2)
-        _spin(30)
+        _settle(vp, lambda: sv._doc_scroll < 1.0, tries=300)
         assert sv._doc_scroll < 1.0, \
             f"wheel-up never returned to the top (at {sv._doc_scroll:.1f})"
 

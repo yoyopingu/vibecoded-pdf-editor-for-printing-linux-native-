@@ -117,7 +117,9 @@ def test_jobs_are_cancelled_on_tab_close_and_on_shutdown():
 
     jobs.cancel_all(2000)
     vp = PageViewerPanel(); vp.resize(600, 400); vp.show()
-    vp.open_file(FX["normal"]); _spin(40, 0.01)
+    vp.open_file(FX["normal"])
+    _settle(vp, lambda: vp.tabs.count() and vp.tabs.currentWidget().single,
+            tries=300)
     tab = vp.tabs.currentWidget()
 
     seen = []
@@ -503,7 +505,7 @@ def test_switching_tabs_does_not_throw_away_the_other_tab_s_renders():
         assert len(first) >= 3, f"the fixture only cached {sorted(first)}"
 
         vp.open_file(FX["color"])
-        _spin(40)
+        _settle(vp, lambda: vp.tabs.count() >= 2, tries=300)
         for idx in (0, 1, 0):                 # back and forth, as a reader does
             vp.tabs.setCurrentIndex(idx)
             _spin(20)

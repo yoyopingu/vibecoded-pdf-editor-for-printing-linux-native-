@@ -19,3 +19,8 @@ __pycache__
 AGENTS.md
 PLAN.md
 .opencode/
+
+# Coverage artifacts (never commit)
+.coverage
+coverage.xml
+htmlcov/

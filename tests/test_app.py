@@ -60,11 +60,13 @@ INSTANCE._IPC_KEY = {key!r}   # own socket, so a real running app is untouched
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-# Quit the way a user does, once the window is up and rendering.
+# Quit the way a user does, once the window is up and rendering. The delay is
+# env-driven so the subprocess caller can shorten it; 1500ms is the default.
 _show = MAIN.MainWindow.show
 def show(self):
     _show(self)
-    QTimer.singleShot(1500, QApplication.instance().quit)
+    QTimer.singleShot(int(os.environ.get("FOLIO_TEST_QUIT_MS", "1500")),
+                      QApplication.instance().quit)
 MAIN.MainWindow.show = show
 try:
     MAIN.main()
@@ -88,7 +90,8 @@ def test_app_exits_without_crashing():
     with open(script, "w") as f:
         f.write(_EXIT_SCRIPT.format(repo=repo, src=FX["normal"],
                                     key=f"copyshop_exit_{os.getpid()}"))
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen",
+               FOLIO_TEST_QUIT_MS="300")   # still exercises startup+show+quit
     runs = []
     for _ in range(3):          # the crash was racy — one clean run proves little
         p = subprocess.run([sys.executable, "-u", script], env=env,
@@ -288,11 +291,11 @@ def test_preview_canvas_follows_the_theme():
     try:
         _open(FX["normal"])
         p = NUpPanel(); p.resize(1000, 700); p.show()
-        _spin(30)
+        _spin(10)
         seen = {}
         for theme in ("light", "dark"):
             MAIN.apply_theme_globally(theme)
-            _spin(40)
+            _spin(15)
             img = p._preview.pixmap().toImage()
             # bottom-right: the sheet is drawn to (w-1, h-1), so the last row
             # and column are the only backdrop the N-Up preview leaves showing.
@@ -396,7 +399,7 @@ def test_a_forwarded_file_survives_a_garbage_collection():
 
         # Let the server accept it. _serve runs here, with nothing to read yet —
         # the state the failure needed.
-        _spin(20)
+        _spin(12)
         gc.collect()
 
         sock.write((FX["single"] + "\n").encode("utf-8"))
@@ -404,7 +407,7 @@ def test_a_forwarded_file_survives_a_garbage_collection():
         if sock.bytesToWrite():
             sock.waitForBytesWritten(2000)
         sock.disconnectFromServer()
-        _spin(40)
+        _spin(20)
 
         assert win.got, "the forwarded path never arrived"
         paths, _token = win.got[0]
@@ -557,14 +560,14 @@ def test_a_restricted_pdf_opens_and_a_locked_one_asks_for_the_password():
         ACCESS.ask_password = lambda path, parent=None: asked.append(path)
         # Restricted: opens, and nothing is asked.
         vp.open_file(FX["restricted"])
-        _spin(40)
+        _spin(20)
         assert vp.tabs.count() == 1, "a restricted PDF still refused to open"
         assert not asked, "a restricted PDF asked for a password it does not need"
 
         # Locked, answered correctly: opens the decrypted copy.
         ACCESS.ask_password = lambda path, parent=None: (asked.append(path), "u")[1]
         vp.open_file(FX["encrypted"])
-        _spin(60)
+        _spin(25)
         assert asked, "a locked PDF opened without asking for anything"
         assert vp.tabs.count() == 2, "the right password did not open the file"
         opened = vp.tabs.currentWidget().pdf_path
