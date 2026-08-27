@@ -65,9 +65,30 @@ def test_stopping_kills_the_child_process():
     assert elapsed < 5, f"took {elapsed:.1f}s to stop a cancelled child"
 
     # And it is gone, not merely abandoned to keep a core busy.
-    leftover = subprocess.run(["pgrep", "-f", "^sleep 30$"],
-                              capture_output=True, text=True).stdout.strip()
-    assert not leftover, f"sleep survived the cancel: {leftover}"
+    #
+    # Two things make this check honest rather than racy:
+    #
+    #   - Scoped to OUR descendants (-P): the parallel runner has every test
+    #     module running in a sibling process, and other modules spawn literal
+    #     `sleep 30` children too (test_gs_pool's timeout batch among them).
+    #     A machine-wide `pgrep -f` matched those, so a green teardown here
+    #     failed intermittently on a sibling's alive-and-shortly-to-be-killed
+    #     child — different stray PID every occurrence, nothing wrong with
+    #     stopping at all. An abandoned child would be a DIRECT child of this
+    #     process forever, so scoping down weakens nothing the test proves.
+    #   - Condition-based, not one-shot: poll until no such descendant exists,
+    #     bounded well beyond contention worst case, so signal delivery under
+    #     heavy CPU load cannot lose the race against a single glance.
+    deadline = time.monotonic() + 3.0
+    while True:
+        leftover = subprocess.run(
+            ["pgrep", "-f", "^sleep 30$", "-P", str(os.getpid())],
+            capture_output=True, text=True).stdout.strip()
+        if not leftover:
+            break
+        if time.monotonic() > deadline:
+            raise AssertionError(f"sleep survived the cancel: {leftover}")
+        time.sleep(0.05)
     return f"child stopped and reaped in {elapsed:.1f}s"
 
 
