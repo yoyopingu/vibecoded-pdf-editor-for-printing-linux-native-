@@ -220,11 +220,16 @@ QScrollArea#sidebarScroll > QWidget > QWidget {{ background: transparent; }}
    no visible relationship to the entries under them. */
 /* Indented past the heading's own 16 px, so the entries read as sitting under
    it rather than beside it — the indent is what says "contained by". */
+/* min-height is the CONTENT box in Qt's QSS model: with 5px vertical padding
+   a 26px floor made every row 36px tall, and thirteen of them plus four group
+   headers left the tool list 52px taller than the scroll viewport at the
+   default window size — which re-exposed the scrollbar (and its track) in the
+   BETA gutter. 22px content + padding = 32px rows; the list fits again. */
 QPushButton#navBtn {{
     background: transparent; color: {_NB_TEXT};
     border: none; border-left: 3px solid transparent;
     padding: 5px 14px 5px 21px; text-align: left;
-    font-size: 12px; border-radius: 6px; min-height: 26px;
+    font-size: 12px; border-radius: 6px; min-height: 22px;
 }}
 /* The tool-list group headings — FARBE, INHALT, AUSGABE. Their own name, not
    the shared #sectionLabel: that one is 9 px with 3 px of letter-spacing, which
@@ -528,9 +533,20 @@ QScrollBar::handle:horizontal:hover {{ background: {_SCROLL_HOV}; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 
 /* The sidebar's own scroll surface gets the same 8px scrollbar explicitly,
-   so it is never left with Fusion's thin 2px thumb. */
+   so it is never left with Fusion's thin 2px thumb. Groove and page segments
+   are painted the SIDEBAR colour itself rather than left transparent: a
+   transparent groove here showed the window BG bleed through the scroll
+   area's own compositing (dark: a #0f1115 column against the #15181e side —
+   the Wave-5 ghost above the BETA chip, back whenever the list legitimately
+   overflows). Painted SB, the column disappears into the sidebar and only
+   the floating thumb reads; non-overflowing mounts hide the bar entirely
+   (AsNeeded) and show nothing at all. */
 QScrollArea#sidebarScroll QScrollBar:vertical {{
-    background: {_SCT}; width: 8px; margin: 2px;
+    background: {_SB}; width: 8px; margin: 0;
+}}
+QScrollArea#sidebarScroll QScrollBar::sub-page:vertical,
+QScrollArea#sidebarScroll QScrollBar::add-page:vertical {{
+    background: {_SB};
 }}
 QScrollArea#sidebarScroll QScrollBar::handle:vertical {{
     background: {_SCB};

@@ -459,7 +459,12 @@ class MainWindow(QMainWindow):
         for group, entries in TOOL_GROUPS:
             gl = QLabel(tr(group).upper())
             gl.setObjectName("navGroup")
-            gl.setContentsMargins(16, 13, 0, 3)
+            # 9px head margin: the list has to fit the scroll viewport at the
+            # default window size — a 13px margin per header left the tool list
+            # 52px taller than it and re-exposed the scrollbar track in the
+            # BETA gutter that Wave 5 had cleared (scrollbar AsNeeded shows the
+            # full-height track whenever content overflows).
+            gl.setContentsMargins(16, 9, 0, 3)
             tl.addWidget(gl)
             for label, PanelClass in entries:
                 panel = PanelClass(self)
@@ -480,6 +485,16 @@ class MainWindow(QMainWindow):
                     # segfaults in sip on shutdown.
                     panel.setAttribute(
                         Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                    # Mouse-transparent is not paint-inert: an unmounted
+                    # wrapper stays VISIBLE at its constructor position (0,0),
+                    # and the blanket QWidget{background:BG} QSS gives that
+                    # default 100x30 rectangle an opaque fill. Wrappers are
+                    # created AFTER the title bar, so they stack above it and
+                    # painted a background chip over the "Folio" wordmark and
+                    # the first half of the Datei menu item ("ei"). Parking
+                    # them off-canvas stops the painting without hide() —
+                    # still safe against the Wave-2 teardown segfault.
+                    panel.move(-4000, -4000)
                     # The standalone panel is a child of MainWindow and would
                     # otherwise sit visible (default) at (0,0), where its
                     # invisible "‹ Werkzeuge" back button intercepts top-left
@@ -502,6 +517,7 @@ class MainWindow(QMainWindow):
         pm_panel = PluginManagerPanel(self)
         pm_panel.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        pm_panel.move(-4000, -4000)
         pm_btn = NavBtn(tr("Plugin-Manager"), icon_name=TOOL_ICONS.get("Plugin-Manager"))
         pm_btn.clicked.connect(lambda c, p=pm_panel: self._mount_tool(p))
         tl.addWidget(pm_btn)
@@ -517,7 +533,7 @@ class MainWindow(QMainWindow):
             sep = QFrame(); sep.setObjectName("separator")
             sep.setFrameShape(QFrame.Shape.NoFrame); tl.addWidget(sep)
             pl = QLabel(tr("PLUGINS")); pl.setObjectName("navGroup")
-            pl.setContentsMargins(16, 13, 0, 3); tl.addWidget(pl)
+            pl.setContentsMargins(16, 9, 0, 3); tl.addWidget(pl)
             for plabel, PCls in plugins:
                 pp = PCls(self)
                 if getattr(pp, "controls_widget", None) is not None:
