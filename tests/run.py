@@ -119,6 +119,11 @@ def main(patterns):
     # stopping the background work first is what lets the QApplication be
     # destroyed cleanly (see tests/conftest.py's pytest_sessionfinish).
     support.shutdown_app_background()
+    # Then destroy everything the tests built — every panel, viewer, dialog and
+    # stray signal-carrier — while the QApplication can still delete them
+    # safely. Left alive they die during interpreter finalisation with sip in
+    # sip_api_get_address, after the summary above has already been printed.
+    support.teardown_app_gui()
     raise SystemExit(0 if failed == 0 else 1)
 
 

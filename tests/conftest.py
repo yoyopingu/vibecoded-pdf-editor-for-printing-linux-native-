@@ -30,3 +30,7 @@ def pytest_sessionfinish(session, exitstatus):
     """
     from tools.render.queue import shutdown_render_queue
     shutdown_render_queue()
+    # Same reason as tests/run.py main(): widgets a test left behind must be
+    # destroyed while the QApplication can still delete them, not at
+    # interpreter finalisation where sip segfaults past the green result.
+    support.teardown_app_gui()

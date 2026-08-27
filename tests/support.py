@@ -65,6 +65,18 @@ from tools.panels.nup import NUpPanel
 # is the ordering that works.
 import tools.app as MAIN                                            # noqa: F401
 
+# Give the suite back the faulthandler the app just took away. importing
+# tools.app installs tools.logging_setup, which points faulthandler at its
+# crash-mailbox file — whose fd its own atexit hook closes BEFORE interpreter
+# module teardown begins. A segfault at teardown therefore writes into a closed
+# fd and vanishes (observed 2026-08-27: crashed runner children reported
+# `-11` with an empty copyshop-crash.log, because the fatal happened after
+# _close_crash_file ran). stderr stays open to the end of the process, and
+# run.py captures it for the `!! <module> exited <rc>` report, so re-enabling
+# here puts the native traceback where the runner can show it.
+import faulthandler                                                  # noqa: E402
+faulthandler.enable(all_threads=True)
+
 
 MM = 2.8346456693
 
@@ -96,6 +108,88 @@ def shutdown_app_background():
     """
     from tools.render.queue import shutdown_render_queue
     shutdown_render_queue()
+
+
+def teardown_app_gui():
+    """Destroy everything the tests built — while the QApplication is alive.
+
+    The crash this answers is the suite's old teardown family: a widget (or any
+    QObject wrapper) a test created and never destroyed survives until
+    interpreter finalisation. By then module clearing has wrecked the destruction
+    order — sip tears down wrappers after (or as) the QApplication itself goes,
+    and dereferencing a half-dead C++ object segfaults in sip_api_get_address,
+    AFTER every test has already reported PASS. A green run that exits -11.
+    Single-module runs usually get away with it; under a parallel run's load,
+    more of what each test did stays queued or referenced when the last test
+    returns, so it hits every few modules.
+
+    Deterministic destruction beats implicit chaos: while Qt can still delete
+    things safely we destroy the top-level widget forest synchronously
+    (sip.delete, not deleteLater — no event pump is involved), letting each
+    ~QObject purge its own pending events, with gc.collect() between passes to
+    let cycles holding widgets break first.
+
+    Safe to call more than once, and safe when nothing was ever built: the sweep
+    is wrapped per object, sip.isdeleted guards each one, and the QApplication
+    itself is deliberately left alone.
+    """
+    import gc
+
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.sip import delete as _sip_delete, isdeleted
+
+    # Background threads emit into widgets; nothing may outlive this call and
+    # still touch one. Idempotent, and stops work the caller forgot about.
+    shutdown_app_background()
+
+    # Drop every cached QImage now rather than at finalisation, when the C++
+    # side of Qt may already be going away under them.
+    try:
+        from tools.render.caches import _FullPageCache, _ThumbnailCache
+        _FullPageCache.invalidate()
+        _ThumbnailCache.invalidate()
+    except Exception:
+        pass                                           # not fatal for exit 0
+
+    # Widget-only sweep, rooted at the window level: every QWidget with no
+    # parent IS a top-level window, whether or not Python can still reach it —
+    # C++ ownership keeps it enumerated here — and each root drags its whole
+    # subtree down with it. Deliberately NOT a gc.get_objects() walk over every
+    # QObject: Qt owns infrastructure objects there (event dispatcher, thread
+    # pool, &c.) that must outlive this call.
+    #
+    # Each root is destroyed SYNCHRONOUSLY with sip.delete rather than handed
+    # to deleteLater + an event-loop pump. Pumping was tried and is unsafe
+    # here: delivering other pending events (timers, queued signals) walks
+    # receivers whose Python wrapper an intervening gc.collect() may have
+    # dropped, and lands inside freed C++ objects — a segfault inside
+    # QEventDispatcherGlib::processEvents, seen live 2026-08-27 on
+    # test_tools_misc. A synchronous destructor purges that object's own
+    # pending events as part of ~QObject, so there is nothing left to deliver.
+    def _kill_roots():
+        killed_any = False
+        for w in list(QApplication.topLevelWidgets()):
+            try:
+                if isdeleted(w):
+                    continue                           # died with a parent
+                _sip_delete(w)
+                killed_any = True
+            except Exception:
+                # Not Python-owned (a rare Qt-side window): hide it instead —
+                # explicit teardown cannot help what it cannot own.
+                try:
+                    w.hide()
+                except Exception:
+                    pass
+        return killed_any
+
+    # Repeat while new roots appear (cascade deletions briefly invalidate
+    # wrappers mid-pass); stop as soon as a pass kills nothing.
+    for _round in range(5):
+        gc.collect()
+        if not _kill_roots():
+            break
+    gc.collect()
 
 
 def _make_fixtures():
