@@ -319,7 +319,6 @@ _EN: dict[str, str] = {
         "PDF page size (Acrobat: Choose paper source by PDF page size).",
     "Fach: Standard": "Tray: Default",
     "Beidseitig": "Two-sided",
-    "Farbraum: Unverändert": "Color space: Unchanged",
     "Kachel-Skalierung": "Tile scale",
     "Überlappung": "Overlap",
     "Schnittmarken": "Cut marks",
@@ -347,8 +346,6 @@ _EN: dict[str, str] = {
     " · Überlappung {ov} mm": " · Overlap {ov} mm",
     "{n} Seiten / Bogen · {order}": "{n} pages / sheet · {order}",
     "Broschüre · Bindung {bind}": "Booklet · Binding {bind}",
-    "Farbraum: → CMYK": "Color space: → CMYK",
-    "Farbraum: → sRGB": "Color space: → sRGB",
     "Alle Seiten  (1 – {n})": "All pages  (1 – {n})",
     "Aktuelle Seite": "Current page",
     "z.B.  1-3, 5, 7-9": "e.g.  1-3, 5, 7-9",
@@ -366,15 +363,6 @@ _EN: dict[str, str] = {
     "Papier:": "Paper:",
     "Sortieren  (1,2,3 / 1,2,3)": "Collate  (1,2,3 / 1,2,3)",
     "Farbe:": "Color:",
-    "Unverändert": "Unchanged",
-    "→ CMYK  (für CMYK-Drucker)": "→ CMYK  (for CMYK printers)",
-    "→ sRGB  (für RGB-Drucker)": "→ sRGB  (for RGB printers)",
-    "Unverändert: Druckertreiber entscheidet (empfohlen mit ICC-Profilen)\n"
-    "→ CMYK: Vor dem Druck in CMYK umrechnen\n"
-    "→ sRGB: Vor dem Druck in sRGB umrechnen":
-        "Unchanged: printer driver decides (recommended with ICC profiles)\n"
-        "→ CMYK: convert to CMYK before printing\n"
-        "→ sRGB: convert to sRGB before printing",
     "Beidseitig drucken  (Duplex)": "Print double-sided  (duplex)",
     "Als Bitmap drucken": "Print as bitmap",
     "Benutzerdefiniert…": "Custom…",
@@ -1015,8 +1003,6 @@ _EN: dict[str, str] = {
         "This printer reports greyscale only — the colour stays in the file and can be printed elsewhere.",
     "Aktuelle Seite kann nicht ermittelt werden — bitte »Alle Seiten« oder einen Bereich waehlen.":
         "Cannot determine the current page — please choose \u00abAll pages\u00bb or a range.",
-    "Hinweis: Der Fallback kann die gewaehlte Farbraum-Umwandlung nicht ausfuehren — es wird ohne sie gedruckt.":
-        "Note: the fallback cannot perform the selected colour conversion — printing without it.",
     "{p0} Dateien zusammengefuehrt ({p1} Seiten)": "{p0} files merged ({p1} pages)",
     "Keine der gewaehlten Dateien enthielt Seiten.": "None of the selected files contained any pages.",
     "Ohne Seiten uebersprungen: {p0}": "Skipped, no pages: {p0}",

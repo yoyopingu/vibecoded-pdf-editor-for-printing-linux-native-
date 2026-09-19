@@ -5,14 +5,9 @@ Ghostscript and lp where they exist, Qt where they do not. Kept apart from the
 dialog because none of it is about widgets: it takes a path, a page model and
 the settings that were chosen, and it is the part that has to be right when the
 copy shop is billing for the output.
-
-_gs_blacked_out is here for the same reason. Ghostscript reports success while
-turning a transparency group solid black, so what comes back is compared against
-what went in before any of it reaches a printer.
 """
 import logging
 from PyQt6.QtGui import QPageLayout
-from tools.app_state import AppState
 from tools.ghostscript import ghostscript_binary, unlink
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
@@ -91,42 +86,6 @@ def paper_size_pt(paper_key):
                           exc_info=True)
             return None
     return _paper_table().get(paper_key)
-
-
-def _gs_blacked_out(before, after, budget=60):
-    """Page indexes that went from paper-white to near-black during Ghostscript's
-    colour conversion for printing.
-
-    Deliberately coarser than the page-by-page check the Grayscale and CMYK tools
-    use: this step also scales, fits and re-centres, so content legitimately
-    moves and a per-pixel comparison would flag healthy pages. Comparing mean
-    brightness is immune to that and still catches the case that matters — a page
-    that was mostly white coming back mostly black. Large documents are sampled,
-    because this runs before every print and must not add noticeable delay.
-
-    Returns [] when nothing is wrong and None if it could not be checked."""
-    try:
-        with _pdfium_lock:
-            a = _open_pdf(before); b = _open_pdf(after)
-            try:
-                n = min(len(a), len(b))
-                if not n:
-                    return None
-                step = max(1, n // budget)
-                bad = []
-                for i in range(0, n, step):
-                    pa = a[i].render(scale=0.12).to_pil().convert("L")
-                    pb = b[i].render(scale=0.12).to_pil().convert("L")
-                    ma = sum(pa.get_flattened_data()) / (pa.size[0] * pa.size[1] or 1)
-                    mb = sum(pb.get_flattened_data()) / (pb.size[0] * pb.size[1] or 1)
-                    if ma > 200 and mb < 80:
-                        bad.append(i)
-                return bad
-            finally:
-                a.close(); b.close()
-    except Exception:
-        logging.exception("print: could not verify the colour conversion")
-        return None
 
 
 def print_path_redraws_the_page(pdf_path, page_index=0, timeout=30):
@@ -653,7 +612,7 @@ def _scaling_options(scale_idx):
 
 
 def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
-                  duplex_edge, colorconv, printer_name, scale_idx,
+                  duplex_edge, printer_name, scale_idx,
                   paper_key, orient_idx, report,
                   paper_source=None, scale_pct=100, comments_forms=DOCUMENT):
     """Full-quality print via Ghostscript + CUPS/lp.
@@ -756,47 +715,24 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                     "-dFIXEDMEDIA",
                 ]
 
-            # Colour handling.
-            # "Graustufen" deliberately does NOT convert the PDF here. It
-            # used to, and that destroyed the colour in the spooled file:
-            # the job was monochrome for good, so a queue that was later
-            # re-routed, or settings picked on another machine, could never
-            # bring the colour back. Mono is requested as a CUPS job option
-            # instead (see print-color-mode below) and the printer does the
-            # conversion, exactly as Evince, Chrome and Acrobat do it. The
-            # explicit "Farbkonvertierung" choices below stay, because there
-            # the user is asking for the data itself to be converted.
-            if colorconv == 1:
-                gs_cmd += ["-sColorConversionStrategy=CMYK",
-                            "-dProcessColorModel=/DeviceCMYK"]
-            elif colorconv == 2:
-                gs_cmd += ["-sColorConversionStrategy=sRGB",
-                            "-dProcessColorModel=/DeviceRGB"]
-            else:
-                gs_cmd += ["-sColorConversionStrategy=LeaveColorUnchanged"]
+            # Colour handling. Colour conversion used to be offered here
+            # (CMYK / sRGB re-computation via pdfwrite) and was removed with
+            # the Farbraum dropdown; the data always leaves this path as it
+            # is. "Graustufen" deliberately does NOT convert the PDF here
+            # either — it used to, and that destroyed the colour in the
+            # spooled file: the job was monochrome for good, so a queue that
+            # was later re-routed, or settings picked on another machine,
+            # could never bring the colour back. Mono is requested as a CUPS
+            # job option instead (see print-color-mode below) and the printer
+            # does the conversion, exactly as Evince, Chrome and Acrobat do
+            # it.
+            gs_cmd += ["-sColorConversionStrategy=LeaveColorUnchanged"]
 
             gs_cmd += [f"-sOutputFile={norm_tmp}", print_src]
             # 240s: a whole-document colour re-conversion, not a query — the
             # slowest thing this file waits on.
             r = _run_capturing(gs_cmd, timeout=240)
-            # Only when a colour conversion was actually asked for, and only
-            # once Ghostscript reported success — otherwise there is nothing
-            # meaningful to compare against.
-            converted = colorconv in (1, 2)
-            blackout = (_gs_blacked_out(print_src, norm_tmp)
-                        if (converted and r.returncode == 0
-                            and os.path.getsize(norm_tmp) > 100)
-                        else None)
-            if blackout:
-                # Print unconverted rather than print black paper. Same
-                # fallback Ghostscript failing outright already takes.
-                logging.error("print: colour conversion blacked out page(s) %s "
-                              "— printing the unconverted file", blackout)
-                AppState.get().status_message.emit(tr(
-                    'Farbumwandlung hat Seite(n) {p0} geschwaerzt — es wird '
-                    'ohne Umwandlung gedruckt.').format(
-                        p0=", ".join(str(i + 1) for i in blackout)))
-            elif r.returncode == 0 and os.path.getsize(norm_tmp) > 100:
+            if r.returncode == 0 and os.path.getsize(norm_tmp) > 100:
                 print_src = norm_tmp
             else:
                 logging.warning("GS normalization failed (rc=%d): %s",

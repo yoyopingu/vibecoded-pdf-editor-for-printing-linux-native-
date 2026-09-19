@@ -339,42 +339,6 @@ def test_cmyk_never_ships_a_blacked_out_page():
     return "refused"
 
 
-def test_print_blackout_check_tolerates_scaling():
-    """The print path scales, fits and re-centres, so its blackout check compares
-    mean brightness rather than pixels — a per-pixel diff would flag healthy
-    pages as damaged and quietly print everything unconverted."""
-    from reportlab.lib import colors
-    from tools.printing.spool import _gs_blacked_out
-    import pikepdf
-
-    def make(name, black_page=None, scaled=False):
-        p = os.path.join(_TMP, name)
-        c = canvas.Canvas(p, pagesize=A4)
-        for i in range(4):
-            if scaled:
-                c.saveState(); c.translate(20, 20); c.scale(0.93, 0.93)
-            c.setFillColor(colors.HexColor("#2277cc"))
-            c.rect(40, 500, 500, 250, fill=1, stroke=0)
-            c.setFillGray(0); c.setFont("Helvetica", 30)
-            c.drawString(50, 430, f"PAGE {i+1}")
-            if scaled: c.restoreState()
-            c.showPage()
-        c.save()
-        if black_page is not None:
-            with pikepdf.open(p, allow_overwriting_input=True) as pdf:
-                pdf.pages[black_page].contents_add(
-                    pikepdf.Stream(pdf, b"0 g 0 0 3000 3000 re f"))
-                pdf.save(p)
-        return p
-
-    before = make("pg_before.pdf")
-    assert _gs_blacked_out(before, make("pg_same.pdf")) == []
-    assert _gs_blacked_out(before, make("pg_fit.pdf", scaled=True)) == [], \
-        "scaling was mistaken for damage"
-    assert _gs_blacked_out(before, make("pg_bad.pdf", black_page=2)) == [2]
-    assert _gs_blacked_out(before, os.path.join(_TMP, "pg_missing.pdf")) is None
-
-
 def test_greyscale_vector():
     if not (shutil.which("gs") or shutil.which("gswin64c")):
         return "SKIP (no ghostscript)"

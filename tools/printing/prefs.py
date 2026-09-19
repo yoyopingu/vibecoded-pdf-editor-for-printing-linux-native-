@@ -35,7 +35,7 @@ _BY_PRINTER = "printing/by_printer"
 # property of the job in front of you rather than of how you like to print, and
 # not the page range or reverse order, which belong to the document. Sheet
 # from–to on a booklet is the same kind of job bound.
-REMEMBERED = ("paper", "orientation", "color", "colorconv", "scale",
+REMEMBERED = ("paper", "orientation", "color", "scale",
               "scale_pct", "collate", "duplex", "duplex_edge", "paper_source",
               "comments_forms", "handling", "by_page_size",
               "tile_pct", "overlap_mm", "cut_marks", "labels",

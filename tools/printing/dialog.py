@@ -357,7 +357,7 @@ class PrintDialog(QDialog):
         fields.setColumnMinimumWidth(0, 176)
         fields.setColumnStretch(0, 0)
         fields.setColumnStretch(1, 1)
-        for row in range(4):
+        for row in range(3):
             fields.setRowMinimumHeight(row, 32)
 
         fields.addWidget(_flbl(tr("Drucker")), 0, 0)
@@ -432,27 +432,6 @@ class PrintDialog(QDialog):
             "Die Farbinformation bleibt in jedem Fall in der Datei erhalten."))
         fields.addWidget(self.color_combo, 2, 1)
 
-        # Acrobat's "Comments & Forms": which of the interactive layer goes
-        # on paper. Default is "Dokument" — the page and the filled-in
-        # fields, no review comments — which is what a copy shop almost
-        # always wants, and what Acrobat itself opens on.
-        fields.addWidget(_flbl(tr("Kommentare & Formulare")), 3, 0)
-        self.comments_combo = QComboBox()
-        self.comments_combo.addItem(tr("Dokument"), DOCUMENT)
-        self.comments_combo.addItem(tr("Dokument und Markierungen"),
-                                    DOCUMENT_AND_MARKUPS)
-        self.comments_combo.addItem(tr("Dokument und Stempel"),
-                                    DOCUMENT_AND_STAMPS)
-        self.comments_combo.addItem(tr("Nur Formularfelder"),
-                                    FORM_FIELDS_ONLY)
-        self.comments_combo.setToolTip(tr(
-            "Was auf das Papier kommt, wie in Adobe Acrobat.\n\n"
-            "Dokument: Seiteninhalt und Formularfelder, keine Kommentare.\n"
-            "Dokument und Markierungen: zusaetzlich Kommentare und Zeichnungen.\n"
-            "Dokument und Stempel: Seiteninhalt, Formularfelder und Stempel.\n"
-            "Nur Formularfelder: nur die ausgefuellten Werte, ohne das "
-            "Formular — zum Bedrucken von Vordrucken."))
-        fields.addWidget(self.comments_combo, 3, 1)
         rl.addLayout(fields)
 
         # ── Zu druckende Seiten ──────────────────────────────────────────────
@@ -788,20 +767,28 @@ class PrintDialog(QDialog):
         self.duplex_check.toggled.connect(self.duplex_edge_combo.setEnabled)
         fg.addWidget(self.duplex_edge_combo, 1, 1)
 
-        self.colorconv_combo = QComboBox()
-        self.colorconv_combo.addItems([
-            tr("Farbraum: Unverändert"),
-            tr("Farbraum: → CMYK"),
-            tr("Farbraum: → sRGB"),
-        ])
-        self.colorconv_combo.setToolTip(
-            tr("Unverändert: Druckertreiber entscheidet (empfohlen mit ICC-Profilen)\n"
-               "→ CMYK: Vor dem Druck in CMYK umrechnen\n"
-               "→ sRGB: Vor dem Druck in sRGB umrechnen"))
-        fg.addWidget(self.colorconv_combo, 1, 2)
-        self.color_combo.currentIndexChanged.connect(
-            lambda _: self.colorconv_combo.setEnabled(
-                self.color_combo.currentData() != "mono"))
+        # Acrobat's "Comments & Forms": which of the interactive layer goes
+        # on paper. Default is "Dokument" — the page and the filled-in
+        # fields, no review comments — which is what a copy shop almost
+        # always wants, and what Acrobat itself opens on. It sits here, with
+        # the sheet options, rather than up in the printer grid: the same
+        # slot the colour-space dropdown had.
+        self.comments_combo = QComboBox()
+        self.comments_combo.addItem(tr("Dokument"), DOCUMENT)
+        self.comments_combo.addItem(tr("Dokument und Markierungen"),
+                                    DOCUMENT_AND_MARKUPS)
+        self.comments_combo.addItem(tr("Dokument und Stempel"),
+                                    DOCUMENT_AND_STAMPS)
+        self.comments_combo.addItem(tr("Nur Formularfelder"),
+                                    FORM_FIELDS_ONLY)
+        self.comments_combo.setToolTip(tr(
+            "Was auf das Papier kommt, wie in Adobe Acrobat.\n\n"
+            "Dokument: Seiteninhalt und Formularfelder, keine Kommentare.\n"
+            "Dokument und Markierungen: zusaetzlich Kommentare und Zeichnungen.\n"
+            "Dokument und Stempel: Seiteninhalt, Formularfelder und Stempel.\n"
+            "Nur Formularfelder: nur die ausgefuellten Werte, ohne das "
+            "Formular — zum Bedrucken von Vordrucken."))
+        fg.addWidget(self.comments_combo, 1, 2)
 
         hl.addWidget(footer)
         rl.addWidget(handling_box)
@@ -855,7 +842,6 @@ class PrintDialog(QDialog):
                 (self.paper_combo, "currentIndexChanged"),
                 (self._orient_group, "idToggled"),
                 (self.color_combo, "currentIndexChanged"),
-                (self.colorconv_combo, "currentIndexChanged"),
                 (self._scale_group, "idToggled"),
                 (self.scale_pct, "valueChanged"),
                 (self.source_combo, "currentIndexChanged"),
@@ -1258,7 +1244,6 @@ class PrintDialog(QDialog):
             "paper":        self.paper_combo.currentData(),
             "orientation":  self.orient_idx,
             "color":        self.color_combo.currentData(),
-            "colorconv":    self.colorconv_combo.currentIndex(),
             "scale":        self._scale_index(),
             "scale_pct":    self.scale_pct.value(),
             "collate":      self.collate,
@@ -1311,7 +1296,6 @@ class PrintDialog(QDialog):
         self.paper_combo.blockSignals(False)
         self._set_orient_idx(saved.get("orientation"))
         _combo_by_data(self.color_combo, saved.get("color"))
-        _combo_by_index(self.colorconv_combo, saved.get("colorconv"))
         self._set_scale_index(saved.get("scale"))
         if isinstance(saved.get("scale_pct"), int):
             self.scale_pct.setValue(saved["scale_pct"])
@@ -1328,7 +1312,6 @@ class PrintDialog(QDialog):
         # a driver queue means nothing on a driverless one.
         if source and len(source) == 2 and source[0] == self._source_keyword:
             _combo_by_data(self.source_combo, source[1])
-        self.colorconv_combo.setEnabled(self.color_combo.currentData() != "mono")
 
         if isinstance(saved.get("by_page_size"), bool):
             self.by_page_size_check.setChecked(saved["by_page_size"])
@@ -1555,8 +1538,6 @@ class PrintDialog(QDialog):
                     "Drucker-Standard: keine Vorgabe senden — der Drucker bzw. "
                     "die Warteschlange entscheidet.\n"
                     "Die Farbinformation bleibt in jedem Fall in der Datei erhalten."))
-            self.colorconv_combo.setEnabled(
-                self.color_combo.currentData() != "mono")
 
             # ── Hardware margins (determines "Fit Page" / "Shrink" behaviour) ──
             self._hw_margin_mm = 3.0  # safe default
@@ -1707,7 +1688,7 @@ class PrintDialog(QDialog):
         """Disable/re-enable controls while a print job is in progress."""
         for w in [self.printer_combo, self.copies_spin,
                   self.paper_combo,
-                  self.color_combo, self.colorconv_combo,
+                  self.color_combo,
                   self._collate_sorted, self._collate_grouped,
                   self.duplex_check, self.duplex_edge_combo,
                   self.source_combo, self.comments_combo,
@@ -1750,7 +1731,6 @@ class PrintDialog(QDialog):
 
         copies    = self.copies_spin.value()
         color_mode = self.color_combo.currentData() or "auto"
-        colorconv = self.colorconv_combo.currentIndex()
         collate   = self.collate
         duplex    = self.duplex_check.isChecked()
         duplex_edge = self.duplex_edge_combo.currentData() or "long"
@@ -1932,7 +1912,7 @@ class PrintDialog(QDialog):
                     try:
                         skipped = print_via_gs(print_path, print_model,
                             print_pages, copies, color_mode, collate, duplex,
-                            duplex_edge, colorconv, printer_name, print_scale,
+                            duplex_edge, printer_name, print_scale,
                             print_paper, print_orient, _report,
                             paper_source=paper_source, scale_pct=print_pct,
                             comments_forms=comments_forms)
@@ -1943,14 +1923,6 @@ class PrintDialog(QDialog):
                     except Exception as e:
                         errors.append(f"GS/lp: {e}")
                         _report(tr("GS-Pfad fehlgeschlagen — Versuche Qt-Fallback…"))
-                        # The rasteriser cannot do the colour-space conversions, so
-                        # say so instead of printing a job that quietly ignores the
-                        # setting the operator chose.
-                        if colorconv in (1, 2):
-                            _report(tr(
-                                "Hinweis: Der Fallback kann die gewaehlte "
-                                "Farbraum-Umwandlung nicht ausfuehren — es wird "
-                                "ohne sie gedruckt."))
 
                 # ── Fallback: Qt rasteriser ───────────────────────────────────────
                 # Pre-render pages in background (pdfium, no QPrinter); draw on GUI thread.
@@ -2060,7 +2032,7 @@ class PrintDialog(QDialog):
                              paper_key, orient_idx, render_dpi=None):
         """Draw pre-rendered images to QPrinter.  MUST run on the GUI thread."""
         from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
-        from PyQt6.QtGui import QPageSize, QPainter
+        from PyQt6.QtGui import QPageSize        # QPainter is a module import
 
         try:
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)

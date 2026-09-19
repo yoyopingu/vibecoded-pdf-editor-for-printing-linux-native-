@@ -206,7 +206,7 @@ def test_print_never_destroys_colour_in_the_spooled_file():
         subprocess.run = spy
         try:
             print_via_gs(dlg.pdf_path, dlg.model,
-                         [0], 1, mode, False, False, "long", 0,
+                         [0], 1, mode, False, False, "long",
                          "test-printer", 0, "A4", 0, null_progress())
         finally:
             subprocess.run = real
@@ -246,7 +246,7 @@ def _lp_options(**kw):
     subprocess.run = spy
     try:
         print_via_gs(src, PageModel(n_pages), [0], 1, "auto", True,
-                     kw.pop("duplex", False), kw.pop("edge", "long"), 0,
+                     kw.pop("duplex", False), kw.pop("edge", "long"),
                      "test-printer", scale_idx, paper_key, orient_idx,
                      null_progress(), **kw)
     finally:
@@ -1607,7 +1607,7 @@ def _lp_with_ready(paper_key, source, ready=_READY_TWO_TRAYS):
     subprocess.run = spy
     try:
         spool.print_via_gs(src, PageModel(n), [0], 1, "auto", False, False,
-                           "long", 0, "press", 0, paper_key, 0,
+                           "long", "press", 0, paper_key, 0,
                            null_progress(),
                            paper_source=("media-source", source) if source else None)
     finally:
