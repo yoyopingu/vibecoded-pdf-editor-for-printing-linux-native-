@@ -1748,6 +1748,10 @@ class PrintDialog(QDialog):
         qt_dpi = self._raster_dpi(qt_dpi)
         hw_margin_mm = self._hw_margin_mm   # capture now; _on_printer_changed won't run in bg
         comments_forms = self.comments_forms_mode()
+        handling = self.handling
+        handling_opts = self._handling_opts()
+        poster_paper_key = self.selected_paper()
+        poster_label = os.path.basename(self.pdf_path)
 
         import shutil, weakref
         self_ref = weakref.ref(self)
@@ -1762,58 +1766,124 @@ class PrintDialog(QDialog):
 
         def _bg(job):
             errors = []
+            print_path = self.pdf_path
+            print_model = self.model
+            print_pages = pages_to_print
+            print_scale = scale_idx
+            print_pct = scale_pct
+            print_paper = paper_key
+            work = []
 
-            # ── Primary: Ghostscript + lp/CUPS ───────────────────────────────
-            # Skipped entirely for "Als Bitmap": Ghostscript re-interprets the
-            # PDF and resolves its fonts a second time, which is the one thing
-            # this option exists to avoid. Going through it and rasterising
-            # afterwards would print the substitution, not the preview.
-            if shutil.which("lp") and not as_bitmap:
-                try:
-                    skipped = print_via_gs(self.pdf_path, self.model,
-                        pages_to_print, copies, color_mode, collate, duplex,
-                        duplex_edge, colorconv, printer_name, scale_idx,
-                        paper_key, orient_idx, _report,
-                        paper_source=paper_source, scale_pct=scale_pct,
-                        comments_forms=comments_forms)
-                    obj = self_ref()
-                    if obj is not None:
-                        obj._print_finished.emit(pages_to_print, copies, skipped)
-                    return
-                except Exception as e:
-                    errors.append(f"GS/lp: {e}")
-                    _report(tr("GS-Pfad fehlgeschlagen — Versuche Qt-Fallback…"))
-                    # The rasteriser cannot do the colour-space conversions, so
-                    # say so instead of printing a job that quietly ignores the
-                    # setting the operator chose.
-                    if colorconv in (1, 2):
-                        _report(tr(
-                            "Hinweis: Der Fallback kann die gewaehlte "
-                            "Farbraum-Umwandlung nicht ausfuehren — es wird "
-                            "ohne sie gedruckt."))
-
-            # ── Fallback: Qt rasteriser ───────────────────────────────────────
-            # Pre-render pages in background (pdfium, no QPrinter); draw on GUI thread.
             try:
-                rendered, skipped = prerender_for_qt(self.pdf_path, self.model,
-                    pages_to_print, color_mode, scale_idx, orient_idx,
-                    paper_key, qt_dpi, hw_margin_mm, _report,
-                    scale_pct=scale_pct,
-                    comments_forms=comments_forms)
-            except Exception as e:
-                errors.append(f"Qt render: {e}")
-                msg = tr("Druckfehler:") + "\n" + "\n".join(errors)
+                if handling == "poster":
+                    # Subset + Comments & Forms first, then tile. The tiles
+                    # already *are* the sheet, so the spooler is told fixed
+                    # 100 % and must not fit them a second time.
+                    import tempfile
+                    from pypdf import PdfReader
+                    from tools.printing.content import prepare_print_pdf
+                    from tools.printing.handling import build_poster_pdf
+                    from tools.printing.spool import (
+                        paper_size_pt, write_subset_pdf)
+                    from tools.viewer.model import PageModel
+
+                    fd, sub = tempfile.mkstemp(suffix="_psub.pdf"); os.close(fd)
+                    fd, prep = tempfile.mkstemp(suffix="_pprep.pdf"); os.close(fd)
+                    fd, tiled = tempfile.mkstemp(suffix="_poster.pdf"); os.close(fd)
+                    work.extend((sub, prep, tiled))
+                    write_subset_pdf(
+                        self.pdf_path, self.model, pages_to_print, sub)
+                    try:
+                        prepare_print_pdf(sub, prep, comments_forms)
+                        tile_src = prep
+                    except Exception:
+                        logging.exception(
+                            "print: could not prepare form fields / comments")
+                        tile_src = sub
+                    pts = paper_size_pt(poster_paper_key)
+                    if pts:
+                        pw, ph = pts
+                        if orient_idx == 2 and pw < ph:
+                            pw, ph = ph, pw
+                        elif orient_idx == 1 and pw > ph:
+                            pw, ph = ph, pw
+                        elif orient_idx == 0:
+                            try:
+                                box = PdfReader(tile_src, strict=False).pages[0].mediabox
+                                if float(box.width) > float(box.height) and pw < ph:
+                                    pw, ph = ph, pw
+                            except Exception:
+                                pass
+                        pts = (pw, ph)
+                    n_tiles = build_poster_pdf(
+                        tile_src, None, pts,
+                        handling_opts.get("tile_pct", 200),
+                        handling_opts.get("overlap_mm", 3),
+                        handling_opts.get("cut_marks", True),
+                        handling_opts.get("labels", False),
+                        tiled, label_name=poster_label)
+                    print_path = tiled
+                    print_model = PageModel(n_tiles)
+                    print_pages = list(range(n_tiles))
+                    print_scale = 1          # Feste Größe — tiles are the sheet
+                    print_pct = 100
+                    print_paper = poster_paper_key or paper_key
+                    _report(tr("Poster: {n} Kachel(n)…").format(n=n_tiles))
+
+                # ── Primary: Ghostscript + lp/CUPS ───────────────────────────────
+                # Skipped entirely for "Als Bitmap": Ghostscript re-interprets the
+                # PDF and resolves its fonts a second time, which is the one thing
+                # this option exists to avoid. Going through it and rasterising
+                # afterwards would print the substitution, not the preview.
+                if shutil.which("lp") and not as_bitmap:
+                    try:
+                        skipped = print_via_gs(print_path, print_model,
+                            print_pages, copies, color_mode, collate, duplex,
+                            duplex_edge, colorconv, printer_name, print_scale,
+                            print_paper, orient_idx, _report,
+                            paper_source=paper_source, scale_pct=print_pct,
+                            comments_forms=comments_forms)
+                        obj = self_ref()
+                        if obj is not None:
+                            obj._print_finished.emit(print_pages, copies, skipped)
+                        return
+                    except Exception as e:
+                        errors.append(f"GS/lp: {e}")
+                        _report(tr("GS-Pfad fehlgeschlagen — Versuche Qt-Fallback…"))
+                        # The rasteriser cannot do the colour-space conversions, so
+                        # say so instead of printing a job that quietly ignores the
+                        # setting the operator chose.
+                        if colorconv in (1, 2):
+                            _report(tr(
+                                "Hinweis: Der Fallback kann die gewaehlte "
+                                "Farbraum-Umwandlung nicht ausfuehren — es wird "
+                                "ohne sie gedruckt."))
+
+                # ── Fallback: Qt rasteriser ───────────────────────────────────────
+                # Pre-render pages in background (pdfium, no QPrinter); draw on GUI thread.
+                try:
+                    rendered, skipped = prerender_for_qt(print_path, print_model,
+                        print_pages, color_mode, print_scale, orient_idx,
+                        print_paper, qt_dpi, hw_margin_mm, _report,
+                        scale_pct=print_pct,
+                        comments_forms=comments_forms)
+                except Exception as e:
+                    errors.append(f"Qt render: {e}")
+                    msg = tr("Druckfehler:") + "\n" + "\n".join(errors)
+                    obj = self_ref()
+                    if obj is not None and not job.cancelled:
+                        obj._print_failed.emit(msg)
+                    return
+
                 obj = self_ref()
                 if obj is not None and not job.cancelled:
-                    obj._print_failed.emit(msg)
-                return
-
-            obj = self_ref()
-            if obj is not None and not job.cancelled:
-                obj._print_qt_send.emit((
-                    rendered, skipped, pages_to_print, copies, color_mode,
-                    collate, duplex, duplex_edge, printer_name, paper_key,
-                    orient_idx, qt_dpi))
+                    obj._print_qt_send.emit((
+                        rendered, skipped, print_pages, copies, color_mode,
+                        collate, duplex, duplex_edge, printer_name, print_paper,
+                        orient_idx, qt_dpi))
+            finally:
+                from tools.ghostscript import unlink as _unlink
+                _unlink(*work)
 
         from tools.jobs import submit
         self._print_job = submit(_bg, owner=self, name="print-job")

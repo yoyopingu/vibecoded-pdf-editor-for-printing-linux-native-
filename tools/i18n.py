@@ -476,6 +476,7 @@ _EN: dict[str, str] = {
     "Fehler: PDF ist passwortgeschützt — bitte zuerst entsperren.":
         "Error: PDF is password-protected — please unlock it first.",
     "Sende {n} Seite(n) an »{name}«…": "Sending {n} page(s) to »{name}«…",
+    "Poster: {n} Kachel(n)…": "Poster: {n} tile(s)…",
     "Druckauftrag wird vorbereitet…": "Preparing print job…",
     "GS-Pfad fehlgeschlagen — Versuche Qt-Fallback…":
         "GS path failed — trying Qt fallback…",
