@@ -443,7 +443,9 @@ class _PrintPreview(QWidget):
         # sheet. Drawn for "leave it to the printer" it would be a picture of
         # a sheet of some size, and the size it would look like is the page's.
         if on_a_sheet:
-            p.fillRect(ox + 3, oy + 3, pw, ph, QColor(0, 0, 0, 60))
+            # Concept `.sheet` drop shadow: a 1 px edge plus a soft offset.
+            p.fillRect(ox + 6, oy + 8, pw, ph, QColor(0, 0, 0, 40))
+            p.fillRect(ox + 2, oy + 3, pw, ph, QColor(0, 0, 0, 50))
             p.fillRect(ox, oy, pw, ph, QColor(255, 255, 255))
 
         # Printable-area rect (where content can go)

@@ -278,7 +278,12 @@ class PrintDialog(QDialog):
         # light, and the (light) theme text/labels become invisible — the
         # "invisible hitboxes". Painting the panel colour keeps text readable
         # regardless of the OS theme.
-        self.setStyleSheet(f"QDialog{{background:{_TV['panel_bg']};}}")
+        # Compact spins match concept `input[type=number]` (min-height 30).
+        # The app sheet uses 36 px, which made the % box sit across two
+        # scale radios.
+        self.setStyleSheet(
+            f"QDialog{{background:{_TV['panel_bg']};}}"
+            f"QSpinBox{{min-height:30px;max-height:30px;padding-left:8px;}}")
 
         # ── Layout helpers ────────────────────────────────────────────────────
         def _flbl(text):
@@ -334,7 +339,8 @@ class PrintDialog(QDialog):
             "QWidget#printSettingsPane{background:transparent;}")
         scroll.setWidget(right)
         rl = QVBoxLayout(right)
-        rl.setContentsMargins(16, 16, 18, 12)
+        # Concept `.settings`: padding 16px 18px 12px.
+        rl.setContentsMargins(18, 16, 18, 12)
         rl.setSpacing(6)
 
         n = len(self.model.order)
@@ -394,7 +400,8 @@ class PrintDialog(QDialog):
         self.copies_spin = QSpinBox()
         self.copies_spin.setRange(1, 999)
         self.copies_spin.setValue(1)
-        self.copies_spin.setFixedWidth(68)
+        self.copies_spin.setFixedWidth(56)
+        self.copies_spin.setFixedHeight(30)
         copies_row.addWidget(self.copies_spin)
         self._collate_sorted = QRadioButton("1,2,3,1,2,3")
         self._collate_sorted.setToolTip(tr(
@@ -484,7 +491,7 @@ class PrintDialog(QDialog):
             tr("SEITENGRÖSSE & HANDHABUNG").replace("&", "&&"))
         hl = QVBoxLayout(handling_box)
         hl.setContentsMargins(12, 10, 12, 10)
-        hl.setSpacing(8)
+        hl.setSpacing(10)
 
         self.handling = "size"
         self._handling_bar = QTabBar()
@@ -500,6 +507,7 @@ class PrintDialog(QDialog):
             f"color:{_TV['dim']};border:none;"
             f"border-right:1px solid {_TV['input_brd']};"
             f"min-height:28px;padding:5px 8px;font-size:13px;}}"
+            f"QTabBar#printHTabs::tab:last{{border-right:0;}}"
             f"QTabBar#printHTabs::tab:selected{{background:{_TV['sel_bg']};"
             f"color:{_TV['text']};font-weight:bold;"
             f"border-top:2px solid {_TV['acc']};}}"
@@ -532,6 +540,7 @@ class PrintDialog(QDialog):
         self.scale_pct.setValue(100)
         self.scale_pct.setSuffix(" %")
         self.scale_pct.setFixedWidth(78)
+        self.scale_pct.setFixedHeight(30)
         self.scale_pct.setToolTip(tr(
             "Größe relativ zum Original. 100 % druckt 1:1."))
         size_col.addWidget(self.scale_fit)
@@ -561,7 +570,7 @@ class PrintDialog(QDialog):
         def _pack(lyt, widgets):
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(8)
+            row.setSpacing(16)
             for w in widgets:
                 row.addWidget(w)
             row.addStretch()
@@ -577,11 +586,13 @@ class PrintDialog(QDialog):
         self.poster_pct.setValue(200)
         self.poster_pct.setSuffix(" %")
         self.poster_pct.setFixedWidth(78)
+        self.poster_pct.setFixedHeight(30)
         self.poster_overlap = QSpinBox()
         self.poster_overlap.setRange(0, 50)
         self.poster_overlap.setValue(3)
         self.poster_overlap.setSuffix(" mm")
         self.poster_overlap.setFixedWidth(78)
+        self.poster_overlap.setFixedHeight(30)
         _pack(po, [_plbl(tr("Kachel-Skalierung")), self.poster_pct,
                    _plbl(tr("Überlappung")), self.poster_overlap])
         self.poster_cutmarks = QCheckBox(tr("Schnittmarken"))
@@ -604,6 +615,7 @@ class PrintDialog(QDialog):
         self.nup_order.addItem(tr("Horizontal umgekehrt"), "hr")
         self.nup_order.addItem(tr("Vertikal"), "v")
         self.nup_order.addItem(tr("Vertikal umgekehrt"), "vr")
+        self.nup_order.setMaximumWidth(220)
         _pack(no, [_plbl(tr("Seiten / Bogen")), self.nup_count,
                    _plbl(tr("Reihenfolge")), self.nup_order])
         self.nup_border = QCheckBox(tr("Seitenrahmen"))
@@ -625,7 +637,7 @@ class PrintDialog(QDialog):
         self.booklet_bind = QComboBox()
         self.booklet_bind.addItem(tr("Links"), "left")
         self.booklet_bind.addItem(tr("Rechts"), "right")
-        self.booklet_bind.setMinimumWidth(100)
+        self.booklet_bind.setMinimumWidth(148)
         _pack(bo, [_plbl(tr("Bogen")), self.booklet_side,
                    _plbl(tr("Bindung")), self.booklet_bind])
         sig = max(1, (n + 3) // 4)
@@ -633,10 +645,12 @@ class PrintDialog(QDialog):
         self.booklet_from.setRange(1, sig)
         self.booklet_from.setValue(1)
         self.booklet_from.setFixedWidth(56)
+        self.booklet_from.setFixedHeight(30)
         self.booklet_to = QSpinBox()
         self.booklet_to.setRange(1, sig)
         self.booklet_to.setValue(sig)
         self.booklet_to.setFixedWidth(56)
+        self.booklet_to.setFixedHeight(30)
         self.booklet_rotate = QCheckBox(tr("Automatisch drehen"))
         self.booklet_rotate.setChecked(True)
         _pack(bo, [_plbl(tr("Blätter")), self.booklet_from,
@@ -805,33 +819,29 @@ class PrintDialog(QDialog):
         bottom.setStyleSheet(
             f"QWidget#printActionBar{{background:{_TV['panel_bg']};"
             f"border-top:1px solid {_TV['border']};}}")
-        bl = QVBoxLayout(bottom)
-        bl.setContentsMargins(18, 10, 18, 12); bl.setSpacing(6)
+        bl = QHBoxLayout(bottom)
+        bl.setContentsMargins(18, 10, 18, 12)
+        bl.setSpacing(8)
+        bottom.setMinimumHeight(52)
 
         self.status_lbl = QLabel("")
         self.status_lbl.setObjectName("dimLabel")
         self.status_lbl.setWordWrap(True)
-        # A wrapped QLabel reports the height of a single line as its sizeHint,
-        # so the layout reserves one line and the second is cut off by the
-        # window edge — which is what happened to the unembedded-fonts notice,
-        # the longest thing that appears here. Reserve the two lines it can
-        # actually need; the bar is this tall either way, empty or not.
-        self.status_lbl.setMinimumHeight(30)
-        bl.addWidget(self.status_lbl)
+        # Concept `.actions`: status left, Abbrechen + Drucken right, one row.
+        # Stretch keeps the buttons pinned while a long unembedded-fonts
+        # notice can still wrap.
+        self.status_lbl.setMinimumHeight(16)
+        bl.addWidget(self.status_lbl, 1)
 
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.addStretch()
         cancel_btn = QPushButton(tr("Abbrechen"))
         cancel_btn.setObjectName("secondaryBtn")
         cancel_btn.clicked.connect(self.close)
-        btn_row.addWidget(cancel_btn)
+        bl.addWidget(cancel_btn)
         print_btn = QPushButton(tr("  Drucken  "))
         print_btn.setObjectName("actionBtn")
-        print_btn.setMinimumWidth(110)
+        print_btn.setMinimumWidth(112)
         print_btn.clicked.connect(self._do_print)
-        btn_row.addWidget(print_btn)
-        bl.addLayout(btn_row)
+        bl.addWidget(print_btn)
 
         outer.addWidget(bottom)
 
