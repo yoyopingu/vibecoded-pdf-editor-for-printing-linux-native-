@@ -53,12 +53,6 @@ class _PrintPreview(QWidget):
         self._handling_opts = {}
         self.setObjectName("printPreviewPanel")
         self.setFixedWidth(316)
-        # A QWidget *subclass* only paints a stylesheet background when it asks
-        # to: without WA_StyledBackground the sidebar colour never filled, and
-        # the dialog's own background showed through around the canvas — read
-        # as a stray band above the sheet and a frame tone that didn't match
-        # the well. Plain QWidgets with the same scoped sheet are already fine.
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         # Nav arrows match the concept `.icon` (28×24, no filled chrome).
         # objectName stays iconBtn so they keep the global type, but the
         # panel sheet drops the filled border the rest of the app wants.

@@ -400,7 +400,7 @@ class PrintDialog(QDialog):
         self.copies_spin = QSpinBox()
         self.copies_spin.setRange(1, 999)
         self.copies_spin.setValue(1)
-        self.copies_spin.setFixedWidth(64)
+        self.copies_spin.setFixedWidth(56)
         self.copies_spin.setFixedHeight(30)
         copies_row.addWidget(self.copies_spin)
         self._collate_sorted = QRadioButton("1,2,3,1,2,3")
@@ -505,18 +505,12 @@ class PrintDialog(QDialog):
             f"border:1px solid {_TV['input_brd']};border-radius:6px;}}"
             f"QTabBar#printHTabs::tab{{background:{_TV['input_bg']};"
             f"color:{_TV['dim']};border:none;"
-            f"border-right:1px solid {_TV['border']};"
+            f"border-right:1px solid {_TV['input_brd']};"
             f"min-height:28px;padding:5px 8px;font-size:13px;}}"
             f"QTabBar#printHTabs::tab:last{{border-right:0;}}"
             f"QTabBar#printHTabs::tab:selected{{background:{_TV['sel_bg']};"
             f"color:{_TV['text']};font-weight:bold;"
             f"border-top:2px solid {_TV['acc']};}}"
-            # The active tab paints over the container's rounded corners; only
-            # the selected end tabs sit on a corner, so only they round.
-            f"QTabBar#printHTabs::tab:first:selected"
-            f"{{border-top-left-radius:6px;}}"
-            f"QTabBar#printHTabs::tab:last:selected"
-            f"{{border-top-right-radius:6px;}}"
             f"QTabBar#printHTabs::tab:hover{{background:{_TV['hover']};"
             f"color:{_TV['text']};}}")
         for label in (tr("Größe"), tr("Poster"), tr("Mehrere"), tr("Broschüre")):
@@ -545,7 +539,7 @@ class PrintDialog(QDialog):
         self.scale_pct.setRange(10, 400)
         self.scale_pct.setValue(100)
         self.scale_pct.setSuffix(" %")
-        self.scale_pct.setFixedWidth(92)
+        self.scale_pct.setFixedWidth(78)
         self.scale_pct.setFixedHeight(30)
         self.scale_pct.setToolTip(tr(
             "Größe relativ zum Original. 100 % druckt 1:1."))
@@ -591,13 +585,13 @@ class PrintDialog(QDialog):
         self.poster_pct.setRange(10, 400)
         self.poster_pct.setValue(200)
         self.poster_pct.setSuffix(" %")
-        self.poster_pct.setFixedWidth(92)
+        self.poster_pct.setFixedWidth(78)
         self.poster_pct.setFixedHeight(30)
         self.poster_overlap = QSpinBox()
         self.poster_overlap.setRange(0, 50)
         self.poster_overlap.setValue(3)
         self.poster_overlap.setSuffix(" mm")
-        self.poster_overlap.setFixedWidth(92)
+        self.poster_overlap.setFixedWidth(78)
         self.poster_overlap.setFixedHeight(30)
         _pack(po, [_plbl(tr("Kachel-Skalierung")), self.poster_pct,
                    _plbl(tr("Überlappung")), self.poster_overlap])
@@ -650,12 +644,12 @@ class PrintDialog(QDialog):
         self.booklet_from = QSpinBox()
         self.booklet_from.setRange(1, sig)
         self.booklet_from.setValue(1)
-        self.booklet_from.setFixedWidth(64)
+        self.booklet_from.setFixedWidth(56)
         self.booklet_from.setFixedHeight(30)
         self.booklet_to = QSpinBox()
         self.booklet_to.setRange(1, sig)
         self.booklet_to.setValue(sig)
-        self.booklet_to.setFixedWidth(64)
+        self.booklet_to.setFixedWidth(56)
         self.booklet_to.setFixedHeight(30)
         self.booklet_rotate = QCheckBox(tr("Automatisch drehen"))
         self.booklet_rotate.setChecked(True)
@@ -663,13 +657,6 @@ class PrintDialog(QDialog):
                    QLabel(tr("bis")), self.booklet_to, self.booklet_rotate])
 
         pane_host = QWidget()
-        # Scoped, not bare "background:transparent": the app stylesheet paints
-        # every plain QWidget with its own background, so without this the pane
-        # area drew a darker rectangle under the tab bar — a box inside the
-        # group box, in a third background tone.
-        pane_host.setObjectName("printPaneHost")
-        pane_host.setStyleSheet(
-            "QWidget#printPaneHost{background:transparent;}")
         pane_host.setMinimumHeight(84)
         ph = QVBoxLayout(pane_host)
         ph.setContentsMargins(0, 0, 0, 0)
@@ -723,10 +710,7 @@ class PrintDialog(QDialog):
             b = QPushButton()
             b.setCheckable(True)
             b.setObjectName("printOrientBtn")
-            # 34 matches the height the paper/tray combos render at, so the
-            # row reads as one aligned strip rather than small buttons beside
-            # taller boxes.
-            b.setFixedSize(34, 34)
+            b.setFixedSize(34, 30)
             b.setIconSize(QSize(20, 18))
             b.setToolTip(tip)
             b.setFocusPolicy(Qt.FocusPolicy.TabFocus)
@@ -766,10 +750,10 @@ class PrintDialog(QDialog):
         paper_row.addWidget(self.paper_combo, 1)
         self.paper_w_mm = QSpinBox()
         self.paper_w_mm.setRange(10, 2000); self.paper_w_mm.setValue(320)
-        self.paper_w_mm.setSuffix(" mm"); self.paper_w_mm.setFixedWidth(92)
+        self.paper_w_mm.setSuffix(" mm"); self.paper_w_mm.setFixedWidth(80)
         self.paper_h_mm = QSpinBox()
         self.paper_h_mm.setRange(10, 2000); self.paper_h_mm.setValue(450)
-        self.paper_h_mm.setSuffix(" mm"); self.paper_h_mm.setFixedWidth(92)
+        self.paper_h_mm.setSuffix(" mm"); self.paper_h_mm.setFixedWidth(80)
         self._paper_x = QLabel("×")
         for w in (self.paper_w_mm, self._paper_x, self.paper_h_mm):
             w.setVisible(False)
@@ -1423,16 +1407,7 @@ class PrintDialog(QDialog):
         # otherwise undo the paper size and sides the operator just picked.
         # _apply_queue_info has honoured _settings_touched all along — this is
         # the Qt half of the same rule.
-        # Re-run the capability query when the selection actually moved — or
-        # when the enumeration found no queues at all: placeholder and "Kein
-        # Drucker gefunden" both carry the data "none", so the selection
-        # compares equal and without this the paper combo was never filled at
-        # all, leaving nothing to pick.
-        # `not names` cannot be folded into the data comparison — the fake in
-        # test_a_printer_appearing_later has no paper combo and must keep its
-        # "unchanged list re-applies nothing" meaning.
-        if ((self.printer_combo.currentData() != was_selected
-                or not names)
+        if (self.printer_combo.currentData() != was_selected
                 and not self._settings_touched):
             self._on_printer_changed()
 
@@ -2085,7 +2060,7 @@ class PrintDialog(QDialog):
                              paper_key, orient_idx, render_dpi=None):
         """Draw pre-rendered images to QPrinter.  MUST run on the GUI thread."""
         from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
-        from PyQt6.QtGui import QPageSize        # QPainter is a module import
+        from PyQt6.QtGui import QPageSize, QPainter
 
         try:
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
