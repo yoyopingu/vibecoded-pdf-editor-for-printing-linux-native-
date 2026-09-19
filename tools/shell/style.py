@@ -281,12 +281,21 @@ QCheckBox::indicator:checked {{
     background: {_ACC}; border: 1px solid {_ACC};
 }}
 QRadioButton {{ color: {_TEXT}; spacing: 8px; background: transparent; }}
+/* Checked and unchecked must build the same-size box: both carry the 2px
+   border, and the dot is painted by a radial gradient inside the content area.
+   With 1px unchecked / 2px checked the chosen state became 4px *larger* than
+   the empty one — a bigger circle over the smaller empty circle behind it,
+   clipped top and bottom wherever the row height was tight. */
 QRadioButton::indicator {{
     width: 15px; height: 15px; border-radius: 8px;
-    border: 1px solid {_IBD}; background: {_IB};
+    border: 2px solid {_IBD}; background: {_IB};
 }}
 QRadioButton::indicator:hover {{ border-color: {_ACC}; }}
-QRadioButton::indicator:checked {{ background: {_ACC}; border: 2px solid {_ACC}; }}
+QRadioButton::indicator:checked {{
+    border: 2px solid {_ACC};
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+                                stop:0.38 {_ACC}, stop:0.46 {_IB});
+}}
 
 /* ── Group boxes ────────────────────────────────────────── */
 QGroupBox {{
