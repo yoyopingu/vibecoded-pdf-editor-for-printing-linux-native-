@@ -53,17 +53,18 @@ def _full_scale_problem(max_w, max_h, params):
 
 
 def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False,
-               fixed_scale=None):
+               fixed_scale=None, border=False):
     """Build the N-Up PDF on a worker thread (via BasePanel.run_async).
 
     Each source page becomes a Form XObject that is scaled to fit its slot,
     keeping its aspect ratio, and centred there — or, with `fixed_scale=1.0`,
-    placed at its own size and centred without being resized at all. This is
-    dramatically faster than
-    pypdf's ``merge_transformed_page`` on vector-heavy pages (which parses +
-    decompresses every content stream — ~30s and a 10× larger output for a dense
-    4-page file vs ~0.5s here) and keeps the source content compressed. Only
-    plain data crosses the thread boundary."""
+    placed at its own size and centred without being resized at all. `border`
+    strokes a hairline around each occupied slot (the print dialog's
+    Seitenrahmen). Faster than pypdf's ``merge_transformed_page`` on
+    vector-heavy pages (which parses + decompresses every content stream —
+    ~30s and a 10× larger output for a dense 4-page file vs ~0.5s here) and
+    keeps the source content compressed. Only plain data crosses the thread
+    boundary."""
     from pikepdf import Pdf, Page, Stream, Name
     (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
     src_doc = Pdf.open(src)
@@ -96,6 +97,11 @@ def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False,
             name = names[src_pi]
             sheet.contents_add(Stream(out_doc,
                 f"q {s:.6f} 0 0 {s:.6f} {tx:.6f} {ty:.6f} cm {name} Do Q\n".encode("latin-1")))
+            if border:
+                x0, y0, x1, y1 = rects[slot_i]
+                sheet.contents_add(Stream(out_doc,
+                    (f"q 0 0 0 RG 0.4 w {x0:.2f} {y0:.2f} "
+                     f"{x1 - x0:.2f} {y1 - y0:.2f} re S Q\n").encode("latin-1")))
             placed += 1
         if mark_ops is not None:
             sheet.contents_add(Stream(out_doc, mark_ops))

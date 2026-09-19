@@ -1775,22 +1775,23 @@ class PrintDialog(QDialog):
             work = []
 
             try:
-                if handling == "poster":
-                    # Subset + Comments & Forms first, then tile. The tiles
-                    # already *are* the sheet, so the spooler is told fixed
-                    # 100 % and must not fit them a second time.
+                if handling in ("poster", "nup"):
+                    # Subset + Comments & Forms first, then impose. The
+                    # result already *is* the sheet, so the spooler is told
+                    # fixed 100 % and must not fit it a second time.
                     import tempfile
                     from pypdf import PdfReader
                     from tools.printing.content import prepare_print_pdf
-                    from tools.printing.handling import build_poster_pdf
+                    from tools.printing.handling import (
+                        build_nup_pdf, build_poster_pdf)
                     from tools.printing.spool import (
                         paper_size_pt, write_subset_pdf)
                     from tools.viewer.model import PageModel
 
                     fd, sub = tempfile.mkstemp(suffix="_psub.pdf"); os.close(fd)
                     fd, prep = tempfile.mkstemp(suffix="_pprep.pdf"); os.close(fd)
-                    fd, tiled = tempfile.mkstemp(suffix="_poster.pdf"); os.close(fd)
-                    work.extend((sub, prep, tiled))
+                    fd, imposed = tempfile.mkstemp(suffix="_imposed.pdf"); os.close(fd)
+                    work.extend((sub, prep, imposed))
                     write_subset_pdf(
                         self.pdf_path, self.model, pages_to_print, sub)
                     try:
@@ -1815,20 +1816,30 @@ class PrintDialog(QDialog):
                             except Exception:
                                 pass
                         pts = (pw, ph)
-                    n_tiles = build_poster_pdf(
-                        tile_src, None, pts,
-                        handling_opts.get("tile_pct", 200),
-                        handling_opts.get("overlap_mm", 3),
-                        handling_opts.get("cut_marks", True),
-                        handling_opts.get("labels", False),
-                        tiled, label_name=poster_label)
-                    print_path = tiled
-                    print_model = PageModel(n_tiles)
-                    print_pages = list(range(n_tiles))
-                    print_scale = 1          # Feste Größe — tiles are the sheet
+                    if handling == "poster":
+                        n_out = build_poster_pdf(
+                            tile_src, None, pts,
+                            handling_opts.get("tile_pct", 200),
+                            handling_opts.get("overlap_mm", 3),
+                            handling_opts.get("cut_marks", True),
+                            handling_opts.get("labels", False),
+                            imposed, label_name=poster_label)
+                        _report(tr("Poster: {n} Kachel(n)…").format(n=n_out))
+                    else:
+                        n_out = build_nup_pdf(
+                            tile_src, None, pts,
+                            handling_opts.get("count") or 4,
+                            handling_opts.get("order") or "h",
+                            handling_opts.get("border", True),
+                            handling_opts.get("nup_rotate", True),
+                            imposed)
+                        _report(tr("Mehrere: {n} Bogen…").format(n=n_out))
+                    print_path = imposed
+                    print_model = PageModel(n_out)
+                    print_pages = list(range(n_out))
+                    print_scale = 1          # Feste Größe — sheets already fit
                     print_pct = 100
                     print_paper = poster_paper_key or paper_key
-                    _report(tr("Poster: {n} Kachel(n)…").format(n=n_tiles))
 
                 # ── Primary: Ghostscript + lp/CUPS ───────────────────────────────
                 # Skipped entirely for "Als Bitmap": Ghostscript re-interprets the

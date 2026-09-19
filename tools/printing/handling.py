@@ -1,4 +1,4 @@
-"""Print-dialog imposition: poster tiles, and later n-up and booklet.
+"""Print-dialog imposition: poster tiles and n-up sheets (booklet next).
 
 The dialog already subsets the job and runs Comments & Forms. This module
 turns that prepared file into sheet-sized pages so spool.py can send them
@@ -162,3 +162,145 @@ def build_poster_pdf(src, pages, paper_pts, tile_pct, overlap_mm, cut_marks,
         except Exception:
             pass
     return tiled
+
+
+NUP_GRID = {2: (2, 1), 4: (2, 2), 6: (3, 2), 9: (3, 3), 16: (4, 4)}
+
+
+def nup_grid(count):
+    """(cols, rows) for a pages-per-sheet count. 2→2×1, 4→2×2, 6→3×2, …"""
+    count = int(count or 4)
+    for n, grid in NUP_GRID.items():
+        if count <= n:
+            return grid
+    return (4, 4)
+
+
+def nup_order(n, cols, rows, order):
+    """Slot permutation matching the concept JS `nupOrder`.
+
+    Visual slots are row-major (top-left is 0). The returned list maps
+    visual slot i → offset within the sheet's page block.
+    """
+    n = max(1, int(n))
+    order = order or "h"
+    if order in ("v", "vr"):
+        cells = [r * cols + c for c in range(cols) for r in range(rows)]
+    else:
+        cells = list(range(n))
+    cells = cells[:n]
+    if order in ("hr", "vr"):
+        cells = list(reversed(cells))
+    return cells
+
+
+def _nup_page_list(n_src, count, order):
+    """Source indices (or None) in visual-slot order, padded to whole sheets."""
+    cols, rows = nup_grid(count)
+    count = cols * rows
+    perm = nup_order(count, cols, rows, order)
+    n_sheets = max(1, math.ceil(max(n_src, 1) / count))
+    out = []
+    for s in range(n_sheets):
+        start = s * count
+        for i in range(count):
+            src = start + perm[i]
+            out.append(src if src < n_src else None)
+    return out
+
+
+def _nup_params(paper_w, paper_h, cols, rows):
+    """Layout tuple `_build_nup` expects, on the dialog's paper.
+
+    Small gutter, not the sidebar tool's crop-mark / custom-sheet UI.
+    """
+    margin = 4.0 * MM_TO_PT
+    gap = 3.0 * MM_TO_PT
+    slot_w = (paper_w - 2 * margin - gap * (cols - 1)) / cols
+    slot_h = (paper_h - 2 * margin - gap * (rows - 1)) / rows
+    if slot_w <= 1.0 or slot_h <= 1.0:
+        margin = gap = 1.0 * MM_TO_PT
+        slot_w = (paper_w - 2 * margin - gap * (cols - 1)) / cols
+        slot_h = (paper_h - 2 * margin - gap * (rows - 1)) / rows
+    return (paper_w, paper_h, margin, margin, margin, margin,
+            gap, gap, slot_w, slot_h, cols, rows)
+
+
+def build_nup_pdf(src, pages, paper_pts, count, order, border, auto_rotate,
+                  dest):
+    """Several source pages per sheet. Returns the number of sheets.
+
+    Wraps `_build_nup` with the dialog's paper size, the concept's slot
+    order, an optional hairline around occupied slots, and auto-rotate so
+    a landscape page fills a portrait slot (and the other way around).
+    Comments & Forms must already have been applied.
+    """
+    import tempfile
+    from pikepdf import Pdf
+    from tools.ghostscript import unlink
+    from tools.panels._shared import _visible_size
+    from tools.panels.nup import _build_nup
+
+    src_doc = Pdf.open(src)
+    n_src = len(src_doc.pages)
+    if pages is None:
+        pages = list(range(n_src))
+    pages = [p for p in pages if isinstance(p, int) and 0 <= p < n_src]
+    if not pages:
+        src_doc.close()
+        raise RuntimeError("n-up: no pages to impose")
+
+    # `_build_nup` indexes into `src`. Subset to `pages` so a range job
+    # does not pull in pages the operator did not pick.
+    work = []
+    subset = src
+    if pages != list(range(n_src)):
+        fd, subset = tempfile.mkstemp(suffix="_nup_sub.pdf")
+        os.close(fd)
+        work.append(subset)
+        out = Pdf.new()
+        for p in pages:
+            out.pages.append(src_doc.pages[p])
+        out.save(subset)
+        out.close()
+        n_src = len(pages)
+    src_doc.close()
+
+    cols, rows = nup_grid(count)
+    count = cols * rows
+    if paper_pts:
+        paper_w, paper_h = float(paper_pts[0]), float(paper_pts[1])
+    else:
+        with Pdf.open(subset) as d:
+            w, h = _visible_size(d.pages[0])
+        paper_w, paper_h = w, h
+    params = _nup_params(paper_w, paper_h, cols, rows)
+    slot_w, slot_h = params[8], params[9]
+
+    rotated = subset
+    if auto_rotate and slot_w > 1 and slot_h > 1:
+        slot_ls = slot_w > slot_h
+        doc = Pdf.open(subset)
+        changed = False
+        for page in doc.pages:
+            vw, vh = _visible_size(page)
+            if (vw > vh) != slot_ls:
+                page.rotate(90, relative=True)
+                changed = True
+        if changed:
+            fd, rotated = tempfile.mkstemp(suffix="_nup_rot.pdf")
+            os.close(fd)
+            work.append(rotated)
+            doc.save(rotated)
+        doc.close()
+
+    src_pages = _nup_page_list(n_src, count, order)
+    try:
+        _build_nup(rotated, dest, src_pages, params, count,
+                   lambda _msg: None, border=bool(border))
+    finally:
+        unlink(*work)
+
+    with Pdf.open(dest) as out:
+        return len(out.pages)
+

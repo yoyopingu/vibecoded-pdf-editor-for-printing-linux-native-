@@ -145,6 +145,8 @@ def test_poster_print_path_tiles_then_spools_at_100_percent():
     assert "print_scale = 1" in src
     assert "print_pct = 100" in src
     assert "not as_bitmap" in src
+    assert "build_nup_pdf" in src
+    assert 'handling in ("poster", "nup")' in src
     return "poster jobs tile first, then spool at fixed 100 %"
 
 
@@ -179,3 +181,154 @@ def test_poster_preview_shows_a_tile_of_the_imposed_pdf():
     finally:
         dlg.close(); tab.deleteLater(); _app.processEvents()
     return "preview walks 4 tiles at 200 % A4"
+
+
+def _nup_marked(name, n=4):
+    """A4 pages with a 40 pt square in a distinct corner: TL, TR, BL, BR, …"""
+    src = os.path.join(_TMP, name)
+    c = canvas.Canvas(src, pagesize=A4)
+    w, h = A4
+    corners = (
+        (20, h - 60), (w - 60, h - 60),
+        (20, 20), (w - 60, 20),
+    )
+    for i in range(n):
+        x, y = corners[i % 4]
+        c.setFillColorRGB(0, 0, 0)
+        c.rect(x, y, 40, 40, fill=1, stroke=0)
+        c.setFont("Helvetica", 48)
+        c.drawCentredString(w / 2, h / 2, f"P{i + 1}")
+        c.showPage()
+    c.save()
+    return src
+
+
+def _nup_slot_patch(paper, slot_i, where, scale=1.5):
+    """A PDF-space box inside slot `slot_i` ('tl' or 'br')."""
+    from tools.panels.nup import _nup_slot_rects
+    from tools.printing.handling import _nup_params
+    params = _nup_params(paper[0], paper[1], 2, 2)
+    x0, y0, x1, y1 = _nup_slot_rects(params, 4)[slot_i]
+    pad = 8
+    side = 28
+    if where == "tl":
+        return (x0 + pad, y1 - pad - side, side, side)
+    return (x1 - pad - side, y0 + pad, side, side)
+
+
+def test_nup_eight_pages_at_four_up_is_two_sheets():
+    """8 pages at 4-up is two sheets, each the chosen paper."""
+    from tools.printing.handling import build_nup_pdf
+    from tools.printing.spool import paper_size_pt
+
+    paper = paper_size_pt("A4")
+    src = _nup_marked("nup_8.pdf", n=8)
+    out = os.path.join(_TMP, "nup_8_out.pdf")
+    n = build_nup_pdf(src, None, paper, 4, "h", False, False, out)
+    assert n == 2, n
+    r = PdfReader(out)
+    assert len(r.pages) == 2
+    for p in r.pages:
+        w, h = float(p.mediabox.width), float(p.mediabox.height)
+        assert abs(w - paper[0]) < 0.5 and abs(h - paper[1]) < 0.5, (w, h)
+    return "8 pages at 4-up → 2 A4 sheets"
+
+
+def test_nup_horizontal_reversed_puts_the_last_page_top_left():
+    """Order `hr` reverses the sheet's page block: visual top-left is
+    page 4 of a 4-up, whose mark sits in the bottom-right of that slot."""
+    from tools.printing.handling import build_nup_pdf
+    from tools.printing.spool import paper_size_pt
+
+    paper = paper_size_pt("A4")
+    src = _nup_marked("nup_hr_src.pdf", n=4)
+    h_out = os.path.join(_TMP, "nup_h_out.pdf")
+    hr_out = os.path.join(_TMP, "nup_hr_out.pdf")
+    assert build_nup_pdf(src, None, paper, 4, "h", False, False, h_out) == 1
+    assert build_nup_pdf(src, None, paper, 4, "hr", False, False, hr_out) == 1
+
+    tl = _nup_slot_patch(paper, 0, "tl")
+    br = _nup_slot_patch(paper, 0, "br")
+    assert _poster_dark(h_out, 0, tl) > 40, "horizontal did not put P1 top-left"
+    assert _poster_dark(h_out, 0, br) < 20, "horizontal leaked P4 into top-left"
+    assert _poster_dark(hr_out, 0, br) > 40, "hr did not put P4 top-left"
+    assert _poster_dark(hr_out, 0, tl) < 20, "hr left P1 in top-left"
+    return "hr reverses the 4-up so P4 sits top-left"
+
+
+def test_nup_border_off_omits_the_slot_stroke():
+    """Seitenrahmen is a hairline around occupied slots. Off means the
+    slot edge is empty when the page content sits in the middle."""
+    from tools.printing.handling import build_nup_pdf, _nup_params
+    from tools.panels.nup import _nup_slot_rects
+    from tools.printing.spool import paper_size_pt
+
+    paper = paper_size_pt("A4")
+    src = _poster_src("nup_border.pdf", n=1, mark="blob")
+    off = os.path.join(_TMP, "nup_border_off.pdf")
+    on = os.path.join(_TMP, "nup_border_on.pdf")
+    build_nup_pdf(src, None, paper, 4, "h", False, False, off)
+    build_nup_pdf(src, None, paper, 4, "h", True, False, on)
+
+    x0, y0, x1, y1 = _nup_slot_rects(_nup_params(paper[0], paper[1], 2, 2), 4)[0]
+    # A thin strip on the slot's left edge — content is a centre blob.
+    edge = (x0 - 1, y0 + 20, 3, y1 - y0 - 40)
+    assert _poster_dark(off, 0, edge, scale=2) < 15, "slot edge was inked without a border"
+    assert _poster_dark(on, 0, edge, scale=2) > 20, "Seitenrahmen did not stroke the slot"
+    return "border off omits the slot stroke"
+
+
+def test_nup_applies_comments_and_forms_per_source_page():
+    """Comments & Forms run on the source pages before they are packed.
+    A filled field that only lived as /V must still show on the sheet."""
+    from tests.test_printing import _form_pdf
+    from tools.printing.content import DOCUMENT, prepare_print_pdf
+    from tools.printing.handling import build_nup_pdf
+    from tools.printing.spool import paper_size_pt
+
+    paper = paper_size_pt("A4")
+    filled = _form_pdf("nup_form.pdf")
+    empty = _form_pdf("nup_form_empty.pdf", value=None)
+    prep = os.path.join(_TMP, "nup_form_prep.pdf")
+    prepare_print_pdf(filled, prep, DOCUMENT)
+    out = os.path.join(_TMP, "nup_form_out.pdf")
+    empty_out = os.path.join(_TMP, "nup_form_empty_out.pdf")
+    build_nup_pdf(prep, None, paper, 2, "h", False, False, out)
+    build_nup_pdf(empty, None, paper, 2, "h", False, False, empty_out)
+    # The field sits in the upper half of the left slot on a 2-up.
+    left = (20, paper[1] * 0.45, paper[0] * 0.45, paper[1] * 0.45)
+    inked = _poster_dark(out, 0, left, scale=1.5)
+    blank = _poster_dark(empty_out, 0, left, scale=1.5)
+    assert inked > blank + 80, (
+        f"filled n-up has {inked} dark px, empty {blank} — the value was lost")
+    return f"filled field survives 2-up ({inked} vs {blank})"
+
+
+def test_nup_preview_walks_sheets():
+    """Mehrere caption and Bogen nav follow the concept; 4-up of a
+    handful of pages is more than one sheet."""
+    from tools.viewer.tab import PdfTab
+    from tools.printing.dialog import PrintDialog
+
+    src = _nup_marked("nup_dlg.pdf", n=8)
+    tab = PdfTab(src)
+    dlg = PrintDialog(tab.pdf_path, tab.model, tab)
+    try:
+        idx = dlg.paper_combo.findData("A4")
+        if idx < 0:
+            dlg.paper_combo.addItem("A4", "A4")
+            idx = dlg.paper_combo.findData("A4")
+        dlg.paper_combo.setCurrentIndex(idx)
+        dlg._handling_bar.setCurrentIndex(2)
+        _spin(15)
+        assert dlg.handling == "nup"
+        cap = dlg._preview._info_lbl.text()
+        assert "4" in cap and "Bogen" in dlg._preview._page_lbl.text(), (
+            cap, dlg._preview._page_lbl.text())
+        assert dlg._preview._nav_count() == 2
+        dlg._preview._next_page()
+        _spin(5)
+        assert "2" in dlg._preview._page_lbl.text()
+    finally:
+        dlg.close(); tab.deleteLater(); _app.processEvents()
+    return "preview walks 2 sheets at 4-up of 8 pages"
