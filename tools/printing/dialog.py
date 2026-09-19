@@ -215,7 +215,29 @@ class PrintDialog(QDialog):
     def _on_handling_tab(self, idx):
         modes = ("size", "poster", "nup", "booklet")
         self.handling = modes[idx] if 0 <= idx < 4 else "size"
-        self._size_pane.setVisible(self.handling == "size")
+        for mode, pane in self._handling_panes.items():
+            pane.setVisible(mode == self.handling)
+        self._sync_preview()
+
+    def _handling_opts(self):
+        """Poster / n-up / booklet controls, as the preview composites them."""
+        n = len(self.model.order)
+        return {
+            "tile_pct": self.poster_pct.value(),
+            "overlap_mm": self.poster_overlap.value(),
+            "cut_marks": self.poster_cutmarks.isChecked(),
+            "labels": self.poster_labels.isChecked(),
+            "count": self.nup_count.currentData() or 4,
+            "order": self.nup_order.currentData() or "h",
+            "border": self.nup_border.isChecked(),
+            "nup_rotate": self.nup_rotate.isChecked(),
+            "side": self.booklet_side.currentData() or "both",
+            "bind": self.booklet_bind.currentData() or "left",
+            "sheet_from": self.booklet_from.value(),
+            "sheet_to": self.booklet_to.value(),
+            "booklet_rotate": self.booklet_rotate.isChecked(),
+            "page_count": n,
+        }
 
     def _job_paper(self):
         """Media name sent with the job. Empty when the operator asked the
@@ -517,9 +539,127 @@ class PrintDialog(QDialog):
             "nach der PDF-Seitengröße (Acrobat: Choose paper source by PDF "
             "page size)."))
         size_col.addWidget(self.by_page_size_check)
+
+        def _plbl(text):
+            l = QLabel(text)
+            l.setStyleSheet(
+                f"color:{_TV['text']};background:transparent;")
+            return l
+
+        def _pack(lyt, widgets):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            for w in widgets:
+                row.addWidget(w)
+            row.addStretch()
+            lyt.addLayout(row)
+
+        poster = QWidget()
+        poster.setStyleSheet("background:transparent;")
+        po = QVBoxLayout(poster)
+        po.setContentsMargins(0, 0, 0, 0)
+        po.setSpacing(8)
+        self.poster_pct = QSpinBox()
+        self.poster_pct.setRange(10, 400)
+        self.poster_pct.setValue(200)
+        self.poster_pct.setSuffix(" %")
+        self.poster_pct.setFixedWidth(78)
+        self.poster_overlap = QSpinBox()
+        self.poster_overlap.setRange(0, 50)
+        self.poster_overlap.setValue(3)
+        self.poster_overlap.setSuffix(" mm")
+        self.poster_overlap.setFixedWidth(78)
+        _pack(po, [_plbl(tr("Kachel-Skalierung")), self.poster_pct,
+                   _plbl(tr("Überlappung")), self.poster_overlap])
+        self.poster_cutmarks = QCheckBox(tr("Schnittmarken"))
+        self.poster_cutmarks.setChecked(True)
+        self.poster_labels = QCheckBox(tr("Kachel beschriften"))
+        _pack(po, [self.poster_cutmarks, self.poster_labels])
+
+        nup = QWidget()
+        nup.setStyleSheet("background:transparent;")
+        no = QVBoxLayout(nup)
+        no.setContentsMargins(0, 0, 0, 0)
+        no.setSpacing(8)
+        self.nup_count = QComboBox()
+        for c in (2, 4, 6, 9, 16):
+            self.nup_count.addItem(str(c), c)
+        self.nup_count.setCurrentIndex(1)          # 4
+        self.nup_count.setFixedWidth(64)
+        self.nup_order = QComboBox()
+        self.nup_order.addItem(tr("Horizontal"), "h")
+        self.nup_order.addItem(tr("Horizontal umgekehrt"), "hr")
+        self.nup_order.addItem(tr("Vertikal"), "v")
+        self.nup_order.addItem(tr("Vertikal umgekehrt"), "vr")
+        _pack(no, [_plbl(tr("Seiten / Bogen")), self.nup_count,
+                   _plbl(tr("Reihenfolge")), self.nup_order])
+        self.nup_border = QCheckBox(tr("Seitenrahmen"))
+        self.nup_border.setChecked(True)
+        self.nup_rotate = QCheckBox(tr("Automatisch drehen"))
+        self.nup_rotate.setChecked(True)
+        _pack(no, [self.nup_border, self.nup_rotate])
+
+        booklet = QWidget()
+        booklet.setStyleSheet("background:transparent;")
+        bo = QVBoxLayout(booklet)
+        bo.setContentsMargins(0, 0, 0, 0)
+        bo.setSpacing(8)
+        self.booklet_side = QComboBox()
+        self.booklet_side.addItem(tr("Beide Seiten"), "both")
+        self.booklet_side.addItem(tr("Nur Vorderseite"), "front")
+        self.booklet_side.addItem(tr("Nur Rückseite"), "back")
+        self.booklet_side.setMinimumWidth(148)
+        self.booklet_bind = QComboBox()
+        self.booklet_bind.addItem(tr("Links"), "left")
+        self.booklet_bind.addItem(tr("Rechts"), "right")
+        self.booklet_bind.setMinimumWidth(100)
+        _pack(bo, [_plbl(tr("Bogen")), self.booklet_side,
+                   _plbl(tr("Bindung")), self.booklet_bind])
+        sig = max(1, (n + 3) // 4)
+        self.booklet_from = QSpinBox()
+        self.booklet_from.setRange(1, sig)
+        self.booklet_from.setValue(1)
+        self.booklet_from.setFixedWidth(56)
+        self.booklet_to = QSpinBox()
+        self.booklet_to.setRange(1, sig)
+        self.booklet_to.setValue(sig)
+        self.booklet_to.setFixedWidth(56)
+        self.booklet_rotate = QCheckBox(tr("Automatisch drehen"))
+        self.booklet_rotate.setChecked(True)
+        _pack(bo, [_plbl(tr("Blätter")), self.booklet_from,
+                   QLabel(tr("bis")), self.booklet_to, self.booklet_rotate])
+
+        pane_host = QWidget()
+        pane_host.setMinimumHeight(84)
+        ph = QVBoxLayout(pane_host)
+        ph.setContentsMargins(0, 0, 0, 0)
+        ph.setSpacing(0)
+        self._handling_panes = {
+            "size": size_pane, "poster": poster, "nup": nup, "booklet": booklet}
+        for pane in self._handling_panes.values():
+            pane.setMinimumHeight(84)
+            ph.addWidget(pane)
+            pane.hide()
+        size_pane.show()
         self._size_pane = size_pane
-        hl.addWidget(size_pane)
+        hl.addWidget(pane_host)
         self._handling_bar.currentChanged.connect(self._on_handling_tab)
+        for w, sig in (
+                (self.poster_pct, "valueChanged"),
+                (self.poster_overlap, "valueChanged"),
+                (self.poster_cutmarks, "toggled"),
+                (self.poster_labels, "toggled"),
+                (self.nup_count, "currentIndexChanged"),
+                (self.nup_order, "currentIndexChanged"),
+                (self.nup_border, "toggled"),
+                (self.nup_rotate, "toggled"),
+                (self.booklet_side, "currentIndexChanged"),
+                (self.booklet_bind, "currentIndexChanged"),
+                (self.booklet_from, "valueChanged"),
+                (self.booklet_to, "valueChanged"),
+                (self.booklet_rotate, "toggled")):
+            getattr(w, sig).connect(self._sync_preview)
 
         footer = QWidget()
         footer.setObjectName("printSheetOpts")
@@ -1422,6 +1562,8 @@ class PrintDialog(QDialog):
             orient_idx = self.orient_idx,
             margin_mm  = self._hw_margin_mm,
             comments_forms = self.comments_forms_mode(),
+            handling = self.handling,
+            handling_opts = self._handling_opts(),
         )
 
     def _detect_pdf_paper(self):
@@ -1509,7 +1651,13 @@ class PrintDialog(QDialog):
                   self.radio_all, self.radio_current, self.radio_range,
                   self.range_edit, self.reverse_check, self.bitmap_check,
                   self.scale_fit, self.scale_fixed, self.scale_shrink,
-                  self.scale_pct, self.by_page_size_check]:
+                  self.scale_pct, self.by_page_size_check,
+                  self.poster_pct, self.poster_overlap,
+                  self.poster_cutmarks, self.poster_labels,
+                  self.nup_count, self.nup_order,
+                  self.nup_border, self.nup_rotate,
+                  self.booklet_side, self.booklet_bind,
+                  self.booklet_from, self.booklet_to, self.booklet_rotate]:
             w.setEnabled(not busy)
         for btn in self.findChildren(QPushButton):
             btn.setEnabled(not busy)

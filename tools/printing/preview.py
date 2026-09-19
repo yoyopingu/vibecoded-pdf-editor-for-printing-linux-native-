@@ -11,7 +11,7 @@ import os
 import tempfile
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer
-from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen
+from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.theme import _TV
@@ -49,6 +49,8 @@ class _PrintPreview(QWidget):
         self._paper_key  = "A4"
         self._orient_idx = 0        # 0=auto, 1=portrait, 2=landscape
         self._comments_forms = DOCUMENT
+        self._handling = "size"
+        self._handling_opts = {}
         self.setObjectName("printPreviewPanel")
         self.setFixedWidth(316)
         # Nav arrows match the concept `.icon` (28×24, no filled chrome).
@@ -122,25 +124,38 @@ class _PrintPreview(QWidget):
     # ── Public API called by PrintDialog ──────────────────────────────────────
 
     def update_settings(self, scale_idx, paper_key, orient_idx, margin_mm,
-                        scale_pct=100, comments_forms=DOCUMENT):
+                        scale_pct=100, comments_forms=DOCUMENT,
+                        handling="size", handling_opts=None):
         content_changed = self._comments_forms != comments_forms
+        handling = handling or "size"
+        opts = dict(handling_opts or {})
+        mode_changed = (self._handling != handling or
+                        self._handling_opts != opts)
         changed = (self._scale_idx  != scale_idx  or
                    self._scale_pct  != scale_pct  or
                    self._paper_key  != paper_key  or
                    self._orient_idx != orient_idx or
                    self._margin_mm  != margin_mm)
+        if self._handling != handling:
+            self._current = 0
         self._scale_idx  = scale_idx
         self._scale_pct  = scale_pct
         self._paper_key  = paper_key
         self._orient_idx = orient_idx
         self._margin_mm  = margin_mm
         self._comments_forms = comments_forms or DOCUMENT
+        self._handling = handling
+        self._handling_opts = opts
         if content_changed:
             # Comments & Forms changes what is *on* the page, so the bitmap
             # has to be made again. Paper and scale only change how that
             # bitmap is placed on the sheet.
             self._render_page()
-        elif changed:
+        elif changed or mode_changed:
+            n = self._nav_count()
+            if self._current >= n:
+                self._current = max(0, n - 1)
+            self._update_nav_label()
             self._redraw()
 
     def set_margin_mm(self, mm):
@@ -163,12 +178,76 @@ class _PrintPreview(QWidget):
     def _prev_page(self):
         if self._current > 0:
             self._current -= 1
-            self._render_page()
+            if self._handling == "size":
+                self._render_page()
+            else:
+                self._update_nav_label()
+                self._redraw()
 
     def _next_page(self):
-        if self._current < len(self._pages) - 1:
+        if self._current < self._nav_count() - 1:
             self._current += 1
-            self._render_page()
+            if self._handling == "size":
+                self._render_page()
+            else:
+                self._update_nav_label()
+                self._redraw()
+
+    def _poster_tiles(self):
+        pct = self._handling_opts.get("tile_pct", 200)
+        if pct >= 180:
+            return 4
+        if pct >= 120:
+            return 2
+        return 1
+
+    def _nav_count(self):
+        n = len(self._pages)
+        h = self._handling
+        if h == "poster":
+            return max(1, self._poster_tiles())
+        if h == "nup":
+            c = max(1, int(self._handling_opts.get("count") or 4))
+            return max(1, (n + c - 1) // c)
+        if h == "booklet":
+            sig = max(1, (n + 3) // 4)
+            frm = int(self._handling_opts.get("sheet_from") or 1)
+            to = int(self._handling_opts.get("sheet_to") or sig)
+            frm = max(1, min(frm, sig))
+            to = max(frm, min(to, sig))
+            return to - frm + 1
+        return n
+
+    def _update_nav_label(self):
+        count = self._nav_count()
+        if count <= 0:
+            self._page_lbl.setText("—")
+            self._prev_btn.setEnabled(False)
+            self._next_btn.setEnabled(False)
+            return
+        if self._current >= count:
+            self._current = count - 1
+        i = self._current + 1
+        h = self._handling
+        if h == "poster":
+            self._page_lbl.setText(
+                tr("Kachel {p0} / {p1}").format(p0=i, p1=count))
+        elif h in ("nup", "booklet"):
+            self._page_lbl.setText(
+                tr("Bogen {p0} / {p1}").format(p0=i, p1=count))
+        else:
+            n = len(self._pages)
+            total = len(self._model.order)
+            pos = self._pages[self._current] if self._pages else 0
+            if n == total:
+                self._page_lbl.setText(
+                    tr('Seite {p0} / {p1}').format(p0=pos + 1, p1=total))
+            else:
+                self._page_lbl.setText(
+                    tr('Seite {p0}   ({p1} / {p2} ausgewählt)').format(
+                        p0=pos + 1, p1=self._current + 1, p2=n))
+        self._prev_btn.setEnabled(self._current > 0)
+        self._next_btn.setEnabled(self._current < count - 1)
 
     def _render_page(self):
         self._render_token += 1
@@ -176,24 +255,17 @@ class _PrintPreview(QWidget):
         n     = len(self._pages)
         total = len(self._model.order)
         if n == 0:
-            self._page_lbl.setText("—")
-            self._prev_btn.setEnabled(False)
-            self._next_btn.setEnabled(False)
+            self._update_nav_label()
             self._pixmap = None
             self._redraw()
             return
-        if self._current >= n:
-            self._current = n - 1
-        pos = self._pages[self._current]        # position into model.order
-        # Show the real page number (of the whole document) plus position in the
-        # selection when a subset is being printed.
-        if n == total:
-            self._page_lbl.setText(tr('Seite {p0} / {p1}').format(p0=pos + 1, p1=total))
+        if self._handling == "size":
+            if self._current >= n:
+                self._current = n - 1
+            pos = self._pages[self._current]
         else:
-            self._page_lbl.setText(
-                tr('Seite {p0}   ({p1} / {p2} ausgewählt)').format(p0=pos + 1, p1=self._current + 1, p2=n))
-        self._prev_btn.setEnabled(self._current > 0)
-        self._next_btn.setEnabled(self._current < n - 1)
+            pos = self._pages[0]
+        self._update_nav_label()
         self._pixmap    = None
         self._page_w_pt = 595.0
         self._page_h_pt = 842.0
@@ -315,6 +387,8 @@ class _PrintPreview(QWidget):
         on_a_sheet = sheet is not None
         if on_a_sheet:
             paper_w_mm, paper_h_mm = sheet
+            if self._handling == "booklet" and paper_w_mm < paper_h_mm:
+                paper_w_mm, paper_h_mm = paper_h_mm, paper_w_mm
             full_bleed = self._margin_mm < 0.5
         else:
             paper_w_mm, paper_h_mm = page_w_mm, page_h_mm
@@ -387,44 +461,47 @@ class _PrintPreview(QWidget):
         cy = pr.y() + (pr.height() - ch_px) / 2
         content_rect = QRectF(cx, cy, cw_px, ch_px)
 
-        # Draw page image into content_rect (clipped to printable_area if overflows)
-        if self._pixmap and not self._pixmap.isNull():
-            p.save()
-            p.setClipRect(pr)           # clip to printable area
-            scaled_page = self._pixmap.scaled(
-                max(1, int(cw_px)), max(1, int(ch_px)),
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            p.drawPixmap(int(cx), int(cy), scaled_page)
-            p.restore()
-            # Mark what will be lost — outside the clip, which is where it is.
-            # The tint used to be drawn inside it, so it landed on the printable
-            # area instead of on the overhang: the whole visible page went red,
-            # saying "this page is a problem" when what is true is "these edges
-            # are".
-            if will_clip:
-                clip_tint = QColor(220, 60, 60, 70)
-                left   = QRectF(cx, cy, max(0.0, pr.left() - cx), ch_px)
-                right  = QRectF(pr.right(), cy,
-                                max(0.0, cx + cw_px - pr.right()), ch_px)
-                top    = QRectF(cx, cy, cw_px, max(0.0, pr.top() - cy))
-                bottom = QRectF(cx, pr.bottom(), cw_px,
-                                max(0.0, cy + ch_px - pr.bottom()))
-                for band in (left, right, top, bottom):
-                    if band.width() > 0.5 and band.height() > 0.5:
-                        p.fillRect(band, clip_tint)
+        if self._handling != "size":
+            self._draw_handling(p, QRectF(ox, oy, pw, ph))
         else:
-            # No image yet — grey placeholder
-            p.fillRect(content_rect, QColor(200, 200, 200))
+            # Draw page image into content_rect (clipped to printable_area if overflows)
+            if self._pixmap and not self._pixmap.isNull():
+                p.save()
+                p.setClipRect(pr)           # clip to printable area
+                scaled_page = self._pixmap.scaled(
+                    max(1, int(cw_px)), max(1, int(ch_px)),
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
+                p.drawPixmap(int(cx), int(cy), scaled_page)
+                p.restore()
+                # Mark what will be lost — outside the clip, which is where it is.
+                # The tint used to be drawn inside it, so it landed on the printable
+                # area instead of on the overhang: the whole visible page went red,
+                # saying "this page is a problem" when what is true is "these edges
+                # are".
+                if will_clip:
+                    clip_tint = QColor(220, 60, 60, 70)
+                    left   = QRectF(cx, cy, max(0.0, pr.left() - cx), ch_px)
+                    right  = QRectF(pr.right(), cy,
+                                    max(0.0, cx + cw_px - pr.right()), ch_px)
+                    top    = QRectF(cx, cy, cw_px, max(0.0, pr.top() - cy))
+                    bottom = QRectF(cx, pr.bottom(), cw_px,
+                                    max(0.0, cy + ch_px - pr.bottom()))
+                    for band in (left, right, top, bottom):
+                        if band.width() > 0.5 and band.height() > 0.5:
+                            p.fillRect(band, clip_tint)
+            else:
+                # No image yet — grey placeholder
+                p.fillRect(content_rect, QColor(200, 200, 200))
 
-        # Margin indicator — dashed line showing the printable-area boundary.
-        # There is no printable area to bound without a sheet: the margin comes
-        # from the queue's hardware margin for a paper size, and no size was
-        # named.
-        if on_a_sheet and not full_bleed:
-            pen = QPen(QColor(180, 100, 100, 200), 1, Qt.PenStyle.DashLine)
-            p.setPen(pen)
-            p.drawRect(pr.toRect())
+            # Margin indicator — dashed line showing the printable-area boundary.
+            # There is no printable area to bound without a sheet: the margin comes
+            # from the queue's hardware margin for a paper size, and no size was
+            # named.
+            if on_a_sheet and not full_bleed:
+                pen = QPen(QColor(180, 100, 100, 200), 1, Qt.PenStyle.DashLine)
+                p.setPen(pen)
+                p.drawRect(pr.toRect())
 
         # Paper border, or — with no paper — the edge of the page itself, so
         # the pixmap does not float unbounded on the canvas.
@@ -437,32 +514,187 @@ class _PrintPreview(QWidget):
         p.end()
         self._canvas.setPixmap(canvas_pm)
 
-        # Caption under the sheet. Scale name + paper like the concept `#meta`,
-        # with the page→sheet millimetres the tests (and the operator) read.
-        if self._scale_idx == 0:
-            scale_lbl = tr("Anpassen")
-        elif self._scale_idx == 1:
-            scale_lbl = f"{self._scale_pct:g} %"
+        self._set_caption(on_a_sheet, will_clip, page_w_mm, page_h_mm,
+                          paper_w_mm, paper_h_mm)
+
+    def _set_caption(self, on_a_sheet, will_clip, page_w_mm, page_h_mm,
+                     paper_w_mm, paper_h_mm):
+        h = self._handling
+        opts = self._handling_opts
+        if h == "poster":
+            pct = opts.get("tile_pct", 200)
+            tiles = self._poster_tiles()
+            info = tr("Poster · {pct} % · Kachel {a}/{b}").format(
+                pct=pct, a=self._current + 1, b=tiles)
+            ov = opts.get("overlap_mm") or 0
+            if ov:
+                info += tr(" · Überlappung {ov} mm").format(ov=ov)
+        elif h == "nup":
+            n = opts.get("count") or 4
+            order = opts.get("order") or "h"
+            order_lbl = {
+                "h": tr("Horizontal"), "hr": tr("Horizontal umgekehrt"),
+                "v": tr("Vertikal"), "vr": tr("Vertikal umgekehrt"),
+            }.get(order, order)
+            info = tr("{n} Seiten / Bogen · {order}").format(
+                n=n, order=order_lbl)
+        elif h == "booklet":
+            bind = tr("Links") if opts.get("bind") == "left" else tr("Rechts")
+            info = tr("Broschüre · Bindung {bind}").format(bind=bind)
         else:
-            scale_lbl = tr("Verkleinern")
-        if on_a_sheet:
-            info = (f"{scale_lbl} · {self._paper_key}  ·  "
-                    f"{page_w_mm:.0f}×{page_h_mm:.0f} mm  →  "
-                    f"{paper_w_mm:.0f}×{paper_h_mm:.0f} mm")
+            if self._scale_idx == 0:
+                scale_lbl = tr("Anpassen")
+            elif self._scale_idx == 1:
+                scale_lbl = f"{self._scale_pct:g} %"
+            else:
+                scale_lbl = tr("Verkleinern")
+            if on_a_sheet:
+                info = (f"{scale_lbl} · {self._paper_key}  ·  "
+                        f"{page_w_mm:.0f}×{page_h_mm:.0f} mm  →  "
+                        f"{paper_w_mm:.0f}×{paper_h_mm:.0f} mm")
+            else:
+                info = f"{scale_lbl} · " + tr(
+                    "Papier wie im Drucker eingestellt")
+            if will_clip:
+                warn = tr("Inhalt wird beschnitten")
+                self._info_lbl.setTextFormat(Qt.TextFormat.RichText)
+                self._info_lbl.setText(
+                    f'{info}  ·  <span style="color:{_TV["acc"]};'
+                    f'font-weight:700">{warn}</span>')
+                return
+        self._info_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        self._info_lbl.setText(info)
+
+    def _draw_handling(self, p, sheet):
+        h = self._handling
+        if h == "poster":
+            self._draw_poster(p, sheet)
+        elif h == "nup":
+            self._draw_nup(p, sheet)
+        elif h == "booklet":
+            self._draw_booklet(p, sheet)
+
+    def _draw_page_into(self, p, rect, empty=False, tag=""):
+        """Composite the last rendered page (or a blank slot) into `rect`."""
+        r = rect.toRect()
+        if empty or self._pixmap is None or self._pixmap.isNull():
+            p.fillRect(r, QColor(243, 245, 248))
         else:
-            # Naming a target size here would be inventing one. The page size
-            # is known; what it goes onto is the printer's business. Keep this
-            # caption short — the preview column is only 316 px.
-            info = f"{scale_lbl} · " + tr("Papier wie im Drucker eingestellt")
-        if will_clip:
-            warn = tr("Inhalt wird beschnitten")
-            self._info_lbl.setTextFormat(Qt.TextFormat.RichText)
-            self._info_lbl.setText(
-                f'{info}  ·  <span style="color:{_TV["acc"]};'
-                f'font-weight:700">{warn}</span>')
+            scaled = self._pixmap.scaled(
+                max(1, r.width()), max(1, r.height()),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            p.drawPixmap(r, scaled)
+        if tag:
+            p.setPen(QPen(QColor(26, 58, 104)))
+            font = QFont()
+            font.setPixelSize(max(8, min(14, r.height() // 8)))
+            font.setBold(True)
+            p.setFont(font)
+            p.drawText(r.adjusted(4, 2, -4, 0),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                       tag)
+
+    def _draw_poster(self, p, sheet):
+        tiles = self._poster_tiles()
+        cols = 2 if tiles == 4 else tiles
+        rows = 2 if tiles == 4 else 1
+        idx = self._current
+        col = idx % cols
+        row = idx // cols
+        p.save()
+        p.setClipRect(sheet)
+        # Zoom the page so this tile is one cell of a cols×rows grid.
+        tw, th = sheet.width() * cols, sheet.height() * rows
+        dest = QRectF(sheet.x() - col * sheet.width(),
+                      sheet.y() - row * sheet.height(), tw, th)
+        self._draw_page_into(p, dest, tag="")
+        p.restore()
+        if self._handling_opts.get("cut_marks"):
+            p.setPen(QPen(QColor(192, 57, 43), 1))
+            x0, y0 = sheet.x() + 6, sheet.y() + 6
+            x1, y1 = sheet.right() - 6, sheet.bottom() - 6
+            for x, y, dx, dy in (
+                    (x0, y0, 10, 10), (x1, y0, -10, 10),
+                    (x0, y1, 10, -10), (x1, y1, -10, -10)):
+                p.drawLine(int(x), int(y), int(x + dx), int(y))
+                p.drawLine(int(x), int(y), int(x), int(y + dy))
+        if self._handling_opts.get("labels"):
+            names = ("A1", "A2", "B1", "B2")
+            tag = names[idx] if idx < 4 else f"T{idx + 1}"
+            p.setPen(QPen(QColor(192, 57, 43)))
+            font = QFont()
+            font.setPixelSize(10)
+            font.setBold(True)
+            p.setFont(font)
+            p.drawText(int(sheet.x() + 8), int(sheet.y() + 18), tag)
+
+    def _nup_order(self, n, cols, rows, order):
+        cells = []
+        if order in ("v", "vr"):
+            for c in range(cols):
+                for r in range(rows):
+                    cells.append(r * cols + c)
         else:
-            self._info_lbl.setTextFormat(Qt.TextFormat.PlainText)
-            self._info_lbl.setText(info)
+            cells = list(range(n))
+        if order in ("hr", "vr"):
+            cells.reverse()
+        return cells
+
+    def _draw_nup(self, p, sheet):
+        n = int(self._handling_opts.get("count") or 4)
+        grid = {2: (2, 1), 4: (2, 2), 6: (3, 2), 9: (3, 3), 16: (4, 4)}
+        cols, rows = grid.get(n, (2, 2))
+        order = self._nup_order(n, cols, rows,
+                                self._handling_opts.get("order") or "h")
+        border = self._handling_opts.get("border", True)
+        gap = 3
+        pad = 6
+        slot_w = (sheet.width() - 2 * pad - (cols - 1) * gap) / cols
+        slot_h = (sheet.height() - 2 * pad - (rows - 1) * gap) / rows
+        start = self._current * n
+        src_n = len(self._pages)
+        for i in range(n):
+            r, c = divmod(i, cols)
+            # Slot i is visual row-major; the page comes from `order`.
+            x = sheet.x() + pad + c * (slot_w + gap)
+            y = sheet.y() + pad + r * (slot_h + gap)
+            slot = QRectF(x, y, slot_w, slot_h)
+            page_i = start + order[i]
+            empty = page_i >= src_n
+            tag = "" if empty else str(self._pages[page_i] + 1)
+            self._draw_page_into(p, slot, empty=empty, tag=tag)
+            if border and not empty:
+                p.setPen(QPen(QColor(197, 206, 216), 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(slot.toRect())
+
+    def _draw_booklet(self, p, sheet):
+        n = len(self._pages)
+        frm = int(self._handling_opts.get("sheet_from") or 1)
+        sheet_i = self._current + frm  # 1-based signature index
+        left_sel = n - (sheet_i - 1)   # 1-based index into the selection
+        right_sel = sheet_i
+        if self._handling_opts.get("bind") == "right":
+            left_sel, right_sel = right_sel, left_sel
+        mid = sheet.center().x()
+        gap = 0
+        left_r = QRectF(sheet.x(), sheet.y(), mid - sheet.x() - gap,
+                        sheet.height())
+        right_r = QRectF(mid + gap, sheet.y(),
+                         sheet.right() - mid - gap, sheet.height())
+
+        def _slot(sel, rect):
+            if sel < 1 or sel > n:
+                self._draw_page_into(p, rect, empty=True)
+            else:
+                tag = str(self._pages[sel - 1] + 1)
+                self._draw_page_into(p, rect, tag=tag)
+
+        _slot(left_sel, left_r)
+        _slot(right_sel, right_r)
+        p.setPen(QPen(QColor(138, 151, 168), 1, Qt.PenStyle.DashLine))
+        p.drawLine(int(mid), int(sheet.y()), int(mid), int(sheet.bottom()))
 
     def _ink_outside(self, content_w_mm, content_h_mm, printable_w, printable_h):
         """Is there anything drawn in the part that will not print?
