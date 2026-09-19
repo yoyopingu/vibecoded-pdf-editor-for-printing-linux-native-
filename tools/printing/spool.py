@@ -17,6 +17,7 @@ from tools.ghostscript import ghostscript_binary, unlink
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.document_cache import open_document as _open_pdf
+from tools.printing.content import DOCUMENT, prepare_print_pdf
 
 def _run_capturing(cmd, timeout):
     """subprocess.run with the shape every call to lp/lpstat/lpoptions/
@@ -153,7 +154,7 @@ def print_path_redraws_the_page(pdf_path, page_index=0, timeout=30):
     if not gs_bin:
         return None
 
-    one = through = None
+    one = through = prepared = None
     try:
         # One page, so this costs the same on a 500-page document as on a
         # one-page one — it runs every time the print dialog opens.
@@ -166,11 +167,25 @@ def print_path_redraws_the_page(pdf_path, page_index=0, timeout=30):
             out.pages.append(src.pages[page_index])
             out.save(one)
 
+        # Compare the print path as the job actually runs it: form values
+        # baked in, then Ghostscript. Comparing the raw file against GS
+        # used to flag every NeedAppearances form as "the print will look
+        # different", which was true of the old path and is no longer.
+        prepared = one + "_prep.pdf"
+        try:
+            prepare_print_pdf(one, prepared, DOCUMENT)
+            gs_in = prepared
+        except Exception:
+            logging.debug("print: could not prepare the page for the "
+                          "preview comparison", exc_info=True)
+            gs_in = one
+            prepared = None
+
         r = _run_capturing([
             gs_bin, "-dBATCH", "-dNOPAUSE", "-dQUIET", "-sDEVICE=pdfwrite",
             "-dCompatibilityLevel=1.5", "-dPDFSETTINGS=/printer",
             "-dEmbedAllFonts=true", "-dSubsetFonts=true",
-            f"-sOutputFile={through}", one], timeout=timeout)
+            f"-sOutputFile={through}", gs_in], timeout=timeout)
         if r.returncode != 0 or not os.path.getsize(through):
             return None
 
@@ -186,7 +201,7 @@ def print_path_redraws_the_page(pdf_path, page_index=0, timeout=30):
             from PIL import ImageOps
             return ImageOps.invert(pil).getbbox(), pil.size
 
-        a, size_a = ink(one)
+        a, size_a = ink(gs_in)
         b, size_b = ink(through)
         if a is None or b is None or size_a != size_b:
             # A page that is blank either side of the conversion says nothing
@@ -204,7 +219,7 @@ def print_path_redraws_the_page(pdf_path, page_index=0, timeout=30):
                       exc_info=True)
         return None
     finally:
-        for tmp in (one, through):
+        for tmp in (one, through, prepared):
             if tmp:
                 unlink(tmp)
 
@@ -494,7 +509,8 @@ def write_subset_pdf(pdf_path, model, pages, dest_path):
 
 
 def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
-                     paper_key, qt_dpi, hw_margin_mm, report, scale_pct=100):
+                     paper_key, qt_dpi, hw_margin_mm, report, scale_pct=100,
+                     comments_forms=DOCUMENT):
     """Rasterise PDF pages via pypdfium2 in background.
 
     No QPrinter usage here — Qt objects must stay on the GUI thread.
@@ -525,66 +541,77 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
 
     rendered    = []
     skipped     = []
-    pdfium_docs: dict = {}
+    pdfium_doc  = None
+    sub_tmp = prep_tmp = None
 
     try:
-        for i, pos in enumerate(pages):
-            report(tr("Rendere Seite {i} / {total}…").format(i=i + 1, total=len(pages)))
-            uid = model.order[pos]
-            src_path, orig = model.page_source(uid, pdf_path)
-            rot = model.get_rotation(uid)
+        # Same file the Ghostscript path sends: subset, then form values
+        # baked in and comments filtered. Rendering the original here
+        # showed filled fields (pdfium draws them) while the GS job
+        # printed them empty.
+        import tempfile, os
+        fd, sub_tmp = tempfile.mkstemp(suffix="_qt_sub.pdf"); os.close(fd)
+        fd, prep_tmp = tempfile.mkstemp(suffix="_qt_prep.pdf"); os.close(fd)
+        subset_skipped = write_subset_pdf(pdf_path, model, pages, sub_tmp)
+        kept = [p for p in pages if (p + 1) not in subset_skipped]
+        skipped = list(subset_skipped)
+        try:
+            prepare_print_pdf(sub_tmp, prep_tmp, comments_forms)
+            render_src = prep_tmp
+        except Exception:
+            logging.exception("Qt render: could not prepare the print file")
+            render_src = sub_tmp
+
+        with _pdfium_lock:
+            pdfium_doc = _open_pdf(render_src)
+            n = len(pdfium_doc)
+        for i in range(n):
+            report(tr("Rendere Seite {i} / {total}…").format(i=i + 1, total=n))
+            orig_pos = kept[i] if i < len(kept) else i
             try:
                 with _pdfium_lock:
-                    if src_path not in pdfium_docs:
-                        pdfium_docs[src_path] = _open_pdf(src_path)
-                    pdfpage = pdfium_docs[src_path][orig]
-                    pdfw    = pdfpage.get_width()
-                    pdfh    = pdfpage.get_height()
+                    pdfpage = pdfium_doc[i]
+                    try:
+                        pdfw    = pdfpage.get_width()
+                        pdfh    = pdfpage.get_height()
 
-                    # Determine per-page orientation
-                    if orient_idx == 0:
-                        page_is_ls = (pdfw > pdfh) != bool(rot % 180)
-                    else:
-                        page_is_ls = (orient_idx == 2)
-                    page_orient = (QPageLayout.Orientation.Landscape
-                                   if page_is_ls
-                                   else QPageLayout.Orientation.Portrait)
+                        if orient_idx == 0:
+                            page_is_ls = pdfw > pdfh
+                        else:
+                            page_is_ls = (orient_idx == 2)
+                        page_orient = (QPageLayout.Orientation.Landscape
+                                       if page_is_ls
+                                       else QPageLayout.Orientation.Portrait)
 
-                    # As the page will be seen: a quarter turn swaps its sides.
-                    eff_w, eff_h = ((pdfh, pdfw) if rot % 180 else (pdfw, pdfh))
-                    target_w, target_h = _target_dims(page_is_ls, eff_w, eff_h)
+                        target_w, target_h = _target_dims(page_is_ls, pdfw, pdfh)
 
-                    scale_fit = min(target_w / max(pdfw, 1),
-                                    target_h / max(pdfh, 1))
-                    scale_100 = qt_dpi / 72.0
-                    if scale_idx == 0:
-                        scale = scale_fit
-                    elif scale_idx == 1:
-                        # Original size, times whatever the percentage box says.
-                        scale = scale_100 * (scale_pct / 100.0)
-                    else:
-                        scale = min(scale_100, scale_fit)
+                        scale_fit = min(target_w / max(pdfw, 1),
+                                        target_h / max(pdfh, 1))
+                        scale_100 = qt_dpi / 72.0
+                        if scale_idx == 0:
+                            scale = scale_fit
+                        elif scale_idx == 1:
+                            scale = scale_100 * (scale_pct / 100.0)
+                        else:
+                            scale = min(scale_100, scale_fit)
 
-                    bm  = pdfpage.render(scale=max(0.5, scale))
-                    pil = bm.to_pil().convert("RGB")
-
-                # No convert("L") here either: the QPrinter colour mode
-                # below carries the request, and throwing the colour away in
-                # the raster made this path just as irreversible as the
-                # Ghostscript one.
-                if rot:
-                    pil = pil.rotate(-rot, expand=True)
+                        bm  = pdfpage.render(scale=max(0.5, scale),
+                                            optimize_mode="print")
+                        pil = bm.to_pil().convert("RGB")
+                    finally:
+                        pdfpage.close()
 
                 rendered.append((pil, page_orient, target_w, target_h))
 
             except Exception:
-                logging.exception("Qt render: page %d", pos + 1)
-                skipped.append(pos + 1)
+                logging.exception("Qt render: page %d", orig_pos + 1)
+                skipped.append(orig_pos + 1)
     finally:
         with _pdfium_lock:
-            for doc in pdfium_docs.values():
-                try: doc.close()
-                except Exception: pass   # closing what we can; a failure here cannot change the job's outcome
+            if pdfium_doc is not None:
+                try: pdfium_doc.close()
+                except Exception: pass
+        unlink(sub_tmp, prep_tmp)
 
     if not rendered:
         raise RuntimeError(tr("Keine Seiten konnten gerendert werden."))
@@ -628,7 +655,7 @@ def _scaling_options(scale_idx):
 def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                   duplex_edge, colorconv, printer_name, scale_idx,
                   paper_key, orient_idx, report,
-                  paper_source=None, scale_pct=100):
+                  paper_source=None, scale_pct=100, comments_forms=DOCUMENT):
     """Full-quality print via Ghostscript + CUPS/lp.
 
     Ghostscript normalises, embeds fonts and applies the colour conversion.
@@ -676,12 +703,19 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
 
     sub_fd, sub_tmp = tempfile.mkstemp(suffix="_sub.pdf")
     os.close(sub_fd)
+    prep_fd, prep_tmp = tempfile.mkstemp(suffix="_prep.pdf")
+    os.close(prep_fd)
     norm_tmp = None
     scaled_tmps = []
     try:
         report(tr("Seiten zusammenstellen… ({count})").format(count=len(pages)))
         skipped = write_subset_pdf(pdf_path, model, pages, sub_tmp)
-        print_src = sub_tmp
+        try:
+            prepare_print_pdf(sub_tmp, prep_tmp, comments_forms)
+            print_src = prep_tmp
+        except Exception:
+            logging.exception("print: could not prepare form fields / comments")
+            print_src = sub_tmp
 
         gs_bin = ghostscript_binary()
         if gs_bin:
@@ -741,7 +775,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             else:
                 gs_cmd += ["-sColorConversionStrategy=LeaveColorUnchanged"]
 
-            gs_cmd += [f"-sOutputFile={norm_tmp}", sub_tmp]
+            gs_cmd += [f"-sOutputFile={norm_tmp}", print_src]
             # 240s: a whole-document colour re-conversion, not a query — the
             # slowest thing this file waits on.
             r = _run_capturing(gs_cmd, timeout=240)
@@ -749,7 +783,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             # once Ghostscript reported success — otherwise there is nothing
             # meaningful to compare against.
             converted = colorconv in (1, 2)
-            blackout = (_gs_blacked_out(sub_tmp, norm_tmp)
+            blackout = (_gs_blacked_out(print_src, norm_tmp)
                         if (converted and r.returncode == 0
                             and os.path.getsize(norm_tmp) > 100)
                         else None)
@@ -890,4 +924,4 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         return skipped
 
     finally:
-        unlink(sub_tmp, norm_tmp, *scaled_tmps)
+        unlink(sub_tmp, prep_tmp, norm_tmp, *scaled_tmps)

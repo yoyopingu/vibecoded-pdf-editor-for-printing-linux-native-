@@ -7,6 +7,8 @@ and takes its settings from the dialog through update_settings.
 """
 import logging
 import io
+import os
+import tempfile
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer
 from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen
@@ -14,6 +16,8 @@ from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.theme import _TV
 from tools.render.document_cache import open_document as _open_pdf
+from tools.ghostscript import unlink
+from tools.printing.content import DOCUMENT, prepare_print_page
 
 
 class _PrintPreview(QWidget):
@@ -44,41 +48,41 @@ class _PrintPreview(QWidget):
         self._scale_pct  = 100      # what "Originalgrösse" is a % of
         self._paper_key  = "A4"
         self._orient_idx = 0        # 0=auto, 1=portrait, 2=landscape
+        self._comments_forms = DOCUMENT
         self.setObjectName("printPreviewPanel")
-        self.setFixedWidth(260)
+        self.setFixedWidth(316)
+        # Nav arrows match the concept `.icon` (28×24, no filled chrome).
+        # objectName stays iconBtn so they keep the global type, but the
+        # panel sheet drops the filled border the rest of the app wants.
         self.setStyleSheet(
-            f"QWidget#printPreviewPanel{{background:{_TV['sidebar_bg']};}}")
+            f"QWidget#printPreviewPanel{{background:{_TV['sidebar_bg']};}}"
+            f"QPushButton#iconBtn{{background:transparent;color:{_TV['dim']};"
+            f"border:none;border-radius:4px;padding:0;"
+            f"min-width:28px;max-width:28px;width:28px;"
+            f"min-height:24px;max-height:24px;height:24px;"
+            f"font-size:13px;}}"
+            f"QPushButton#iconBtn:hover{{background:{_TV['hover']};"
+            f"color:{_TV['text']};}}"
+            f"QPushButton#iconBtn:disabled{{background:transparent;"
+            f"color:{_TV['vdim']};}}")
 
         lyt = QVBoxLayout(self)
-        lyt.setContentsMargins(10, 14, 10, 10)
+        lyt.setContentsMargins(18, 22, 18, 14)
         lyt.setSpacing(4)
-
-        hdr = QLabel(tr("VORSCHAU"))
-        hdr.setStyleSheet(
-            f"font-size:10px;font-weight:bold;letter-spacing:1px;"
-            f"color:{_TV['dim']};background:transparent;")
-        lyt.addWidget(hdr)
 
         self._canvas = QLabel()
         self._canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._canvas.setMinimumHeight(240)
         lyt.addWidget(self._canvas, 1)
 
-        # Info line: scale% + dimensions
+        # One caption under the sheet (concept `#meta`). Clip warning shares
+        # this line rather than sitting on a second label of its own.
         self._info_lbl = QLabel("")
         self._info_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._info_lbl.setWordWrap(True)
         self._info_lbl.setStyleSheet(
-            f"font-size:10px;color:{_TV['dim']};background:transparent;")
+            f"font-size:11px;color:{_TV['dim']};background:transparent;")
         lyt.addWidget(self._info_lbl)
-
-        # Clip warning (shown only when 100% overflows printable area)
-        self._clip_lbl = QLabel(tr("⚠ Inhalt wird beschnitten"))
-        self._clip_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._clip_lbl.setStyleSheet(
-            f"font-size:10px;font-weight:bold;"
-            f"color:{_TV['acc']};background:transparent;")
-        self._clip_lbl.hide()
-        lyt.addWidget(self._clip_lbl)
 
         # Page navigation
         nav = QHBoxLayout()
@@ -90,16 +94,16 @@ class _PrintPreview(QWidget):
         # tools/shell/style.py and again beside the zoom buttons in
         # tools/panels/_shared.py; this was the third place with it.
         self._prev_btn = QPushButton("◀")
-        self._prev_btn.setFixedSize(46, 28)
+        self._prev_btn.setFixedSize(28, 24)
         self._prev_btn.setObjectName("iconBtn")
         self._prev_btn.clicked.connect(self._prev_page)
         self._page_lbl = QLabel(tr("Seite 1 / 1"))
         self._page_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._page_lbl.setMinimumWidth(84)
+        self._page_lbl.setMinimumWidth(88)
         self._page_lbl.setStyleSheet(
-            f"font-size:10px;color:{_TV['dim']};background:transparent;")
+            f"font-size:11px;color:{_TV['dim']};background:transparent;")
         self._next_btn = QPushButton("▶")
-        self._next_btn.setFixedSize(46, 28)
+        self._next_btn.setFixedSize(28, 24)
         self._next_btn.setObjectName("iconBtn")
         self._next_btn.clicked.connect(self._next_page)
         # Together, centred under the sheet. The stretch used to be on the
@@ -118,7 +122,8 @@ class _PrintPreview(QWidget):
     # ── Public API called by PrintDialog ──────────────────────────────────────
 
     def update_settings(self, scale_idx, paper_key, orient_idx, margin_mm,
-                        scale_pct=100):
+                        scale_pct=100, comments_forms=DOCUMENT):
+        content_changed = self._comments_forms != comments_forms
         changed = (self._scale_idx  != scale_idx  or
                    self._scale_pct  != scale_pct  or
                    self._paper_key  != paper_key  or
@@ -129,7 +134,13 @@ class _PrintPreview(QWidget):
         self._paper_key  = paper_key
         self._orient_idx = orient_idx
         self._margin_mm  = margin_mm
-        if changed:
+        self._comments_forms = comments_forms or DOCUMENT
+        if content_changed:
+            # Comments & Forms changes what is *on* the page, so the bitmap
+            # has to be made again. Paper and scale only change how that
+            # bitmap is placed on the sheet.
+            self._render_page()
+        elif changed:
             self._redraw()
 
     def set_margin_mm(self, mm):
@@ -197,16 +208,32 @@ class _PrintPreview(QWidget):
         import weakref
         self_ref = weakref.ref(self)
 
+        comments_forms = self._comments_forms
+
         def _bg(job):
+            prepared = None
             try:
+                fd, prepared = tempfile.mkstemp(suffix="_preview.pdf")
+                os.close(fd)
+                try:
+                    prepare_print_page(src_path, orig, prepared, comments_forms)
+                    render_path, render_index = prepared, 0
+                except Exception:
+                    logging.debug("print preview: could not prepare page; "
+                                  "rendering the original", exc_info=True)
+                    render_path, render_index = src_path, orig
                 with _pdfium_lock:
-                    doc = _open_pdf(src_path)
+                    doc = _open_pdf(render_path)
                     try:
-                        page = doc[orig]
+                        page = doc[render_index]
                         pw_pt = page.get_width()
                         ph_pt = page.get_height()
                         render_scale = 240.0 / max(pw_pt, ph_pt, 1)
-                        bm  = page.render(scale=render_scale)
+                        # optimize_mode="print" honours the Print flag, so
+                        # the preview matches the paper rather than the
+                        # screen — Acrobat's print preview does the same.
+                        bm  = page.render(scale=render_scale,
+                                          optimize_mode="print")
                         pil = bm.to_pil()
                     finally:
                         doc.close()
@@ -226,6 +253,8 @@ class _PrintPreview(QWidget):
                         pass   # widget was deleted
             except Exception:
                 logging.exception("print preview: background render failed")
+            finally:
+                unlink(prepared)
         from tools.jobs import submit
         self._render_job = submit(_bg, owner=self, name="print-preview-render")
 
@@ -408,19 +437,32 @@ class _PrintPreview(QWidget):
         p.end()
         self._canvas.setPixmap(canvas_pm)
 
-        # Info line
-        pct = content_scale * 100.0
+        # Caption under the sheet. Scale name + paper like the concept `#meta`,
+        # with the page→sheet millimetres the tests (and the operator) read.
+        if self._scale_idx == 0:
+            scale_lbl = tr("Anpassen")
+        elif self._scale_idx == 1:
+            scale_lbl = f"{self._scale_pct:g} %"
+        else:
+            scale_lbl = tr("Verkleinern")
         if on_a_sheet:
-            info = (f"{pct:.0f}%  ·  "
+            info = (f"{scale_lbl} · {self._paper_key}  ·  "
                     f"{page_w_mm:.0f}×{page_h_mm:.0f} mm  →  "
                     f"{paper_w_mm:.0f}×{paper_h_mm:.0f} mm")
         else:
             # Naming a target size here would be inventing one. The page size
-            # is known; what it goes onto is the printer's business.
-            info = (f"{pct:.0f}%  ·  {page_w_mm:.0f}×{page_h_mm:.0f} mm  ·  "
-                    + tr("Papier wie im Drucker eingestellt"))
-        self._info_lbl.setText(info)
-        self._clip_lbl.setVisible(will_clip)
+            # is known; what it goes onto is the printer's business. Keep this
+            # caption short — the preview column is only 316 px.
+            info = f"{scale_lbl} · " + tr("Papier wie im Drucker eingestellt")
+        if will_clip:
+            warn = tr("Inhalt wird beschnitten")
+            self._info_lbl.setTextFormat(Qt.TextFormat.RichText)
+            self._info_lbl.setText(
+                f'{info}  ·  <span style="color:{_TV["acc"]};'
+                f'font-weight:700">{warn}</span>')
+        else:
+            self._info_lbl.setTextFormat(Qt.TextFormat.PlainText)
+            self._info_lbl.setText(info)
 
     def _ink_outside(self, content_w_mm, content_h_mm, printable_w, printable_h):
         """Is there anything drawn in the part that will not print?

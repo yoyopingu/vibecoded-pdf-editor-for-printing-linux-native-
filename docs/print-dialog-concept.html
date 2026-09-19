@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>CopyShop — Druckdialog Konzept</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #151520;
+    --side: #0e2d58;
+    --panel: #1c2340;
+    --acc: #4d8df5;
+    --acc-hov: #6ba1f8;
+    --acc-prs: #3a76d8;
+    --text: #e8eaf0;
+    --dim: #7a8699;
+    --hover: #1e4d82;
+    --line: #1e3354;
+    --input-bg: #1a2038;
+    --input-brd: #2a4470;
+    --sel: #1e4d82;
+    --list-hov: #1a3050;
+    --on-acc: #ffffff;
+    --close: #c0392b;
+    --viewer-bg: #111827;
+    --sidebar-bg: #0f3460;
+    --panel-bg: #16213e;
+    --card: #1a2a40;
+    --group: #1a2038;
+    --vdim: #556070;
+    --paper: #ffffff;
+    --ink: #1a2433;
+    --rule: #d5dbe6;
+    --field: #eef3f8;
+    --desk: #0a1020;
+    --well-inset: rgba(0,0,0,.22);
+    --sheet-edge: rgba(15,20,30,.10);
+    --shadow: 0 18px 50px rgba(0,0,0,.55);
+    --radius: 8px;
+    --font: "Noto Sans", "DejaVu Sans", ui-sans-serif, system-ui, sans-serif;
+    --label-col: 176px;
+  }
+  html[data-theme="light"] {
+    --bg: #edf1f7;
+    --side: #d8e8f8;
+    --panel: #ffffff;
+    --acc: #1f6feb;
+    --acc-hov: #1a5fd0;
+    --acc-prs: #1550b4;
+    --text: #0d1a28;
+    --dim: #556070;
+    --hover: #d4e4f8;
+    --line: #c0d0e4;
+    --input-bg: #ffffff;
+    --input-brd: #a8c0d8;
+    --sel: #d4e4f8;
+    --list-hov: #eaf2fc;
+    --on-acc: #ffffff;
+    --viewer-bg: #e8edf3;
+    --sidebar-bg: #c5d4e8;
+    --panel-bg: #ffffff;
+    --card: #f4f7fb;
+    --group: #f6f9fd;
+    --vdim: #6888a0;
+    --desk: #c5d2e4;
+    --well-inset: rgba(40,60,90,.10);
+    --sheet-edge: rgba(20,40,70,.12);
+    --shadow: 0 18px 50px rgba(20,40,70,.28);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--font);
+    font-size: 13px;
+    color: var(--text);
+    background:
+      radial-gradient(1200px 600px at 20% -10%, #1a3a68 0%, transparent 50%),
+      var(--desk);
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+  button, select, input { font: inherit; color: inherit; }
+  button { font-family: inherit; }
+
+  /* ── Concept chrome ────────────────────────────────────── */
+  .concept-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 18px;
+    background: #0b1e3a;
+    border-bottom: 2px solid var(--line);
+    color: var(--text);
+    flex-shrink: 0;
+  }
+  html[data-theme="light"] .concept-bar { background: #bcd0ec; }
+  .concept-bar h1 {
+    font-size: 13px; font-weight: 700; letter-spacing: .4px;
+    margin: 0; margin-right: auto;
+  }
+  .concept-bar h1 span { color: var(--dim); font-weight: 500; margin-left: 10px; }
+  .pill {
+    background: var(--input-bg);
+    border: 1px solid var(--input-brd); border-radius: 6px;
+    padding: 5px 12px; min-height: 28px; cursor: pointer;
+  }
+  .pill:hover { background: var(--hover); border-color: var(--acc); }
+  .pill.on { background: var(--acc); color: var(--on-acc); border-color: var(--acc); }
+
+  .stage {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    padding: 28px 20px 32px; gap: 18px; min-height: 0;
+  }
+
+  .notes {
+    width: 320px; flex-shrink: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    overflow: auto;
+    display: none;
+    padding: 16px 16px 22px;
+    max-height: min(720px, calc(100vh - 96px));
+  }
+  .notes.open { display: block; }
+  .notes h2 {
+    font-size: 11px; letter-spacing: 1.6px; color: var(--acc);
+    margin: 0 0 10px; font-weight: 700;
+  }
+  .notes h3 {
+    font-size: 12px; color: var(--text); margin: 16px 0 6px; font-weight: 700;
+  }
+  .notes p, .notes li { color: var(--dim); font-size: 12px; line-height: 1.45; }
+  .notes p { margin: 0 0 8px; }
+  .notes ul { margin: 0; padding-left: 16px; }
+  .notes li { margin: 0 0 6px; }
+
+  /* ── Dialog ────────────────────────────────────────────── */
+  .dialog {
+    width: 1080px;
+    height: 680px;
+    max-width: 100%;
+    max-height: calc(100vh - 88px);
+    background: var(--panel-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .titlebar {
+    height: 36px; display: flex; align-items: center; gap: 10px;
+    background: #0b1e3a;
+    border-bottom: 2px solid var(--line);
+    padding: 0 6px 0 14px;
+    flex-shrink: 0;
+  }
+  html[data-theme="light"] .titlebar { background: #bcd0ec; }
+  .titlebar .name {
+    font-weight: 700; font-size: 13px; letter-spacing: .4px;
+    margin-right: auto;
+  }
+  .titlebar .file {
+    color: var(--dim); font-weight: 500; letter-spacing: 0;
+    margin-left: 8px;
+  }
+  .winbtn {
+    width: 42px; height: 34px;
+    background: transparent; border: 0; color: var(--dim);
+    cursor: pointer; font-size: 16px; border-radius: 0;
+  }
+  .winbtn:hover { background: var(--hover); color: var(--text); }
+  .winbtn.close:hover { background: var(--close); color: #fff; }
+
+  .body { flex: 1; display: flex; min-height: 0; }
+
+  /* Left: preview well — Acrobat's gray shaft, CopyShop sidebar */
+  .preview {
+    width: 316px; flex-shrink: 0;
+    background: var(--sidebar-bg);
+    display: flex; flex-direction: column;
+    padding: 0;
+    border-right: 1px solid var(--line);
+  }
+  .well {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    min-height: 0;
+    padding: 22px 18px 8px;
+    background:
+      linear-gradient(180deg, var(--well-inset), transparent 38%);
+  }
+  .sheet {
+    width: 208px; height: 294px;
+    background: var(--paper);
+    position: relative;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px var(--sheet-edge),
+      0 1px 2px rgba(0,0,0,.18),
+      0 10px 22px rgba(0,0,0,.28);
+    transition: width .12s ease, height .12s ease;
+  }
+  .sheet.land { width: 276px; height: 196px; }
+
+  /* Realistic document */
+  .doc { position: absolute; inset: 0; background: #fff; color: var(--ink); }
+  .doc .brand {
+    height: 28px; background: #1a3a68; color: #fff;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 10px; font-size: 8px; font-weight: 700; letter-spacing: .7px;
+  }
+  .doc .brand small { font-weight: 500; letter-spacing: .3px; opacity: .8; }
+  .doc .addr {
+    padding: 8px 10px 0; font-size: 7.5px; line-height: 1.35; color: #334155;
+  }
+  .doc .addr b { color: var(--ink); }
+  .doc .meta {
+    display: flex; gap: 6px; padding: 7px 10px 0;
+  }
+  .doc .chip {
+    flex: 1; background: var(--field); border: 1px solid #c5d0de;
+    padding: 3px 5px; font-size: 7px; color: #1a2433;
+  }
+  .doc .chip span { display: block; color: #7a8699; font-size: 6px; letter-spacing: .3px; }
+  .doc table {
+    width: calc(100% - 20px); margin: 8px 10px 0;
+    border-collapse: collapse; font-size: 6.5px;
+  }
+  .doc th {
+    text-align: left; background: #1a3a68; color: #fff;
+    font-weight: 600; padding: 3px 4px; letter-spacing: .2px;
+  }
+  .doc td { padding: 3px 4px; border-bottom: 1px solid var(--rule); }
+  .doc td.r { text-align: right; }
+  .doc .sum {
+    margin: 8px 10px 0 auto; width: 46%;
+    font-size: 7px; border-top: 1.5px solid #1a3a68; padding-top: 4px;
+    display: flex; justify-content: space-between; font-weight: 700;
+  }
+  .doc .note {
+    margin: 10px 10px 0; font-size: 7px; color: #334155;
+    background: var(--field); border: 1px solid #c5d0de; padding: 4px 5px;
+  }
+  .doc .sig {
+    position: absolute; left: 10px; right: 10px; bottom: 10px;
+    border-top: 1px solid var(--rule); padding-top: 4px;
+    font-size: 6.5px; color: #7a8699;
+  }
+  .doc.fields-only .brand,
+  .doc.fields-only table thead,
+  .doc.fields-only .sig { visibility: hidden; }
+  .doc .sticky {
+    position: absolute; top: 44px; right: 8px; width: 54px;
+    background: #ffe58a; color: #5c4300; font-size: 6px;
+    padding: 5px 5px 6px; box-shadow: 1px 2px 0 rgba(0,0,0,.15);
+    transform: rotate(4deg); display: none; line-height: 1.3;
+  }
+  .doc.markups .sticky { display: block; }
+  .doc .strike { text-decoration: line-through; color: #c0392b; }
+  .clip {
+    position: absolute; inset: 7px; border: 1px dashed #c0392b;
+    pointer-events: none; display: none;
+  }
+  .clip.show { display: block; }
+
+  /* Mini pages for n-up / booklet */
+  .sheet.grid {
+    display: grid; gap: 3px; padding: 6px; background: #fff;
+  }
+  .mini {
+    background: #fff; border: 1px solid #c5ced8; overflow: hidden;
+    position: relative; min-height: 0;
+  }
+  .mini .mh {
+    height: 11px; background: #1a3a68; color: #fff;
+    font-size: 7px; font-weight: 700; letter-spacing: .4px;
+    display: flex; align-items: center; padding: 0 4px;
+  }
+  .mini .mb { padding: 4px; }
+  .mini .mf {
+    height: 8px; background: var(--field); border: 1px solid #c5d0de;
+    margin-top: 3px; font-size: 6px; color: var(--ink); padding: 0 3px;
+    display: flex; align-items: center;
+  }
+  .mini.empty { background: #f3f5f8; border-style: dashed; }
+  .sheet.grid.noborder .mini { border-color: transparent; }
+  .sheet.booklet {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 0;
+    background: #fff;
+  }
+  .sheet.booklet .mini { border: 0; background: #fff; }
+  .sheet.booklet .mini + .mini { border-left: 1px dashed #9aa8bc; }
+  .sheet.booklet .doc .brand { height: 16px; font-size: 6px; }
+  .sheet.grid .doc .brand {
+    height: 12px; font-size: 5.5px; letter-spacing: .3px; padding: 0 3px;
+  }
+  .sheet.grid .doc .brand small,
+  .sheet.grid .doc .meta,
+  .sheet.grid .doc .note,
+  .sheet.grid .doc .sig,
+  .sheet.grid .doc .sum { display: none; }
+  .sheet.grid .doc .addr, .sheet.booklet .doc .addr { padding-top: 4px; }
+  .sheet.grid .doc table, .sheet.booklet .doc table { margin-top: 4px; }
+  .sheet.booklet .doc .sig { display: none; }
+  .fold {
+    position: absolute; top: 0; bottom: 0; left: 50%; width: 0;
+    border-left: 1px dashed #8a97a8; pointer-events: none;
+  }
+
+  /* Poster: one tile of a larger page */
+  .sheet.poster-tile .doc { transform-origin: top left; }
+  .crop {
+    position: absolute; inset: 0; pointer-events: none; display: none;
+  }
+  .crop.on { display: block; }
+  .crop i {
+    position: absolute; width: 10px; height: 10px; border: 0 solid #c0392b;
+  }
+  .crop i.tl { top: 5px; left: 5px; border-top-width: 1px; border-left-width: 1px; }
+  .crop i.tr { top: 5px; right: 5px; border-top-width: 1px; border-right-width: 1px; }
+  .crop i.bl { bottom: 5px; left: 5px; border-bottom-width: 1px; border-left-width: 1px; }
+  .crop i.br { bottom: 5px; right: 5px; border-bottom-width: 1px; border-right-width: 1px; }
+  .tile-tag {
+    position: absolute; top: 8px; left: 8px;
+    font-size: 8px; font-weight: 700; color: #c0392b;
+    letter-spacing: .4px; display: none;
+  }
+  .tile-tag.on { display: block; }
+
+  .preview-foot {
+    padding: 4px 12px 14px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .preview-meta {
+    text-align: center; color: var(--dim); font-size: 11px;
+    min-height: 16px; letter-spacing: .1px;
+  }
+  .preview-meta .warn { color: #e8b44c; font-weight: 700; }
+  .nav {
+    display: flex; align-items: center; justify-content: center;
+    gap: 4px; margin-top: 6px;
+  }
+  .icon {
+    width: 28px; height: 24px;
+    background: transparent; color: var(--dim);
+    border: 0; border-radius: 4px;
+    cursor: pointer; font-size: 13px;
+  }
+  .icon:hover { background: var(--hover); color: var(--text); }
+  .icon:disabled { opacity: .3; cursor: default; background: transparent; }
+  .page-lbl {
+    color: var(--dim); font-size: 11px; min-width: 88px; text-align: center;
+  }
+
+  /* Right: settings */
+  .settings {
+    flex: 1; overflow: auto; min-width: 0;
+    background: var(--panel-bg);
+    padding: 16px 18px 12px;
+    display: flex; flex-direction: column; gap: 0;
+  }
+
+  .field {
+    display: grid;
+    grid-template-columns: var(--label-col) minmax(0, 1fr);
+    align-items: center;
+    gap: 8px 10px;
+    min-height: 32px;
+    margin: 0 0 8px;
+  }
+  .field > .lbl {
+    color: var(--text); text-align: left; line-height: 1.25;
+    white-space: nowrap; font-size: 12.5px;
+    padding-right: 4px;
+  }
+  .field .ctrl {
+    display: flex; align-items: center; gap: 10px; min-width: 0;
+  }
+  .grow { flex: 1; min-width: 0; }
+
+  select, input[type="text"], input[type="number"] {
+    background: var(--input-bg); color: var(--text);
+    border: 1px solid var(--input-brd); border-radius: 5px;
+    padding: 5px 8px; min-height: 30px;
+    outline: none;
+  }
+  select { min-width: 0; }
+  select:focus, input:focus { border: 2px solid var(--acc); padding: 4px 7px; }
+  input[type="number"] {
+    width: 68px;
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none; margin: 0;
+  }
+
+  label.opt {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text); cursor: pointer;
+    min-height: 22px; white-space: nowrap;
+  }
+  input[type="radio"], input[type="checkbox"] {
+    accent-color: var(--acc); width: 15px; height: 15px; margin: 0;
+    flex-shrink: 0;
+  }
+  .muted { opacity: .4; pointer-events: none; }
+
+  .group {
+    background: var(--group);
+    border: 1px solid var(--input-brd);
+    border-radius: 8px;
+    padding: 14px 14px 12px;
+    margin: 12px 0 0;
+    position: relative;
+  }
+  .group > .gtitle {
+    position: absolute; top: -8px; left: 12px;
+    padding: 0 6px; background: var(--panel-bg);
+    font-size: 9px; font-weight: 700; letter-spacing: 1.6px;
+    color: var(--acc);
+  }
+
+  .htabs {
+    display: flex;
+    margin: 0 0 10px;
+    border: 1px solid var(--input-brd);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .htab {
+    flex: 1;
+    min-height: 28px;
+    padding: 5px 8px;
+    background: var(--input-bg);
+    color: var(--dim);
+    border: 0;
+    border-right: 1px solid var(--input-brd);
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+  .htab:last-child { border-right: 0; }
+  .htab:hover:not(.on) { background: var(--hover); color: var(--text); }
+  .htab.on {
+    background: var(--sel);
+    color: var(--text);
+    font-weight: 700;
+    box-shadow: inset 0 2px 0 var(--acc);
+  }
+  .hpane { min-height: 84px; }
+  .pane { display: none; }
+  .pane.on { display: block; }
+
+  .stack { display: flex; flex-direction: column; gap: 5px; }
+  .stack .opt { min-height: 24px; }
+  .pane-pack {
+    display: flex; align-items: center; flex-wrap: wrap;
+    gap: 8px 16px;
+    min-height: 30px;
+    margin: 0 0 8px;
+  }
+  .pane-pack .lbl { color: var(--text); }
+  .checks { display: flex; gap: 16px; flex-wrap: wrap; }
+
+  .sheet-opts {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+  .sheet-opts .cell {
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+  }
+  .sheet-opts .cell select { flex: 1; min-width: 0; }
+
+  .orient { display: flex; gap: 4px; flex-shrink: 0; }
+  .orient button {
+    width: 34px; height: 30px;
+    background: var(--input-bg); color: var(--dim);
+    border: 1px solid var(--input-brd); border-radius: 5px;
+    cursor: pointer; padding: 4px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .orient button svg { width: 20px; height: 18px; }
+  .orient button.on {
+    border-color: var(--acc); color: var(--acc); background: var(--sel);
+  }
+  .orient button:hover { border-color: var(--acc); }
+
+  .custom-mm { display: none; gap: 6px; align-items: center; }
+  .custom-mm.show { display: flex; }
+  .custom-mm input { width: 72px; }
+
+  #dpi { width: 92px; flex: 0 0 auto; }
+  #copies { width: 56px; }
+  #printer, #comments, #paper, #tray, #color, #space { flex: 1; }
+  #edge { flex: 1 1 160px; max-width: 220px; }
+  #nupCount { width: 64px; }
+  #nupOrder { flex: 1; max-width: 220px; }
+  #bookletSide, #bookletBind { width: 148px; }
+
+  .order {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+  }
+
+  .pages-top {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px;
+  }
+
+  .actions {
+    flex-shrink: 0;
+    background: var(--panel-bg);
+    border-top: 1px solid var(--line);
+    padding: 10px 18px 12px;
+    display: flex; align-items: center; gap: 8px;
+    min-height: 52px;
+  }
+  .status {
+    color: var(--dim); font-size: 12px;
+    min-height: 16px; margin-right: auto;
+  }
+  .btn {
+    border-radius: 6px; cursor: pointer;
+    min-height: 32px; padding: 6px 14px;
+  }
+  .btn.ghost {
+    background: var(--input-bg); color: var(--text);
+    border: 1px solid var(--input-brd);
+  }
+  .btn.ghost:hover { background: var(--hover); border-color: var(--acc); }
+  .btn.primary {
+    background: var(--acc); color: var(--on-acc); border: none;
+    font-weight: 700; min-width: 112px; padding: 8px 20px; border-radius: 7px;
+    letter-spacing: .3px;
+  }
+  .btn.primary:hover { background: var(--acc-hov); }
+  .btn.primary:active { background: var(--acc-prs); }
+
+  .range { width: 148px; }
+  .range:disabled { opacity: .45; }
+  .tiny { width: 56px; }
+
+  @media (max-width: 920px) {
+    .notes { display: none !important; }
+    .dialog { width: 100%; height: auto; min-height: 560px; }
+    .preview { width: 240px; }
+    .sheet { width: 150px; height: 212px; }
+    .sheet.land { width: 200px; height: 142px; }
+  }
+</style>
+</head>
+<body>
+  <div class="concept-bar">
+    <h1>CopyShop Druckdialog <span>Konzept · Acrobat-Anordnung · App-Theme</span></h1>
+    <button class="pill" id="themeBtn" type="button">Hell</button>
+    <button class="pill" id="notesBtn" type="button">Anordnung</button>
+  </div>
+
+  <div class="stage">
+    <aside class="notes" id="notes">
+      <h2>WAS SICH GEÄNDERT HAT</h2>
+      <p>Acrobat wirkt professionell, weil die Fläche fest ist, die Vorschau ein Blatt Papier ist, und die vier Handhabungsmodi als kompakte Namens-Leiste sitzen — nicht als Iconfeld.</p>
+      <h3>Von Acrobat übernommen</h3>
+      <ul>
+        <li>Zwei Spalten: Papier-Schacht links, Formular rechts, Aktionsleiste unten fest.</li>
+        <li>Drucker, Kopien, Farbe, Kommentare als beschriftetes Raster — Label rechtsbündig, Control links.</li>
+        <li>Zwei Gruppen: Seiten, dann Handhabung. Der Rest ohne Kasten.</li>
+        <li>Größe · Poster · Mehrere · Broschüre als schmale Text-Leiste; die Fläche darunter wechselt mit.</li>
+        <li>Skalierung als senkrechte Radio-Liste, nicht in einer Zeile.</li>
+        <li>Vorschau ohne „VORSCHAU“-Titel. Das Blatt <em>ist</em> die Vorschau.</li>
+        <li>Kein Page-Setup-Knopf — Papier, Fach, Ausrichtung liegen schon hier.</li>
+        <li>Kopien-Reihenfolge statt Teilmenge: 1,2,3, 1,2,3 oder 1,1, 2,2, 3,3.</li>
+      </ul>
+      <h3>CopyShop, nicht Acrobat-Kopie</h3>
+      <ul>
+        <li>Theme, Schrift, Gruppen-Titel (9 px, Akzent, Tracking) bleiben die App.</li>
+        <li>Bitmap + dpi sitzen rechts vom Drucker, analog zu Acrobat „Properties“.</li>
+        <li>Farbe, Fach, Farbraum bleiben sichtbar — Satzbetrieb braucht sie auf der Fläche.</li>
+      </ul>
+    </aside>
+
+    <div class="dialog" role="dialog" aria-label="Drucken">
+      <div class="titlebar">
+        <div class="name">Drucken <span class="file">Lieferschein_Muster_2026.pdf</span></div>
+        <button class="winbtn close" type="button" id="cancelX" aria-label="Schließen">×</button>
+      </div>
+
+      <div class="body">
+        <aside class="preview">
+          <div class="well">
+            <div class="sheet" id="sheet"></div>
+          </div>
+          <div class="preview-foot">
+            <div class="preview-meta" id="meta">Anpassen · A4</div>
+            <div class="nav">
+              <button class="icon" id="prevPg" type="button" disabled aria-label="Vorherige Seite">◀</button>
+              <div class="page-lbl" id="pageLbl">Seite 1 / 8</div>
+              <button class="icon" id="nextPg" type="button" aria-label="Nächste Seite">▶</button>
+            </div>
+          </div>
+        </aside>
+
+        <div class="settings">
+          <div class="field">
+            <div class="lbl">Drucker</div>
+            <div class="ctrl">
+              <select id="printer" class="grow" title="Drucker">
+                <option>Xerox Versant 180</option>
+                <option>EPSON ET-8500</option>
+                <option>Brother HL-L5210DN</option>
+              </select>
+              <label class="opt" title="Druckt die Seiten so, wie die Vorschau sie zeigt — analog zu Acrobat »Print as Image«.">
+                <input type="checkbox" id="bitmap"> Als Bitmap
+              </label>
+              <select id="dpi" class="muted" title="Auflösung der Rasterung">
+                <option>150 dpi</option>
+                <option selected>300 dpi</option>
+                <option>600 dpi</option>
+                <option>1200 dpi</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="lbl">Kopien</div>
+            <div class="ctrl">
+              <input type="number" id="copies" min="1" max="999" value="1">
+              <label class="opt order" title="Sortiert: der ganze Satz, dann der nächste Satz.">
+                <input type="radio" name="collate" value="collate" checked> 1,2,3,1,2,3
+              </label>
+              <label class="opt order" title="Gruppiert: alle Kopien von Seite 1, dann Seite 2, dann Seite 3.">
+                <input type="radio" name="collate" value="group"> 1,1,2,2,3,3
+              </label>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="lbl">Farbe</div>
+            <div class="ctrl">
+              <select id="color" class="grow">
+                <option>Drucker-Standard</option>
+                <option>Farbe</option>
+                <option>Graustufen</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="lbl">Kommentare &amp; Formulare</div>
+            <div class="ctrl">
+              <select id="comments" title="Seiteninhalt und Formularfelder, keine Kommentare. (Acrobat: Document)">
+                <option value="document">Dokument</option>
+                <option value="markups">Dokument und Markierungen</option>
+                <option value="stamps">Dokument und Stempel</option>
+                <option value="fields">Nur Formularfelder</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="gtitle">ZU DRUCKENDE SEITEN</div>
+            <div class="pages-top">
+              <label class="opt"><input type="radio" name="pages" value="all" checked> Alle  (1 – 8)</label>
+              <label class="opt"><input type="radio" name="pages" value="current"> Aktuelle</label>
+              <label class="opt">
+                <input type="radio" name="pages" value="range"> Bereich
+                <input type="text" class="range" id="range" placeholder="1-3, 5, 7-9" disabled>
+              </label>
+              <label class="opt">
+                <input type="checkbox" id="reverse"> Umgekehrt
+              </label>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="gtitle">SEITENGRÖSSE &amp; HANDHABUNG</div>
+            <div class="htabs" id="handling" role="tablist">
+              <button type="button" class="htab on" data-mode="size" role="tab" aria-selected="true">Größe</button>
+              <button type="button" class="htab" data-mode="poster" role="tab" aria-selected="false">Poster</button>
+              <button type="button" class="htab" data-mode="nup" role="tab" aria-selected="false">Mehrere</button>
+              <button type="button" class="htab" data-mode="booklet" role="tab" aria-selected="false">Broschüre</button>
+            </div>
+
+            <div class="hpane">
+              <div class="pane on" id="pane-size">
+                <div class="stack">
+                  <label class="opt"><input type="radio" name="scale" value="fit" checked> Anpassen</label>
+                  <label class="opt">
+                    <input type="radio" name="scale" value="fixed"> Feste Größe
+                    <input type="number" id="pct" min="10" max="400" value="100" disabled> %
+                  </label>
+                  <label class="opt"><input type="radio" name="scale" value="shrink"> Verkleinern</label>
+                  <label class="opt"><input type="checkbox" id="byPageSize"> Papierfach nach PDF-Seitengröße</label>
+                </div>
+              </div>
+
+              <div class="pane" id="pane-poster">
+                <div class="pane-pack">
+                  <span class="lbl">Kachel-Skalierung</span>
+                  <input type="number" id="tilePct" min="10" max="400" value="200"> %
+                  <span class="lbl">Überlappung</span>
+                  <input type="number" id="overlap" min="0" max="50" value="3"> mm
+                </div>
+                <div class="checks">
+                  <label class="opt"><input type="checkbox" id="cutmarks" checked> Schnittmarken</label>
+                  <label class="opt"><input type="checkbox" id="tilelabels"> Kachel beschriften</label>
+                </div>
+              </div>
+
+              <div class="pane" id="pane-nup">
+                <div class="pane-pack">
+                  <span class="lbl">Seiten / Bogen</span>
+                  <select id="nupCount">
+                    <option value="2">2</option>
+                    <option value="4" selected>4</option>
+                    <option value="6">6</option>
+                    <option value="9">9</option>
+                    <option value="16">16</option>
+                  </select>
+                  <span class="lbl">Reihenfolge</span>
+                  <select id="nupOrder">
+                    <option value="h">Horizontal</option>
+                    <option value="hr">Horizontal umgekehrt</option>
+                    <option value="v">Vertikal</option>
+                    <option value="vr">Vertikal umgekehrt</option>
+                  </select>
+                </div>
+                <div class="checks">
+                  <label class="opt"><input type="checkbox" id="nupBorder" checked> Seitenrahmen</label>
+                  <label class="opt"><input type="checkbox" id="nupRotate" checked> Automatisch drehen</label>
+                </div>
+              </div>
+
+              <div class="pane" id="pane-booklet">
+                <div class="pane-pack">
+                  <span class="lbl">Bogen</span>
+                  <select id="bookletSide">
+                    <option>Beide Seiten</option>
+                    <option>Nur Vorderseite</option>
+                    <option>Nur Rückseite</option>
+                  </select>
+                  <span class="lbl">Bindung</span>
+                  <select id="bookletBind">
+                    <option value="left">Links</option>
+                    <option value="right">Rechts</option>
+                  </select>
+                </div>
+                <div class="pane-pack">
+                  <span class="lbl">Blätter</span>
+                  <input type="number" class="tiny" id="sheetFrom" min="1" value="1">
+                  <span>bis</span>
+                  <input type="number" class="tiny" id="sheetTo" min="1" value="2">
+                  <label class="opt"><input type="checkbox" id="bookletRotate" checked> Automatisch drehen</label>
+                </div>
+              </div>
+            </div>
+
+            <div class="sheet-opts">
+              <div class="orient" id="orient">
+                <button type="button" class="on" data-o="auto" title="Automatisch">
+                  <svg viewBox="0 0 20 18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <rect x="6" y="3" width="8" height="11" rx="1"/>
+                    <path d="M3 8a6 6 0 0 1 3-5M17 10a6 6 0 0 1-3 5" stroke-linecap="round"/>
+                    <path d="M3 5v3h3M17 13v-3h-3" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <button type="button" data-o="port" title="Hochformat">
+                  <svg viewBox="0 0 20 18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <rect x="6" y="2" width="8" height="14" rx="1.2"/>
+                  </svg>
+                </button>
+                <button type="button" data-o="land" title="Querformat">
+                  <svg viewBox="0 0 20 18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <rect x="2" y="5" width="16" height="9" rx="1.2"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="cell">
+                <select id="paper">
+                  <option value="">Wie im Drucker eingestellt</option>
+                  <option value="A4" selected>A4  (210 × 297 mm)</option>
+                  <option value="A3">A3  (297 × 420 mm)</option>
+                  <option value="SRA3">SRA3  (320 × 450 mm)</option>
+                  <option value="custom">Benutzerdefiniert…</option>
+                </select>
+                <span class="custom-mm" id="customMm">
+                  <input type="number" value="320"> × <input type="number" value="450"> mm
+                </span>
+              </div>
+              <div class="cell">
+                <select id="tray" title="Papierfach">
+                  <option>Fach: Standard</option>
+                  <option>Tray1  (Standard)</option>
+                  <option>Tray2</option>
+                  <option>Bypass</option>
+                </select>
+              </div>
+              <label class="opt"><input type="checkbox" id="duplex"> Beidseitig</label>
+              <div class="cell">
+                <select id="edge" class="muted" title="Bindungskante">
+                  <option>Lange Seite (Buch)</option>
+                  <option>Kurze Seite (Notizblock)</option>
+                </select>
+              </div>
+              <div class="cell">
+                <select id="space" title="Farbraum">
+                  <option>Farbraum: Unverändert</option>
+                  <option>Farbraum: → CMYK</option>
+                  <option>Farbraum: → sRGB</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <div class="status" id="status"></div>
+        <button class="btn ghost" type="button" id="cancelBtn">Abbrechen</button>
+        <button class="btn primary" type="button">Drucken</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const $ = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+
+  $("#themeBtn").onclick = () => {
+    const light = document.documentElement.getAttribute("data-theme") === "light";
+    document.documentElement.setAttribute("data-theme", light ? "dark" : "light");
+    $("#themeBtn").textContent = light ? "Hell" : "Dunkel";
+    $("#themeBtn").classList.toggle("on", !light);
+  };
+  $("#notesBtn").onclick = () => {
+    $("#notes").classList.toggle("open");
+    $("#notesBtn").classList.toggle("on", $("#notes").classList.contains("open"));
+  };
+
+  const commentsCopy = {
+    document: "Seiteninhalt und Formularfelder, keine Kommentare. (Acrobat: Document)",
+    markups: "Seite, Felder und Kommentare. (Acrobat: Document and Markups)",
+    stamps: "Seite, Felder und Stempel — keine sonstigen Markierungen. (Acrobat: Document and Stamps)",
+    fields: "Nur die ausgefüllten Werte, ohne das Formular — für Vordrucke. (Acrobat: Form fields only)",
+  };
+  let handling = "size";
+  let sheetIndex = 1;
+  const SRC_PAGES = 8;
+
+  const fullDoc = (n, {fieldsOnly, markups, scale = 1, ox = 0, oy = 0} = {}) => {
+    const cls = ["doc"];
+    if (fieldsOnly) cls.push("fields-only");
+    if (markups) cls.push("markups");
+    const extra = (scale !== 1 || ox || oy)
+      ? `style="transform:scale(${scale}) translate(${ox}%,${oy}%)"`
+      : "";
+    const row2 = markups ? "strike" : "";
+    return `<div class="${cls.join(" ")}" ${extra}>
+      <div class="brand">MUSTER GmbH <small>LS-4711 · S. ${n}</small></div>
+      <div class="addr"><b>Firma Muster GmbH</b><br>Hauptstr. 12 · 80331 München</div>
+      <div class="meta">
+        <div class="chip"><span>Datum</span>12.03.2026</div>
+        <div class="chip"><span>Kommission</span>Rampe 3</div>
+        <div class="chip"><span>Art</span>Express</div>
+      </div>
+      <table>
+        <thead><tr><th>Pos</th><th>Artikel</th><th class="r">Menge</th></tr></thead>
+        <tbody>
+          <tr><td>01</td><td>Offset 135 g, A4</td><td class="r">250</td></tr>
+          <tr><td>02</td><td class="${row2}">Umschlag, 4/0</td><td class="r">250</td></tr>
+          <tr><td>03</td><td>Rückstichheftung</td><td class="r">1</td></tr>
+        </tbody>
+      </table>
+      <div class="sum"><span>Gesamt</span><span>501</span></div>
+      <div class="note">Bitte an Rampe 3 · nicht knicken</div>
+      <div class="sig">Wareneingang ______________________</div>
+      <div class="sticky">Korrektur:<br>Umschlag 4/4!</div>
+    </div>`;
+  };
+
+  const miniPage = (n, {fieldsOnly, markups} = {}) => {
+    if (!n) return `<div class="mini empty"></div>`;
+    return `<div class="mini">${fullDoc(n, {fieldsOnly, markups})}</div>`;
+  };
+
+  const nupGrid = (count) => {
+    if (count <= 2) return [2, 1];
+    if (count <= 4) return [2, 2];
+    if (count <= 6) return [3, 2];
+    if (count <= 9) return [3, 3];
+    return [4, 4];
+  };
+
+  const nupOrder = (n, cols, rows, order) => {
+    const cells = [];
+    if (order === "v" || order === "vr") {
+      for (let c = 0; c < cols; c++)
+        for (let r = 0; r < rows; r++) cells.push(r * cols + c);
+    } else {
+      for (let i = 0; i < n; i++) cells.push(i);
+    }
+    if (order === "hr" || order === "vr") cells.reverse();
+    return cells;
+  };
+
+  const renderPreview = () => {
+    const sheet = $("#sheet");
+    const fieldsOnly = $("#comments").value === "fields";
+    const markups = $("#comments").value === "markups";
+    const paper = $("#paper").value || "A4";
+    const land = $("#orient .on")?.dataset.o === "land";
+    sheet.className = "sheet";
+    sheet.style.gridTemplateColumns = "";
+    sheet.style.gridTemplateRows = "";
+    if (land && handling !== "booklet") sheet.classList.add("land");
+
+    let sheets = 1;
+    let meta = "";
+
+    if (handling === "size") {
+      const mode = $("input[name=scale]:checked")?.value || "fit";
+      $("#pct").disabled = mode !== "fixed";
+      const pct = Number($("#pct").value) || 100;
+      const label = {fit:"Anpassen", fixed:`${pct} %`, shrink:"Verkleinern"}[mode];
+      const clip = mode === "fixed" && pct > 100;
+      sheets = SRC_PAGES;
+      const scale = clip ? pct / 100 : 1;
+      sheet.innerHTML = fullDoc(sheetIndex, {fieldsOnly, markups, scale}) +
+        `<div class="clip${clip ? " show" : ""}"></div>`;
+      meta = clip
+        ? `${label} · ${paper}  ·  <span class="warn">Inhalt wird beschnitten</span>`
+        : `${label} · ${paper}`;
+    }
+
+    if (handling === "poster") {
+      const pct = Number($("#tilePct").value) || 100;
+      const tiles = pct >= 180 ? 4 : pct >= 120 ? 2 : 1;
+      const cols = tiles === 4 ? 2 : tiles;
+      const rows = tiles === 4 ? 2 : 1;
+      sheets = tiles;
+      sheet.classList.add("poster-tile");
+      const idx = sheetIndex - 1;
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      const scale = cols;
+      const ox = -col * (100 / scale);
+      const oy = -row * (100 / scale);
+      const names = ["A1", "A2", "B1", "B2"];
+      const tag = names[idx] || `T${sheetIndex}`;
+      sheet.innerHTML = fullDoc(1, {fieldsOnly, markups, scale, ox, oy}) +
+        `<div class="crop${$("#cutmarks").checked ? " on" : ""}"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div>` +
+        `<div class="tile-tag${$("#tilelabels").checked ? " on" : ""}">${tag}</div>`;
+      const ov = Number($("#overlap").value);
+      meta = `Poster · ${pct} % · Kachel ${sheetIndex}/${tiles}` +
+        (ov ? ` · Überlappung ${ov} mm` : "");
+    }
+
+    if (handling === "nup") {
+      const n = Number($("#nupCount").value);
+      const [cols, rows] = nupGrid(n);
+      sheets = Math.ceil(SRC_PAGES / n);
+      sheet.classList.add("grid");
+      if (!$("#nupBorder").checked) sheet.classList.add("noborder");
+      sheet.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      sheet.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+      const start = (sheetIndex - 1) * n;
+      const order = nupOrder(n, cols, rows, $("#nupOrder").value);
+      let html = "";
+      for (let i = 0; i < n; i++) {
+        const p = start + order[i] + 1;
+        html += miniPage(p <= SRC_PAGES ? p : 0, {fieldsOnly, markups});
+      }
+      sheet.innerHTML = html;
+      meta = `${n} Seiten / Bogen · ${$("#nupOrder").selectedOptions[0].text}`;
+    }
+
+    if (handling === "booklet") {
+      const sig = Math.ceil(SRC_PAGES / 4);
+      sheets = sig;
+      sheet.classList.add("land", "booklet");
+      const left = SRC_PAGES - (sheetIndex - 1);
+      const right = sheetIndex;
+      const bind = $("#bookletBind").value;
+      const pair = bind === "right" ? [right, left] : [left, right];
+      sheet.innerHTML = miniPage(pair[0], {fieldsOnly, markups}) + miniPage(pair[1], {fieldsOnly, markups}) +
+        `<div class="fold"></div>`;
+      meta = `Broschüre · Bindung ${$("#bookletBind").selectedOptions[0].text}`;
+    }
+
+    sheetIndex = Math.min(sheets, Math.max(1, sheetIndex));
+    const unit = handling === "poster" ? "Kachel" : handling === "size" ? "Seite" : "Bogen";
+    $("#pageLbl").textContent = `${unit} ${sheetIndex} / ${sheets}`;
+    $("#prevPg").disabled = sheetIndex === 1;
+    $("#nextPg").disabled = sheetIndex === sheets;
+    $("#meta").innerHTML = meta;
+    window._sheetCount = sheets;
+  };
+
+  $("#comments").onchange = () => {
+    $("#comments").title = commentsCopy[$("#comments").value];
+    renderPreview();
+  };
+
+  $$("input[name=pages]").forEach(r => r.addEventListener("change", () => {
+    $("#range").disabled = $("input[name=pages]:checked").value !== "range";
+  }));
+
+  $$("#handling .htab").forEach(btn => btn.onclick = () => {
+    $$("#handling .htab").forEach(b => {
+      b.classList.toggle("on", b === btn);
+      b.setAttribute("aria-selected", b === btn ? "true" : "false");
+    });
+    handling = btn.dataset.mode;
+    $$(".pane").forEach(p => p.classList.toggle("on", p.id === "pane-" + handling));
+    sheetIndex = 1;
+    renderPreview();
+  });
+
+  $$("input[name=scale]").forEach(r => r.addEventListener("change", renderPreview));
+  $("#pct").addEventListener("input", renderPreview);
+  ["tilePct", "overlap", "cutmarks", "tilelabels", "nupCount", "nupOrder",
+   "nupBorder", "nupRotate", "bookletSide", "bookletBind", "bookletRotate"]
+    .forEach(id => {
+      const el = $("#" + id);
+      if (!el) return;
+      el.addEventListener("change", renderPreview);
+      el.addEventListener("input", renderPreview);
+    });
+
+  $("#paper").onchange = () => {
+    $("#customMm").classList.toggle("show", $("#paper").value === "custom");
+    renderPreview();
+  };
+
+  $$("#orient button").forEach(b => b.onclick = () => {
+    $$("#orient button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    renderPreview();
+  });
+
+  $("#duplex").onchange = () => {
+    $("#edge").classList.toggle("muted", !$("#duplex").checked);
+  };
+  $("#bitmap").onchange = () => {
+    $("#dpi").classList.toggle("muted", !$("#bitmap").checked);
+  };
+
+  $("#prevPg").onclick = () => { sheetIndex--; renderPreview(); };
+  $("#nextPg").onclick = () => { sheetIndex++; renderPreview(); };
+
+  const statusOf = () => {
+    const names = {size:"Größe", poster:"Poster", nup:"Mehrere", booklet:"Broschüre"};
+    $("#status").textContent =
+      `Konzept — nichts wird gedruckt. ${names[handling]}, ${window._sheetCount || 1} Bogen an »Xerox Versant 180«.`;
+  };
+  $(".btn.primary").onclick = statusOf;
+  const clear = () => { $("#status").textContent = ""; };
+  $("#cancelBtn").onclick = clear;
+  $("#cancelX").onclick = clear;
+
+  const params = new URLSearchParams(location.search);
+  if (params.get("theme") === "light") $("#themeBtn").click();
+  const startMode = params.get("mode");
+  if (startMode) {
+    const tab = $(`#handling .htab[data-mode="${startMode}"]`);
+    if (tab) tab.click();
+  }
+
+  renderPreview();
+</script>
+</body>
+</html>

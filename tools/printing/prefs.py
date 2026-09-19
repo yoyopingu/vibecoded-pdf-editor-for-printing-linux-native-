@@ -35,7 +35,8 @@ _BY_PRINTER = "printing/by_printer"
 # property of the job in front of you rather than of how you like to print, and
 # not the page range, which belongs to the document.
 REMEMBERED = ("paper", "orientation", "color", "colorconv", "scale",
-              "collate", "duplex", "duplex_edge", "paper_source")
+              "scale_pct", "collate", "duplex", "duplex_edge", "paper_source",
+              "comments_forms")
 
 
 def _settings():

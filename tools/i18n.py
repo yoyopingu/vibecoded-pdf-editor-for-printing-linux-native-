@@ -273,7 +273,55 @@ _EN: dict[str, str] = {
     # ── Print dialog (full) ─────────────────────────────────────────────────────
     "DRUCKER": "PRINTER",
     "SEITEN": "PAGES",
+    "Drucker": "Printer",
+    "Kopien": "Copies",
+    "Kommentare & Formulare": "Comments & Forms",
+    "Als Bitmap": "As bitmap",
+    "ZU DRUCKENDE SEITEN": "PAGES TO PRINT",
+    "Alle  (1 – {n})": "All  (1 – {n})",
+    "Aktuelle": "Current",
+    "Bereich": "Range",
+    "Umgekehrt": "Reverse",
+    "Druckt die gewählten Seiten in umgekehrter Reihenfolge.":
+        "Prints the chosen pages in reverse order.",
+    "Sortiert: der ganze Satz, dann der nächste Satz.":
+        "Collated: the whole set, then the next set.",
+    "Gruppiert: alle Kopien von Seite 1, dann Seite 2, dann Seite 3.":
+        "Grouped: every copy of page 1, then page 2, then page 3.",
+    "KOMMENTARE UND FORMULARE": "COMMENTS & FORMS",
+    "Dokument": "Document",
+    "Dokument und Markierungen": "Document and Markups",
+    "Dokument und Stempel": "Document and Stamps",
+    "Nur Formularfelder": "Form fields only",
+    "Was auf das Papier kommt, wie in Adobe Acrobat.\n\n"
+    "Dokument: Seiteninhalt und Formularfelder, keine Kommentare.\n"
+    "Dokument und Markierungen: zusaetzlich Kommentare und Zeichnungen.\n"
+    "Dokument und Stempel: Seiteninhalt, Formularfelder und Stempel.\n"
+    "Nur Formularfelder: nur die ausgefuellten Werte, ohne das "
+    "Formular — zum Bedrucken von Vordrucken.":
+        "What goes on the paper, as in Adobe Acrobat.\n\n"
+        "Document: page contents and form fields, no comments.\n"
+        "Document and Markups: comments and drawings as well.\n"
+        "Document and Stamps: page, form fields and stamps.\n"
+        "Form fields only: just the filled-in values, without the form — "
+        "for printing onto pre-printed stock.",
     "SEITENHANDHABUNG": "PAGE HANDLING",
+    "SEITENGRÖSSE & HANDHABUNG": "PAGE SIZE & HANDLING",
+    "Größe": "Size",
+    "Poster": "Poster",
+    "Mehrere": "Multiple",
+    "Broschüre": "Booklet",
+    "Papierfach nach PDF-Seitengröße": "Choose paper source by PDF page size",
+    "Kein festes Format senden — die Warteschlange wählt das Fach "
+    "nach der PDF-Seitengröße (Acrobat: Choose paper source by PDF "
+    "page size).":
+        "Do not send a fixed size — the queue picks the tray from the "
+        "PDF page size (Acrobat: Choose paper source by PDF page size).",
+    "Fach: Standard": "Tray: Default",
+    "Beidseitig": "Two-sided",
+    "Farbraum: Unverändert": "Color space: Unchanged",
+    "Farbraum: → CMYK": "Color space: → CMYK",
+    "Farbraum: → sRGB": "Color space: → sRGB",
     "Alle Seiten  (1 – {n})": "All pages  (1 – {n})",
     "Aktuelle Seite": "Current page",
     "z.B.  1-3, 5, 7-9": "e.g.  1-3, 5, 7-9",
@@ -510,6 +558,9 @@ _EN: dict[str, str] = {
     "Alles auswählen": "Select all",
     "VORSCHAU": "PREVIEW",
     "⚠ Inhalt wird beschnitten": "⚠ Content will be clipped",
+    "Anpassen": "Fit",
+    "Verkleinern": "Shrink",
+    "Inhalt wird beschnitten": "Content will be clipped",
     "Seite 1 / 1": "Page 1 / 1",
     "Masse: —": "Size: —",
     "Farbprofil: —": "Color profile: —",

@@ -531,44 +531,50 @@ def _filled_form_pdf(name="filled_form.pdf"):
     return out
 
 
-def _ink_width(pil):
-    from PIL import ImageOps
-    box = ImageOps.invert(pil.convert("L")).getbbox()
-    return 0 if box is None else box[2] - box[0]
+def _field_dark(path, scale=2):
+    """Dark pixels inside the reportlab text field at `scale`.
+
+    The field is at (60, 700) pt, 300×24, on A4. Image y is from the top.
+    """
+    from PIL import Image
+    from tools.render.raster import render_window
+    from tools.render.region import page_px_size, page_size_pt
+    from tools.render import document_cache as dc
+    w_pt, h_pt = page_size_pt(path, 0)
+    px = page_px_size(w_pt, h_pt, scale)
+    img = render_window(path, 0, *px)
+    assert img is not None, "render_window returned nothing"
+    png = os.path.join(_TMP, "field_dark.png")
+    img.save(png)
+    pil = Image.open(png).convert("L")
+    # (x, y from bottom, w, h) → image crop at `scale`
+    x0, y0, fw, fh = 60 * scale, (842 - 700 - 24) * scale, 300 * scale, 24 * scale
+    crop = pil.crop((int(x0), int(y0), int(x0 + fw), int(y0 + fh)))
+    dc.close_all()
+    return sum(1 for v in crop.get_flattened_data() if v < 200)
 
 
 def test_a_filled_in_form_is_not_rendered_empty():
-    """A field's typed value is painted from its appearance stream, and pdfium
-    paints those only once a form environment exists on the document. Without
-    one the page comes back with the field and its contents missing — so a
-    delivery note the customer filled in showed blank here while Acrobat
-    showed it filled.
+    """A field's typed value is painted by pdfium's form-fill pass
+    (FPDF_FFLDraw), not by FPDF_ANNOT. The viewer rasterises through the
+    progressive API and used to skip that pass, so a delivery note the
+    customer filled in showed blank here — thumbnails, page view, print
+    preview — while Acrobat showed it filled.
 
-    Checked through the document cache, which is what the viewer and the
-    thumbnails render from.
+    Checked through render_window, which is what the viewer actually calls.
+    page.render() already drew forms; testing that hid the bug.
     """
     from tools.render import document_cache as dc
     src = _filled_form_pdf("cache_form.pdf")
-
     try:
-        with dc.page_document(src) as doc:
-            page = doc[0]
-            try:
-                pil = page.render(scale=2,
-                                  fill_color=(255, 255, 255, 255)).to_pil()
-            finally:
-                page.close()
+        drawn = _field_dark(src)
     finally:
-        # The registry is shared, and a document left in it changes what the
-        # eviction tests further down see.
         dc.close_all()
-    drawn = _ink_width(pil)
-
-    # The label alone is about 80px at this scale; the field box and the text
-    # in it reach several times that.
-    assert drawn > 300, \
-        f"only {drawn}px of ink — the filled field was not drawn"
-    return f"the field and its value are drawn ({drawn}px of ink)"
+    # An empty field still draws its border (~3–4k dark px at scale 2); the
+    # typed value adds the glyphs on top. A blank render is 0.
+    assert drawn > 4500, \
+        f"only {drawn} dark px in the field — the filled value was not drawn"
+    return f"the field and its value are drawn ({drawn} dark px)"
 
 
 def test_every_render_path_opens_documents_the_same_way():

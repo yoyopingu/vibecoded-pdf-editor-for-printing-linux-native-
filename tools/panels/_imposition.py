@@ -121,10 +121,45 @@ def _flatten_annots(doc):
     Imposition turns every source page into a Form XObject, and an XObject
     carries content only — annotations stay behind on the page that is being
     left behind. Anything the user could see but that lived in an /AP stream
-    would silently vanish from the printed sheet."""
+    would silently vanish from the printed sheet.
+
+    pikepdf.flatten_annotations refuses to run while NeedAppearances is
+    set, and even with it cleared it only bakes an appearance that is
+    already there. A form filled by pypdf/pdftk has the value and not
+    the stream — the same file the viewer used to show empty. pdfium
+    regenerates the appearances first, the way the print path does.
+    """
     if not any("/Annots" in p.obj for p in doc.pages):
         return
+    import logging
+    import os
+    import tempfile
+    import pikepdf
+    from tools.ghostscript import unlink
+    from tools.printing.content import _bake_appearances, _ensure_form_for_print
+
+    fd, src = tempfile.mkstemp(suffix="_imp_src.pdf"); os.close(fd)
+    fd, dst = tempfile.mkstemp(suffix="_imp_dst.pdf"); os.close(fd)
     try:
-        doc.flatten_annotations("all")
-    except Exception:
-        pass          # older qpdf: better an un-flattened page than no output
+        has_form = _ensure_form_for_print(doc)
+        doc.save(src)
+        if has_form:
+            try:
+                _bake_appearances(src, dst, printing=False)
+                with pikepdf.open(dst) as baked:
+                    n = min(len(doc.pages), len(baked.pages))
+                    for i in range(n):
+                        doc.pages[i] = baked.pages[i]
+                return
+            except Exception:
+                logging.debug("imposition: pdfium flatten failed, "
+                              "falling back to pikepdf", exc_info=True)
+        try:
+            acro = doc.Root.get("/AcroForm")
+            if acro is not None and "/NeedAppearances" in acro:
+                del acro["/NeedAppearances"]
+            doc.flatten_annotations("all")
+        except Exception:
+            pass          # older qpdf: better an un-flattened page than no output
+    finally:
+        unlink(src, dst)

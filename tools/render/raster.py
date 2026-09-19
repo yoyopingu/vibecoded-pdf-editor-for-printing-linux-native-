@@ -92,25 +92,29 @@ def _raw_from_bitmap(bitmap):
 
 
 def render_window(path, page_index, page_px_w, page_px_h, box=None,
-                  rotation=0, should_cancel=None, slice_ms=SLICE_MS):
+                  rotation=0, should_cancel=None, slice_ms=SLICE_MS,
+                  printing=False):
     """Rasterise part of a page into a QImage. See _render_window."""
     return _render_window(path, page_index, page_px_w, page_px_h, box,
-                          rotation, should_cancel, slice_ms, _image_from_bitmap)
+                          rotation, should_cancel, slice_ms, _image_from_bitmap,
+                          printing)
 
 
 def render_window_raw(path, page_index, page_px_w, page_px_h, box=None,
-                      rotation=0, should_cancel=None, slice_ms=SLICE_MS):
+                      rotation=0, should_cancel=None, slice_ms=SLICE_MS,
+                      printing=False):
     """Rasterise part of a page into plain bytes, for a worker process.
 
     Same render, different last step: (buffer, w, h, stride) instead of a
     QImage, so the result can be pickled back to the process that has the GUI.
     """
     return _render_window(path, page_index, page_px_w, page_px_h, box,
-                          rotation, should_cancel, slice_ms, _raw_from_bitmap)
+                          rotation, should_cancel, slice_ms, _raw_from_bitmap,
+                          printing)
 
 
 def _render_window(path, page_index, page_px_w, page_px_h, box,
-                   rotation, should_cancel, slice_ms, finish):
+                   rotation, should_cancel, slice_ms, finish, printing=False):
     """Rasterise part of a page.
 
     `page_px_w`/`page_px_h` are the size of the whole page in displayed pixels
@@ -142,6 +146,25 @@ def _render_window(path, page_index, page_px_w, page_px_h, box,
     callback = _pause_type()(_need_pause)
     pause = pdfium_c.IFSDK_PAUSE(version=1, NeedToPauseNow=callback, user=None)
 
+    # FPDF_ANNOT draws markup annotations (highlights, stamps, ink). Form
+    # *widgets* are also annotations, but pdfium does not paint their
+    # values through this flag — that is a separate form-fill pass
+    # (FPDF_FFLDraw) after the page has been rasterised. Skipping it is
+    # how a filled-in delivery note showed blank in the viewer while
+    # Acrobat showed it filled: the typed value lives in the field
+    # dictionary, and only FFLDraw (or a pre-generated appearance
+    # stream that this flag still does not composite) puts it on the
+    # bitmap. pypdfium2's page.render() does both; this path has to too.
+    #
+    # FPDF_PRINTING honours the Print annotation flag, so a field set to
+    # "Visible but doesn't print" stays on screen and drops off paper,
+    # and "Hidden but printable" does the reverse — Acrobat's four
+    # Form Field visibility states.
+    flags = pdfium_c.FPDF_ANNOT
+    if printing:
+        flags |= pdfium_c.FPDF_PRINTING
+    rotate = _quarter_turns(rotation)
+
     try:
         with open_page(path, page_index) as page:
             bitmap = pdfium.PdfBitmap.new_native(
@@ -155,8 +178,7 @@ def _render_window(path, page_index, page_px_w, page_px_h, box,
                 deadline[0] = time.monotonic() + budget
                 status = pdfium_c.FPDF_RenderPageBitmap_Start(
                     bitmap, page, -x, -y, page_px_w, page_px_h,
-                    _quarter_turns(rotation), pdfium_c.FPDF_ANNOT,
-                    ctypes.byref(pause))
+                    rotate, flags, ctypes.byref(pause))
                 try:
                     while status == pdfium_c.FPDF_RENDER_TOBECONTINUED:
                         if should_cancel is not None and should_cancel():
@@ -172,6 +194,20 @@ def _render_window(path, page_index, page_px_w, page_px_h, box,
 
                 if status == pdfium_c.FPDF_RENDER_FAILED:
                     return None
+                formenv = getattr(page, "formenv", None)
+                if formenv is not None:
+                    try:
+                        pdfium_c.FPDF_FFLDraw(
+                            formenv, bitmap, page, -x, -y,
+                            page_px_w, page_px_h, rotate, flags)
+                    except Exception:
+                        # A broken form is not a reason to throw the page away:
+                        # the content stream still rendered, only the values
+                        # in the fields are missing, which is what happened
+                        # everywhere before this pass existed.
+                        logging.debug(
+                            "raster: form fields of %s page %s not drawn",
+                            path, page_index, exc_info=True)
                 # A render that got as far as finishing is returned even if the
                 # caller has since lost interest: it costs one copy, and the
                 # caller may still want to cache it. Only an abandoned one
