@@ -37,27 +37,30 @@ def test_print_spools_exactly_what_was_asked_for():
         write_subset_pdf(dlg.pdf_path, dlg.model, dlg._get_pages(), out)
         return _page_labels(out), out
 
-    dlg.radio_range.setChecked(True); dlg.range_edit.setText("3-5, 8")
-    assert spool("range")[0] == ["P3", "P4", "P5", "P8"]
-    assert [p + 1 for p in dlg._preview_pages()] == [3, 4, 5, 8], \
-        "the preview disagrees with the job"
+    try:
+        dlg.radio_range.setChecked(True); dlg.range_edit.setText("3-5, 8")
+        assert spool("range")[0] == ["P3", "P4", "P5", "P8"]
+        assert [p + 1 for p in dlg._preview_pages()] == [3, 4, 5, 8], \
+            "the preview disagrees with the job"
 
-    tab.single._current = 6
-    dlg.radio_current.setChecked(True)
-    assert spool("current")[0] == ["P7"], "'current page' printed the wrong sheet"
+        tab.single._current = 6
+        dlg.radio_current.setChecked(True)
+        assert spool("current")[0] == ["P7"], "'current page' printed the wrong sheet"
 
-    dlg.radio_all.setChecked(True)
-    assert len(spool("all")[0]) == 10
+        dlg.radio_all.setChecked(True)
+        assert len(spool("all")[0]) == 10
 
-    # Unsaved reorder + rotation must reach the printer.
-    tab.model.move(0, 10)
-    tab.model.selected = {tab.model.order[0]}
-    tab.model.rotate_selected(90)
-    dlg.radio_range.setChecked(True); dlg.range_edit.setText("1-3")
-    labels, out = spool("edited")
-    assert labels == ["P2", "P3", "P4"], f"page-manager order ignored: {labels}"
-    rot = [int(p.get("/Rotate", 0) or 0) for p in PdfReader(out).pages]
-    assert rot == [90, 0, 0], f"page-manager rotation ignored: {rot}"
+        # Unsaved reorder + rotation must reach the printer.
+        tab.model.move(0, 10)
+        tab.model.selected = {tab.model.order[0]}
+        tab.model.rotate_selected(90)
+        dlg.radio_range.setChecked(True); dlg.range_edit.setText("1-3")
+        labels, out = spool("edited")
+        assert labels == ["P2", "P3", "P4"], f"page-manager order ignored: {labels}"
+        rot = [int(p.get("/Rotate", 0) or 0) for p in PdfReader(out).pages]
+        assert rot == [90, 0, 0], f"page-manager rotation ignored: {rot}"
+    finally:
+        dlg.close(); tab.deleteLater(); _app.processEvents()
 
 
 def test_print_preview_and_job_agree_on_a_bad_range():
@@ -131,13 +134,16 @@ def test_print_reports_the_sheets_it_actually_sent():
     pages told the operator more sheets were coming than the printer got — while
     listing the skipped ones in the same sentence."""
     tab, dlg = _print_dialog()
-    dlg._progress = None
-    dlg._after_print_close = lambda: None
-    dlg._finish(list(range(10)), 2, [3, 7])
-    text = dlg.status_lbl.text()
-    assert "8" in text and "16" in text, \
-        f"expected 8 pages x 2 copies = 16 sheets, got: {text}"
-    assert "3, 7" in text or "[3, 7]" in text, f"skipped pages not named: {text}"
+    try:
+        dlg._progress = None
+        dlg._after_print_close = lambda: None
+        dlg._finish(list(range(10)), 2, [3, 7])
+        text = dlg.status_lbl.text()
+        assert "8" in text and "16" in text, \
+            f"expected 8 pages x 2 copies = 16 sheets, got: {text}"
+        assert "3, 7" in text or "[3, 7]" in text, f"skipped pages not named: {text}"
+    finally:
+        dlg.close(); tab.deleteLater(); _app.processEvents()
 
 
 def test_print_never_destroys_colour_in_the_spooled_file():

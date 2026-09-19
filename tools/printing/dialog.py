@@ -1772,10 +1772,11 @@ class PrintDialog(QDialog):
             print_scale = scale_idx
             print_pct = scale_pct
             print_paper = paper_key
+            print_orient = orient_idx
             work = []
 
             try:
-                if handling in ("poster", "nup"):
+                if handling in ("poster", "nup", "booklet"):
                     # Subset + Comments & Forms first, then impose. The
                     # result already *is* the sheet, so the spooler is told
                     # fixed 100 % and must not fit it a second time.
@@ -1783,7 +1784,7 @@ class PrintDialog(QDialog):
                     from pypdf import PdfReader
                     from tools.printing.content import prepare_print_pdf
                     from tools.printing.handling import (
-                        build_nup_pdf, build_poster_pdf)
+                        build_booklet_pdf, build_nup_pdf, build_poster_pdf)
                     from tools.printing.spool import (
                         paper_size_pt, write_subset_pdf)
                     from tools.viewer.model import PageModel
@@ -1802,7 +1803,13 @@ class PrintDialog(QDialog):
                             "print: could not prepare form fields / comments")
                         tile_src = sub
                     pts = paper_size_pt(poster_paper_key)
-                    if pts:
+                    if handling == "booklet":
+                        # Two pages side by side: the sheet is landscape of
+                        # the chosen paper. Do not silently tick Beidseitig
+                        # — the operator may be printing Nur Vorderseite.
+                        if pts and pts[0] < pts[1]:
+                            pts = (pts[1], pts[0])
+                    elif pts:
                         pw, ph = pts
                         if orient_idx == 2 and pw < ph:
                             pw, ph = ph, pw
@@ -1825,7 +1832,7 @@ class PrintDialog(QDialog):
                             handling_opts.get("labels", False),
                             imposed, label_name=poster_label)
                         _report(tr("Poster: {n} Kachel(n)…").format(n=n_out))
-                    else:
+                    elif handling == "nup":
                         n_out = build_nup_pdf(
                             tile_src, None, pts,
                             handling_opts.get("count") or 4,
@@ -1834,6 +1841,18 @@ class PrintDialog(QDialog):
                             handling_opts.get("nup_rotate", True),
                             imposed)
                         _report(tr("Mehrere: {n} Bogen…").format(n=n_out))
+                    else:
+                        n_out = build_booklet_pdf(
+                            tile_src, None, pts,
+                            handling_opts.get("bind") or "left",
+                            handling_opts.get("side") or "both",
+                            handling_opts.get("sheet_from") or 1,
+                            handling_opts.get("sheet_to") or 0,
+                            handling_opts.get("booklet_rotate", True),
+                            imposed)
+                        _report(tr("Broschüre: {n} Bogen…").format(n=n_out))
+                        if pts:
+                            print_orient = 2 if pts[0] > pts[1] else 1
                     print_path = imposed
                     print_model = PageModel(n_out)
                     print_pages = list(range(n_out))
@@ -1851,7 +1870,7 @@ class PrintDialog(QDialog):
                         skipped = print_via_gs(print_path, print_model,
                             print_pages, copies, color_mode, collate, duplex,
                             duplex_edge, colorconv, printer_name, print_scale,
-                            print_paper, orient_idx, _report,
+                            print_paper, print_orient, _report,
                             paper_source=paper_source, scale_pct=print_pct,
                             comments_forms=comments_forms)
                         obj = self_ref()
@@ -1874,7 +1893,7 @@ class PrintDialog(QDialog):
                 # Pre-render pages in background (pdfium, no QPrinter); draw on GUI thread.
                 try:
                     rendered, skipped = prerender_for_qt(print_path, print_model,
-                        print_pages, color_mode, print_scale, orient_idx,
+                        print_pages, color_mode, print_scale, print_orient,
                         print_paper, qt_dpi, hw_margin_mm, _report,
                         scale_pct=print_pct,
                         comments_forms=comments_forms)
@@ -1891,7 +1910,7 @@ class PrintDialog(QDialog):
                     obj._print_qt_send.emit((
                         rendered, skipped, print_pages, copies, color_mode,
                         collate, duplex, duplex_edge, printer_name, print_paper,
-                        orient_idx, qt_dpi))
+                        print_orient, qt_dpi))
             finally:
                 from tools.ghostscript import unlink as _unlink
                 _unlink(*work)

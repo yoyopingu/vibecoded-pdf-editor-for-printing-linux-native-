@@ -146,7 +146,9 @@ def test_poster_print_path_tiles_then_spools_at_100_percent():
     assert "print_pct = 100" in src
     assert "not as_bitmap" in src
     assert "build_nup_pdf" in src
-    assert 'handling in ("poster", "nup")' in src
+    assert "build_booklet_pdf" in src
+    assert 'handling in ("poster", "nup", "booklet")' in src
+    assert "duplex_check.setChecked" not in src
     return "poster jobs tile first, then spool at fixed 100 %"
 
 
@@ -332,3 +334,123 @@ def test_nup_preview_walks_sheets():
     finally:
         dlg.close(); tab.deleteLater(); _app.processEvents()
     return "preview walks 2 sheets at 4-up of 8 pages"
+
+
+def _grey_booklet(name, n):
+    """n A4 pages, each a unique grey so an imposed half identifies its source."""
+    from tests.support import _BK_GREY
+    src = os.path.join(_TMP, name)
+    w, h = A4
+    c = canvas.Canvas(src, pagesize=A4)
+    for i in range(n):
+        c.setFillGray(_BK_GREY(i))
+        c.rect(0, 0, w, h, fill=1, stroke=0)
+        c.setFillGray(0.0)
+        c.rect(0, 0, w, h * 0.05, fill=1, stroke=0)
+        c.showPage()
+    c.save()
+    return src
+
+
+def test_booklet_eight_pages_is_four_faces_left_bind():
+    """8 pages saddle-stitch to 4 faces (2 sheets duplex). Left bind puts
+    page 8 beside page 1 on the outer sheet — the Broschüre tool's order."""
+    from tests.test_tools_nup import _booklet_halves
+    from tools.printing.handling import build_booklet_pdf
+    from tools.printing.spool import paper_size_pt
+
+    paper = paper_size_pt("A4")
+    src = _grey_booklet("bk8.pdf", 8)
+    out = os.path.join(_TMP, "bk8_left.pdf")
+    n = build_booklet_pdf(src, None, paper, "left", "both", 1, 0, True, out)
+    assert n == 4, n
+    r = PdfReader(out)
+    assert len(r.pages) == 4
+    w, h = float(r.pages[0].mediabox.width), float(r.pages[0].mediabox.height)
+    assert w > h, f"booklet sheet should be landscape, got {w:.0f}x{h:.0f}"
+    got = _booklet_halves(out)
+    assert got[0] == (8, 1), got
+    assert got[1] == (2, 7), got
+    return f"8 pages left bind → {got[:2]}…"
+
+
+def test_booklet_right_bind_swaps_the_pair():
+    """Bindung rechts is the same saddle-stitch with each pair swapped."""
+    from tests.test_tools_nup import _booklet_halves
+    from tools.printing.handling import build_booklet_pdf
+    from tools.printing.spool import paper_size_pt
+
+    paper = paper_size_pt("A4")
+    src = _grey_booklet("bk8r.pdf", 8)
+    out = os.path.join(_TMP, "bk8_right.pdf")
+    build_booklet_pdf(src, None, paper, "right", "both", 1, 0, True, out)
+    got = _booklet_halves(out)
+    assert got[0] == (1, 8), got
+    assert got[1] == (7, 2), got
+    return "right bind: 1|8 on the outer sheet"
+
+
+def test_booklet_front_only_emits_half_the_faces():
+    """Nur Vorderseite is the front of each physical sheet, not a
+    different imposition."""
+    from tests.test_tools_nup import _booklet_halves
+    from tools.printing.handling import build_booklet_pdf
+    from tools.printing.spool import paper_size_pt
+
+    paper = paper_size_pt("A4")
+    src = _grey_booklet("bk8f.pdf", 8)
+    out = os.path.join(_TMP, "bk8_front.pdf")
+    n = build_booklet_pdf(src, None, paper, "left", "front", 1, 0, True, out)
+    assert n == 2, n
+    got = _booklet_halves(out)
+    assert got == [(8, 1), (6, 3)], got
+    return "front-only: 2 faces, the two fronts"
+
+
+def test_booklet_pads_to_a_multiple_of_four():
+    """A folded sheet carries four pages. 5 source pages become 4 faces
+    with blank slots, the same padding the Broschüre tool uses."""
+    from tests.test_tools_nup import _booklet_halves
+    from tools.printing.handling import build_booklet_pdf
+    from tools.printing.spool import paper_size_pt
+
+    paper = paper_size_pt("A4")
+    src = _grey_booklet("bk5.pdf", 5)
+    out = os.path.join(_TMP, "bk5_out.pdf")
+    n = build_booklet_pdf(src, None, paper, "left", "both", 1, 0, True, out)
+    assert n == 4, n
+    got = _booklet_halves(out)
+    assert got[0] == ("blank", 1), got
+    return f"5 pages pad to 4 faces: {got[0]}"
+
+
+def test_booklet_preview_shows_the_outer_spread():
+    """Broschüre preview: landscape spread, left bind 8|1 on Bogen 1."""
+    from tools.viewer.tab import PdfTab
+    from tools.printing.dialog import PrintDialog
+
+    src = _nup_marked("bk_dlg.pdf", n=8)
+    tab = PdfTab(src)
+    dlg = PrintDialog(tab.pdf_path, tab.model, tab)
+    try:
+        idx = dlg.paper_combo.findData("A4")
+        if idx < 0:
+            dlg.paper_combo.addItem("A4", "A4")
+            idx = dlg.paper_combo.findData("A4")
+        dlg.paper_combo.setCurrentIndex(idx)
+        dlg._handling_bar.setCurrentIndex(3)
+        _spin(15)
+        assert dlg.handling == "booklet"
+        assert dlg.booklet_bind.currentData() == "left"
+        cap = dlg._preview._info_lbl.text()
+        assert "Broschüre" in cap, cap
+        assert "Bogen" in dlg._preview._page_lbl.text()
+        before = dlg.duplex_check.isChecked()
+        dlg._handling_bar.setCurrentIndex(0)
+        dlg._handling_bar.setCurrentIndex(3)
+        _spin(5)
+        assert dlg.duplex_check.isChecked() == before, \
+            "Broschüre must not silently tick Beidseitig"
+    finally:
+        dlg.close(); tab.deleteLater(); _app.processEvents()
+    return "preview Broschüre caption and Bogen nav"

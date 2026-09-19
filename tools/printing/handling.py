@@ -1,4 +1,4 @@
-"""Print-dialog imposition: poster tiles and n-up sheets (booklet next).
+"""Print-dialog imposition: poster tiles, n-up sheets, booklet spreads.
 
 The dialog already subsets the job and runs Comments & Forms. This module
 turns that prepared file into sheet-sized pages so spool.py can send them
@@ -303,4 +303,97 @@ def build_nup_pdf(src, pages, paper_pts, count, order, border, auto_rotate,
 
     with Pdf.open(dest) as out:
         return len(out.pages)
+
+
+def booklet_faces(n_pages, bind="left", side="both", sheet_from=1, sheet_to=None):
+    """Imposed faces after bind, Acrobat sheet range, and front/back subset.
+
+    One face is [left, right] as 0-based source indexes (None = blank).
+    Physical sheets are pairs of faces; `sheet_from`/`sheet_to` are 1-based
+    on that list. The order itself is `_booklet_sides` — the Broschüre
+    tool's saddle-stitch, not a second copy of it.
+    """
+    from tools.panels.impose import _booklet_sides
+    sides = _booklet_sides(n_pages)
+    if (bind or "left") == "right":
+        sides = [list(reversed(pair)) for pair in sides]
+    n_phys = max(1, (len(sides) + 1) // 2)
+    frm = max(1, int(sheet_from or 1))
+    to = int(n_phys if sheet_to in (None, 0) else sheet_to)
+    frm = min(frm, n_phys)
+    to = max(frm, min(to, n_phys))
+    picked = []
+    for i in range(frm - 1, to):
+        front = sides[2 * i] if 2 * i < len(sides) else None
+        back = sides[2 * i + 1] if 2 * i + 1 < len(sides) else None
+        if side in ("both", "front", None) and front is not None:
+            picked.append(front)
+        if side in ("both", "back") and back is not None:
+            picked.append(back)
+    return picked or sides[:1]
+
+
+def build_booklet_pdf(src, pages, paper_pts, bind, side, sheet_from, sheet_to,
+                      auto_rotate, dest):
+    """Saddle-stitch 2-up on a landscape sheet. Returns the number of faces.
+
+    The order and the Form-XObject placement are the Broschüre tool's:
+    `_booklet_sides` and `_build_impose`. This only sizes the sheet from
+    the dialog's paper (landscape of that size, two pages per face),
+    applies bind / front-back / sheet range, and maps Automatisch drehen
+    onto the tool's "normalisieren" (fit into the half-sheet).
+    """
+    import tempfile
+    from pikepdf import Pdf
+    from tools.ghostscript import unlink
+    from tools.panels.impose import _build_impose, _largest_page
+
+    src_doc = Pdf.open(src)
+    n_src = len(src_doc.pages)
+    if pages is None:
+        pages = list(range(n_src))
+    pages = [p for p in pages if isinstance(p, int) and 0 <= p < n_src]
+    if not pages:
+        src_doc.close()
+        raise RuntimeError("booklet: no pages to impose")
+
+    work = []
+    subset = src
+    if pages != list(range(n_src)):
+        fd, subset = tempfile.mkstemp(suffix="_bk_sub.pdf")
+        os.close(fd)
+        work.append(subset)
+        out = Pdf.new()
+        for p in pages:
+            out.pages.append(src_doc.pages[p])
+        out.save(subset)
+        out.close()
+    src_doc.close()
+    with Pdf.open(subset) as d:
+        n_src = len(d.pages)
+        page_w, page_h = _largest_page(d)
+
+    if paper_pts:
+        sheet_w, sheet_h = float(paper_pts[0]), float(paper_pts[1])
+        if sheet_w < sheet_h:
+            sheet_w, sheet_h = sheet_h, sheet_w
+    else:
+        sheet_w, sheet_h = page_w * 2.0, page_h
+
+    faces = booklet_faces(n_src, bind=bind, side=side,
+                          sheet_from=sheet_from, sheet_to=sheet_to)
+    half_w = sheet_w / 2.0
+    halves = [(0.0, 0.0, half_w, sheet_h), (half_w, 0.0, sheet_w, sheet_h)]
+    sheets = [list(zip(face, halves)) for face in faces]
+    fit = bool(auto_rotate)
+    try:
+        _build_impose(subset, dest, sheets, sheet_w, sheet_h, fit,
+                      lambda _msg: None,
+                      lambda placed, nsheets: "")
+    finally:
+        unlink(*work)
+
+    with Pdf.open(dest) as out:
+        return len(out.pages)
+
 
