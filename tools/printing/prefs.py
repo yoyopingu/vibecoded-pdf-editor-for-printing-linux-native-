@@ -33,10 +33,14 @@ _BY_PRINTER = "printing/by_printer"
 
 # Only settings that describe *how* to print. Not the copy count, which is a
 # property of the job in front of you rather than of how you like to print, and
-# not the page range, which belongs to the document.
+# not the page range or reverse order, which belong to the document. Sheet
+# from–to on a booklet is the same kind of job bound.
 REMEMBERED = ("paper", "orientation", "color", "colorconv", "scale",
               "scale_pct", "collate", "duplex", "duplex_edge", "paper_source",
-              "comments_forms")
+              "comments_forms", "handling", "by_page_size",
+              "tile_pct", "overlap_mm", "cut_marks", "labels",
+              "nup_count", "nup_order", "nup_border", "nup_rotate",
+              "booklet_bind", "booklet_side", "booklet_rotate")
 
 
 def _settings():

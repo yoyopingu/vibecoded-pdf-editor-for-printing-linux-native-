@@ -535,6 +535,13 @@ def test_the_dialog_reopens_on_what_was_used_last():
             dlg.paper_combo.setCurrentIndex(dlg.paper_combo.findData("A3"))
             dlg.duplex_check.setChecked(True)
             dlg.source_combo.setCurrentIndex(dlg.source_combo.findData("Tray2"))
+            dlg.copies_spin.setValue(5)
+            dlg.reverse_check.setChecked(True)
+            dlg.poster_pct.setValue(150)
+            dlg.nup_count.setCurrentIndex(0)          # 2
+            dlg.booklet_bind.setCurrentIndex(1)       # right
+            dlg.by_page_size_check.setChecked(True)
+            dlg._set_handling("nup")
             prefs.remember("office", dlg._current_settings())
             dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
 
@@ -542,7 +549,18 @@ def test_the_dialog_reopens_on_what_was_used_last():
             assert dlg2.paper_combo.currentData() == "A3", "forgot the paper"
             assert dlg2.duplex_check.isChecked() is True, "forgot the sides"
             assert dlg2.source_combo.currentData() == "Tray2", "forgot the tray"
+            assert dlg2.handling == "nup", "forgot the handling tab"
+            assert dlg2.nup_count.currentData() == 2, "forgot pages/sheet"
+            assert dlg2.poster_pct.value() == 150, "forgot tile scale"
+            assert dlg2.booklet_bind.currentData() == "right", "forgot bind"
+            assert dlg2.by_page_size_check.isChecked() is True
+            assert dlg2._job_paper() == "", "by-page-size still sends no media"
+            assert dlg2.copies_spin.value() == 1, "copies are a job, not a habit"
+            assert dlg2.reverse_check.isChecked() is False, "reverse is a job"
             assert prefs.last_printer() == "office"
+            prefs.remember("office", {**dlg2._current_settings(), "nup_count": 7})
+            dlg2._restore_saved("office")
+            assert dlg2.nup_count.currentData() == 4, "invalid nup count must fall back to 4"
             dlg2.deleteLater(); tab2.deleteLater(); _app.processEvents()
     finally:
         prefs.forget()
@@ -1851,10 +1869,20 @@ def test_scale_pct_is_remembered_with_the_rest():
     prefs.forget()
     try:
         prefs.remember("office", {"scale": 1, "scale_pct": 70,
-                                  "comments_forms": "form_fields_only"})
+                                  "comments_forms": "form_fields_only",
+                                  "handling": "poster", "tile_pct": 180,
+                                  "nup_count": 9, "booklet_bind": "right",
+                                  "by_page_size": True, "copies": 9,
+                                  "reverse": True})
         saved = prefs.for_printer("office")
         assert saved.get("scale_pct") == 70, saved
         assert saved.get("comments_forms") == "form_fields_only", saved
+        assert saved.get("handling") == "poster", saved
+        assert saved.get("tile_pct") == 180, saved
+        assert saved.get("nup_count") == 9, saved
+        assert saved.get("booklet_bind") == "right", saved
+        assert saved.get("by_page_size") is True, saved
+        assert "copies" not in saved and "reverse" not in saved, saved
     finally:
         prefs.forget()
-    return "scale_pct and comments_forms survive remember()"
+    return "scale_pct, handling and mode options survive remember()"

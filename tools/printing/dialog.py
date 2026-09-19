@@ -219,6 +219,18 @@ class PrintDialog(QDialog):
             pane.setVisible(mode == self.handling)
         self._sync_preview()
 
+    def _set_handling(self, mode):
+        modes = ("size", "poster", "nup", "booklet")
+        if mode not in modes:
+            mode = "size"
+        idx = modes.index(mode)
+        if self._handling_bar.currentIndex() != idx:
+            self._handling_bar.setCurrentIndex(idx)
+        else:
+            self.handling = mode
+            for name, pane in self._handling_panes.items():
+                pane.setVisible(name == mode)
+
     def _handling_opts(self):
         """Poster / n-up / booklet controls, as the preview composites them."""
         n = len(self.model.order)
@@ -1231,6 +1243,7 @@ class PrintDialog(QDialog):
 
     def _current_settings(self):
         """The dialog's settings, in the shape prefs stores them."""
+        opts = self._handling_opts()
         return {
             "paper":        self.paper_combo.currentData(),
             "orientation":  self.orient_idx,
@@ -1245,6 +1258,19 @@ class PrintDialog(QDialog):
                              if self._source_keyword and self.source_combo.currentData()
                              else None),
             "comments_forms": self.comments_combo.currentData(),
+            "handling":     self.handling,
+            "by_page_size": self.by_page_size_check.isChecked(),
+            "tile_pct":     opts["tile_pct"],
+            "overlap_mm":   opts["overlap_mm"],
+            "cut_marks":    opts["cut_marks"],
+            "labels":       opts["labels"],
+            "nup_count":    opts["count"],
+            "nup_order":    opts["order"],
+            "nup_border":   opts["border"],
+            "nup_rotate":   opts["nup_rotate"],
+            "booklet_bind": opts["bind"],
+            "booklet_side": opts["side"],
+            "booklet_rotate": opts["booklet_rotate"],
         }
 
     def _restore_saved(self, printer_name):
@@ -1293,6 +1319,33 @@ class PrintDialog(QDialog):
         if source and len(source) == 2 and source[0] == self._source_keyword:
             _combo_by_data(self.source_combo, source[1])
         self.colorconv_combo.setEnabled(self.color_combo.currentData() != "mono")
+
+        if isinstance(saved.get("by_page_size"), bool):
+            self.by_page_size_check.setChecked(saved["by_page_size"])
+        if isinstance(saved.get("tile_pct"), int):
+            self.poster_pct.setValue(saved["tile_pct"])
+        if isinstance(saved.get("overlap_mm"), int):
+            self.poster_overlap.setValue(saved["overlap_mm"])
+        if isinstance(saved.get("cut_marks"), bool):
+            self.poster_cutmarks.setChecked(saved["cut_marks"])
+        if isinstance(saved.get("labels"), bool):
+            self.poster_labels.setChecked(saved["labels"])
+        # Unknown nup counts (a stale 3, a typo) fall back to 4, the default.
+        if "nup_count" in saved:
+            nup_idx = self.nup_count.findData(saved.get("nup_count"))
+            self.nup_count.setCurrentIndex(nup_idx if nup_idx >= 0 else 1)
+        _combo_by_data(self.nup_order, saved.get("nup_order"))
+        if isinstance(saved.get("nup_border"), bool):
+            self.nup_border.setChecked(saved["nup_border"])
+        if isinstance(saved.get("nup_rotate"), bool):
+            self.nup_rotate.setChecked(saved["nup_rotate"])
+        _combo_by_data(self.booklet_bind, saved.get("booklet_bind"))
+        _combo_by_data(self.booklet_side, saved.get("booklet_side"))
+        if isinstance(saved.get("booklet_rotate"), bool):
+            self.booklet_rotate.setChecked(saved["booklet_rotate"])
+        # Tab last, so the preview sees the restored options.
+        if saved.get("handling"):
+            self._set_handling(saved["handling"])
 
     def _on_printers_enumerated(self, names, default):
         """A fresh enumeration has come back from the background thread.
@@ -1856,7 +1909,7 @@ class PrintDialog(QDialog):
                     print_path = imposed
                     print_model = PageModel(n_out)
                     print_pages = list(range(n_out))
-                    print_scale = 1          # Feste Größe — sheets already fit
+                    print_scale = 1          # Size fit/shrink must not run again
                     print_pct = 100
                     print_paper = poster_paper_key or paper_key
 
