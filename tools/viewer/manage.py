@@ -479,13 +479,13 @@ class ManagePanel(QWidget):
                                                len(self.model.order) - 1)]
                 ref_path, ref_orig = self.model.page_source(ref_uid, self.pdf_path)
                 ref = PdfReader(ref_path, strict=False).pages[ref_orig]
-                rot = (int(ref.get("/Rotate", 0) or 0)
-                       + self.model.get_rotation(ref_uid)) % 360
+                extra = self.model.get_rotation(ref_uid)
             else:
-                ref, rot = reader.pages[0], 0
-            pw = float(ref.mediabox.width)
-            ph = float(ref.mediabox.height)
-            if rot in (90, 270): pw, ph = ph, pw
+                ref, extra = reader.pages[0], 0
+            # The page on screen: a CropBox smaller than the MediaBox used to
+            # make the blank the old uncropped sheet.
+            from tools.pagebox import displayed_size
+            pw, ph = displayed_size(ref, extra)
             # Leerseite ans Ende der Datei anhängen
             new_orig = len(reader.pages)
             writer = PdfWriter()

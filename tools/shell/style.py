@@ -270,31 +270,40 @@ QTextEdit, QPlainTextEdit {{
 /* ── Checkboxes & radios ────────────────────────────────── */
 /* background:transparent is not cosmetic — without it these inherit the window
    background from the QWidget rule above and paint it as an opaque bar right
-   across the group box they sit in, which looked like a rendering fault. */
-QCheckBox {{ color: {_TEXT}; spacing: 8px; background: transparent; }}
+   across the group box they sit in, which looked like a rendering fault.
+   min-height is not cosmetic either. The indicator used to be drawn with a
+   border *outside* its width/height, so the chosen circle was taller than the
+   row Qt allocated and the top and bottom were sliced off the moment it was
+   ticked. The mark now lives entirely inside a 16px box, and the row is tall
+   enough to hold that box with a pixel of air around it. */
+QCheckBox {{ color: {_TEXT}; spacing: 8px; background: transparent; min-height: 22px; }}
 QCheckBox::indicator {{
-    width: 16px; height: 16px; border-radius: 4px;
+    width: 15px; height: 15px; border-radius: 3px;
     border: 1px solid {_IBD}; background: {_IB};
 }}
 QCheckBox::indicator:hover {{ border-color: {_ACC}; }}
 QCheckBox::indicator:checked {{
     background: {_ACC}; border: 1px solid {_ACC};
 }}
-QRadioButton {{ color: {_TEXT}; spacing: 8px; background: transparent; }}
-/* Checked and unchecked must build the same-size box: both carry the 2px
-   border, and the dot is a radial gradient inside the content area. With 1px
-   unchecked / 2px checked the chosen state came out 4px *larger* than the
-   empty one — a bigger circle over the smaller empty circle, clipped top and
-   bottom wherever the row height was tight. */
+QRadioButton {{ color: {_TEXT}; spacing: 8px; background: transparent; min-height: 22px; }}
 QRadioButton::indicator {{
-    width: 15px; height: 15px; border-radius: 8px;
-    border: 2px solid {_IBD}; background: {_IB};
-}}
-QRadioButton::indicator:hover {{ border-color: {_ACC}; }}
-QRadioButton::indicator:checked {{
-    border: 2px solid {_ACC};
+    width: 16px; height: 16px; border-radius: 8px; border: none;
     background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
-                                stop:0.38 {_ACC}, stop:0.46 {_IB});
+        stop:0 {_IB}, stop:0.58 {_IB}, stop:0.72 {_IBD}, stop:1 {_IBD});
+}}
+QRadioButton::indicator:hover {{
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+        stop:0 {_IB}, stop:0.58 {_IB}, stop:0.72 {_ACC}, stop:1 {_ACC});
+}}
+QRadioButton::indicator:checked {{
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+        stop:0 {_ACC}, stop:0.34 {_ACC}, stop:0.46 {_IB}, stop:0.58 {_IB},
+        stop:0.72 {_ACC}, stop:1 {_ACC});
+}}
+QRadioButton::indicator:checked:hover {{
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+        stop:0 {_ACC}, stop:0.34 {_ACC}, stop:0.46 {_IB}, stop:0.58 {_IB},
+        stop:0.72 {_ACC}, stop:1 {_ACC});
 }}
 
 /* ── Group boxes ────────────────────────────────────────── */

@@ -515,3 +515,83 @@ def test_the_preview_still_draws_when_the_view_is_shorter_than_the_file():
     pm, info = p._render_preview(500, 650, 1.0)
     assert pm is not None, f"the preview drew nothing: {info!r}"
     return "the preview draws against the document that is on screen"
+
+
+def test_growing_a_cropped_page_does_not_restore_what_was_hidden():
+    """Acrobat's crop hides the rest of the page; it does not delete it.
+    Putting that page on a larger sheet used to scale and pad the hidden
+    original, so the format landed on the uncropped file."""
+    import pikepdf
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+
+    W, H = A4
+    src = os.path.join(_TMP, "hidden_crop.pdf")
+    c = canvas.Canvas(src, pagesize=A4)
+    c.setFillColorRGB(1, 0, 0); c.rect(0, 0, W, H, fill=1, stroke=0)
+    x0, y0, x1, y1 = 180.0, 250.0, 420.0, 560.0
+    c.setFillColorRGB(1, 0, 1)
+    c.rect(x0, y0, x1 - x0, y1 - y0, fill=1, stroke=0)
+    c.showPage(); c.save()
+    with pikepdf.open(src, allow_overwriting_input=True) as pdf:
+        pdf.pages[0].CropBox = [x0, y0, x1, y1]
+        pdf.save(src)
+
+    def corners_and_center(path):
+        doc = pdfium.PdfDocument(path)
+        img = doc[0].render(scale=1).to_pil().convert("RGB")
+        doc.close()
+        w, h = img.size
+        pts = (img.getpixel((2, 2)), img.getpixel((w - 3, 2)),
+               img.getpixel((2, h - 3)), img.getpixel((w - 3, h - 3)),
+               img.getpixel((w // 2, h // 2)))
+        return pts
+
+    def is_white(rgb):
+        return min(rgb) > 230
+
+    def is_magenta(rgb):
+        r, g, b = rgb
+        return r > 200 and b > 200 and g < 40
+
+    _open(src)
+    p = CropResizePanel(); p.apply_all.setChecked(True)
+    p.log.log = lambda *a, **k: None
+    p.fmt.set_format("A5  (148x210mm)")
+    p.scale_check.setChecked(True)
+    out = os.path.join(_TMP, "hidden_crop_out.pdf")
+    p.save_pdf = lambda *a, **k: out
+    p.open_result = lambda *a, **k: None
+    p._run_action()
+
+    tl, tr, bl, br, mid = corners_and_center(out)
+    assert is_magenta(mid), f"the cropped page itself is gone, center is {mid}"
+    for name, rgb in (("tl", tl), ("tr", tr), ("bl", bl), ("br", br)):
+        assert is_white(rgb), f"{name} is {rgb}, the hidden page came back"
+
+    # A crop that already starts at the origin does not need a move, only a
+    # bigger page. Extending the right edge used to skip the clip entirely,
+    # and the hidden strip came back on that side alone.
+    src2 = os.path.join(_TMP, "hidden_origin.pdf")
+    c = canvas.Canvas(src2, pagesize=A4)
+    c.setFillColorRGB(1, 0, 0); c.rect(0, 0, W, H, fill=1, stroke=0)
+    c.setFillColorRGB(0, 0, 1); c.rect(0, 0, 300, 400, fill=1, stroke=0)
+    c.showPage(); c.save()
+    with pikepdf.open(src2, allow_overwriting_input=True) as pdf:
+        pdf.pages[0].CropBox = [0, 0, 300, 400]
+        pdf.save(src2)
+    _open(src2)
+    p = CropResizePanel(); p.apply_all.setChecked(True)
+    p.log.log = lambda *a, **k: None
+    p.cr.setValue(-40.0)
+    out2 = os.path.join(_TMP, "hidden_origin_out.pdf")
+    p.save_pdf = lambda *a, **k: out2
+    p.open_result = lambda *a, **k: None
+    p._run_action()
+    doc = pdfium.PdfDocument(out2)
+    img = doc[0].render(scale=1).to_pil().convert("RGB")
+    doc.close()
+    right = img.getpixel((img.size[0] - 3, img.size[1] // 2))
+    left = img.getpixel((3, img.size[1] // 2))
+    assert left[2] > 200 and left[0] < 40, f"the visible page was lost, left is {left}"
+    assert min(right) > 230, f"the hidden page came back on the new margin, right is {right}"

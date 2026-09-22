@@ -608,16 +608,29 @@ class CropResizePanel(BasePanel):
         pdf = pikepdf.open(src_path)
         n_changed = 0
 
-        def _apply_ctm(pg, m):
-            """Prepend `q a b c d e f cm` to the page's content stream."""
-            if m == (1.0, 0.0, 0.0, 1.0, 0.0, 0.0): return
+        def _apply_ctm(pg, m, clip):
+            """Move the page, and drop whatever sat outside the page on screen.
+
+            Acrobat's crop only sets the CropBox. The rest of the old page is
+            still drawn, just hidden. A plain matrix then moves that drawing
+            with everything else, so growing the sheet — a format larger than
+            the crop, an added margin, a scale that does not fill the page —
+            puts the hidden part back where the new paper is. The rectangle
+            is in the content's own coordinates and inside the same q/Q as the
+            matrix, so the clip travels with the drawing instead of staying
+            at the old page position.
+            """
             contents = pg.get("/Contents")
             if contents is None: return
             old = (b" ".join(bytes(s.read_bytes()) for s in contents)
                    if isinstance(contents, pikepdf.Array)
                    else bytes(contents.read_bytes()))
-            hdr = ("q %.6f %.6f %.6f %.6f %.4f %.4f cm\n" % m).encode()
-            pg["/Contents"] = pikepdf.Stream(pdf, hdr + old + (chr(10) + "Q").encode())
+            x0, y0, x1, y1 = clip
+            hdr = b"q\n"
+            if m != (1.0, 0.0, 0.0, 1.0, 0.0, 0.0):
+                hdr += ("%.6f %.6f %.6f %.6f %.4f %.4f cm\n" % m).encode()
+            hdr += ("%.4f %.4f %.4f %.4f re W n\n" % (x0, y0, x1 - x0, y1 - y0)).encode()
+            pg["/Contents"] = pikepdf.Stream(pdf, hdr + old + b"\nQ")
 
         for i, page in enumerate(pdf.pages):
             if i not in target_origs: continue
@@ -653,7 +666,7 @@ class CropResizePanel(BasePanel):
             else:
                 # Nur Rahmen verschieben, Inhalt bleibt
                 C = (1.0, 0.0, 0.0, 1.0, -l_pt, -b_pt)
-            _apply_ctm(page, _mat_mul(R, C))
+            _apply_ctm(page, _mat_mul(R, C), box)
 
             page.mediabox = pikepdf.Array([pikepdf.Real(0),pikepdf.Real(0),
                                          pikepdf.Real(new_w),pikepdf.Real(new_h)])

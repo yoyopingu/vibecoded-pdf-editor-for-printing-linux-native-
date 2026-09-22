@@ -387,6 +387,36 @@ def paper_sources(printer_name):
     return None
 
 
+def _place_displayed(src_path, dest_path, paper_w_pt, paper_h_pt, factor):
+    """Centre each page, as it is displayed, on a sheet of the given size.
+
+    The size and the rotation are the visible page: a CropBox smaller than
+    the MediaBox used to scale the hidden original onto the sheet and then
+    make that the whole page, and a /Rotate left in place turned the sheet
+    again after it had been measured unrotated. Scaling is about the
+    displayed origin, then the result is centred — scaling after centring
+    walks it off the sheet.
+    """
+    import pikepdf
+    from tools.pagebox import (_display_matrix, _inherited_rotate, _mat_mul,
+                               _visible_box, _visible_size, apply_visible_transform)
+    with pikepdf.open(src_path) as pdf:
+        if not pdf.pages:
+            raise RuntimeError(tr("Re-centre: keine Seiten."))
+        for page in pdf.pages:
+            box = _visible_box(page)
+            dw, dh = _visible_size(page)
+            w1, h1 = dw * factor, dh * factor
+            tx = (paper_w_pt - w1) / 2.0
+            ty = (paper_h_pt - h1) / 2.0
+            placed = _mat_mul(
+                _display_matrix(box, _inherited_rotate(page)),
+                _mat_mul((factor, 0.0, 0.0, factor, 0.0, 0.0),
+                         (1.0, 0.0, 0.0, 1.0, tx, ty)))
+            apply_visible_transform(page, pdf, placed, box, paper_w_pt, paper_h_pt)
+        pdf.save(dest_path)
+
+
 def recenter_on_paper(src_path, dest_path, paper_w_pt, paper_h_pt, factor=1.0):
     """Enlarge every page's media box to the full physical sheet size and
     centre the existing content on it, optionally scaled by `factor`.
@@ -399,38 +429,12 @@ def recenter_on_paper(src_path, dest_path, paper_w_pt, paper_h_pt, factor=1.0):
     already did for the printable-area fit, with one more number in it.
 
     Ghostscript fits the content to the *printable area* (media set to
-    paper − hardware margins).  This step places that printable-area page,
-    unscaled, in the exact centre of a full-size sheet so the printer driver
+    paper − hardware margins).  This step places that page, as it is
+    displayed, in the exact centre of a full-size sheet so the printer driver
     receives correctly-sized media and does not rescale — the on-screen
-    preview and the physical print then agree.  The GS output is already
-    normalised (upright, /Rotate cleared, media box at the origin), so a
-    plain translate + media-box resize is safe here.
+    preview and the physical print then agree.
     """
-    from pypdf import PdfReader, PdfWriter, Transformation
-    from pypdf.generic import RectangleObject
-    reader = PdfReader(src_path, strict=False)
-    writer = PdfWriter()
-    for page in reader.pages:
-        box = page.mediabox
-        x0 = float(box.left);   y0 = float(box.bottom)
-        w0 = float(box.width);  h0 = float(box.height)
-        # Scale about the page's own origin first, then centre what that
-        # produced — centring a page and then scaling it moves it off centre.
-        w1, h1 = w0 * factor, h0 * factor
-        tx = (paper_w_pt - w1) / 2.0 - x0 * factor
-        ty = (paper_h_pt - h1) / 2.0 - y0 * factor
-        t = Transformation()
-        if abs(factor - 1.0) > 1e-9:
-            t = t.scale(factor, factor)
-        page.add_transformation(t.translate(tx, ty))
-        full = RectangleObject([0, 0, paper_w_pt, paper_h_pt])
-        page.mediabox = full
-        page.cropbox  = full
-        writer.add_page(page)
-    if not writer.pages:
-        raise RuntimeError(tr("Re-centre: keine Seiten."))
-    with open(dest_path, "wb") as f:
-        writer.write(f)
+    _place_displayed(src_path, dest_path, paper_w_pt, paper_h_pt, factor)
 
 
 def write_subset_pdf(pdf_path, model, pages, dest_path):
@@ -611,6 +615,195 @@ def _scaling_options(scale_idx):
     return ["print-scaling=none"]
 
 
+def oriented_sheet_pt(paper_key, orient_idx, pdf_path, model, pages):
+    """The sheet in points, after the orientation this job actually uses.
+
+    None when no sheet was named — the pages keep their own size, and
+    nothing about paper is sent. Landscape swaps the axes. Automatic
+    follows the first selected page, which is the same rule the CUPS job
+    is labelled with. Print to PDF has no queue to do this afterwards, so
+    it has to use the same answer.
+    """
+    sheet = paper_size_pt(paper_key)
+    if not sheet:
+        return None
+    pw_pt, ph_pt = sheet
+    if orient_idx == 2:                 # explicit landscape
+        pw_pt, ph_pt = ph_pt, pw_pt
+    elif orient_idx == 0 and pages:     # auto — the first selected page
+        try:
+            uid = model.order[pages[0]]
+            src_path, orig = model.page_source(uid, pdf_path)
+            with _pdfium_lock:
+                doc = _open_pdf(src_path)
+                try:
+                    pg = doc[orig]
+                    pdfw, pdfh = pg.get_width(), pg.get_height()
+                finally:
+                    doc.close()
+            rot0 = model.get_rotation(uid)
+            if (pdfw > pdfh) != bool(rot0 % 180):
+                if pw_pt < ph_pt:
+                    pw_pt, ph_pt = ph_pt, pw_pt
+        except Exception:
+            logging.debug("could not read the first page's orientation; "
+                          "using the paper as given", exc_info=True)
+    return pw_pt, ph_pt
+
+
+def _place_on_sheet(src_path, dest_path, paper_w_pt, paper_h_pt,
+                    scale_idx, scale_pct):
+    """Put every page on a sheet of the given size.
+
+    Fit scales up and down so the page fills the sheet. Shrink only scales
+    down. Feste Größe uses the percentage (100 is the page's own size) and
+    centres it, which is what Acrobat does for Adobe PDF — there is no
+    printer left to apply print-scaling= afterwards.
+    """
+    import pikepdf
+    from tools.pagebox import (_display_matrix, _inherited_rotate, _mat_mul,
+                               _visible_box, _visible_size, apply_visible_transform)
+    with pikepdf.open(src_path) as pdf:
+        if not pdf.pages:
+            raise RuntimeError(tr("Re-centre: keine Seiten."))
+        # One factor per page: mixed sizes must not share the first page's.
+        # Fitted from the displayed size. The MediaBox is the sheet a crop
+        # hid, and fitting that brought the hidden drawing back.
+        for page in pdf.pages:
+            box = _visible_box(page)
+            dw, dh = _visible_size(page)
+            if scale_idx == FIXED:
+                factor = (scale_pct or 100) / 100.0
+            elif scale_idx == FIT:
+                factor = min(paper_w_pt / max(dw, 1.0), paper_h_pt / max(dh, 1.0))
+            else:
+                factor = min(1.0, paper_w_pt / max(dw, 1.0),
+                             paper_h_pt / max(dh, 1.0))
+            w1, h1 = dw * factor, dh * factor
+            tx = (paper_w_pt - w1) / 2.0
+            ty = (paper_h_pt - h1) / 2.0
+            placed = _mat_mul(
+                _display_matrix(box, _inherited_rotate(page)),
+                _mat_mul((factor, 0.0, 0.0, factor, 0.0, 0.0),
+                         (1.0, 0.0, 0.0, 1.0, tx, ty)))
+            apply_visible_transform(page, pdf, placed, box, paper_w_pt, paper_h_pt)
+        pdf.save(dest_path)
+
+
+def _scale_pages(src_path, dest_path, factor):
+    """Scale each page about its own size. Used when no sheet was chosen."""
+    import pikepdf
+    from tools.pagebox import (_display_matrix, _inherited_rotate, _mat_mul,
+                               _visible_box, _visible_size, apply_visible_transform)
+    with pikepdf.open(src_path) as pdf:
+        if not pdf.pages:
+            raise RuntimeError(tr("Re-centre: keine Seiten."))
+        for page in pdf.pages:
+            box = _visible_box(page)
+            dw, dh = _visible_size(page)
+            placed = _mat_mul(
+                _display_matrix(box, _inherited_rotate(page)),
+                (factor, 0.0, 0.0, factor, 0.0, 0.0))
+            apply_visible_transform(page, pdf, placed, box, dw * factor, dh * factor)
+        pdf.save(dest_path)
+
+
+def build_print_pdf(pdf_path, model, pages, dest_path, *,
+                    color_mode="auto", scale_idx=FIT, scale_pct=100,
+                    paper_key="", orient_idx=0, comments_forms=DOCUMENT,
+                    report=None):
+    """Write the PDF Acrobat's "Adobe PDF" printer would have saved.
+
+    The pages are the ones the operator picked, with form values baked in
+    and comments filtered the same way a paper job is. Fit, Shrink and
+    Feste Größe are applied here because nothing downstream will do it.
+    One copy — a copy count is a printer setting, and Acrobat leaves it
+    off for this target. Returns the 1-based page numbers that could not
+    be read, the same list print_via_gs returns.
+    """
+    import os
+    import shutil
+    import tempfile
+    report = report or (lambda *_a: None)
+    sub_fd, sub_tmp = tempfile.mkstemp(suffix="_pdfsub.pdf")
+    os.close(sub_fd)
+    prep_fd, prep_tmp = tempfile.mkstemp(suffix="_pdfprep.pdf")
+    os.close(prep_fd)
+    norm_tmp = placed_tmp = None
+    try:
+        report(tr("Seiten zusammenstellen… ({count})").format(count=len(pages)))
+        skipped = write_subset_pdf(pdf_path, model, pages, sub_tmp)
+        try:
+            prepare_print_pdf(sub_tmp, prep_tmp, comments_forms)
+            src = prep_tmp
+        except Exception:
+            logging.exception("print to pdf: could not prepare form fields")
+            src = sub_tmp
+
+        gs_bin = ghostscript_binary()
+        if gs_bin:
+            norm_fd, norm_tmp = tempfile.mkstemp(suffix="_pdfnorm.pdf")
+            os.close(norm_fd)
+            report(tr("PDF wird geschrieben…"))
+            gs_cmd = [
+                gs_bin, "-dBATCH", "-dNOPAUSE", "-dQUIET",
+                "-sDEVICE=pdfwrite",
+                "-dCompatibilityLevel=1.5",
+                "-dPDFSETTINGS=/printer",
+                "-dEmbedAllFonts=true",
+                "-dSubsetFonts=true",
+            ]
+            if color_mode == "mono":
+                # The file is the output, so grayscale has to be in it.
+                # A paper job leaves the colour and asks the queue instead.
+                gs_cmd += ["-sColorConversionStrategy=Gray",
+                           "-sProcessColorModel=DeviceGray"]
+            else:
+                gs_cmd += ["-sColorConversionStrategy=LeaveColorUnchanged"]
+            gs_cmd += [f"-sOutputFile={norm_tmp}", src]
+            r = _run_capturing(gs_cmd, timeout=240)
+            if r.returncode == 0 and os.path.getsize(norm_tmp) > 100:
+                src = norm_tmp
+            else:
+                logging.warning("print to pdf: ghostscript failed (rc=%s): %s",
+                                r.returncode, (r.stderr or "")[:300])
+
+        sheet = oriented_sheet_pt(paper_key, orient_idx, pdf_path, model, pages)
+        if sheet:
+            placed_fd, placed_tmp = tempfile.mkstemp(suffix="_pdfplace.pdf")
+            os.close(placed_fd)
+            _place_on_sheet(src, placed_tmp, sheet[0], sheet[1],
+                            scale_idx, scale_pct)
+            src = placed_tmp
+        elif scale_idx == FIXED and scale_pct and scale_pct != 100:
+            placed_fd, placed_tmp = tempfile.mkstemp(suffix="_pdfpct.pdf")
+            os.close(placed_fd)
+            _scale_pages(src, placed_tmp, scale_pct / 100.0)
+            src = placed_tmp
+
+        shutil.copyfile(src, dest_path)
+        return skipped
+    finally:
+        unlink(sub_tmp, prep_tmp, norm_tmp, placed_tmp)
+
+
+def write_raster_pdf(rendered, dest_path, dpi):
+    """Wrap already-rasterised print pages into a PDF of the right sheet size.
+
+    "Als Bitmap" for Print to PDF. The images were rendered at `dpi` for
+    the sheet; PIL's PDF writer uses that resolution so a 300 dpi bitmap
+    of an A4 sheet comes out A4, not a huge page.
+    """
+    if not rendered:
+        raise RuntimeError(tr("Keine Seiten konnten gerendert werden."))
+    images = []
+    for pil, _orient, _w, _h in rendered:
+        images.append(pil.convert("RGB"))
+    first, rest = images[0], images[1:]
+    first.save(dest_path, "PDF", resolution=float(dpi or 72),
+               save_all=True, append_images=rest)
+
+
 def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                   duplex_edge, printer_name, scale_idx,
                   paper_key, orient_idx, report,
@@ -635,30 +828,9 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
     # sheet for this side to reason about, and nothing about it is sent: the
     # queue's own default applies, which is the only thing that can be right
     # for a size this application does not know.
-    sheet = paper_size_pt(paper_key)
-    pw_pt, ph_pt = sheet if sheet else (0.0, 0.0)
-
-    # Determine target paper orientation
-    if orient_idx == 2 and sheet:   # explicit landscape
-        pw_pt, ph_pt = ph_pt, pw_pt
-    elif orient_idx == 0 and sheet:  # auto — detect from first selected page
-        try:
-            uid = model.order[pages[0]]
-            src_path, orig = model.page_source(uid, pdf_path)
-            with _pdfium_lock:
-                doc = _open_pdf(src_path)
-                try:
-                    pg = doc[orig]; pdfw = pg.get_width(); pdfh = pg.get_height()
-                finally:
-                    doc.close()
-            rot0 = model.get_rotation(model.order[pages[0]])
-            if (pdfw > pdfh) != bool(rot0 % 180):   # page is landscape
-                if pw_pt < ph_pt:
-                    pw_pt, ph_pt = ph_pt, pw_pt
-        except Exception:
-            logging.debug("could not read the first page's orientation; "
-                          "using the paper as given", exc_info=True)
-    # orient_idx == 1 → portrait: keep pw_pt < ph_pt as-is
+    oriented = oriented_sheet_pt(paper_key, orient_idx, pdf_path, model, pages)
+    sheet = oriented is not None
+    pw_pt, ph_pt = oriented if sheet else (0.0, 0.0)
 
     sub_fd, sub_tmp = tempfile.mkstemp(suffix="_sub.pdf")
     os.close(sub_fd)

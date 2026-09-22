@@ -34,9 +34,11 @@ _BY_PRINTER = "printing/by_printer"
 # Only settings that describe *how* to print. Not the copy count, which is a
 # property of the job in front of you rather than of how you like to print, and
 # not the page range or reverse order, which belong to the document. Sheet
-# from–to on a booklet is the same kind of job bound.
+# from–to on a booklet is the same kind of job bound. The percentage beside
+# "Feste Größe" is too: it goes back to 100 % whenever the dialog closes,
+# so a one-off 70 % does not quietly shrink the next job.
 REMEMBERED = ("paper", "orientation", "color", "scale",
-              "scale_pct", "collate", "duplex", "duplex_edge", "paper_source",
+              "collate", "duplex", "duplex_edge", "paper_source",
               "comments_forms", "handling", "by_page_size",
               "tile_pct", "overlap_mm", "cut_marks", "labels",
               "nup_count", "nup_order", "nup_border", "nup_rotate",

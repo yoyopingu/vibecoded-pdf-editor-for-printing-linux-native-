@@ -17,6 +17,29 @@ from tools.render.document_cache import open_document as _open_pdf
 def _run_ocr(src, out, lang, deskew, skip, report):
     """Run OCR on a worker thread (via BasePanel.run_async). Returns
     (out_path, summary); raises on failure."""
+    import tempfile
+    from tools.pagebox import materialize_visible
+    # ocrmypdf renders through Ghostscript, which sizes the page from the
+    # MediaBox. A cropped file would be read as the hidden original. Bake
+    # the visible page first; a file that hides nothing is left untouched.
+    fd, baked_path = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
+    try:
+        if materialize_visible(src, baked_path):
+            src = baked_path
+        else:
+            os.remove(baked_path)
+            baked_path = None
+        return _run_ocr_on(src, out, lang, deskew, skip, report)
+    finally:
+        if baked_path:
+            try:
+                os.remove(baked_path)
+            except OSError:
+                pass
+
+
+def _run_ocr_on(src, out, lang, deskew, skip, report):
     if shutil.which("ocrmypdf"):
         report(tr("Starte ocrmypdf …"))
         cmd = ["ocrmypdf", "--language", lang, "--output-type", "pdfa"]
@@ -91,7 +114,7 @@ def _ocr_with_tesseract(src, out, lang, deskew, skip, report):
 
     report(tr("Rendere Seiten …"))
     try:
-        images = convert_from_path(src, dpi=300)
+        images = convert_from_path(src, dpi=300, use_cropbox=True)
     except Exception as e:
         raise RuntimeError(tr(
             "Seiten konnten nicht gerendert werden (poppler installiert?):\n{p0}"

@@ -11,6 +11,15 @@ from tools.i18n      import tr
 
 
 MM_TO_PT = 2.8346456693
+
+# The visible-page geometry lives in tools.pagebox so the print path and the
+# viewer can use it without importing a panel. These names stay here: every
+# tool already imports them from this module.
+from tools.pagebox import (  # noqa: E402
+    _display_matrix, _inherited_rotate, _mat_mul, _visible_box, _visible_size,
+)
+
+
 def _paper_sizes_pt():
     """The sizes to offer, keyed by the label shown in a dropdown.
 
@@ -22,76 +31,6 @@ def _paper_sizes_pt():
     from tools.paper import label, sizes
     return {label(name): size for name, size in sizes().items()}
 LABEL_W = 220   # Feste Label-Breite — passt alle deutschen Bezeichnungen
-
-
-def _inherited_rotate(page) -> int:
-    """/Rotate of a pikepdf page, following the inheritance chain up the page
-    tree (it may live on a /Pages node instead of the page itself)."""
-    node = page.obj
-    for _ in range(32):
-        try:
-            if "/Rotate" in node:
-                return int(node["/Rotate"]) % 360
-            node = node["/Parent"]
-        except Exception:
-            break
-    return 0
-
-
-def _visible_box(page):
-    """The rectangle a viewer actually shows for a pikepdf page: its CropBox
-    clipped to the MediaBox (the PDF spec requires that intersection), falling
-    back to the MediaBox.
-
-    This matters because qpdf's ``add_overlay`` places TrimBox → CropBox →
-    MediaBox *as written*, without clipping. A file whose CropBox is stale or
-    larger than its MediaBox — e.g. one the Crop tool resized — would otherwise
-    be laid out from a box that has nothing to do with the visible page, and the
-    content lands off-centre in its slot."""
-    def _rect(o):
-        v = [float(x) for x in o]
-        return (min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3]))
-    x0, y0, x1, y1 = _rect(page.mediabox)
-    try:
-        cx0, cy0, cx1, cy1 = _rect(page.cropbox)
-    except Exception:
-        return x0, y0, x1, y1
-    ix0, iy0 = max(x0, cx0), max(y0, cy0)
-    ix1, iy1 = min(x1, cx1), min(y1, cy1)
-    if ix1 - ix0 > 1.0 and iy1 - iy0 > 1.0:
-        return ix0, iy0, ix1, iy1
-    return x0, y0, x1, y1
-
-
-def _visible_size(page):
-    """(width, height) of the page as it is displayed — the visible box with
-    /Rotate applied. This is what pdfium reports (and therefore what every tool
-    preview draws), so layout maths must use it too."""
-    x0, y0, x1, y1 = _visible_box(page)
-    w, h = x1 - x0, y1 - y0
-    return (h, w) if _inherited_rotate(page) in (90, 270) else (w, h)
-
-
-def _mat_mul(m, n):
-    """Compose two PDF matrices (a b c d e f): apply `m` first, then `n`."""
-    a1, b1, c1, d1, e1, f1 = m
-    a2, b2, c2, d2, e2, f2 = n
-    return (a1*a2 + b1*c2,        a1*b2 + b1*d2,
-            c1*a2 + d1*c2,        c1*b2 + d1*d2,
-            e1*a2 + f1*c2 + e2,   e1*b2 + f1*d2 + f2)
-
-
-def _display_matrix(box, rot):
-    """Matrix mapping a page's visible box into display space: origin at (0, 0)
-    and /Rotate applied, i.e. the coordinate system the previews (and every
-    viewer) show. Lets a tool do its geometry in the same space the user sees
-    instead of in raw MediaBox coordinates."""
-    x0, y0, x1, y1 = box
-    rot = rot % 360
-    if rot == 90:   return (0.0, -1.0, 1.0,  0.0, -y0,  x1)
-    if rot == 180:  return (-1.0, 0.0, 0.0, -1.0,  x1,  y1)
-    if rot == 270:  return (0.0,  1.0, -1.0, 0.0,  y1, -x0)
-    return (1.0, 0.0, 0.0, 1.0, -x0, -y0)
 
 
 def row(label_text: str, widget, stretch=1, label_w: int = LABEL_W) -> QHBoxLayout:

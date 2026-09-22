@@ -290,6 +290,55 @@ def test_output_validity():
         assert os.path.exists(path) and pages(path) >= 1, f"{cls.__name__} produced no valid output"
 
 
+def test_a_jpeg_keeps_only_its_main_picture():
+    """A phone JPEG often hides a second picture in the same file: an HDR gain
+    map or a depth image, which looks like the photo darkened and inverted.
+    That attachment is not a page. A multi-page TIFF next to it still is."""
+    import io
+    import img2pdf
+    from PIL import ImageOps
+    from tools.multi_open import images_to_pdf_bytes
+
+    def npages(data):
+        return len(PdfReader(io.BytesIO(data)).pages)
+
+    def box(data):
+        page = PdfReader(io.BytesIO(data)).pages[0]
+        return tuple(round(float(v), 2) for v in page.mediabox)
+
+    tmp = tempfile.mkdtemp(dir=_TMP)
+    photo = Image.new("RGB", (320, 200), (220, 40, 40))
+    hidden = ImageOps.invert(photo.resize((160, 100))).point(lambda p: p // 3)
+    plain = os.path.join(tmp, "plain.jpg")
+    photo.save(plain, "JPEG", quality=90)
+    mpo = os.path.join(tmp, "phone.jpg")
+    photo.save(mpo, "MPO", quality=90, append_images=[hidden], save_all=True)
+    # The fixture has to be a file img2pdf itself would split, or this test
+    # passes without exercising the case.
+    assert npages(img2pdf.convert(mpo)) == 2, "fixture is not a multi-picture JPEG"
+
+    main = images_to_pdf_bytes([plain])
+    opened = images_to_pdf_bytes([mpo])
+    assert npages(main) == 1
+    assert npages(opened) == 1, "the hidden picture became its own page"
+    assert box(opened) == box(main), "kept a frame other than the main picture"
+
+    other = Image.new("RGB", (80, 60), (10, 20, 30))
+    tif = os.path.join(tmp, "scan.tif")
+    other.save(tif, format="TIFF", save_all=True,
+               append_images=[Image.new("RGB", (90, 70), (40, 50, 60))])
+    gif = os.path.join(tmp, "anim.gif")
+    other.save(gif, format="GIF", save_all=True,
+               append_images=[Image.new("RGB", (90, 70), (40, 50, 60))],
+               duration=100, loop=0)
+    assert npages(images_to_pdf_bytes([tif])) == 2, "a multi-page TIFF lost a page"
+    assert npages(images_to_pdf_bytes([gif])) == 2, "a multi-frame GIF lost a frame"
+    # first_frame_only applies to a whole img2pdf call, so a JPEG and a TIFF
+    # in one batch must not share that call.
+    assert npages(images_to_pdf_bytes([mpo, tif])) == 3
+    assert npages(images_to_pdf_bytes([plain, mpo])) == 2
+
+
 def test_the_heavy_tools_hand_their_work_to_a_worker():
     """Pressing Ausführen must return to the event loop, not hold it.
 

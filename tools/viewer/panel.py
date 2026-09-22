@@ -380,7 +380,7 @@ class PageViewerPanel(QWidget):
     def _open(self, path=None):
         from PyQt6.QtWidgets import QMessageBox
         from tools.multi_open import (IMAGE_EXTS, OFFICE_EXTS, PDF_EXT,
-                                      file_dialog_filter)
+                                      file_dialog_filter, images_to_pdf_bytes)
         if not path:
             path, _ = QFileDialog.getOpenFileName(
                 self, tr("Datei oeffnen"), "", file_dialog_filter())
@@ -404,10 +404,10 @@ class PageViewerPanel(QWidget):
 
         if ext in IMAGE_EXTS:
             try:
-                import img2pdf, tempfile
+                import tempfile
                 tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
                 with open(tmp, "wb") as f:
-                    f.write(img2pdf.convert(path))
+                    f.write(images_to_pdf_bytes([path]))
                 path = tmp
             except Exception as e:
                 from PyQt6.QtWidgets import QMessageBox

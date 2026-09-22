@@ -5,6 +5,8 @@ import io
 from PyQt6.QtWidgets import QVBoxLayout, QLineEdit, QSpinBox, QComboBox, QGroupBox
 from tools._base import BasePanel
 from tools.i18n import tr
+from tools.pagebox import (_display_matrix, _mat_inv, _visible_box,
+                           _visible_size, _inherited_rotate)
 from tools.panels._shared import row
 
 
@@ -58,9 +60,14 @@ class PageNumbersPanel(BasePanel):
             if i < skip: writer.add_page(page); continue
             num   = start + (i-skip)
             label = prefix + str(num) + suffix.replace("{gesamt}", str(n))
-            pw=float(page.mediabox.width); ph=float(page.mediabox.height)
+            # Draw in the space the viewer shows, then map back into the file.
+            # The MediaBox is the uncropped sheet and /Rotate only affects
+            # display, so a number placed from those landed in the hidden
+            # margin, or on the side of a rotated page.
+            box = _visible_box(page)
+            pw, ph = _visible_size(page)
             packet = io.BytesIO()
-            c = rl_canvas.Canvas(packet, pagesize=(pw,ph))
+            c = rl_canvas.Canvas(packet, pagesize=(pw, ph))
             c.setFont("Helvetica", fs)
             # position by index: 0=Mitte/Unten, 1=Links/Unten, 2=Rechts/Unten,
             #                    3=Mitte/Oben,  4=Links/Oben,  5=Rechts/Oben
@@ -75,7 +82,9 @@ class PageNumbersPanel(BasePanel):
                 x = pw - margin; c.drawRightString(x, y, label)
             c.save(); packet.seek(0)
             from pypdf import PdfReader as PR
-            page.merge_page(PR(packet).pages[0]); writer.add_page(page)
+            placed = _mat_inv(_display_matrix(box, _inherited_rotate(page)))
+            page.merge_transformed_page(PR(packet).pages[0], placed, expand=False)
+            writer.add_page(page)
         with open(out, "wb") as f: writer.write(f)
         self.open_result(out, tr("Mit Seitenzahlen"))
         return tr('Seitenzahlen auf {p0} Seiten hinzugefuegt').format(p0=n - skip)

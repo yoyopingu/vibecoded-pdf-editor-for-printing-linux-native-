@@ -98,10 +98,10 @@ class ImgPdfPanel(BasePanel):
 def _images_to_pdf(paths, out, report):
     """Encode `paths` into one PDF at `out`, on a worker thread. Returns
     (out, n_images)."""
-    import img2pdf
+    from tools.multi_open import images_to_pdf_bytes
     report(tr("Bilder werden zusammengefuehrt …"))
     with open(out, "wb") as f:
-        f.write(img2pdf.convert(paths))
+        f.write(images_to_pdf_bytes(paths))
     return out, len(paths)
 
 
@@ -118,7 +118,10 @@ def _pdf_to_images(src, out_dir, fmt, dpi, report):
         report.check()          # between batches, before the next ten renders
         end = min(i + 10, n_pages)
         report(tr('Seite {i} / {total}…').format(i=end, total=n_pages))
-        pages = convert_from_path(src, dpi=dpi, first_page=i + 1, last_page=end)
+        # poppler's default is the MediaBox, which is the page Acrobat cropped
+        # away. The crop box is the page this app shows.
+        pages = convert_from_path(src, dpi=dpi, first_page=i + 1, last_page=end,
+                                  use_cropbox=True)
         for j, img in enumerate(pages):
             img.save(os.path.join(out_dir, f"{stem}_s{i+j+1:03d}.{ext}"), fmt.upper())
     return n_pages

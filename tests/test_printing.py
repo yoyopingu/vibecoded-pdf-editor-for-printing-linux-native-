@@ -788,7 +788,8 @@ def test_a_printer_appearing_later_shows_up_without_a_restart():
 
         # A printer appears. It must show up, and the selection must survive.
         dlg._on_printers_enumerated(["Officejet", "Laser"], "Officejet")
-        assert [d for _, d in dlg.printer_combo.items] == ["Officejet", "Laser"]
+        assert [d for _, d in dlg.printer_combo.items] == [
+            D.PDF_PRINTER, "Officejet", "Laser"]
         assert dlg.printer_combo.currentData() == "Officejet", "selection was lost"
         assert dlg.changed == 1, "same printer still selected — defaults not re-applied"
 
@@ -842,7 +843,7 @@ def test_a_refresh_never_undoes_a_deliberate_choice():
 
         dlg._settings_touched = True          # the operator picks A3, say
         dlg._on_printers_enumerated(["other"], "other")
-        assert [d for _, d in dlg.printer_combo.items] == ["other"], \
+        assert [d for _, d in dlg.printer_combo.items] == [D.PDF_PRINTER, "other"], \
             "the new list still has to be shown"
         assert dlg.changed == 1, "defaults were re-applied over a deliberate choice"
     finally:
@@ -1861,10 +1862,10 @@ def test_a_checked_box_prints_checked():
     return f"checked box prints ({printed} dark px vs {empty} empty)"
 
 
-def test_scale_pct_is_remembered_with_the_rest():
-    """The percentage beside Feste Größe was written into _current_settings
-    but never stored — REMEMBERED did not list it — so it reset to 100
-    every time the dialog opened."""
+def test_scale_pct_is_not_remembered_with_the_rest():
+    """The percentage beside Feste Größe is part of this job, not of how
+    this printer is usually used. It goes back to 100 % when the dialog
+    closes, including a close that did not print."""
     from tools.printing import prefs
     prefs.forget()
     try:
@@ -1875,7 +1876,8 @@ def test_scale_pct_is_remembered_with_the_rest():
                                   "by_page_size": True, "copies": 9,
                                   "reverse": True})
         saved = prefs.for_printer("office")
-        assert saved.get("scale_pct") == 70, saved
+        assert "scale_pct" not in saved, saved
+        assert saved.get("scale") == 1, saved
         assert saved.get("comments_forms") == "form_fields_only", saved
         assert saved.get("handling") == "poster", saved
         assert saved.get("tile_pct") == 180, saved
@@ -1883,6 +1885,117 @@ def test_scale_pct_is_remembered_with_the_rest():
         assert saved.get("booklet_bind") == "right", saved
         assert saved.get("by_page_size") is True, saved
         assert "copies" not in saved and "reverse" not in saved, saved
+
+        tab, dlg = _print_dialog(2, "pct_reset.pdf")
+        try:
+            dlg.scale_fixed.setChecked(True)
+            dlg.scale_pct.setValue(70)
+            assert dlg.scale_pct.value() == 70
+            dlg.done(0)
+            _app.processEvents()
+        finally:
+            tab.deleteLater(); _app.processEvents()
+
+        tab2, dlg2 = _print_dialog(2, "pct_reset_next.pdf")
+        try:
+            assert dlg2.scale_pct.value() == 100, dlg2.scale_pct.value()
+            # An old saved 70 must not be put back when the printer's
+            # other settings are restored.
+            dlg2._restore_saved("office")
+            assert dlg2.scale_pct.value() == 100, dlg2.scale_pct.value()
+        finally:
+            dlg2.close(); tab2.deleteLater(); _app.processEvents()
     finally:
         prefs.forget()
-    return "scale_pct, handling and mode options survive remember()"
+    return "scale percent is not kept; the next dialog opens at 100 %"
+
+
+def test_the_print_button_is_fully_inside_a_short_dialog():
+    """The buttons used to paint past the bottom of the window once the
+    dialog was shorter than its hint — a 52px bar under a button that,
+    with its padding, was taller than the bar."""
+    from PyQt6.QtWidgets import QPushButton
+    tab, dlg = _print_dialog(2, "short_dlg.pdf")
+    try:
+        dlg.resize(1000, 540)
+        _app.processEvents()
+        btn = next(b for b in dlg.findChildren(QPushButton)
+                   if b.text().strip() == "Drucken")
+        bottom = btn.mapTo(dlg, btn.rect().bottomLeft()).y()
+        assert bottom <= dlg.height() - 1, (bottom, dlg.height(), btn.height())
+        # The last settings row has to belong to the scrollable pane, not
+        # be sliced off the bottom of it.
+        pane = dlg._settings_pane
+        dlg._content_height()
+        combo_bottom = dlg.comments_combo.mapTo(
+            pane, dlg.comments_combo.rect().bottomLeft()).y()
+        assert combo_bottom <= pane.minimumHeight(), (
+            combo_bottom, pane.minimumHeight(), pane.sizeHint().height())
+    finally:
+        dlg.close(); tab.deleteLater(); _app.processEvents()
+    return "Drucken stays inside the window, and the last row can be scrolled to"
+
+
+def test_print_to_pdf_is_a_printer_and_writes_the_chosen_pages():
+    """Acrobat's Adobe PDF: a target in the printer list. Drucken saves a
+    PDF of the pages that were picked, on the sheet that was picked, instead
+    of sending them to a queue. Copies and duplex do not apply to a file."""
+    from pypdf import PdfReader
+    from tools.printing.dialog import PDF_PRINTER
+    from tools.printing.spool import build_print_pdf
+    from tools.viewer.model import PageModel
+
+    tab, dlg = _print_dialog(4, "to_pdf_src.pdf")
+    try:
+        # The virtual printer is there even before a queue answers.
+        dlg._apply_printer_list(["Officejet"], "Officejet")
+        assert dlg.printer_combo.findData(PDF_PRINTER) == 0
+        assert dlg.printer_combo.currentData() == "Officejet"
+        dlg.printer_combo.setCurrentIndex(0)
+        _app.processEvents()
+        assert dlg._is_pdf_printer()
+        assert not dlg.copies_spin.isEnabled()
+        assert not dlg.duplex_check.isEnabled()
+        assert not dlg.source_combo.isEnabled()
+        # A real queue gets those controls back.
+        dlg.printer_combo.setCurrentIndex(dlg.printer_combo.findData("Officejet"))
+        _app.processEvents()
+        assert dlg.copies_spin.isEnabled()
+        assert dlg.duplex_check.isEnabled()
+    finally:
+        dlg.close(); tab.deleteLater(); _app.processEvents()
+
+    src = os.path.join(_TMP, "to_pdf_src.pdf")
+    model = PageModel(4)
+    out = os.path.join(_TMP, "to_pdf_out.pdf")
+    skipped = build_print_pdf(
+        src, model, [0, 2], out, scale_idx=1, scale_pct=100,
+        paper_key="A4", orient_idx=1, color_mode="auto")
+    assert skipped == []
+    doc = PdfReader(out)
+    assert len(doc.pages) == 2, len(doc.pages)
+    assert "P1" in (doc.pages[0].extract_text() or "")
+    assert "P3" in (doc.pages[1].extract_text() or "")
+    box = doc.pages[0].mediabox
+    # Placed on A4, not left at whatever the source happened to be.
+    assert abs(float(box.width) - 595.28) < 2, float(box.width)
+    assert abs(float(box.height) - 841.89) < 2, float(box.height)
+
+    # A page smaller than A4, fitted, still comes out as an A4 sheet.
+    small = os.path.join(_TMP, "to_pdf_small.pdf")
+    c = canvas.Canvas(small, pagesize=(200, 200))
+    c.setFont("Helvetica", 20); c.drawString(20, 100, "TINY"); c.showPage(); c.save()
+    fitted = os.path.join(_TMP, "to_pdf_fitted.pdf")
+    build_print_pdf(small, PageModel(1), [0], fitted,
+                    scale_idx=0, scale_pct=100, paper_key="A4", orient_idx=1)
+    fbox = PdfReader(fitted).pages[0].mediabox
+    assert abs(float(fbox.width) - 595.28) < 2
+    assert abs(float(fbox.height) - 841.89) < 2
+
+    # No sheet chosen: the page keeps its own size.
+    native = os.path.join(_TMP, "to_pdf_native.pdf")
+    build_print_pdf(small, PageModel(1), [0], native,
+                    scale_idx=0, paper_key="", orient_idx=0)
+    nbox = PdfReader(native).pages[0].mediabox
+    assert abs(float(nbox.width) - 200) < 2, float(nbox.width)
+    return "Print to PDF is in the list and saves the picked pages on the sheet"

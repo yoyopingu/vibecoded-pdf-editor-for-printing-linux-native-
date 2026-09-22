@@ -7,6 +7,7 @@ from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QGroupBox, QCheckBox, QTextEdit
 from tools._base import BasePanel, make_label
 from tools.i18n import tr
+from tools.pagebox import _visible_size
 from tools.panels._shared import _paper_sizes_pt, row
 from tools.panels._colour import _colour_histogram, _hist_stats
 from tools.panels._prepress import MIN_PRESS_DPI
@@ -207,7 +208,10 @@ def _preflight(src, checks, target, min_dpi, report):
                 report(tr('Seite {i} / {total}…').format(i=i + 1, total=n))
                 page = reader.pages[i]
                 report.check()
-                pw = float(page.mediabox.width); ph = float(page.mediabox.height)
+                # The page on screen, not the MediaBox. A crop leaves the old
+                # sheet in the file, and /Rotate does not swap the MediaBox,
+                # so either one reported a size the operator is not looking at.
+                pw, ph = _visible_size(page)
                 orients.append("Q" if pw > ph else "H")
                 if checks["size"] and target:
                     tw, th = target

@@ -18,7 +18,8 @@ from tools.i18n import tr
 # preview — so a format can never be accepted by one and hidden by another.
 #
 # Images go through img2pdf (verified here: png incl. alpha and 16-bit, jpg,
-# tif, bmp, webp, gif). Everything in OFFICE_EXTS goes through LibreOffice,
+# tif, bmp, webp, gif). A JPEG contributes its first picture only — see
+# images_to_pdf_bytes. Everything in OFFICE_EXTS goes through LibreOffice,
 # which also handles plain text, csv, html and svg — those were convertible all
 # along but were missing from the lists, so the app refused files it could open.
 IMAGE_EXTS  = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp", ".gif"}
@@ -57,9 +58,8 @@ def convert_to_pdf(path, out_dir):
     if kind == "pdf":
         return path
     if kind == "bild":
-        import img2pdf
         with open(out, "wb") as f:
-            f.write(img2pdf.convert(path))
+            f.write(images_to_pdf_bytes([path]))
         return out
     if kind == "office":
         soffice = shutil.which("soffice") or shutil.which("libreoffice")
@@ -81,6 +81,52 @@ def convert_to_pdf(path, out_dir):
                 return os.path.join(out_dir, f)
         raise RuntimeError(tr('Konvertierung fehlgeschlagen:\n{p0}').format(p0=r.stderr.strip()[:300]))
     raise RuntimeError(tr("Nicht unterstuetzt: {p0}").format(p0=os.path.basename(path)))
+
+
+def images_to_pdf_bytes(paths):
+    """Losslessly wrap one or more image files in a single PDF.
+
+    A JPEG is one picture. Phones store further images in the same file — an
+    HDR gain map, a depth image, a stereo mate — and img2pdf turns each of
+    those into its own page. The first picture is the one every other viewer
+    shows, so that is the only page. TIFF and GIF keep every frame: those
+    extra frames are pages, not a hidden attachment.
+
+    img2pdf's first_frame_only flag covers a whole call. A JPEG therefore
+    cannot share a call with a multi-page TIFF, or the TIFF would lose pages.
+    """
+    import img2pdf
+    paths = list(paths)
+    jpeg = [os.path.splitext(p)[1].lower() in (".jpg", ".jpeg") for p in paths]
+    if any(jpeg) and not all(jpeg):
+        return _concat_pdf_bytes(_one_image_pdf(p) for p in paths)
+    if any(jpeg):
+        return img2pdf.convert(paths, first_frame_only=True)
+    return img2pdf.convert(paths)
+
+
+def _one_image_pdf(path):
+    import img2pdf
+    if os.path.splitext(path)[1].lower() in (".jpg", ".jpeg"):
+        return img2pdf.convert(path, first_frame_only=True)
+    return img2pdf.convert(path)
+
+
+def _concat_pdf_bytes(blobs):
+    """Page-wise concatenation. Sources stay open until the result is saved:
+    pikepdf copies a page lazily, and closing the source first drops it."""
+    import contextlib
+    import io
+    import pikepdf
+    with contextlib.ExitStack() as stack:
+        merged = stack.enter_context(pikepdf.Pdf.new())
+        for blob in blobs:
+            src = stack.enter_context(pikepdf.open(io.BytesIO(blob)))
+            for page in src.pages:
+                merged.pages.append(page)
+        buf = io.BytesIO()
+        merged.save(buf)
+        return buf.getvalue()
 
 
 def convert_files(paths, out_dir, job=None):

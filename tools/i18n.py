@@ -439,6 +439,11 @@ _EN: dict[str, str] = {
         "(bound on the short edge, like a notepad).",
     "Drucker werden geladen…": "Loading printers…",
     "Kein Drucker gefunden": "No printer found",
+    "In PDF drucken": "Print to PDF",
+    "PDF wird geschrieben…": "Writing the PDF…",
+    "PDF gespeichert ({pages} Seite(n)): {path}":
+        "PDF saved ({pages} page(s)): {path}",
+    "Fertig — PDF gespeichert.": "Done — PDF saved.",
     "Dieser Drucker unterstützt kein Duplex-Drucken.":
         "This printer does not support duplex printing.",
     "Dieser Drucker druckt nur in Graustufen.":
