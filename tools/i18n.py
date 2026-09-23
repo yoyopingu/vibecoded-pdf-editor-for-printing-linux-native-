@@ -40,6 +40,16 @@ def tr(text: str) -> str:
 # ── English translations (key = German source string) ─────────────────────────
 _EN: dict[str, str] = {
 
+    # Document navigation rail
+    "Aktuelle Seite": "Current page",
+    "Seitenzahl eingeben und mit Enter bestätigen": "Enter a page number and press Enter",
+    "Vorherige Seite": "Previous page",
+    "Nächste Seite": "Next page",
+    "Ansicht vergrößern": "Zoom in",
+    "Ansicht verkleinern": "Zoom out",
+    "Originalgröße (100 %)": "Actual size (100%)",
+    "von {p0}": "of {p0}",
+
     # ── Menu bar ──────────────────────────────────────────────────────────────
     "Datei": "File",
     "PDF öffnen…": "Open PDF…",

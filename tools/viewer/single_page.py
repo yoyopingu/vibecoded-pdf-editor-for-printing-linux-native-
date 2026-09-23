@@ -19,9 +19,9 @@ goes looking.
 import logging
 import math
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-                             QPushButton, QLabel, QApplication,
+                             QLabel, QApplication,
                              QSizePolicy)
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect, QEvent
 from PyQt6.QtGui import QPixmap
 from tools.colorspace import (cached_page_colorspaces, describe,
                               document_revision, page_colorspaces,
@@ -32,10 +32,11 @@ from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
 from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
+from tools.viewer.navigation import DocumentNavigation
 from tools.viewer.rulers import RulerBar, RulerCorner
 from tools.viewer.scrollbar import SlimScrollBar
 from tools.viewer.tab_base import owning_tab
-from tools.theme import _PREV_BTN, _TV, _register_themed
+from tools.theme import _TV, _register_themed
 
 
 # How far the user may zoom in. Was 8x, which existed because the page was
@@ -56,6 +57,10 @@ class SinglePageView(QWidget):
         self.model      = None
         self._current   = 0
         self._zoom      = 1.0   # 1.0 = Fit-to-window
+        self._physical_size_mode = False
+        self._physical_size_pending = False
+        self._screen_window = None
+        self._watched_screen = None
         self._last_pm   = None
         self._last_zoom = 1.0
         # Which page _last_pm holds. It is a stand-in for zooming, and a
@@ -130,6 +135,7 @@ class SinglePageView(QWidget):
 
         # Seiten-Anzeigebereich, mit Linealen an den Kanten (Strg+R)
         self._view = PdfPageCanvas()
+        self._view.installEventFilter(self)
         self._view.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding)
@@ -145,10 +151,8 @@ class SinglePageView(QWidget):
         page_area.addWidget(self._view,         1, 1)
         page_area.setRowStretch(1, 1)
         page_area.setColumnStretch(1, 1)
-        # The page, and Acrobat's slim bar on its right (and along the
-        # bottom, once the sheet is wider than the window). The old rail
-        # was 50 px of page number and two buttons — nothing you could
-        # drag to a place in a zoomed page.
+        # The track stays next to the sheet. Navigation has its own column,
+        # so adding page controls never takes away the draggable scrollbar.
         self._vbar = SlimScrollBar(Qt.Orientation.Vertical)
         self._hbar = SlimScrollBar(Qt.Orientation.Horizontal)
         # The vertical bar is part of the window, not something that waits
@@ -168,9 +172,23 @@ class SinglePageView(QWidget):
         page_wrap.setRowStretch(0, 1)
         page_wrap.setColumnStretch(0, 1)
         main.addLayout(page_wrap, 1)
-        # Off until Strg+R, as in Acrobat. Hidden here rather than through
-        # _set_rulers_visible, which also syncs the toolbar button that the
-        # info bar has not built yet.
+        self._navigation = DocumentNavigation()
+        main.addWidget(self._navigation)
+        self._num_lbl = self._navigation.page
+        self._tot_lbl = self._navigation.total
+        self._nav_btns = [self._navigation.previous, self._navigation.next]
+        self._nav_btns[0].clicked.connect(self.prev_page)
+        self._nav_btns[1].clicked.connect(self.next_page)
+        self._num_lbl.page_requested.connect(self._jump_from_navigation)
+        self._ruler_btn = self._navigation.rulers
+        self._ruler_btn.clicked.connect(self._set_rulers_visible)
+        self._zoom_btns = [self._navigation.zoom_out, self._navigation.zoom_in]
+        for button, action in zip(self._zoom_btns, (self._zoom_out, self._zoom_in)):
+            button.clicked.connect(action)
+        self._navigation.actual.clicked.connect(self._zoom_actual_size)
+        self._zoom_lbl = self._navigation.zoom
+        # Off until Strg+R or the rail button is used. Hide them before the
+        # first layout so the fitted page gets the full canvas dimensions.
         for w in (self._ruler_top, self._ruler_left, self._ruler_corner):
             w.setVisible(False)
 
@@ -201,52 +219,6 @@ class SinglePageView(QWidget):
 
         il.addStretch()
 
-        # Page number and the page buttons used to be a rail on the right.
-        # A scrollbar cannot hold them, and the info bar already holds the
-        # zoom, so they sit with it. The two ends of the bar itself step
-        # *within* the page.
-        self._num_lbl = QLabel("1")
-        self._num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._tot_lbl = QLabel("/ 0")
-        self._tot_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._nav_btns = []
-        pager = QHBoxLayout()
-        pager.setSpacing(4)
-        pager.setContentsMargins(0, 0, 0, 0)
-        for text, fn in (("▲", self.prev_page), ("▼", self.next_page)):
-            b = QPushButton(text)
-            b.setFixedSize(*_PREV_BTN)
-            b.clicked.connect(fn)
-            self._nav_btns.append(b)
-        pager.addWidget(self._nav_btns[0])
-        pager.addWidget(self._num_lbl)
-        pager.addWidget(self._tot_lbl)
-        pager.addWidget(self._nav_btns[1])
-        il.addLayout(pager)
-
-        # Lineale — Strg+R schaltet sie ebenfalls um, aber ein Kuerzel allein
-        # findet niemand, der nicht weiss, dass es die Lineale gibt.
-        self._ruler_btn = QPushButton("⊞")
-        self._ruler_btn.setCheckable(True)
-        self._ruler_btn.setFixedSize(*_PREV_BTN)
-        self._ruler_btn.setToolTip(tr("Lineale und Hilfslinien") + "  (Strg+R)")
-        self._ruler_btn.clicked.connect(lambda on: self._set_rulers_visible(on))
-        il.addWidget(self._ruler_btn)
-
-        # Zoom-Steuerung
-        self._zoom_btns = []
-        for txt, fn in [("−", self._zoom_out), ("fit", self._zoom_fit), ("+", self._zoom_in)]:
-            zb = QPushButton(txt)
-            zb.setFixedSize(*_PREV_BTN)
-            zb.clicked.connect(fn)
-            il.addWidget(zb)
-            self._zoom_btns.append(zb)
-
-        self._zoom_lbl = QLabel("100%")
-        self._zoom_lbl.setObjectName("dimLabel")
-        self._zoom_lbl.setFixedWidth(42)
-        il.addWidget(self._zoom_lbl)
-
         layout.addWidget(self._info_bar)
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -255,22 +227,13 @@ class SinglePageView(QWidget):
     def _apply_theme(self):
         t = _TV
         self._view.setStyleSheet(f"background:{t['viewer_bg']};")
-        self._num_lbl.setStyleSheet(
-            f"color:{t['text']};font-size:13px;font-weight:bold;background:transparent;")
-        self._tot_lbl.setStyleSheet(
-            f"color:{t['dim']};font-size:11px;background:transparent;")
-        _nb = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
-               f"border:1px solid {t['btn_brd']};border-radius:5px;font-size:12px;}}"
-               f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}")
-        for b in self._nav_btns:
-            b.setStyleSheet(_nb)
         self._info_bar.setStyleSheet(
-            f"QWidget#infoBar{{background:{t['sidebar_bg']};border-top:1px solid {t['border']};}}")
-        _zb = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
-               f"border:1px solid {t['btn_brd']};border-radius:5px;font-size:12px;padding:0;}}"
-               f"QPushButton:hover{{background:{t['hover']};border-color:{t['acc']};}}")
-        for zb in self._zoom_btns:
-            zb.setStyleSheet(_zb)
+            f"QWidget#infoBar{{background:{t['panel_bg']};border-top:1px solid {t['border']};}}"
+            f"QLabel{{color:{t['dim']};background:transparent;font-size:11px;}}")
+
+    def _jump_from_navigation(self, page):
+        self.go_to(page)
+        self._view.setFocus()
 
     # ── Zoom-Methoden ─────────────────────────────────────────────────────────
 
@@ -329,6 +292,9 @@ class SinglePageView(QWidget):
             _last_pm.width() * (_zoom / _last_zoom)
         Das muss für old_zoom und new_zoom konsistent gelten.
         """
+        self._physical_size_mode = False
+        self._physical_size_pending = False
+        self._unwatch_screen()
         avail_w = float(self._view.width())
         avail_h = float(self._view.height())
         if avail_w < 1 or avail_h < 1:
@@ -394,38 +360,94 @@ class SinglePageView(QWidget):
         self._zoom_timer.start(120)
 
     def _zoom_fit(self):
+        self._physical_size_mode = False
+        self._physical_size_pending = False
+        self._unwatch_screen()
         self._zoom     = 1.0
         self._scroll_x = 0.0
         self._scroll_y = 0.0
         self._render()
 
     def _zoom_actual_size(self):
-        """Zoom so the page appears at its true physical size (100% = 1pt = 1/72 in)."""
-        try:
-            win    = self.window().windowHandle()
-            screen = (win.screen() if win and win.screen()
-                      else QApplication.primaryScreen())
-            phys_dpi = screen.physicalDotsPerInchX()
-            dpr      = screen.devicePixelRatio()
-            if phys_dpi < 50 or phys_dpi > 600:
-                phys_dpi = screen.logicalDotsPerInchX() * dpr
-            actual_scale = phys_dpi / 72.0          # px per PDF point at physical size
-            avail_w = self._view.width()
-            avail_h = self._view.height()
-            if self._page_w_pt > 0 and avail_w > 16 and avail_h > 16:
-                pad       = 16
-                fit_scale = min((avail_w - pad) / self._page_w_pt,
-                                (avail_h - pad) / self._page_h_pt)
-                self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, actual_scale / fit_scale)) if fit_scale > 0 else 1.0
-            else:
-                self._zoom = 1.0
-        except Exception:
-            logging.debug("single_page: could not read the screen's physical "
-                          "DPI", exc_info=True)
-            self._zoom = 1.0
+        """Show one PDF point as 1/72 inch on the monitor, including after resize."""
+        self._physical_size_mode = True
         self._scroll_x = 0.0
         self._scroll_y = 0.0
         self._render()
+
+    def _physical_dpi(self):
+        """Qt gives physical DPI in the same logical pixels used by widgets.
+
+        Multiplying by DPR here would make a page twice its physical size on a
+        2x display. Logical DPI is only a fallback when the display supplies no
+        usable physical measurement; it cannot promise true size there.
+        """
+        win = self.window().windowHandle()
+        screen = (win.screen() if win and win.screen()
+                  else QApplication.primaryScreen())
+        if screen is None:
+            return None
+        dpi = screen.physicalDotsPerInchX()
+        if math.isfinite(dpi) and dpi > 0:
+            return dpi
+        size = screen.physicalSize()
+        if size.width() > 0 and math.isfinite(size.width()):
+            return screen.geometry().width() * 25.4 / size.width()
+        dpi = screen.logicalDotsPerInchX()
+        return dpi if math.isfinite(dpi) and dpi > 0 else None
+
+    def _sync_physical_size(self):
+        """Express an absolute physical scale in the renderer's fit-relative zoom."""
+        if self._page_w_pt <= 0 or self._page_h_pt <= 0:
+            self._physical_size_pending = True
+            return
+        dpi = self._physical_dpi()
+        avail_w, avail_h = self._view.width(), self._view.height()
+        if dpi is None or avail_w <= 16 or avail_h <= 16:
+            return
+        fit = min((avail_w - 16) / self._page_w_pt,
+                  (avail_h - 16) / self._page_h_pt)
+        if fit > 0:
+            # Physical size is an absolute scale. The usual manual-zoom bounds
+            # must not make it depend on the window or monitor dimensions.
+            self._zoom = (dpi / 72.0) / fit
+            self._physical_size_pending = False
+
+    def _screen_changed(self, _screen):
+        self._watch_screen()
+        if self._physical_size_mode:
+            self._render()
+
+    def _watch_screen(self):
+        """A true-size page must be recalculated when its window changes screen."""
+        win = self.window().windowHandle()
+        if win is not self._screen_window:
+            if self._screen_window is not None:
+                self._screen_window.screenChanged.disconnect(self._screen_changed)
+            self._screen_window = win
+            if win is not None:
+                win.screenChanged.connect(self._screen_changed)
+        screen = win.screen() if win and win.screen() else QApplication.primaryScreen()
+        if screen is not self._watched_screen:
+            if self._watched_screen is not None:
+                self._watched_screen.physicalDotsPerInchChanged.disconnect(self._screen_changed)
+            self._watched_screen = screen
+            if screen is not None:
+                screen.physicalDotsPerInchChanged.connect(self._screen_changed)
+
+    def _unwatch_screen(self):
+        if self._screen_window is not None:
+            try:
+                self._screen_window.screenChanged.disconnect(self._screen_changed)
+            except (TypeError, RuntimeError):
+                pass                 # its window may already be gone on tab close
+            self._screen_window = None
+        if self._watched_screen is not None:
+            try:
+                self._watched_screen.physicalDotsPerInchChanged.disconnect(self._screen_changed)
+            except (TypeError, RuntimeError):
+                pass                 # likewise if the monitor was unplugged
+            self._watched_screen = None
 
     def wheelEvent(self, e):
         ctrl  = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
@@ -865,6 +887,7 @@ class SinglePageView(QWidget):
         if same_scale and covers(self._region_rect, page_px_w, page_px_h,
                                  avail_w, avail_h, self._scroll_x, self._scroll_y):
             self._blit_region()          # already have these pixels
+            self._showing_provisional = False
             return
 
         rect = region_for_viewport(page_px_w, page_px_h, avail_w, avail_h,
@@ -1016,10 +1039,11 @@ class SinglePageView(QWidget):
         self._current  = 0
         self._page_w_pt = 0.0
         self._page_h_pt = 0.0
+        self._physical_size_pending = False
         self._scroll_x = 0.0
         self._scroll_y = 0.0
         n = len(model.order)
-        self._tot_lbl.setText(f"/ {n}")
+        self._navigation.set_document(1 if n else 0, n)
         self._prerender_aim = None   # a new file: re-aim even at the same index
         QTimer.singleShot(0, self._render)
         # Give the canvas focus so arrow keys work without needing a click first
@@ -1028,6 +1052,7 @@ class SinglePageView(QWidget):
     def stop_background_work(self):
         """Cancel every render this view has outstanding and stop it asking for
         more. Called when the tab closes; safe to call twice."""
+        self._unwatch_screen()
         for timer in (self._zoom_timer, self._size_retry_timer,
                       self._prerender_timer):
             try: timer.stop()
@@ -1112,8 +1137,8 @@ class SinglePageView(QWidget):
     def refresh(self):
         if self.model:
             n = len(self.model.order)
-            self._tot_lbl.setText(f"/ {n}")
             self._current = min(self._current, max(0, n-1))
+            self._navigation.set_document(self._current + 1 if n else 0, n)
             self._render()
 
     def _render(self):
@@ -1135,7 +1160,7 @@ class SinglePageView(QWidget):
             return
 
         # Update page counter immediately
-        self._num_lbl.setText(str(self._current + 1))
+        self._navigation.set_document(self._current + 1, n)
         self.page_changed.emit(self._current + 1)
 
         # The page's dimensions have to be right *before* anything is computed
@@ -1143,6 +1168,9 @@ class SinglePageView(QWidget):
         # that had just been rotated — or not yet rendered at all — was measured
         # as it used to be, and at deep zoom that misplaces the whole window.
         self._ensure_page_dims(src_path, orig, rot)
+        if self._physical_size_mode:
+            self._watch_screen()
+            self._sync_physical_size()
 
         # Pre-rendering used to run once, 400 ms after the file opened, over a
         # window around page 1 — so it warmed the pages the user had already
@@ -1176,6 +1204,9 @@ class SinglePageView(QWidget):
         # least as fine as this zoom needs; otherwise one is started and
         # something stands in until it lands.
         if self._show_cached_page(src_path, orig, rot, avail_w, avail_h):
+            if self._physical_size_pending and self._page_w_pt > 0:
+                self._physical_size_pending = False
+                QTimer.singleShot(0, self._render)
             return
         self._start_page_render(src_path, orig, rot, avail_w, avail_h)
 
@@ -1308,14 +1339,10 @@ class SinglePageView(QWidget):
             mm_h = page_h_pt / 72 * 25.4
             self._size_lbl.setText(tr('Masse: {p0:.0f} × {p1:.0f} mm').format(p0=mm_w, p1=mm_h))
             try:
-                win = self.window().windowHandle()
-                screen = (win.screen() if win and win.screen()
-                          else QApplication.primaryScreen())
-                phys_dpi = screen.physicalDotsPerInchX()
-                dpr      = screen.devicePixelRatio()
-                if phys_dpi < 50 or phys_dpi > 600:
-                    phys_dpi = screen.logicalDotsPerInchX() * dpr
-                displayed_w_in = pm.width() * dpr / phys_dpi
+                phys_dpi = self._physical_dpi()
+                if phys_dpi is None:
+                    raise ValueError("no screen DPI")
+                displayed_w_in = pm.width() / phys_dpi
                 actual_w_in    = page_w_pt / 72.0
                 phys_pct       = round(displayed_w_in / actual_w_in * 100)
                 self._zoom_lbl.setText(f"{phys_pct}%")
@@ -1366,6 +1393,10 @@ class SinglePageView(QWidget):
             self._render_task = None
         self._view.set_page(pm, display_chars, off_x, off_y)
         self._apply_zoom_labels(pm, page_w_pt, page_h_pt)
+
+        if not provisional and self._physical_size_pending:
+            self._physical_size_pending = False
+            QTimer.singleShot(0, self._render)
 
         # The dimensions have only just arrived, and they may say this page is
         # too big to be shown in one bitmap at this zoom — which is exactly the
@@ -1522,7 +1553,7 @@ class SinglePageView(QWidget):
             self._render()
 
     def go_to(self, page_1based):
-        self._current  = max(0, page_1based - 1)
+        self._current = max(0, min(self._page_count() - 1, page_1based - 1))
         self._scroll_x  = 0.0
         self._scroll_y  = 0.0
         self._want_bottom = False
@@ -1530,9 +1561,22 @@ class SinglePageView(QWidget):
         self._page_h_pt = 0.0
         self._render()
 
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        QTimer.singleShot(80, self._render)
+    def eventFilter(self, obj, event):
+        if obj is self._view and event.type() == QEvent.Type.Resize and self.pdf_path:
+            # Scrollbars, rulers and the navigation rail can resize the canvas
+            # without resizing SinglePageView. Invalidate work sized for the
+            # old viewport and render after Qt has finished the layout pass.
+            # Otherwise a zoom can settle with a bitmap at the old fit scale.
+            self._render_gen += 1
+            if self._render_task is not None:
+                self._render_task.cancel()
+                self._render_task = None
+            if self._region_task is not None:
+                self._region_task.cancel()
+                self._region_task = None
+            self._showing_provisional = True
+            self._size_retry_timer.start(0)
+        return super().eventFilter(obj, event)
 
     def keyPressEvent(self, e):
         k    = e.key()
