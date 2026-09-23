@@ -136,6 +136,12 @@ class SlimScrollBar(QScrollBar):
 
 
 def use_slim_scrollbars(area: QScrollArea) -> None:
-    """Replace both bars of a scroll area. Qt deletes the ones it had."""
+    """Replace both bars of a scroll area. Qt deletes the ones it had.
+
+    The vertical bar stays on screen even when the sheet already fits.
+    A bar that appears only once you have overflowed is the one people
+    report as missing.
+    """
     area.setVerticalScrollBar(SlimScrollBar(Qt.Orientation.Vertical, area))
     area.setHorizontalScrollBar(SlimScrollBar(Qt.Orientation.Horizontal, area))
+    area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)

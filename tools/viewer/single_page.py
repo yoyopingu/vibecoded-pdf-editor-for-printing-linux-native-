@@ -151,8 +151,12 @@ class SinglePageView(QWidget):
         # drag to a place in a zoomed page.
         self._vbar = SlimScrollBar(Qt.Orientation.Vertical)
         self._hbar = SlimScrollBar(Qt.Orientation.Horizontal)
-        self._vbar.setVisible(False)
+        # The vertical bar is part of the window, not something that waits
+        # for a zoom. The horizontal one only earns its strip once the sheet
+        # is wider than the view.
         self._hbar.setVisible(False)
+        self._vbar.setRange(0, 0)
+        self._v_slot = 1
         self._vbar.valueChanged.connect(self._on_vscroll)
         self._hbar.valueChanged.connect(self._on_hscroll)
         page_wrap = QGridLayout()
@@ -715,11 +719,53 @@ class SinglePageView(QWidget):
         self._scroll_y = max(0.0, min(self._scroll_y, max_sy))
         self._sync_scrollbars(max_sx, max_sy)
 
+    def _page_count(self):
+        if self.model and self.model.order:
+            return len(self.model.order)
+        return 1
+
     def _sync_scrollbars(self, max_sx, max_sy):
-        """Show the bar only when there is somewhere to drag to. A fitted
-        page has no bar; Acrobat does the same."""
-        self._set_bar(self._vbar, max_sy, self._scroll_y, self._view.height())
+        """The vertical bar covers the whole document, not just this page.
+
+        One screen per page when the sheet fits, so dragging the thumb
+        turns pages. A sheet taller than the window adds that extra
+        height, and the same thumb pans inside the page. The thumb is
+        left alone while the user is holding it — writing the value back
+        there pulls it out from under the pointer.
+        """
+        avail_h = max(1, int(self._view.height()))
+        slot = avail_h + int(max_sy)
+        self._v_slot = slot
+        n = self._page_count()
+        maximum = max(0, (n - 1) * slot + int(max_sy))
+        value = int(round(self._current * slot + self._scroll_y))
+        self._vbar.blockSignals(True)
+        self._vbar.setRange(0, maximum)
+        if max_sy <= 1:
+            self._vbar.setSingleStep(slot)
+            self._vbar.setPageStep(slot)
+        else:
+            self._vbar.setSingleStep(max(16, int(avail_h * 0.08)))
+            self._vbar.setPageStep(max(1, int(avail_h * 0.9)))
+        self._vbar.setVisible(True)
+        if not self._vbar.isSliderDown() and not self._vbar_matches(slot, max_sy):
+            self._vbar.setValue(max(0, min(value, maximum)))
+        self._vbar.blockSignals(False)
         self._set_bar(self._hbar, max_sx, self._scroll_x, self._view.width())
+
+    def _vbar_matches(self, slot, max_sy):
+        """True when the thumb already describes the page on screen.
+
+        A drag lands anywhere inside a fitted page's slot. Snapping the
+        thumb to the top of that slot is what made it jump off the cursor.
+        """
+        if slot <= 0:
+            return False
+        n = self._page_count()
+        cur = self._vbar.value()
+        page = min(n - 1, max(0, cur // slot))
+        offset = min(float(cur - page * slot), float(max_sy))
+        return page == self._current and abs(offset - self._scroll_y) < 1.0
 
     def _set_bar(self, bar, maximum, value, page):
         bar.blockSignals(True)
@@ -731,17 +777,34 @@ class SinglePageView(QWidget):
         bar.blockSignals(False)
 
     def _on_vscroll(self, value):
-        self._scroll_from_bar("_scroll_y", value)
+        avail_h = max(1, int(self._view.height()))
+        slot = self._v_slot or avail_h
+        n = self._page_count()
+        if slot <= 0 or n <= 0:
+            return
+        page = min(n - 1, max(0, int(value) // slot))
+        max_sy = float(max(0, slot - avail_h))
+        offset = min(float(int(value) - page * slot), max_sy)
+        if page != self._current:
+            self._current = page
+            self._scroll_x = 0.0
+            self._scroll_y = offset
+            self._want_bottom = False
+            # Stale dimensions here are the previous page's. _render
+            # measures the new one before it lays the scroll out.
+            self._page_w_pt = 0.0
+            self._page_h_pt = 0.0
+            self._render()
+            return
+        if abs(self._scroll_y - offset) < 0.5:
+            return
+        self._scroll_y = offset
+        self._render_preview()
 
     def _on_hscroll(self, value):
-        self._scroll_from_bar("_scroll_x", value)
-
-    def _scroll_from_bar(self, attr, value):
-        if abs(getattr(self, attr) - value) < 0.5:
+        if abs(self._scroll_x - value) < 0.5:
             return
-        setattr(self, attr, float(value))
-        # Same path as the wheel: a cheap stand-in now, the exact page
-        # once the drag stops.
+        self._scroll_x = float(value)
         self._render_preview()
 
     def _leave_region_mode(self):

@@ -1,6 +1,7 @@
 """
 The slim scrollbar shared by the three document views.
 """
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QScrollArea
 
 from tests.support import FX, _app, _open_single_view, _settle
@@ -11,6 +12,8 @@ def _bar(area):
     bar = area.verticalScrollBar()
     assert isinstance(bar, SlimScrollBar), type(bar).__name__
     assert bar.width() == SLIM_W, bar.width()
+    assert area.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+    assert bar.isVisible(), "the scrollbar is not showing"
     assert isinstance(area.horizontalScrollBar(), SlimScrollBar)
     return bar
 
@@ -27,17 +30,25 @@ def test_the_three_views_use_one_scrollbar():
     try:
         assert isinstance(sv._vbar, SlimScrollBar)
         assert sv._vbar.width() == SLIM_W
-        # Fitted page: nothing to drag, so the bar stays out of the way.
-        assert not sv._vbar.isVisible(), "a fitted page grew a scrollbar"
+        # A fitted page still has the bar. Hiding it until the user zoomed
+        # is why opening a document showed nothing on the right.
+        n = len(sv.model.order)
+        assert sv._vbar.isVisible(), "the scrollbar is not on the page"
+        assert n >= 2 and sv._vbar.maximum() >= sv._view.height(), \
+            f"the bar does not span the document (max {sv._vbar.maximum()})"
+        sv._vbar.setValue(sv._vbar.maximum())
+        assert _settle(vp, lambda: sv._current == n - 1), \
+            f"dragging to the end stayed on page {sv._current + 1}"
+        sv._vbar.setValue(0)
+        assert _settle(vp, lambda: sv._current == 0), "dragging back did not return to page 1"
         sv._zoom = 4.0
         sv._render()
-        assert _settle(vp, lambda: sv._vbar.maximum() > 20), \
-            f"zoomed page did not grow a bar (max {sv._vbar.maximum()})"
-        assert sv._vbar.isVisible()
-        target = sv._vbar.maximum() // 2
-        sv._vbar.setValue(target)
+        assert _settle(vp, lambda: sv._v_slot > sv._view.height() + 20), \
+            "zoomed page did not lengthen the bar"
+        sv._vbar.setValue(40)
         _app.processEvents()
-        assert abs(sv._scroll_y - target) < 2, sv._scroll_y
+        assert sv._current == 0 and abs(sv._scroll_y - 40) < 2, \
+            f"page {sv._current} scroll {sv._scroll_y}"
     finally:
         vp.deleteLater(); _app.processEvents()
 
