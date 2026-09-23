@@ -312,8 +312,12 @@ class PageViewerPanel(QWidget):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         # Cards already drag for reordering. The bar is a second, explicit drop
         # target: dropping there creates a tab instead of reordering the grid.
+        # QTabBar only occupies the width of its tabs; its empty continuation
+        # belongs to QTabWidget itself, so both widgets must accept the drag.
         self.tabs.tabBar().setAcceptDrops(True)
         self.tabs.tabBar().installEventFilter(self)
+        self.tabs.setAcceptDrops(True)
+        self.tabs.installEventFilter(self)
 
         # Body: holds [ManagePanel (optional)] + [tabs]
         self._body = QWidget()
@@ -383,11 +387,22 @@ class PageViewerPanel(QWidget):
         return w if isinstance(w, PdfTab) else None
 
     def eventFilter(self, obj, event):
-        if obj is self.tabs.tabBar() and event.type() in (
+        if obj in (self.tabs.tabBar(), self.tabs) and event.type() in (
                 QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop):
             source = event.source()
             if isinstance(source, (FileCard, PageCard)):
-                if event.type() == QEvent.Type.Drop:
+                # Accept entry on QTabWidget even below the strip. The cursor
+                # can first enter it through the pane before reaching blank
+                # strip space; Qt then sends moves, not a second DragEnter.
+                in_strip = (obj is self.tabs.tabBar() or
+                            self.tabs.tabBar().geometry().top() <=
+                            event.position().y() <=
+                            self.tabs.tabBar().geometry().bottom())
+                if event.type() == QEvent.Type.DragEnter:
+                    event.acceptProposedAction()
+                elif not in_strip:
+                    event.ignore()
+                elif event.type() == QEvent.Type.Drop:
                     if self._drop_card_on_tab_bar(source):
                         event.acceptProposedAction()
                     else:
@@ -434,7 +449,12 @@ class PageViewerPanel(QWidget):
                 if (isinstance(tab, PdfTab) and tab._manage_panel is not None
                         and tab._manage_panel.grid is grid
                         and tab._stack.currentWidget() is not tab.single):
-                    return tab._manage_panel.open_selection_in_new_tab()
+                    if not tab._manage_panel.move_selection_to_new_tab(
+                            self._open_result_tab):
+                        return False
+                    if not tab.model.order:
+                        self._close_tab(self.tabs.indexOf(tab))
+                    return True
         return False
 
     def _open(self, path=None):
@@ -611,6 +631,7 @@ class PageViewerPanel(QWidget):
         self.tabs.setCurrentIndex(idx)
         self.tab_opened.emit()
         self.tabs_changed.emit()
+        return tab
 
     def _close_tab(self, idx):
         w = self.tabs.widget(idx)

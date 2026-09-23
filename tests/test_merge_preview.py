@@ -355,8 +355,8 @@ def test_tab_bar_split_and_later_file_manager_delivery_follow_focus():
 
 
 def test_page_manager_tab_bar_drop_opens_selected_pages_as_pdf():
-    """The new tab contains the selected live pages, in view order, without
-    removing them from the source page manager or opening a merge preview."""
+    """The new tab gets the selected live pages in view order, and the source
+    loses them only after the destination was opened successfully."""
     from tools.viewer.panel import PageViewerPanel
     from tools.viewer.tab import PdfTab
 
@@ -382,8 +382,115 @@ def test_page_manager_tab_bar_drop_opens_selected_pages_as_pdf():
     assert [p.extract_text() for p in pages] == [source[2].extract_text(),
                                                 source[0].extract_text()]
     assert pages[0].get("/Rotate") == 90
-    assert tab.model.order == original_order and tab.model.selected == {first, third}
+    assert tab.model.order == [u for u in original_order if u not in {first, third}]
+    assert not tab.model.selected
+    assert tab._manage_panel._history, "moving pages must be undoable"
     assert vp._manage_splitter_widget is None, "switching tabs must exit manage layout"
+    vp.deleteLater()
+
+
+def test_page_tab_drop_keeps_source_if_destination_cannot_open():
+    """A failed destination must not silently remove the only copy of pages."""
+    from tools.viewer.panel import PageViewerPanel
+
+    vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
+    vp.open_file(FX["normal"])
+    tab = vp.tabs.currentWidget()
+    vp._toggle_manage()
+    uid = tab.model.order[1]
+    tab.model.selected = {uid}
+    before = list(tab.model.order)
+    real_open = vp._open_result_tab
+    vp._open_result_tab = lambda path, title: None
+    try:
+        assert not vp._drop_card_on_tab_bar(tab._manage_panel.grid._cards[1])
+    finally:
+        vp._open_result_tab = real_open
+    assert tab.model.order == before and tab.model.selected == {uid}
+    assert vp.tabs.count() == 1
+    vp.deleteLater()
+
+
+def test_moving_all_pages_closes_the_empty_source_tab():
+    """A PDF tab with no live pages cannot remain as a broken viewer tab."""
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.tab import PdfTab
+
+    vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
+    vp.open_file(FX["single"])
+    source_tab = vp.tabs.currentWidget()
+    vp._toggle_manage()
+    grid = source_tab._manage_panel.grid
+    grid.select_all()
+    assert vp._drop_card_on_tab_bar(grid._cards[0])
+    assert vp.tabs.indexOf(source_tab) == -1
+    assert vp.tabs.count() == 1
+    assert isinstance(vp.tabs.currentWidget(), PdfTab)
+    assert len(PdfReader(vp.tabs.currentWidget().pdf_path).pages) == 1
+    vp.deleteLater()
+
+
+def test_blank_tab_strip_accepts_file_card_drop():
+    """The blank strip is the QTabWidget, not the narrower QTabBar widget."""
+    from PyQt6.QtCore import QEvent, QPointF
+    from tools.viewer.panel import PageViewerPanel
+
+    vp = PageViewerPanel(); vp.resize(1000, 600); vp.show()
+    w = vp.show_merge_tab([FX["normal"], FX["single"]])
+    _spin(10, 0.0)
+    bar, tabs = vp.tabs.tabBar(), vp.tabs
+    assert tabs.acceptDrops()
+    point = QPointF(tabs.width() - 10, bar.geometry().center().y())
+    assert point.x() > bar.geometry().right(), "fixture has no blank tab strip"
+
+    class DragEvent:
+        def __init__(self, kind):
+            self.kind = kind
+            self.accepted = False
+        def type(self): return self.kind
+        def source(self): return w._grid._cards[0]
+        def position(self): return point
+        def acceptProposedAction(self): self.accepted = True
+        def ignore(self): self.accepted = False
+
+    for kind in (QEvent.Type.DragEnter, QEvent.Type.DragMove,
+                 QEvent.Type.Drop):
+        event = DragEvent(kind)
+        assert vp.eventFilter(tabs, event) and event.accepted
+    assert tabs.count() == 2
+    assert w._grid.get_paths() == [FX["single"]]
+    vp.deleteLater()
+
+
+def test_blank_tab_strip_accepts_page_card_drop():
+    """The same blank target moves pages, not just whole files."""
+    from PyQt6.QtCore import QEvent, QPointF
+    from tools.viewer.panel import PageViewerPanel
+
+    vp = PageViewerPanel(); vp.resize(1000, 600); vp.show()
+    vp.open_file(FX["normal"])
+    source_tab = vp.tabs.currentWidget()
+    vp._toggle_manage()
+    _spin(10, 0.0)
+    uid = source_tab.model.order[0]
+    source_tab.model.selected = {uid}
+    card = source_tab._manage_panel.grid._cards[0]
+    tabs, bar = vp.tabs, vp.tabs.tabBar()
+    point = QPointF(tabs.width() - 10, bar.geometry().center().y())
+    assert point.x() > bar.geometry().right(), "fixture has no blank tab strip"
+
+    class DropEvent:
+        accepted = False
+        def type(self): return QEvent.Type.Drop
+        def source(self): return card
+        def position(self): return point
+        def acceptProposedAction(self): self.accepted = True
+        def ignore(self): self.accepted = False
+
+    event = DropEvent()
+    assert vp.eventFilter(tabs, event) and event.accepted
+    assert uid not in source_tab.model.order
+    assert tabs.count() == 2
     vp.deleteLater()
 
 

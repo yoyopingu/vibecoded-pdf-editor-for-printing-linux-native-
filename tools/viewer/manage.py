@@ -443,18 +443,33 @@ class ManagePanel(QWidget):
             writer.write(tmp)
         return tmp.name, count
 
-    def open_selection_in_new_tab(self):
-        """A tab-bar drag copies selected pages into an ordinary PDF tab."""
+    def move_selection_to_new_tab(self, open_tab):
+        """Move selected view pages only after their new PDF tab opens safely."""
         if not self.model.selected:
             return False
+        path = None
+        opened = False
         try:
             path, n = self._write_selection_to_temp()
             stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
-            AppState.get().open_result(path, f"{stem} [{n}S]")
-            self.status.setText(tr('{p0} Seite(n) als neuer Tab geoeffnet.').format(p0=n))
+            if open_tab(path, f"{stem} [{n}S]") is None:
+                os.unlink(path)
+                return False
+            opened = True
+            self._save_history()
+            self.model.delete_selected()
+            self.grid._rebuild()
+            self.grid.order_changed.emit()
+            self.grid.selection_changed.emit()
+            self.status.setText(tr('{p0} Seite(n) in neuen Tab verschoben.').format(p0=n))
             return True
         except Exception as e:
             logging.exception("manage: tab-bar page drop failed")
+            if path is not None and not opened:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
             return False
 
