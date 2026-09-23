@@ -348,6 +348,7 @@ class ManagePanel(QWidget):
         else:               self.grid.zoom_reset()
 
     def _extract(self):
+        """Save the selected pages; opening them is a separate page-manager action."""
         if not self.model.selected:
             self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
         path, _ = QFileDialog.getSaveFileName(
@@ -368,7 +369,6 @@ class ManagePanel(QWidget):
                     if rot: page.rotate(rot)
                     writer.add_page(page)
             with open(path, "wb") as f: writer.write(f)
-            AppState.get().open_result(path, "Extrahiert")
             self.status.setText(tr('{p0} Seite(n) extrahiert.').format(p0=len(self.model.selected)))
         except Exception as e:
             logging.exception("manage: _extract failed")
@@ -398,32 +398,14 @@ class ManagePanel(QWidget):
         if box.clickedButton() not in (keep, move):
             return
         try:
-            import tempfile
-            from pypdf import PdfReader, PdfWriter
-            readers = {}
-            def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p, strict=False)
-                return readers[p]
-            writer = PdfWriter(); n = 0
-            for uid in self.model.order:
-                if uid in self.model.selected:
-                    src_path, orig = self.model.page_source(uid, self.pdf_path)
-                    page = _rdr(src_path).pages[orig]
-                    rot  = self.model.get_rotation(uid)
-                    if rot: page.rotate(rot)
-                    writer.add_page(page); n += 1
-            # Temporäre Datei — bleibt solange der Tab offen ist
-            tmp = tempfile.NamedTemporaryFile(
-                suffix=".pdf", delete=False,
-                prefix="copyshop_sel_")
-            with open(tmp.name, "wb") as f: writer.write(f)
+            path, n = self._write_selection_to_temp()
             stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
             # Only remove them here once the new file is safely written.
             if box.clickedButton() is move:
                 self._save_history()
                 self.model.delete_selected()
                 self.grid._rebuild(); self.grid.order_changed.emit()
-            AppState.get().open_result(tmp.name, f"{stem} [{n}S]")
+            AppState.get().open_result(path, f"{stem} [{n}S]")
             self.status.setText(
                 (tr('{p0} Seite(n) in neuen Tab verschoben.')
                  if box.clickedButton() is move
@@ -431,6 +413,50 @@ class ManagePanel(QWidget):
         except Exception as e:
             logging.exception("manage: _open_as_tab failed")
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
+
+    def _write_selection_to_temp(self):
+        """Flatten selected model pages, not the unchanged source PDF on disk.
+
+        A page may come from an inserted document and may have a live rotation;
+        both the toolbar action and a tab-bar drop must use this same view.
+        """
+        import tempfile
+        from pypdf import PdfReader, PdfWriter
+        readers = {}
+        writer = PdfWriter()
+        count = 0
+        for uid in self.model.order:
+            if uid not in self.model.selected:
+                continue
+            src_path, orig = self.model.page_source(uid, self.pdf_path)
+            if src_path not in readers:
+                readers[src_path] = PdfReader(src_path, strict=False)
+            page = readers[src_path].pages[orig]
+            rotation = self.model.get_rotation(uid)
+            if rotation:
+                page.rotate(rotation)
+            writer.add_page(page)
+            count += 1
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".pdf", delete=False, prefix="copyshop_sel_")
+        with tmp:
+            writer.write(tmp)
+        return tmp.name, count
+
+    def open_selection_in_new_tab(self):
+        """A tab-bar drag copies selected pages into an ordinary PDF tab."""
+        if not self.model.selected:
+            return False
+        try:
+            path, n = self._write_selection_to_temp()
+            stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
+            AppState.get().open_result(path, f"{stem} [{n}S]")
+            self.status.setText(tr('{p0} Seite(n) als neuer Tab geoeffnet.').format(p0=n))
+            return True
+        except Exception as e:
+            logging.exception("manage: tab-bar page drop failed")
+            self.status.setText(tr('Fehler: {p0}').format(p0=e))
+            return False
 
     def _swap_source(self, new_path):
         """Point the page manager — and everything else that resolves the model's
@@ -563,7 +589,7 @@ class ManagePanel(QWidget):
 
     # ── Trennen ──────────────────────────────────────────────────────────────
     def _split_selection(self):
-        """Save selected pages as a new PDF file and open in new tab."""
+        """Save the selection without creating a tab; that has its own action."""
         from pypdf import PdfReader, PdfWriter
         if not self.model.selected:
             self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
@@ -586,7 +612,6 @@ class ManagePanel(QWidget):
             with open(path, "wb") as f: writer.write(f)
             n = len(self.model.selected)
             self.status.setText(f"OK: {n} {tr('Seite(n) gespeichert.')}")
-            AppState.get().open_result(path, os.path.basename(path))
         except Exception as e:
             logging.exception("manage: _split_selection failed")
             self.status.setText(tr('Fehler: {p0}').format(p0=e))

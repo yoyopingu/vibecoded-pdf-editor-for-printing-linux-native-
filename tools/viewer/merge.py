@@ -574,6 +574,18 @@ class MergeOrderWidget(QWidget):
         del self._history[:-40]
         self._redo_stack.clear()
 
+    def append_paths(self, paths):
+        """Add a later file-manager delivery to this preview without losing its order.
+
+        The launcher's next batch belongs to the preview in focus, not to a
+        new preview with an independent conversion directory.
+        """
+        if self._busy or not paths:
+            return False
+        self._save_history()
+        self._grid.insert_paths(len(self._grid.get_paths()), paths)
+        return True
+
     def _copy(self):
         picked = [self._grid.get_paths()[i] for i in sorted(self._grid._selected)
                   if 0 <= i < len(self._grid.get_paths())]

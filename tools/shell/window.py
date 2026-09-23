@@ -84,6 +84,18 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda: self._open_forwarded(paths))
 
     def _open_forwarded(self, paths):
+        # A second launch is part of the merge preview the operator is using.
+        # Check at delivery time, after the compositor raise, so the focused
+        # tab is the destination even when several merge previews are open.
+        from tools.viewer.merge import MergeOrderWidget
+        from tools.multi_open import classify
+        tabs = getattr(self.viewer, "tabs", None)
+        current = tabs.currentWidget() if tabs is not None else None
+        if isinstance(current, MergeOrderWidget):
+            files = [p for p in paths if classify(p)]
+            if current.append_paths(files):
+                self._switch(0)
+                return
         if len(paths) == 1:
             self._switch(0)
             self.viewer.open_file(paths[0])

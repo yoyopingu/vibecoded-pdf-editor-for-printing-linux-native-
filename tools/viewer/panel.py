@@ -14,7 +14,8 @@ from tools.app_state import AppState
 from tools.i18n import tr
 from tools.render.caches import _FullPageCache, _ThumbnailCache, _set_active
 from tools.render.document_cache import release
-from tools.viewer.merge import MergeOrderWidget
+from tools.viewer.merge import FileCard, FileGrid, MergeOrderWidget
+from tools.viewer.page_grid import PageCard, PageGrid
 from tools.viewer.tab import PdfTab
 from tools.theme import _TOP_BTN_W, _TV, _register_themed
 
@@ -309,6 +310,10 @@ class PageViewerPanel(QWidget):
         self.tabs.setMovable(True)
         self.tabs.tabCloseRequested.connect(self._close_tab)
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        # Cards already drag for reordering. The bar is a second, explicit drop
+        # target: dropping there creates a tab instead of reordering the grid.
+        self.tabs.tabBar().setAcceptDrops(True)
+        self.tabs.tabBar().installEventFilter(self)
 
         # Body: holds [ManagePanel (optional)] + [tabs]
         self._body = QWidget()
@@ -376,6 +381,61 @@ class PageViewerPanel(QWidget):
     def _current(self):
         w = self.tabs.currentWidget()
         return w if isinstance(w, PdfTab) else None
+
+    def eventFilter(self, obj, event):
+        if obj is self.tabs.tabBar() and event.type() in (
+                QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop):
+            source = event.source()
+            if isinstance(source, (FileCard, PageCard)):
+                if event.type() == QEvent.Type.Drop:
+                    if self._drop_card_on_tab_bar(source):
+                        event.acceptProposedAction()
+                    else:
+                        event.ignore()
+                else:
+                    event.acceptProposedAction()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _drop_card_on_tab_bar(self, card):
+        """Use the actual drag source, not the positional text MIME payload.
+
+        Both grids encode positions as plain text for their own reordering, so
+        that text alone cannot tell a page from a file (or identify its tab).
+        """
+        if isinstance(card, FileCard):
+            grid = card.parent()
+            while grid is not None and not isinstance(grid, FileGrid):
+                grid = grid.parent()
+            owner = grid.parent() if grid is not None else None
+            while owner is not None and not isinstance(owner, MergeOrderWidget):
+                owner = owner.parent()
+            if owner is None or self.tabs.indexOf(owner) < 0 or owner._busy:
+                return False
+            positions = (grid._selected if card.pos in grid._selected
+                         else {card.pos})
+            paths = [grid._paths[i] for i in sorted(positions)
+                     if 0 <= i < len(grid._paths)]
+            if not paths:
+                return False
+            self.show_merge_tab(paths, dedupe=False)
+            owner._save_history()
+            grid._selected = set(positions)
+            grid.remove_selected()
+            if not grid.get_paths():
+                self._close_tab(self.tabs.indexOf(owner))
+            return True
+        if isinstance(card, PageCard):
+            grid = card.parent()
+            while grid is not None and not isinstance(grid, PageGrid):
+                grid = grid.parent()
+            for i in range(self.tabs.count()):
+                tab = self.tabs.widget(i)
+                if (isinstance(tab, PdfTab) and tab._manage_panel is not None
+                        and tab._manage_panel.grid is grid
+                        and tab._stack.currentWidget() is not tab.single):
+                    return tab._manage_panel.open_selection_in_new_tab()
+        return False
 
     def _open(self, path=None):
         from PyQt6.QtWidgets import QMessageBox
@@ -620,7 +680,7 @@ class PageViewerPanel(QWidget):
         # exiting manage mode when clicked while already inside it.
         self._toggle_manage()
 
-    def show_merge_tab(self, file_paths):
+    def show_merge_tab(self, file_paths, *, dedupe=True):
         """Preview for several picked files, shown as a tab in the same style as
         the page manager: sort them, then either merge them into one document or
         open them as separate tabs."""
@@ -634,11 +694,12 @@ class PageViewerPanel(QWidget):
         # request, not a second job. Raise the tab that is already open instead
         # of stacking an identical one behind it — that stack was how a fast
         # click ended up merging twice at once.
-        for i in range(self.tabs.count()):
-            w = self.tabs.widget(i)
-            if isinstance(w, MergeOrderWidget) and w.source_paths == file_paths:
-                self.tabs.setCurrentIndex(i)
-                return
+        if dedupe:
+            for i in range(self.tabs.count()):
+                w = self.tabs.widget(i)
+                if isinstance(w, MergeOrderWidget) and w.source_paths == file_paths:
+                    self.tabs.setCurrentIndex(i)
+                    return w
 
         widget = MergeOrderWidget(file_paths)   # records file_paths as source_paths
         # One conversion directory per tab. A single panel-wide one was wiped by
@@ -669,6 +730,7 @@ class PageViewerPanel(QWidget):
         widget.merge_confirmed.connect(_on_confirmed)
         widget.open_separately.connect(_on_separately)
         widget.cancelled.connect(_on_cancelled)
+        return widget
 
     def _start_conversion(self, file_paths, merge_widget, on_done):
         """Convert the picked files to PDF in the merge tab's own temp dir and

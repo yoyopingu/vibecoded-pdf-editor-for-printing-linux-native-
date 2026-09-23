@@ -149,6 +149,41 @@ def _answer_dialog(word):
     QMessageBox.clickedButton = picked
 
 
+def test_extract_and_save_selection_only_write_files():
+    """Saving selected pages must not turn the result into a new viewer tab."""
+    from PyQt6.QtWidgets import QFileDialog
+
+    tab, panel = _manage(4, "mgr_extract_only.pdf")
+    # The exported order and rotation must be the unsaved page-manager view.
+    uid_2, uid_4 = tab.model.order[1], tab.model.order[3]
+    tab.model.order = [tab.model.order[0], uid_4, uid_2, tab.model.order[2]]
+    tab.model.selected = {uid_2, uid_4}
+    tab.model.rotations[uid_4] = 90
+    original_order = list(tab.model.order)
+    outputs = [os.path.join(_TMP, "extracted_only.pdf"),
+               os.path.join(_TMP, "saved_selection_only.pdf")]
+    chosen = iter(outputs)
+    real_dialog = QFileDialog.getSaveFileName
+    QFileDialog.getSaveFileName = staticmethod(
+        lambda *args, **kwargs: (next(chosen), "PDF (*.pdf)"))
+    state = AppState.get()
+    real_open = state.open_result
+    opened = []
+    state.open_result = lambda *args: opened.append(args)
+    try:
+        for action, output in zip((panel._extract, panel._split_selection), outputs):
+            action()
+            assert os.path.isfile(output), f"{action.__name__} did not save a PDF"
+            assert _page_labels(output) == ["P4", "P2"]
+            assert PdfReader(output).pages[0].get("/Rotate") == 90
+            assert tab.model.order == original_order
+            assert tab.model.selected == {uid_2, uid_4}
+        assert not opened, "saving selected pages also opened a new tab"
+    finally:
+        QFileDialog.getSaveFileName = real_dialog
+        state.open_result = real_open
+
+
 def test_manage_open_as_tab_copies_or_moves():
     """"Als neuen Tab oeffnen" asks whether the pages should stay. Moving them is
     what the removed "Nach Bereichen..." split was for, only driven by picking

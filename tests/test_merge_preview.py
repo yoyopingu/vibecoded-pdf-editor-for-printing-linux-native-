@@ -310,6 +310,83 @@ def test_several_files_go_straight_to_the_preview():
     vp.deleteLater()
 
 
+def test_tab_bar_split_and_later_file_manager_delivery_follow_focus():
+    """A dragged subset becomes its own merge job; later launches join whichever
+    merge tab is active, even when the forwarded batch contains one file."""
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.merge import MergeOrderWidget
+
+    class FakeWindow:
+        open_paths = MAIN.MainWindow.open_paths
+        _open_forwarded = MAIN.MainWindow._open_forwarded
+        def __init__(self, viewer): self.viewer = viewer
+        def _raise_to_front(self, activation_token=""): pass
+        def _switch(self, idx): pass
+        def _open_multi(self, paths): self.viewer.show_merge_tab(paths)
+
+    vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
+    first = vp.show_merge_tab([FX["normal"], FX["single"], FX["framed"]])
+    first._grid._selected = {0, 2}
+    first._grid._update_selection()
+    assert vp.tabs.tabBar().acceptDrops()
+    assert vp._drop_card_on_tab_bar(first._grid._cards[0])
+    second = vp.tabs.currentWidget()
+    assert isinstance(second, MergeOrderWidget) and second is not first
+    assert first._grid.get_paths() == [FX["single"]]
+    assert second._grid.get_paths() == [FX["normal"], FX["framed"]]
+    assert first._history, "splitting must be undoable in the source tab"
+
+    win = FakeWindow(vp)
+    win.open_paths([FX["mixed"]])
+    _spin(10, 0.0)
+    assert second._grid.get_paths() == [FX["normal"], FX["framed"], FX["mixed"]]
+    assert first._grid.get_paths() == [FX["single"]]
+    vp.tabs.setCurrentWidget(first)
+    win.open_paths([FX["color"], FX["image"]])
+    _spin(10, 0.0)
+    assert first._grid.get_paths() == [FX["single"], FX["color"], FX["image"]]
+    assert second._grid.get_paths() == [FX["normal"], FX["framed"], FX["mixed"]]
+    second._grid.select_all()
+    assert vp._drop_card_on_tab_bar(second._grid._cards[0])
+    assert vp.tabs.indexOf(second) == -1, "an emptied merge tab must close"
+    assert vp.tabs.currentWidget()._grid.get_paths() == \
+        [FX["normal"], FX["framed"], FX["mixed"]]
+    vp.deleteLater()
+
+
+def test_page_manager_tab_bar_drop_opens_selected_pages_as_pdf():
+    """The new tab contains the selected live pages, in view order, without
+    removing them from the source page manager or opening a merge preview."""
+    from tools.viewer.panel import PageViewerPanel
+    from tools.viewer.tab import PdfTab
+
+    vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
+    vp.open_file(FX["normal"])
+    tab = vp.tabs.currentWidget()
+    vp._toggle_manage()
+    assert vp._manage_splitter_widget is not None
+    grid = tab._manage_panel.grid
+    first, third = tab.model.order[0], tab.model.order[2]
+    tab.model.order = [third, tab.model.order[1], first] + tab.model.order[3:]
+    tab.model.selected = {first, third}
+    tab.model.rotations[third] = 90
+    grid._rebuild()
+    original_order = list(tab.model.order)
+
+    assert vp._drop_card_on_tab_bar(grid._cards[0])
+    result = vp.tabs.currentWidget()
+    assert isinstance(result, PdfTab) and result is not tab
+    pages = PdfReader(result.pdf_path).pages
+    source = PdfReader(FX["normal"]).pages
+    assert len(pages) == 2
+    assert [p.extract_text() for p in pages] == [source[2].extract_text(),
+                                                source[0].extract_text()]
+    assert pages[0].get("/Rotate") == 90
+    assert tab.model.order == original_order and tab.model.selected == {first, third}
+    assert vp._manage_splitter_widget is None, "switching tabs must exit manage layout"
+    vp.deleteLater()
+
+
 def test_preview_opens_files_separately():
     """"Einzeln oeffnen" converts the same way the merge does, but gives every
     file its own tab."""
