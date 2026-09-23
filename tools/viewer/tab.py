@@ -17,6 +17,7 @@ from tools.viewer.model import PageModel
 from tools.printing.dialog import PrintDialog
 from tools.viewer.manage import ManagePanel
 from tools.viewer.page_grid import PageGrid
+from tools.viewer.scrollbar import use_slim_scrollbars
 from tools.viewer.single_page import SinglePageView
 from tools.viewer.tab_base import PdfTabBase
 
@@ -105,6 +106,7 @@ class PdfTab(PdfTabBase):
         grid_scroll.setWidgetResizable(True)
         grid_scroll.setFrameShape(QFrame.Shape.NoFrame)
         grid_scroll.setWidget(grid)
+        use_slim_scrollbars(grid_scroll)
 
         panel = ManagePanel(self.model, self.pdf_path, grid, parent=self, tab=self)
         panel.hide()

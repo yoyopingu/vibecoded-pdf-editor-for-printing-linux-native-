@@ -19,7 +19,7 @@ goes looking.
 import logging
 import math
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-                             QPushButton, QLabel, QFrame, QApplication,
+                             QPushButton, QLabel, QApplication,
                              QSizePolicy)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QPixmap
@@ -33,6 +33,7 @@ from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask,
 from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
 from tools.viewer.rulers import RulerBar, RulerCorner
+from tools.viewer.scrollbar import SlimScrollBar
 from tools.viewer.tab_base import owning_tab
 from tools.theme import _PREV_BTN, _TV, _register_themed
 
@@ -144,7 +145,25 @@ class SinglePageView(QWidget):
         page_area.addWidget(self._view,         1, 1)
         page_area.setRowStretch(1, 1)
         page_area.setColumnStretch(1, 1)
-        main.addLayout(page_area, 1)
+        # The page, and Acrobat's slim bar on its right (and along the
+        # bottom, once the sheet is wider than the window). The old rail
+        # was 50 px of page number and two buttons — nothing you could
+        # drag to a place in a zoomed page.
+        self._vbar = SlimScrollBar(Qt.Orientation.Vertical)
+        self._hbar = SlimScrollBar(Qt.Orientation.Horizontal)
+        self._vbar.setVisible(False)
+        self._hbar.setVisible(False)
+        self._vbar.valueChanged.connect(self._on_vscroll)
+        self._hbar.valueChanged.connect(self._on_hscroll)
+        page_wrap = QGridLayout()
+        page_wrap.setContentsMargins(0, 0, 0, 0)
+        page_wrap.setSpacing(0)
+        page_wrap.addLayout(page_area, 0, 0)
+        page_wrap.addWidget(self._vbar, 0, 1)
+        page_wrap.addWidget(self._hbar, 1, 0)
+        page_wrap.setRowStretch(0, 1)
+        page_wrap.setColumnStretch(0, 1)
+        main.addLayout(page_wrap, 1)
         # Off until Strg+R, as in Acrobat. Hidden here rather than through
         # _set_rulers_visible, which also syncs the toolbar button that the
         # info bar has not built yet.
@@ -158,38 +177,6 @@ class SinglePageView(QWidget):
         self._view.guide_moved.connect(self._guide_moved)
         self._view.repainted.connect(self._sync_rulers)
 
-        # Rechte Seitenleiste (Navigation)
-        self._nav_side = QWidget()
-        self._nav_side.setObjectName("navSide")
-        self._nav_side.setFixedWidth(50)
-        sl = QVBoxLayout(self._nav_side)
-        sl.setContentsMargins(4, 10, 4, 10)
-        sl.setSpacing(4)
-
-        self._num_lbl = QLabel("1")
-        self._num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sl.addWidget(self._num_lbl)
-
-        self._nav_sep = QFrame()
-        self._nav_sep.setFrameShape(QFrame.Shape.HLine)
-        sl.addWidget(self._nav_sep)
-
-        self._tot_lbl = QLabel("/ 0")
-        self._tot_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sl.addWidget(self._tot_lbl)
-        sl.addStretch()
-
-        # Same metrics as the zoom cluster below — the two sets of controls sit
-        # in the same corner of the preview and used to be different sizes.
-        self._nav_btns = []
-        for text, fn in [("▲", self.prev_page), ("▼", self.next_page)]:
-            b = QPushButton(text)
-            b.setFixedSize(*_PREV_BTN)
-            b.clicked.connect(fn)
-            sl.addWidget(b, alignment=Qt.AlignmentFlag.AlignCenter)
-            self._nav_btns.append(b)
-
-        main.addWidget(self._nav_side)
         layout.addLayout(main, 1)
 
         # Untere Info-Leiste
@@ -209,6 +196,29 @@ class SinglePageView(QWidget):
         il.addWidget(self._color_lbl)
 
         il.addStretch()
+
+        # Page number and the page buttons used to be a rail on the right.
+        # A scrollbar cannot hold them, and the info bar already holds the
+        # zoom, so they sit with it. The two ends of the bar itself step
+        # *within* the page.
+        self._num_lbl = QLabel("1")
+        self._num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._tot_lbl = QLabel("/ 0")
+        self._tot_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._nav_btns = []
+        pager = QHBoxLayout()
+        pager.setSpacing(4)
+        pager.setContentsMargins(0, 0, 0, 0)
+        for text, fn in (("▲", self.prev_page), ("▼", self.next_page)):
+            b = QPushButton(text)
+            b.setFixedSize(*_PREV_BTN)
+            b.clicked.connect(fn)
+            self._nav_btns.append(b)
+        pager.addWidget(self._nav_btns[0])
+        pager.addWidget(self._num_lbl)
+        pager.addWidget(self._tot_lbl)
+        pager.addWidget(self._nav_btns[1])
+        il.addLayout(pager)
 
         # Lineale — Strg+R schaltet sie ebenfalls um, aber ein Kuerzel allein
         # findet niemand, der nicht weiss, dass es die Lineale gibt.
@@ -241,11 +251,8 @@ class SinglePageView(QWidget):
     def _apply_theme(self):
         t = _TV
         self._view.setStyleSheet(f"background:{t['viewer_bg']};")
-        self._nav_side.setStyleSheet(
-            f"QWidget#navSide{{background:{t['sidebar_bg']};border-left:1px solid {t['border']};}}")
         self._num_lbl.setStyleSheet(
-            f"color:{t['text']};font-size:16px;font-weight:bold;background:transparent;")
-        self._nav_sep.setStyleSheet(f"color:{t['border']};")
+            f"color:{t['text']};font-size:13px;font-weight:bold;background:transparent;")
         self._tot_lbl.setStyleSheet(
             f"color:{t['dim']};font-size:11px;background:transparent;")
         _nb = (f"QPushButton{{background:{t['btn_bg']};color:{t['text']};"
@@ -706,6 +713,36 @@ class SinglePageView(QWidget):
             self._want_bottom = False
         self._scroll_x = max(0.0, min(self._scroll_x, max_sx))
         self._scroll_y = max(0.0, min(self._scroll_y, max_sy))
+        self._sync_scrollbars(max_sx, max_sy)
+
+    def _sync_scrollbars(self, max_sx, max_sy):
+        """Show the bar only when there is somewhere to drag to. A fitted
+        page has no bar; Acrobat does the same."""
+        self._set_bar(self._vbar, max_sy, self._scroll_y, self._view.height())
+        self._set_bar(self._hbar, max_sx, self._scroll_x, self._view.width())
+
+    def _set_bar(self, bar, maximum, value, page):
+        bar.blockSignals(True)
+        bar.setRange(0, int(maximum))
+        bar.setPageStep(max(1, int(page * 0.9)))
+        bar.setSingleStep(max(16, int(page * 0.08)))
+        bar.setValue(int(round(min(max(value, 0.0), maximum))))
+        bar.setVisible(maximum > 1)
+        bar.blockSignals(False)
+
+    def _on_vscroll(self, value):
+        self._scroll_from_bar("_scroll_y", value)
+
+    def _on_hscroll(self, value):
+        self._scroll_from_bar("_scroll_x", value)
+
+    def _scroll_from_bar(self, attr, value):
+        if abs(getattr(self, attr) - value) < 0.5:
+            return
+        setattr(self, attr, float(value))
+        # Same path as the wheel: a cheap stand-in now, the exact page
+        # once the drag stops.
+        self._render_preview()
 
     def _leave_region_mode(self):
         if self._region_task is not None:

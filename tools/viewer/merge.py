@@ -16,6 +16,7 @@ from tools.viewer.model import _parse_positions, _positions_to_str
 from tools.viewer.shortcuts import ThumbGridShortcutFilter
 from tools.viewer.page_grid import (CARD_H, CARD_W, GAP, MARGIN,
                                     card_size, paint_card)
+from tools.viewer.scrollbar import use_slim_scrollbars
 from tools.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
 
 
@@ -770,6 +771,7 @@ class MergeOrderWidget(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        use_slim_scrollbars(self._scroll)
         self._grid = FileGrid(file_paths)
         self._grid.order_changed.connect(self._on_order_changed)
         self._grid.order_about_to_change.connect(self._save_history)

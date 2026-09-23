@@ -7,6 +7,7 @@ The viewer, one module per part.
     page_grid    the thumbnails of "Seiten verwalten"
     manage       the toolbar over that grid
     merge        the file-level grid, for several files at once
+    scrollbar    the slim bar on the right of those document views
     tab          one open document
     panel        the tab host
 
