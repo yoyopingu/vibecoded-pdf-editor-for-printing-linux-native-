@@ -232,7 +232,16 @@ class PageCard(QFrame):
 
         drag.setHotSpot(e.position().toPoint())
         actions = Qt.DropAction.CopyAction | Qt.DropAction.MoveAction
-        drag.exec(actions)
+        # QDrag.exec runs a nested event loop. Auto-scroll can evict cards
+        # while it is active, but deleting the source widget mid-drag is unsafe.
+        if grid:
+            grid._dragging_card = self
+        try:
+            drag.exec(actions)
+        finally:
+            if grid:
+                grid._dragging_card = None
+                grid._schedule_visible()
 
 
 class PageGrid(QWidget):
@@ -245,6 +254,7 @@ class PageGrid(QWidget):
         self.pdf_path = pdf_path
         self._cards   = []
         self._live_cards = set()
+        self._dragging_card = None
         self._card_render_widths = []   # single-column widths; normal grid is uniform
         self._drop_indicator = -1
         self._last_click_pos   = None  # für Shift+Click Bereichsauswahl
@@ -479,7 +489,7 @@ class PageGrid(QWidget):
             # A bounded widget set keeps the switch and later scrolls fast even
             # for PDFs with thousands of pages. Cancel stale offscreen renders.
             for i in tuple(self._live_cards):
-                if not first <= i < last:
+                if not first <= i < last and self._cards[i] is not self._dragging_card:
                     card = self._cards[i]
                     card.hide()
                     card.deleteLater()
