@@ -20,6 +20,7 @@ from tools.viewer.page_grid import PageGrid
 from tools.viewer.scrollbar import use_slim_scrollbars
 from tools.viewer.single_page import SinglePageView
 from tools.viewer.tab_base import PdfTabBase
+from tools.preview_status import PreviewStatusBar
 
 
 class PdfTab(PdfTabBase):
@@ -39,6 +40,10 @@ class PdfTab(PdfTabBase):
         layout.setSpacing(0)
 
         layout.addWidget(self._stack, 1)
+        self._manage_status = PreviewStatusBar()
+        self._manage_count = self._manage_status.add_label()
+        self._manage_status.hide()
+        layout.addWidget(self._manage_status)
 
         # Einzelansicht
         self.single = SinglePageView()
@@ -114,22 +119,34 @@ class PdfTab(PdfTabBase):
         grid.order_changed.connect(self.changed.emit)
         grid.order_changed.connect(panel.update_info)
         grid.selection_changed.connect(panel.update_info)
+        grid.order_changed.connect(self._update_manage_status)
+        grid.selection_changed.connect(self._update_manage_status)
 
         self._manage_panel = panel
         self._manage_widget = grid_scroll
         self._stack.addWidget(grid_scroll)
+        self._update_manage_status()
+
+    def _update_manage_status(self):
+        total = len(self.model.order) if self.model else 0
+        selected = len(self.model.selected) if self.model else 0
+        self._manage_count.setText(tr('{p0} Seiten  ·  {p1} ausgewählt').format(
+            p0=total, p1=selected))
 
     def _enter_manage(self, on_exit=None):
         self._on_manage_exit = on_exit
         self._build_manage_once()
         self._manage_panel.show()
         self._stack.setCurrentWidget(self._manage_widget)
+        self._update_manage_status()
+        self._manage_status.show()
         # The grid is hidden while constructed; populate the actual viewport
         # only after the stack has shown it and assigned its final geometry.
         QTimer.singleShot(0, self._manage_widget.widget()._schedule_visible)
 
     def _exit_manage(self):
         self._stack.setCurrentWidget(self.single)
+        self._manage_status.hide()
         # Restore sidebar / layout via callback
         cb = getattr(self, '_on_manage_exit', None)
         if cb:

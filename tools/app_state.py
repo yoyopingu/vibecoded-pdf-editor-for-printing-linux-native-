@@ -33,6 +33,7 @@ class AppState(QObject):
     result_ready        = pyqtSignal(str, str)      # (pfad, tab_titel) — öffne in neuem Tab
     status_message      = pyqtSignal(str)           # Statuszeile aktualisieren
     current_page_changed = pyqtSignal(int)          # aktuell angezeigte Seite gewechselt (0-basiert)
+    preview_overlay_changed = pyqtSignal(object)    # tool preview drawn over the current page
 
     _instance = None
 
@@ -41,6 +42,21 @@ class AppState(QObject):
         self._current_pdf  = ""
         self.page_model    = None   # aktuelles PageModel
         self._current_page = 0     # aktuell angezeigte Seite (0-basiert)
+        self.preview_overlay = None
+        self._preview_overlay_owner = None
+
+    def set_preview_overlay(self, owner, spec):
+        self._preview_overlay_owner = owner
+        if self.preview_overlay != spec:
+            self.preview_overlay = spec
+            self.preview_overlay_changed.emit(spec)
+
+    def clear_preview_overlay(self, owner):
+        if self._preview_overlay_owner is owner:
+            self._preview_overlay_owner = None
+            if self.preview_overlay is not None:
+                self.preview_overlay = None
+                self.preview_overlay_changed.emit(None)
 
     @classmethod
     def get(cls) -> "AppState":

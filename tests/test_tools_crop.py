@@ -11,6 +11,35 @@ from tests.support import (FX, MM, _TMP, _brightest, _ink_margins, _nup,
                            _open, _sync_async)
 
 
+def test_crop_preview_navigates_pages_it_will_change():
+    """Browsing an unselected page also changes the crop job's target."""
+    state = _open(FX["normal"])
+    p = CropResizePanel()
+    p._render_preview(400, 500, 1.0)
+    assert p._page_bar.maximum() == 4
+    p._page_bar.setValue(3)
+    assert state.current_page == 3
+    assert p._page_positions[p._preview_index] == 3
+    assert "4" in p._page_status.text()
+
+    # When the page manager has a selection, the job acts on that subset.
+    # Preview navigation moves among those pages without changing the target.
+    state.page_model.selected = {state.page_model.order[1],
+                                 state.page_model.order[4]}
+    p._render_preview(400, 500, 1.0)
+    assert p._page_bar.maximum() == 1
+    p._page_bar.setValue(1)
+    assert p._page_positions[p._preview_index] == 4
+    assert state.current_page == 3
+    p.apply_all.setChecked(True)
+    p._render_preview(400, 500, 1.0)
+    assert p._page_bar.maximum() == 4
+    p._page_bar.setValue(4)
+    assert p._page_positions[p._preview_index] == 4
+    assert state.current_page == 3, "all-pages browsing must not change the source selection"
+    p.deleteLater()
+
+
 def test_crop_format_modes():
     _open(FX["normal"])
     def run(action_idx, fmt_setter):

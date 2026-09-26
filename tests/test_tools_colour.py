@@ -1105,3 +1105,25 @@ def test_the_greyscale_sidebar_opens_the_width_it_asks_for():
     finally:
         p.deleteLater(); nup.deleteLater(); _app.processEvents()
     return f"opens at {_SIDEBAR_W} px like its siblings, and stays there"
+
+
+def test_greyscale_cards_match_page_manager_and_fit_a_narrow_pane():
+    """The specialized grid keeps its own behavior but shares card scale."""
+    from tools.viewer.page_grid import PageGrid
+    from tools.viewer.model import PageModel
+    _open(FX["normal"])
+    grey = GrayscalePanel()
+    grid = PageGrid(PageModel(5), FX["normal"])
+    try:
+        assert grey._card_w == grid._card_w
+        assert grey._card_w >= 260
+        grey.resize(750, 650)
+        grey.show(); _app.processEvents()
+        # Qt may keep the window wider than requested to honor the sidebar's
+        # minimum. A zoomed card wider than the remaining viewport still has
+        # to get its own row instead of forcing a clipped second column.
+        grey._card_w = grey._preview_scroll.viewport().width()
+        assert grey._preview_columns() == 1, \
+            "wide cards must fall back to one column in a narrow tool pane"
+    finally:
+        grey.deleteLater(); grid.deleteLater(); _app.processEvents()

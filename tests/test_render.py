@@ -31,6 +31,29 @@ def _count_parses():
     return restore, parsed
 
 
+def test_page_geometry_reaches_the_viewer_before_raster_work():
+    """A cold numbered sheet can take its real shape while pixels are pending."""
+    from tools.render import queue
+
+    path = _cache_fixture(_TMP, "early_dimensions.pdf", 1, "SHAPE")
+    signals = queue._PageSignals()
+    events = []
+    signals.dimensions.connect(lambda _gen, w, h: events.append((w, h)))
+    task = queue._PageRenderTask(42, path, 0, 0, 800, 600, 1.0, signals)
+    original = queue.render_window
+    def pending_pixels(*_args, **_kwargs):
+        assert len(events) == 1 and all(abs(a - b) < 0.01 for a, b in zip(events[0], A4)), \
+            "raster started before the page shape was sent"
+        task.cancel()
+        return None
+    try:
+        queue.render_window = pending_pixels
+        task.run()
+    finally:
+        queue.render_window = original
+    assert len(events) == 1
+
+
 def test_background_work_uses_one_mechanism():
     """Structural guard. There were three ways to run work off the GUI thread:
     QThread subclasses, bare threading.Thread(daemon=True), and _RenderQueue.

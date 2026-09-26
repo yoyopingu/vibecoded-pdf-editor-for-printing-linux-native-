@@ -7,6 +7,7 @@ from tools.panels.crop_resize import CropResizePanel
 from tools.panels.grayscale import GrayscalePanel
 from tools.panels.nup import NUpPanel
 from tools.panels.page_numbers import PageNumbersPanel
+from tools.app_state import AppState
 import tools.app as MAIN
 import tools.shell.instance as INSTANCE
 from tests.support import FX, _TMP, _app, _open, _spin, _wait_for
@@ -726,6 +727,8 @@ def test_a_form_tool_keeps_the_page_on_screen():
         pages = at(PageNumbersPanel)
         win._switch(pages)
         _app.processEvents()
+        assert AppState.get().preview_overlay is not None, \
+            "the page-number column did not preview its output"
         tab = win.viewer.tabs.currentWidget()
         assert win.viewer.isVisible() and win._stage.currentWidget() is win.viewer
         assert tab._stack.currentWidget() is tab.single, "the tool hid the page"
@@ -750,6 +753,8 @@ def test_a_form_tool_keeps_the_page_on_screen():
         for cls in (NUpPanel, CropResizePanel, GrayscalePanel):
             win._switch(at(cls))
             _app.processEvents()
+            assert AppState.get().preview_overlay is None, \
+                "the page-number stamp leaked into another tool preview"
             panel = win._by_nav[at(cls)]
             assert win._stage.currentWidget() is panel, cls.__name__
             assert not win._tool_column.isVisible(), cls.__name__

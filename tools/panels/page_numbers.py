@@ -3,8 +3,10 @@ Seitenzahlen — stamp page numbers onto the pages.
 """
 import io
 from PyQt6.QtWidgets import QVBoxLayout, QLineEdit, QSpinBox, QComboBox, QGroupBox
+from tools.app_state import AppState
 from tools._base import BasePanel
 from tools.i18n import tr
+from tools.page_numbering import number_label, number_position
 from tools.pagebox import (_display_matrix, _mat_inv, _visible_box,
                            _visible_size, _inherited_rotate)
 from tools.panels._shared import row
@@ -16,6 +18,52 @@ from tools.panels._shared import row
 class PageNumbersPanel(BasePanel):
     TITLE         = "Seitenzahlen"
     SUBTITLE      = "Seitenzahlen auf jede Seite stempeln."
+
+    def __init__(self, parent=None):
+        self._overlay_token = object()
+        self._result_path = None
+        super().__init__(parent)
+        AppState.get().pdf_changed.connect(self._document_changed)
+        token = self._overlay_token
+        self.destroyed.connect(
+            lambda *_: AppState.get().clear_preview_overlay(token))
+
+    def _preview_settings(self):
+        return {
+            "kind": "page_numbers",
+            "path": AppState.get().current_pdf,
+            "position": self.pos.currentIndex(),
+            "prefix": self.prefix.text(),
+            "suffix": self.suffix.text(),
+            "start": self.start_spin.value(),
+            "skip": self.skip_spin.value(),
+            "font_size": self.font_spin.value(),
+            "margin": self.margin_spin.value(),
+        }
+
+    def _publish_preview(self):
+        state = AppState.get()
+        if (self.isVisible() and state.current_pdf
+                and state.current_pdf != self._result_path):
+            state.set_preview_overlay(self._overlay_token,
+                                      self._preview_settings())
+        else:
+            state.clear_preview_overlay(self._overlay_token)
+
+    def _settings_changed(self, *_):
+        self._result_path = None
+        self._publish_preview()
+
+    def _document_changed(self, *_):
+        self._publish_preview()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._publish_preview()
+
+    def hideEvent(self, event):
+        AppState.get().clear_preview_overlay(self._overlay_token)
+        super().hideEvent(event)
 
     def build_ui(self, layout):
         ob = QGroupBox(tr("EINSTELLUNGEN")); ol = QVBoxLayout(ob)
@@ -44,6 +92,12 @@ class PageNumbersPanel(BasePanel):
         ol.addLayout(row(tr("Abstand vom Rand (pt):"), self.margin_spin))
 
         layout.addWidget(ob)
+        self.pos.currentIndexChanged.connect(self._settings_changed)
+        for field in (self.prefix, self.suffix):
+            field.textChanged.connect(self._settings_changed)
+        for field in (self.start_spin, self.skip_spin,
+                      self.font_spin, self.margin_spin):
+            field.valueChanged.connect(self._settings_changed)
 
     def _run_action(self):
         src = self.require_pdf()
@@ -57,9 +111,8 @@ class PageNumbersPanel(BasePanel):
         margin=self.margin_spin.value(); pos_idx=self.pos.currentIndex()
         prefix=self.prefix.text(); suffix=self.suffix.text()
         for i, page in enumerate(reader.pages):
-            if i < skip: writer.add_page(page); continue
-            num   = start + (i-skip)
-            label = prefix + str(num) + suffix.replace("{gesamt}", str(n))
+            label = number_label(i, n, skip, start, prefix, suffix)
+            if label is None: writer.add_page(page); continue
             # Draw in the space the viewer shows, then map back into the file.
             # The MediaBox is the uncropped sheet and /Rotate only affects
             # display, so a number placed from those landed in the hidden
@@ -69,22 +122,20 @@ class PageNumbersPanel(BasePanel):
             packet = io.BytesIO()
             c = rl_canvas.Canvas(packet, pagesize=(pw, ph))
             c.setFont("Helvetica", fs)
-            # position by index: 0=Mitte/Unten, 1=Links/Unten, 2=Rechts/Unten,
-            #                    3=Mitte/Oben,  4=Links/Oben,  5=Rechts/Oben
-            bottom = pos_idx < 3
-            h_mode = pos_idx % 3   # 0=center, 1=left, 2=right
-            y = margin if bottom else ph - margin - fs
-            if h_mode == 0:
-                x = pw / 2; c.drawCentredString(x, y, label)
-            elif h_mode == 1:
-                x = margin; c.drawString(x, y, label)
+            x, y, alignment = number_position(
+                pw, ph, fs, margin, pos_idx)
+            if alignment == "center":
+                c.drawCentredString(x, y, label)
+            elif alignment == "left":
+                c.drawString(x, y, label)
             else:
-                x = pw - margin; c.drawRightString(x, y, label)
+                c.drawRightString(x, y, label)
             c.save(); packet.seek(0)
             from pypdf import PdfReader as PR
             placed = _mat_inv(_display_matrix(box, _inherited_rotate(page)))
             page.merge_transformed_page(PR(packet).pages[0], placed, expand=False)
             writer.add_page(page)
         with open(out, "wb") as f: writer.write(f)
+        self._result_path = out
         self.open_result(out, tr("Mit Seitenzahlen"))
         return tr('Seitenzahlen auf {p0} Seiten hinzugefuegt').format(p0=n - skip)

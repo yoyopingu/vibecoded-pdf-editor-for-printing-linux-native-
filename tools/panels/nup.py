@@ -13,7 +13,7 @@ from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from tools.app_state import AppState
 from tools._base import BasePanel
 from tools.i18n import tr
-from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _visible_size, row, PreviewPane
+from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _visible_size, row, PreviewPane, PreviewPageBar
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
 from tools.panels._imposition import (_slot_placement, _flatten_annots,
                                       form_factory, full_scale_problem)
@@ -144,6 +144,8 @@ class NUpPanel(BasePanel):
         self._thumb_pending = set()  # {(path, page_idx, rot, render_w)} in flight
         self._thumb_signals = _ThumbSignals()
         self._thumb_signals.ready.connect(self._on_thumb_ready)
+        self._sheet_index = 0
+        self._sheet_total = 0
         super().__init__(parent)
 
     def _on_thumb_ready(self, *_):
@@ -164,12 +166,20 @@ class NUpPanel(BasePanel):
         right_w = self.build_tool_right_panel()
         right_l = right_w.layout()
 
-        # Shared preview pane (zoom, Ctrl+wheel, page/pdf/show/resize refresh).
+        # The sheet track navigates the actual output sequence. Keeping its
+        # index separate from AppState.current_page lets an operator inspect
+        # every imposed sheet without turning the source document.
         self._pane = PreviewPane(
             lambda w, h, z: self._render_preview(w, h, z, async_dims=True),
-            header="Vorschau (erstes Blatt)")
+            page_step=self._step_sheet)
         self._preview      = self._pane.label
         self._preview_info = self._pane.info
+        self._sheet_bar = PreviewPageBar('Blatt')
+        self._sheet_bar.valueChanged.connect(self._show_sheet)
+        self._sheet_status = QLabel()
+        self._sheet_status.setObjectName("dimLabel")
+        self._pane.add_navigation(self._sheet_bar, self._sheet_status)
+        self._set_sheet_range(0)
         right_l.addWidget(self._pane)
 
         splitter.addWidget(right_w)
@@ -181,6 +191,8 @@ class NUpPanel(BasePanel):
         # (built-once theme_color() strings would otherwise stay dark).
         _register_themed(self)
         self._apply_theme()
+        AppState.get().pdf_changed.connect(self._document_changed)
+        AppState.get().current_page_changed.connect(self._source_page_changed)
 
     def _apply_theme(self):
         t = _TV
@@ -197,6 +209,44 @@ class NUpPanel(BasePanel):
     def _update_preview(self):
         # Bridge for this panel's widget-value connections.
         self._pane.refresh()
+
+    def _document_changed(self, *_):
+        self._dims_cache.clear()
+        self._sheet_index = 0
+        self._set_sheet_range(0)
+        # PreviewPane receives pdf_changed first; redraw after our state reset
+        # so switching files cannot leave the old sheet selected.
+        self._pane.refresh()
+
+    def _source_page_changed(self, page):
+        slots = max(1, self.cols.value() * self.rows.value())
+        self._sheet_index = page // slots if self.src_combo.currentIndex() == 0 else page
+        self._pane.refresh()
+
+    def _set_sheet_range(self, total):
+        self._sheet_total = total
+        self._sheet_index = min(self._sheet_index, max(0, total - 1))
+        bar = self._sheet_bar
+        was_blocked = bar.blockSignals(True)
+        bar.setRange(0, max(0, total - 1))
+        bar.setPageStep(1)
+        bar.setValue(self._sheet_index)
+        bar.blockSignals(was_blocked)
+        bar.setEnabled(total > 1)
+        self._pane.set_page_total(total)
+        self._sheet_status.setText(
+            tr('Blatt {p0} / {p1}').format(
+                p0=self._sheet_index + 1 if total else 0, p1=total))
+
+    def _show_sheet(self, sheet):
+        self._sheet_index = sheet
+        self._set_sheet_range(self._sheet_total)
+        self._pane.refresh()
+
+    def _step_sheet(self, direction):
+        if self._sheet_total:
+            self._sheet_bar.setValue(max(0, min(self._sheet_total - 1,
+                                              self._sheet_index + direction)))
 
     def build_ui(self, layout):
         def mm_spin(val=0):
@@ -379,6 +429,7 @@ class NUpPanel(BasePanel):
         # AppState.get().current_pdf, is what a preview measures against.
         pdf_path = self.current_pdf()
         if not pdf_path or not os.path.isfile(pdf_path):
+            self._set_sheet_range(0)
             return None, tr("Keine PDF geöffnet")
         idx = max(0, AppState.get().current_page)
         key = (pdf_path, idx)
@@ -394,9 +445,12 @@ class NUpPanel(BasePanel):
             paint_page_number(painter, pm.rect(), source)
             painter.end()
             return pm, tr('rendert …')
-        page_idx, src_pw, src_ph, n_total = self._page_dims(pdf_path)
+        _page_idx, src_pw, src_ph, n_total = self._page_dims(pdf_path)
         out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows = \
             self._get_layout_params(src_pw, src_ph)
+        sequential = self.src_combo.currentIndex() == 0
+        n_slot = cols * rows
+        self._set_sheet_range(math.ceil(n_total / n_slot) if sequential else n_total)
         if slot_w <= 1.0 or slot_h <= 1.0:
             return None, tr("Abstände zu groß — kein Platz für Inhalt.")
         full_scale = self.full_scale.isChecked()
@@ -414,13 +468,15 @@ class NUpPanel(BasePanel):
         # Which page goes in each slot — this is what differs between the two
         # source modes: sequential packs consecutive pages, "repeat" puts the
         # same page in every slot.
-        sequential = self.src_combo.currentIndex() == 0
-        n_slot = cols * rows
         if sequential:
-            slot_pages = [(page_idx + s if page_idx + s < n_total else None)
+            first = self._sheet_index * n_slot
+            slot_pages = [(first + s if first + s < n_total else None)
                           for s in range(n_slot)]
+            if n_total == 1:
+                # The exported one-page job fills the sheet, too.
+                slot_pages = [0] * n_slot
         else:
-            slot_pages = [page_idx] * n_slot
+            slot_pages = [self._sheet_index] * n_slot
 
         # Fetch each needed page image from the shared cache (async if missing).
         # Width is fixed to the slot's point size (independent of the display
@@ -475,7 +531,9 @@ class NUpPanel(BasePanel):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(0, 0, canvas_w-1, canvas_h-1)
         painter.end()
-        info = f"{out_w/MM_TO_PT:.0f}×{out_h/MM_TO_PT:.0f} mm  |  {cols}×{rows} = {cols*rows} Slots"
+        info = (f"{out_w/MM_TO_PT:.0f}×{out_h/MM_TO_PT:.0f} mm  |  "
+                + tr('{p0}×{p1} = {p2} Plätze').format(
+                    p0=cols, p1=rows, p2=cols * rows))
         if any_pending:
             info += "  ·  " + tr("rendert …")
         return result, info

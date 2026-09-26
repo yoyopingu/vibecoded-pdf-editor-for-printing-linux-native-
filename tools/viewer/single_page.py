@@ -19,7 +19,7 @@ goes looking.
 import logging
 import math
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-                             QLabel, QApplication,
+                             QApplication,
                              QSizePolicy)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRect, QEvent
 from PyQt6.QtGui import QPixmap
@@ -27,6 +27,8 @@ from tools.colorspace import (cached_page_colorspaces, describe,
                               document_revision, page_colorspaces,
                               scan_document)
 from tools.i18n import tr
+from tools.app_state import AppState
+from tools.page_numbering import number_label
 from tools.render.caches import _FullPageCache, _ThumbnailCache
 from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
@@ -36,6 +38,7 @@ from tools.viewer.navigation import DocumentNavigation
 from tools.viewer.rulers import RulerBar, RulerCorner
 from tools.viewer.scrollbar import SlimScrollBar
 from tools.viewer.tab_base import owning_tab
+from tools.preview_status import PreviewStatusBar
 from tools.theme import _TV, _register_themed
 
 
@@ -112,6 +115,7 @@ class SinglePageView(QWidget):
         self._dims_key = None
         self._dims_rot = None
         self._render_signals = _PageSignals()
+        self._render_signals.dimensions.connect(self._on_page_dimensions)
         self._render_signals.ready.connect(self._on_page_ready)
         # Pre-render (background warm-up) state
         self._prerender_tasks: list = []
@@ -202,24 +206,19 @@ class SinglePageView(QWidget):
         layout.addLayout(main, 1)
 
         # Untere Info-Leiste
-        self._info_bar = QWidget()
-        self._info_bar.setObjectName("infoBar")
-        self._info_bar.setFixedHeight(30)
-        il = QHBoxLayout(self._info_bar)
-        il.setContentsMargins(12, 0, 12, 0)
-        il.setSpacing(20)
-
-        self._size_lbl = QLabel(tr("Masse: —"))
-        self._size_lbl.setObjectName("dimLabel")
-        il.addWidget(self._size_lbl)
-
-        self._color_lbl = QLabel(tr("Farbprofil: —"))
-        self._color_lbl.setObjectName("dimLabel")
-        il.addWidget(self._color_lbl)
-
-        il.addStretch()
+        self._info_bar = PreviewStatusBar()
+        self._size_lbl = self._info_bar.add_label(tr("Masse: —"))
+        self._color_lbl = self._info_bar.add_label(tr("Farbprofil: —"))
+        self._number_status = self._info_bar.add_label()
+        self._number_status.setMinimumWidth(1)
+        self._number_status.setMaximumWidth(240)
+        self._number_status.hide()
 
         layout.addWidget(self._info_bar)
+
+        AppState.get().preview_overlay_changed.connect(self._sync_number_overlay)
+        self.page_changed.connect(self._sync_number_overlay)
+        self._view.repainted.connect(self._sync_number_overlay)
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._apply_theme()
@@ -227,9 +226,25 @@ class SinglePageView(QWidget):
     def _apply_theme(self):
         t = _TV
         self._view.setStyleSheet(f"background:{t['viewer_bg']};")
-        self._info_bar.setStyleSheet(
-            f"QWidget#infoBar{{background:{t['panel_bg']};border-top:1px solid {t['border']};}}"
-            f"QLabel{{color:{t['dim']};background:transparent;font-size:11px;}}")
+
+    def _sync_number_overlay(self, *_):
+        spec = AppState.get().preview_overlay
+        if (spec is None or spec.get("kind") != "page_numbers"
+                or spec.get("path") != self.pdf_path or self.model is None):
+            self._view.set_number_overlay(None, 0, 0, None)
+            self._number_status.hide()
+            return
+        total = len(self.model.order)
+        size = ((self._page_w_pt, self._page_h_pt)
+                if self._page_w_pt > 0 and self._page_h_pt > 0 else None)
+        self._view.set_number_overlay(spec, self._current, total, size)
+        label = number_label(self._current, total, spec["skip"], spec["start"],
+                             spec["prefix"], spec["suffix"])
+        self._number_status.setText(
+            tr('Seitenzahl: {p0}').format(p0=label) if label is not None
+            else tr('Seitenzahl: übersprungen'))
+        self._number_status.setToolTip(self._number_status.text())
+        self._number_status.show()
 
     def _jump_from_navigation(self, page):
         self.go_to(page)
@@ -1041,6 +1056,7 @@ class SinglePageView(QWidget):
         self._current  = 0
         self._page_w_pt = 0.0
         self._page_h_pt = 0.0
+        self._sync_number_overlay()
         self._physical_size_pending = False
         self._scroll_x = 0.0
         self._scroll_y = 0.0
@@ -1170,6 +1186,7 @@ class SinglePageView(QWidget):
         # that had just been rotated — or not yet rendered at all — was measured
         # as it used to be, and at deep zoom that misplaces the whole window.
         self._ensure_page_dims(src_path, orig, rot)
+        self._sync_number_overlay()
         if self._physical_size_mode:
             self._watch_screen()
             self._sync_physical_size()
@@ -1356,6 +1373,22 @@ class SinglePageView(QWidget):
                 self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
         else:
             self._zoom_lbl.setText(f"{int(self._zoom * 100)}%")
+
+    def _on_page_dimensions(self, gen, page_w_pt, page_h_pt):
+        """Size a cold placeholder before the raster work has finished."""
+        if gen != self._render_gen or page_w_pt <= 0 or page_h_pt <= 0:
+            return
+        self._page_w_pt, self._page_h_pt = page_w_pt, page_h_pt
+        if self._view._placeholder_page is None:
+            return  # keep an available thumbnail or cached stand-in visible
+        key = self._current_page_key()
+        if key is None:
+            return
+        self._show_empty_sheet(key[0], key[1], key[2],
+                               self._view.width(), self._view.height())
+        self._sync_number_overlay()
+        self._size_lbl.setText(tr('Masse: {p0:.0f} × {p1:.0f} mm').format(
+            p0=page_w_pt / 72 * 25.4, p1=page_h_pt / 72 * 25.4))
 
     def _on_page_ready(self, gen, image, off_x, off_y,
                        page_w_pt, page_h_pt, scale, raw_chars,

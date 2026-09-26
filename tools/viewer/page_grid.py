@@ -16,10 +16,9 @@ from tools.render.placeholder import paint_page_number
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.theme import (STATUS, _DROP_THICKNESS, _TV, _paint_drop_marker,
                          _register_themed)
+from tools.thumbnail_size import CARD_W, CARD_H, default_card_width, card_height
 
 
-CARD_W = 187
-CARD_H = 264
 GAP    = 10
 MARGIN = 12
 
@@ -261,8 +260,8 @@ class PageGrid(QWidget):
         self._dragging_card = None
         self._drop_indicator = -1
         self._last_click_pos   = None  # für Shift+Click Bereichsauswahl
-        self._card_w  = CARD_W   # zoombarer Thumbnail-Breite
-        self._card_h  = CARD_H   # zoombarer Thumbnail-Höhe
+        self._card_w  = default_card_width(self)   # zoombarer Thumbnail-Breite
+        self._card_h  = card_height(self._card_w)
         # Background thumbnail rendering
         self._thumb_gen     = 0
         self._thumb_tasks   = []        # active _ThumbTask objects
@@ -284,18 +283,18 @@ class PageGrid(QWidget):
     def zoom_in(self):
         step = 20 if self._card_w < 300 else 40 if self._card_w < 600 else 80
         self._card_w = min(1400, self._card_w + step)
-        self._card_h = int(self._card_w * (CARD_H / CARD_W))
+        self._card_h = card_height(self._card_w)
         self._rebuild()
 
     def zoom_out(self):
         step = 20 if self._card_w <= 300 else 40 if self._card_w <= 600 else 80
         self._card_w = max(60, self._card_w - step)
-        self._card_h = int(self._card_w * (CARD_H / CARD_W))
+        self._card_h = card_height(self._card_w)
         self._rebuild()
 
     def zoom_reset(self):
-        self._card_w = CARD_W
-        self._card_h = CARD_H
+        self._card_w = default_card_width(self)
+        self._card_h = card_height(self._card_w)
         self._rebuild()
 
     def wheelEvent(self, e):

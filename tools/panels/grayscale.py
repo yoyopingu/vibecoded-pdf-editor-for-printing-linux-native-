@@ -8,7 +8,7 @@ from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals, _thumb_render_width
 from tools.render.placeholder import paint_page_number, source_page_index
 from tools.theme import STATUS, _TV, _register_themed
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox, QRadioButton, QScrollArea, QWidget, QSlider, QFrame, QSplitter, QGridLayout
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, QRadioButton, QScrollArea, QWidget, QSlider, QFrame, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap, QPainter, QColor
 from tools.app_state import AppState
@@ -21,13 +21,14 @@ from tools.panels._colour import _colour_histogram, _hist_stats
 from tools.pageverify import BLACKOUT_LIMIT, conversion_damage
 from tools.panels._verify import _page_luma, _verify_pages_intact
 from tools.render.document_cache import open_document as _open_pdf
+from tools.thumbnail_size import default_card_width, card_height
+from tools.preview_status import PreviewStatusBar
+from tools.scrollbar import use_slim_scrollbars
+from tools.viewer.navigation import DocumentNavigation
 
 
-# Default card size — kept in sync with tools/viewer/page_grid.py CARD_W/CARD_H.
-# Panels may not import from viewer (layering), so the constants are duplicated
-# here; change both together.
-_CARD_W = 187
-_CARD_H = 264
+# The grid and page manager share thumbnail geometry without importing viewer
+# from panels, which would reverse the dependency direction.
 
 # Scale for the colour-detection scan. Full size (1.0) used to be the only way
 # to catch a half-point colour mark — a 128-pixel squash averaged it away — but
@@ -74,7 +75,7 @@ _GRID_MARGIN  = 10
 
 
 def _card_height(card_w):
-    return int(card_w * (_CARD_H / _CARD_W))
+    return card_height(card_w)
 
 
 def _ratio_percent(value):
@@ -386,21 +387,27 @@ class GrayscalePanel(BasePanel):
         right_w = self.build_tool_right_panel()
         right_layout = right_w.layout()
 
-        zoom_bar = QWidget(); zoom_bar.setFixedHeight(32)
+        zoom_bar = QWidget(); zoom_bar.setFixedHeight(38)
+        zoom_bar.setObjectName("greyPreviewHeader")
         self._gs_zoombar = zoom_bar
-        zbl = QHBoxLayout(zoom_bar); zbl.setContentsMargins(8, 0, 8, 0); zbl.setSpacing(4)
+        zbl = QHBoxLayout(zoom_bar); zbl.setContentsMargins(12, 0, 12, 0); zbl.setSpacing(6)
+        title = QLabel(tr("Vorschau"))
+        title.setObjectName("dimLabel")
+        zbl.addWidget(title)
+        zbl.addSpacing(12)
         self._gs_legend_lbls = []
         for key, text in [("converted", tr("Grün = konvertiert")),
                           ("forced",    tr("Blau = erzwungen")),
                           ("skipped",   tr("Orange = übersprungen")),
                           ("colour",    tr("Rot = Farbe"))]:
             color = STATUS[key]
-            dot = QLabel("■"); dot.setStyleSheet(f"color:{color};font-size:13px;background:transparent;")
+            dot = QLabel("●"); dot.setStyleSheet(f"color:{color};font-size:13px;background:transparent;")
             lbl = QLabel(text)
             self._gs_legend_lbls.append(lbl)
             zbl.addWidget(dot); zbl.addWidget(lbl); zbl.addSpacing(6)
         zbl.addStretch()
-        self._card_w = _CARD_W
+        self._card_w = default_card_width(self)
+        self._card_base_w = self._card_w
         self._preview_cards = []
         self._preview_cols = 0
         # Re-flowing the grid moves every card, and a splitter drag is a stream
@@ -413,34 +420,45 @@ class GrayscalePanel(BasePanel):
         self._zoom_smooth_timer = QTimer(self)
         self._zoom_smooth_timer.setSingleShot(True)
         self._zoom_smooth_timer.timeout.connect(self._rezoom_smooth)
-        self._gs_zoombtns = []
-        for txt, fn in [("−", self._zoom_out), ("fit", self._zoom_reset), ("+", self._zoom_in)]:
-            zb = QPushButton(txt); zb.setFixedSize(32, 22)
-            self._gs_zoombtns.append(zb)
-            zb.clicked.connect(fn); zbl.addWidget(zb)
         right_layout.addWidget(zoom_bar)
 
         self._preview_scroll = QScrollArea()
         self._preview_scroll.setWidgetResizable(True)
         self._preview_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        use_slim_scrollbars(self._preview_scroll)
         self._preview_scroll.wheelEvent = self._preview_wheel
         self._preview_scroll.viewport().installEventFilter(self)
+        self._preview_scroll.verticalScrollBar().valueChanged.connect(
+            self._sync_grid_navigation)
 
         placeholder = QLabel(tr("← PDF öffnen um Vorschau zu laden"))
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._gs_placeholder = placeholder
         self._preview_scroll.setWidget(placeholder)
-        right_layout.addWidget(self._preview_scroll, 1)
+        preview_row = QHBoxLayout()
+        preview_row.setContentsMargins(0, 0, 0, 0)
+        preview_row.setSpacing(0)
+        preview_row.addWidget(self._preview_scroll, 1)
+        self._grid_navigation = DocumentNavigation()
+        self._grid_navigation.rulers.hide()
+        self._grid_navigation.previous.clicked.connect(lambda: self._step_grid_page(-1))
+        self._grid_navigation.next.clicked.connect(lambda: self._step_grid_page(1))
+        self._grid_navigation.page.page_requested.connect(self._jump_grid_page)
+        self._grid_navigation.zoom_in.clicked.connect(self._zoom_in)
+        self._grid_navigation.zoom_out.clicked.connect(self._zoom_out)
+        self._grid_navigation.actual.clicked.connect(self._zoom_reset)
+        self._grid_nav_state = None
+        self._grid_navigation.set_document(0, 0)
+        preview_row.addWidget(self._grid_navigation)
+        right_layout.addLayout(preview_row, 1)
 
-        status_bar = QWidget(); status_bar.setFixedHeight(28)
+        status_bar = PreviewStatusBar()
         self._gs_statusbar = status_bar
-        sbl = QHBoxLayout(status_bar); sbl.setContentsMargins(12, 0, 12, 0); sbl.setSpacing(20)
-        self._status_sw    = QLabel(f"🖤  {tr('SW')}: —")
-        self._status_color = QLabel(f"🎨  {tr('Farbe')}: —")
+        self._status_sw    = QLabel(f"{tr('SW')}: —")
+        self._status_color = QLabel(f"{tr('Farbe')}: —")
         self._status_total = QLabel(f"{tr('Gesamt')}: —")
         for lbl in [self._status_sw, self._status_color, self._status_total]:
-            sbl.addWidget(lbl)
-        sbl.addStretch()
+            status_bar.add_widget(lbl)
         right_layout.addWidget(status_bar)
 
         splitter.addWidget(right_w)
@@ -463,16 +481,10 @@ class GrayscalePanel(BasePanel):
         self._tool_splitter.setStyleSheet(
             f"QSplitter::handle{{background:{t['splitter']};}}")
         self._gs_zoombar.setStyleSheet(
-            f"background:{t['sidebar_bg']};border-bottom:1px solid {t['border']};")
-        self._gs_statusbar.setStyleSheet(
-            f"background:{t['sidebar_bg']};border-top:1px solid {t['border']};")
+            f"QWidget#greyPreviewHeader{{background:{t['panel_bg']};"
+            f"border-bottom:1px solid {t['vdim']};}}")
         self._preview_scroll.setStyleSheet(
             f"QScrollArea{{background:{t['viewer_bg']};border:none;}}")
-        for zb in self._gs_zoombtns:
-            zb.setStyleSheet(
-                f"QPushButton{{background:{t['panel_bg']};color:{t['text']};"
-                f"border:1px solid {t['border']};border-radius:3px;font-size:11px;padding:0;}}"
-                f"QPushButton:hover{{background:{t['hover']};}}")
         self._style_ratio_box()
         for lbl in (self._gs_legend_lbls +
                     [self._status_sw, self._status_color, self._status_total]):
@@ -523,9 +535,39 @@ class GrayscalePanel(BasePanel):
     def _zoom_out(self):
         self._card_w = max(50, self._card_w - 20); self._rezoom()
     def _zoom_reset(self):
-        self._card_w = _CARD_W; self._rezoom()
+        self._card_w = self._card_base_w; self._rezoom()
+
+    def _sync_grid_navigation(self, *_):
+        """Use the middle visible row as the grid's current page."""
+        if not hasattr(self, '_grid_navigation'):
+            return
+        total = len(self._preview_cards)
+        if not total:
+            if self._grid_nav_state != (0, 0):
+                self._grid_nav_state = (0, 0)
+                self._grid_navigation.set_document(0, 0)
+            return
+        row_h = _card_height(self._card_w) + _CARD_CAPTION + _GRID_GAP
+        middle = (self._preview_scroll.verticalScrollBar().value()
+                  + self._preview_scroll.viewport().height() / 2)
+        row = max(0, int((middle - _GRID_MARGIN) // max(1, row_h)))
+        page = min(total, row * max(1, self._preview_cols) + 1)
+        if self._grid_nav_state != (page, total):
+            self._grid_nav_state = (page, total)
+            self._grid_navigation.set_document(page, total)
+
+    def _jump_grid_page(self, page):
+        if 1 <= page <= len(self._preview_cards):
+            self._preview_scroll.ensureWidgetVisible(self._preview_cards[page - 1][0], 0, 0)
+            self._grid_nav_state = (page, len(self._preview_cards))
+            self._grid_navigation.set_document(page, len(self._preview_cards))
+
+    def _step_grid_page(self, direction):
+        self._jump_grid_page(self._grid_navigation.page._page + direction)
 
     def _rezoom(self):
+        self._grid_navigation.zoom.setText(
+            f"{round(self._card_w / self._card_base_w * 100)}%")
         if not self._preview_cards: return
         card_h = _card_height(self._card_w)
         for frame, img_lbl, num_lbl in self._preview_cards:
@@ -538,6 +580,7 @@ class GrayscalePanel(BasePanel):
                     Qt.TransformationMode.FastTransformation))
             else:
                 self._set_pending_card_image(img_lbl)
+        self._update_grid_extent()
         self._relayout_preview()
         self._zoom_smooth_timer.start(180)
 
@@ -833,6 +876,18 @@ class GrayscalePanel(BasePanel):
             frame.mousePressEvent = lambda e, n=i: self._toggle_manual(n, e)
         self._card_colours = [None] * n_pages
         self._set_card_cursors()
+        self._update_grid_extent()
+        self._sync_grid_navigation()
+
+    def _update_grid_extent(self):
+        """Give the scroll area the rows' real height instead of compressing them."""
+        box = getattr(self, '_preview_box', None)
+        if box is None:
+            return
+        rows = (len(self._preview_cards) + max(1, self._preview_cols) - 1) // max(1, self._preview_cols)
+        frame_h = _card_height(self._card_w) + _CARD_CAPTION
+        box.setMinimumHeight(2 * _GRID_MARGIN + rows * frame_h
+                             + max(0, rows - 1) * _GRID_GAP)
 
     def _set_card_cursors(self):
         """A pointing hand on the cards a click can do something to."""
@@ -844,7 +899,9 @@ class GrayscalePanel(BasePanel):
         """How many cards fit across the pane as it is now."""
         vp_w = self._preview_scroll.viewport().width() or 600
         per_card = self._card_w + _CARD_PAD + _GRID_GAP
-        return max(2, (vp_w - 2 * _GRID_MARGIN + _GRID_GAP) // per_card)
+        # A single column keeps larger default cards usable in a narrow tool
+        # pane; forcing two columns clips their right edges on small screens.
+        return max(1, (vp_w - 2 * _GRID_MARGIN + _GRID_GAP) // per_card)
 
     def _relayout_preview(self):
         """Re-flow the cards across the width there is now.
@@ -863,6 +920,8 @@ class GrayscalePanel(BasePanel):
         if layout:
             for i, (frame, _, _) in enumerate(self._preview_cards):
                 layout.addWidget(frame, i // cols, i % cols)
+            self._update_grid_extent()
+            self._sync_grid_navigation()
 
     def _load_preview_pixmaps_async(self, pdf_path):
         """Load thumbnails via the shared render queue + thumbnail cache.
@@ -906,7 +965,7 @@ class GrayscalePanel(BasePanel):
         if cidx >= len(self._preview_cards):
             return
         frame, img_lbl, num_lbl = self._preview_cards[cidx]
-        CARD_W = self._card_w; CARD_H = int(CARD_W * (_CARD_H / _CARD_W))
+        CARD_W = self._card_w; CARD_H = _card_height(CARD_W)
         pm = QPixmap.fromImage(image)
         img_lbl.setProperty("src_pm", pm)
         img_lbl.setPixmap(pm.scaled(CARD_W, CARD_H,
@@ -989,8 +1048,8 @@ class GrayscalePanel(BasePanel):
         n_total = len(self._page_data)
         pages_to_convert = (self._grey_pages | self._manual_sel) - self._manual_skip - self._already_grey
         n_sw = len(self._already_grey | pages_to_convert)
-        self._status_sw.setText(f"🖤  {tr('SW')}: {n_sw}")
-        self._status_color.setText(f"🎨  {tr('Farbe')}: {n_total - n_sw}")
+        self._status_sw.setText(f"{tr('SW')}: {n_sw}")
+        self._status_color.setText(f"{tr('Farbe')}: {n_total - n_sw}")
         self._status_total.setText(f"{tr('Gesamt')}: {n_total}")
 
     def _scan(self, then=None):

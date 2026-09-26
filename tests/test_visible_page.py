@@ -13,7 +13,7 @@ from tools.panels.page_numbers import PageNumbersPanel
 from tools.panels.preflight import _preflight
 from tools.panels.img_pdf import _pdf_to_images
 from tools.printing.spool import _place_on_sheet, _scale_pages, FIT
-from tests.support import FX, _TMP, _open
+from tests.support import FX, _TMP, _open, _app, _open_single_view
 
 
 def _cropped(name, rotate=0, bar=False):
@@ -120,6 +120,51 @@ def test_page_numbers_land_on_the_page_that_is_shown():
     _size, img = _render(out)
     assert _dark_side(img) == "bottom", (
         f"on a rotated page the number landed {_dark_side(img)}, not at the bottom")
+
+
+def test_page_numbers_preview_updates_the_open_page_without_exporting():
+    """Option edits stamp the visible page and clearing the tool removes it."""
+    vp, single = _open_single_view(FX["normal"])
+    panel = PageNumbersPanel()
+    try:
+        def pixels():
+            image = single._view.grab().toImage()
+            bits = image.bits(); bits.setsize(image.sizeInBytes())
+            return bytes(bits)
+
+        base = pixels()
+        render_gen = single._render_gen
+        panel.prefix.setText("PREVIEW ")
+        panel.suffix.setText(" / {gesamt}")
+        panel.font_spin.setValue(36)
+        panel.show(); _app.processEvents()
+        assert pixels() != base, "the page still shows only its source content"
+        assert single._number_status.isVisible()
+        assert "PREVIEW 1 / 5" in single._number_status.text()
+        assert single._render_gen == render_gen, "typing started a PDF render"
+
+        panel.pos.setCurrentIndex(3)
+        _app.processEvents()
+        assert pixels() != base, "moving the stamp removed it"
+        panel.skip_spin.setValue(1)
+        _app.processEvents()
+        assert pixels() == base, "a skipped page still shows a stamp"
+
+        # Opening the result must show its baked-in numbers once, not the
+        # result page plus the still-active preview overlay.
+        panel.skip_spin.setValue(0)
+        out = os.path.join(_TMP, "number_preview_output.pdf")
+        panel.save_pdf = lambda *_: out
+        panel.open_result = lambda path, _title: AppState.get().open_pdf(path)
+        panel._run_action()
+        assert AppState.get().preview_overlay is None
+
+        panel.hide(); _app.processEvents()
+        assert not single._number_status.isVisible()
+        assert AppState.get().preview_overlay is None
+    finally:
+        panel.close(); panel.deleteLater()
+        vp.deleteLater(); _app.processEvents()
 
 
 def test_placing_on_a_sheet_uses_the_visible_page():

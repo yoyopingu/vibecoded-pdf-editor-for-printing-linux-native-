@@ -12,7 +12,7 @@ from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from tools.app_state import AppState
 from tools._base import BasePanel
 from tools.i18n import tr
-from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, _mat_mul, _display_matrix, PreviewPane
+from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, _mat_mul, _display_matrix, PreviewPane, PreviewPageBar
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
 from tools.render.document_cache import open_document as _open_pdf
 from tools.render.placeholder import paint_page_number, source_page_index
@@ -41,6 +41,8 @@ class CropResizePanel(BasePanel):
     RUN_LABEL     = "Ausfuehren"
 
     def _setup(self):
+        self._preview_index = 0
+        self._page_positions = []
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -56,9 +58,15 @@ class CropResizePanel(BasePanel):
         # supplies the render callback below.
         self._pane = PreviewPane(
             lambda w, h, z: self._render_preview(w, h, z, async_load=True),
-            header="Vorschau")
+            page_step=self._step_preview_page)
         self._preview      = self._pane.label   # kept for _apply_theme()
         self._preview_info = self._pane.info
+        self._page_bar = PreviewPageBar('Seite')
+        self._page_bar.valueChanged.connect(self._show_preview_page)
+        self._page_status = QLabel()
+        self._page_status.setObjectName('dimLabel')
+        self._pane.add_navigation(self._page_bar, self._page_status)
+        self._set_page_range([], 0)
         right_l.addWidget(self._pane)
 
         self._tool_splitter = splitter
@@ -68,11 +76,63 @@ class CropResizePanel(BasePanel):
         splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1)
         splitter.setSizes([400, 800])
         outer.addWidget(splitter, 1)
+        AppState.get().pdf_changed.connect(self._document_changed)
 
     def _update_preview(self):
         # Bridge for this panel's widget-value connections; the pane owns the
         # actual render flow and calls back into _render_preview().
         self._pane.refresh()
+
+    def _document_changed(self, *_):
+        self._preview_index = 0
+        self._set_page_range([], 0)
+        # PreviewPane receives the document signal before this panel resets
+        # its navigation state.
+        self._pane.refresh()
+
+    def _preview_positions(self):
+        model = AppState.get().page_model
+        if model is None or not model.order:
+            return []
+        if self.apply_all.isChecked() or not model.selected:
+            return list(range(len(model.order)))
+        return [i for i, uid in enumerate(model.order) if uid in model.selected]
+
+    def _set_page_range(self, positions, document_total):
+        self._page_positions = positions
+        self._preview_index = min(self._preview_index, max(0, len(positions) - 1))
+        bar = self._page_bar
+        was_blocked = bar.blockSignals(True)
+        bar.setRange(0, max(0, len(positions) - 1))
+        bar.setPageStep(1)
+        bar.setValue(self._preview_index)
+        bar.blockSignals(was_blocked)
+        bar.setEnabled(len(positions) > 1)
+        self._pane.set_page_total(len(positions))
+        current = positions[self._preview_index] + 1 if positions else 0
+        self._page_status.setText(tr('Seite {p0} / {p1}').format(
+            p0=current, p1=document_total))
+
+    def _show_preview_page(self, index):
+        self._preview_index = index
+        model = AppState.get().page_model
+        self._set_page_range(self._page_positions,
+                             len(model.order) if model is not None else 0)
+        if (model is not None and not model.selected
+                and not self.apply_all.isChecked() and self._page_positions):
+            # With no explicit selection, the current page is also the page
+            # the run will crop. Keep navigation and the output target aligned.
+            state = AppState.get()
+            page = self._page_positions[index]
+            if state.current_page != page:
+                state.current_page = page  # its signal refreshes the pane
+                return
+        self._pane.refresh()
+
+    def _step_preview_page(self, direction):
+        if self._page_positions:
+            self._page_bar.setValue(max(0, min(len(self._page_positions) - 1,
+                                             self._preview_index + direction)))
 
     def build_ui(self, layout):
         self._syncing = False
@@ -448,17 +508,25 @@ class CropResizePanel(BasePanel):
         pdf_path = self.current_pdf()
         if not pdf_path:
             self._sel_info.setText("")
+            self._set_page_range([], 0)
             return None, tr("Keine PDF geoeffnet")
         if not os.path.isfile(pdf_path):
             # Same distinction the run makes: a document is open, its file is
             # not there any more. "No PDF open" describes a different problem
             # and sends the operator to fix the wrong one.
             self._sel_info.setText("")
+            self._set_page_range([], 0)
             return None, tr("Datei nicht mehr auffindbar")
         from PIL import Image as PILImage
 
         pages    = self._get_target_pages()
-        page_idx = pages[0][0] if pages else 0
+        positions = self._preview_positions()
+        model = AppState.get().page_model
+        if model is not None and not model.selected and not self.apply_all.isChecked():
+            self._preview_index = max(0, min(AppState.get().current_page,
+                                             len(positions) - 1))
+        self._set_page_range(positions, len(model.order) if model else 0)
+        page_idx = positions[self._preview_index] if positions else (pages[0][0] if pages else 0)
         n_pages  = len(pages)
         if self.apply_all.isChecked(): self._sel_info.setText(tr("Alle Seiten"))
         elif n_pages > 1:             self._sel_info.setText(f"{n_pages} {tr('Seiten')}")

@@ -18,6 +18,8 @@ from tools.viewer.page_grid import (CARD_H, CARD_W, GAP, MARGIN,
                                     card_size, paint_card)
 from tools.viewer.scrollbar import use_slim_scrollbars
 from tools.theme import _DROP_THICKNESS, _TV, _paint_drop_marker, _register_themed
+from tools.thumbnail_size import default_card_width, card_height
+from tools.preview_status import PreviewStatusBar
 
 
 class FileCard(QFrame):
@@ -182,8 +184,8 @@ class FileGrid(QWidget):
         self._last_selected  = -1
         self._last_click_pos = None       # for Shift+click ranges
         self._drop_indicator = -1
-        self._card_w         = CARD_W
-        self._card_h         = CARD_H
+        self._card_w         = default_card_width(self)
+        self._card_h         = card_height(self._card_w)
         self._thumb_gen      = 0
         self._thumb_tasks    = []
         self._thumb_signals  = _ThumbSignals()
@@ -201,17 +203,17 @@ class FileGrid(QWidget):
     def zoom_in(self):
         step = 20 if self._card_w < 300 else 40 if self._card_w < 600 else 80
         self._card_w = min(1400, self._card_w + step)
-        self._card_h = int(self._card_w * (CARD_H / CARD_W))
+        self._card_h = card_height(self._card_w)
         self._rebuild()
 
     def zoom_out(self):
         step = 20 if self._card_w <= 300 else 40 if self._card_w <= 600 else 80
         self._card_w = max(60, self._card_w - step)
-        self._card_h = int(self._card_w * (CARD_H / CARD_W))
+        self._card_h = card_height(self._card_w)
         self._rebuild()
 
     def zoom_reset(self):
-        self._card_w = CARD_W; self._card_h = CARD_H
+        self._card_w = default_card_width(self); self._card_h = card_height(self._card_w)
         self._rebuild()
 
     def wheelEvent(self, e):
@@ -789,8 +791,13 @@ class MergeOrderWidget(QWidget):
         self._grid.order_changed.connect(self._on_order_changed)
         self._grid.order_about_to_change.connect(self._save_history)
         self._grid.selection_changed.connect(self._on_select)
+        self._grid.order_changed.connect(self._update_preview_status)
+        self._grid.selection_changed.connect(self._update_preview_status)
         self._scroll.setWidget(self._grid)
         rl.addWidget(self._scroll, 1)
+        self._preview_status = PreviewStatusBar()
+        self._preview_count = self._preview_status.add_label()
+        rl.addWidget(self._preview_status)
         splitter.addWidget(self._right_w)
 
         splitter.setSizes([236, 500])
@@ -804,6 +811,7 @@ class MergeOrderWidget(QWidget):
         # Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+Z did nothing here while working one
         # view over.
         self._on_order_changed()
+        self._update_preview_status()
 
         # Enter merges, the way Enter runs a tool in every panel. This is a
         # plain QWidget in a tab rather than a QDialog, so there is no default
@@ -880,6 +888,10 @@ class MergeOrderWidget(QWidget):
         self._total.setText(txt)
         self._btn_go.setText(tr('  Zusammenfuehren  ({p0})').format(p0=n))
         self._btn_single.setText(tr('  Einzeln oeffnen  ({p0})').format(p0=n))
+
+    def _update_preview_status(self, *_):
+        self._preview_count.setText(tr('{p0} Dateien  ·  {p1} ausgewählt').format(
+            p0=len(self._grid.get_paths()), p1=len(self._grid._selected)))
 
     def _apply_sel_edit(self):
         positions = _parse_positions(self.sel_edit.text(), len(self._grid.get_paths()))

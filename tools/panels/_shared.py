@@ -2,12 +2,15 @@
 Helpers shared by more than one tool panel: the label/field rows, the
 preview pane, the paper sizes and the page geometry.
 """
-from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel,
                              QSizePolicy, QWidget, QComboBox, QDoubleSpinBox,
                              QCheckBox)
 from PyQt6.QtCore import Qt, QTimer, QEvent, pyqtSignal
 from tools.app_state import AppState
 from tools.i18n      import tr
+from tools.scrollbar import SlimScrollBar
+from tools.preview_status import PreviewStatusBar
+from tools.viewer.navigation import DocumentNavigation
 
 
 MM_TO_PT = 2.8346456693
@@ -54,6 +57,16 @@ def row(label_text: str, widget, stretch=1, label_w: int = LABEL_W) -> QHBoxLayo
 # ══════════════════════════════════════════════════════════════════════════════
 # SHARED PREVIEW PANE
 # ══════════════════════════════════════════════════════════════════════════════
+class PreviewPageBar(SlimScrollBar):
+    """The document track with a tool-specific accessible page/sheet name."""
+
+    def __init__(self, label, parent=None):
+        super().__init__(Qt.Orientation.Vertical, parent)
+        self.setRange(0, 0)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(tr(label))
+
+
 class PreviewPane(QWidget):
     """Reusable preview area shared by tools that show a rendered PDF page
     (Crop, N-Up, …). Owns the preview label, the zoom controls + state, the
@@ -66,31 +79,16 @@ class PreviewPane(QWidget):
     Return (pixmap, info_text) to display a page, or (None, message) to show a
     text placeholder (e.g. "no PDF open"). Exceptions are caught and shown.
     """
-    def __init__(self, render_fn, header="Vorschau", parent=None):
+    def __init__(self, render_fn, parent=None, page_step=None):
         super().__init__(parent)
         self._render_fn = render_fn
+        self._page_step = page_step
         self.zoom = 1.0
         self._rendering = False
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(6, 6, 6, 6); outer.setSpacing(3)
-
-        hdr_row = QHBoxLayout()
-        hdr = QLabel(tr(header)); hdr.setObjectName("dimLabel")
-        hdr_row.addStretch(); hdr_row.addWidget(hdr); hdr_row.addStretch()
-        # iconBtn, not secondaryBtn: the latter's padding leaves no room for the
-        # glyph in a 22px square and the buttons come out blank.
-        zoom_out_btn = QPushButton("−"); zoom_out_btn.setFixedSize(24, 24); zoom_out_btn.setObjectName("iconBtn")
-        self._zoom_lbl = QLabel("100%"); self._zoom_lbl.setObjectName("dimLabel")
-        self._zoom_lbl.setFixedWidth(38); self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zoom_in_btn  = QPushButton("+");  zoom_in_btn.setFixedSize(24, 24);  zoom_in_btn.setObjectName("iconBtn")
-        zoom_rst_btn = QPushButton("⟳"); zoom_rst_btn.setFixedSize(24, 24); zoom_rst_btn.setObjectName("iconBtn")
-        hdr_row.addWidget(zoom_out_btn); hdr_row.addWidget(self._zoom_lbl)
-        hdr_row.addWidget(zoom_in_btn);  hdr_row.addWidget(zoom_rst_btn)
-        outer.addLayout(hdr_row)
-        zoom_out_btn.clicked.connect(lambda: self._set_zoom(self.zoom / 1.25))
-        zoom_in_btn.clicked.connect(lambda: self._set_zoom(self.zoom * 1.25))
-        zoom_rst_btn.clicked.connect(lambda: self._set_zoom(1.0))
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         self.label = QLabel()
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -111,20 +109,63 @@ class PreviewPane(QWidget):
         self.label.setMinimumSize(1, 1)
         self.label.setMouseTracking(True)
         self.label.installEventFilter(self)
-        outer.addWidget(self.label, 1)
+        self._page_row = QHBoxLayout()
+        self._page_row.setContentsMargins(0, 0, 0, 0)
+        self._page_row.setSpacing(0)
+        self._page_row.addWidget(self.label, 1)
+        self.navigation = DocumentNavigation()
+        self.navigation.rulers.hide()
+        self.navigation.previous.clicked.connect(lambda: self._move_page(-1))
+        self.navigation.next.clicked.connect(lambda: self._move_page(1))
+        self.navigation.page.page_requested.connect(self._jump_page)
+        self.navigation.zoom_out.clicked.connect(lambda: self._set_zoom(self.zoom / 1.25))
+        self.navigation.zoom_in.clicked.connect(lambda: self._set_zoom(self.zoom * 1.25))
+        self.navigation.actual.clicked.connect(lambda: self._set_zoom(1.0))
+        self._page_bar = None
+        self._page_row.addWidget(self.navigation)
+        outer.addLayout(self._page_row, 1)
 
-        self.info = QLabel(""); self.info.setObjectName("dimLabel")
-        self.info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        outer.addWidget(self.info)
+        self.status = PreviewStatusBar()
+        self._status_layout = self.status.row
+        self.info = self.status.add_label()
+        outer.addWidget(self.status)
 
         # Refresh whenever the active page or document changes.
         AppState.get().current_page_changed.connect(lambda *_: self.refresh())
         AppState.get().pdf_changed.connect(lambda *_: self.refresh())
         QTimer.singleShot(400, self.refresh)
 
+    def add_navigation(self, bar, status=None):
+        """Attach the same scroll track and navigation column as the viewer."""
+        self._page_bar = bar
+        self.navigation.page.setAccessibleName(bar.accessibleName())
+        self._page_row.insertWidget(1, bar)
+        bar.valueChanged.connect(self._sync_navigation)
+        self._sync_navigation()
+        if status is not None:
+            self._status_layout.insertWidget(0, status)
+
+    def _sync_navigation(self, *_):
+        if self._page_bar is not None:
+            total = self._page_bar.property("page_total") or 0
+            self.navigation.set_document(self._page_bar.value() + 1 if total else 0, total)
+
+    def set_page_total(self, total):
+        if self._page_bar is not None:
+            self._page_bar.setProperty("page_total", total)
+            self.navigation.set_document(self._page_bar.value() + 1 if total else 0, total)
+
+    def _move_page(self, direction):
+        if self._page_bar is not None:
+            self._page_bar.setValue(self._page_bar.value() + direction)
+
+    def _jump_page(self, page):
+        if self._page_bar is not None:
+            self._page_bar.setValue(max(0, min(self._page_bar.maximum(), page - 1)))
+
     def _set_zoom(self, z):
         self.zoom = max(0.2, min(z, 8.0))
-        self._zoom_lbl.setText(f"{int(self.zoom * 100)}%")
+        self.navigation.zoom.setText(f"{int(self.zoom * 100)}%")
         self.refresh()
 
     def refresh(self):
@@ -151,7 +192,9 @@ class PreviewPane(QWidget):
         try:
             pm, info = self._render_fn(avail_w, avail_h, self.zoom)
         except Exception as ex:
-            self.label.setText(tr('Vorschau: {p0}').format(p0=ex))
+            message = tr('Vorschau: {p0}').format(p0=ex)
+            self.label.setText(message)
+            self.info.setText(message)
             return
         finally:
             self._rendering = False
@@ -175,6 +218,9 @@ class PreviewPane(QWidget):
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 step = 1.15 if event.angleDelta().y() > 0 else (1 / 1.15)
                 self._set_zoom(self.zoom * step)
+                return True
+            if self._page_step is not None and event.angleDelta().y():
+                self._page_step(-1 if event.angleDelta().y() > 0 else 1)
                 return True
         return super().eventFilter(obj, event)
 

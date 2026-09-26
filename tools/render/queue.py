@@ -215,6 +215,7 @@ atexit.register(shutdown_render_queue)
 
 
 class _PageSignals(QObject):
+    dimensions = pyqtSignal(int, float, float)
     ready = pyqtSignal(int, QImage, int, int, float, float, float, list, bool)
 
 
@@ -386,6 +387,11 @@ class _PageRenderTask:
             quarter = self._rot % 180 == 90
             page_w_pt, page_h_pt = ((raw_h_pt, raw_w_pt) if quarter
                                     else (raw_w_pt, raw_h_pt))
+            # Geometry is cheap once the page is open. Deliver it before the
+            # complex content render so a cold numbered sheet gets its true
+            # aspect ratio while the worker is still drawing its pixels.
+            if self._sig is not None and self._active:
+                self._sig.dimensions.emit(self._gen, page_w_pt, page_h_pt)
 
             # Exactly the scale the fast-path above asked for, so the result
             # lands on the cache entry it was compared against instead of a hair

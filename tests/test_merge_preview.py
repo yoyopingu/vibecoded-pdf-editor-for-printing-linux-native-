@@ -698,10 +698,13 @@ def test_merge_preview_thumbnails_behave_like_the_page_manager():
     _spin(5, 0.0)
     assert not g._selected, f"clicking empty space left {sorted(g._selected)} picked"
 
-    # drop position never goes backwards as the cursor sweeps right
+    # Drop position never goes backwards as the cursor sweeps across the last
+    # row. Larger monitor-sized cards may wrap the four files to two rows.
     n = len(g.get_paths())
     cell_w = g._card_w + 16 + GAP
-    seq = [g._pos_from_point(QPoint(x, MARGIN + 10))
+    cell_h = g._card_h + 28 + GAP
+    last_row = (n - 1) // g._per_row()
+    seq = [g._pos_from_point(QPoint(x, MARGIN + last_row * cell_h + 10))
            for x in range(MARGIN, MARGIN + int((n + 2) * cell_w), 7)]
     assert seq == sorted(seq), f"drop position bounces: {seq}"
     assert seq[-1] == n, f"sweeping past the end gives {seq[-1]}, expected {n}"

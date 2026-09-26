@@ -6,9 +6,10 @@ boxes that come back with a render, the drag that picks a range out of them, and
 the copy.
 """
 from PyQt6.QtWidgets import QWidget, QApplication, QMenu, QSizePolicy
-from PyQt6.QtCore import Qt, QRect, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QKeySequence, QBrush, QCursor
+from PyQt6.QtCore import Qt, QRect, QPointF, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen, QKeySequence, QBrush, QCursor, QFont, QFontMetricsF
 from tools.i18n import tr
+from tools.page_numbering import number_label, number_position
 from tools.theme import PAPER, _TV
 from tools.render.placeholder import paint_page_number
 from tools.viewer.rulers import GUIDE_COLOUR
@@ -36,6 +37,7 @@ class PdfPageCanvas(QWidget):
         self._offset_y   = 0
         self._page_rect  = None   # sheet outline when the pixmap is a region
         self._placeholder_page = None
+        self._number_overlay = None
         # Guides, in this widget's pixels. The view owns them in page
         # coordinates and hands down where they land on screen — see
         # tools/viewer/rulers.py.
@@ -138,6 +140,54 @@ class PdfPageCanvas(QWidget):
         self._chars  = []
         self._sel_start = self._sel_end = -1
         self.update()
+
+    def set_number_overlay(self, spec, page_index, total, page_size):
+        """Preview a stamp over the source pixels without rerendering the PDF."""
+        overlay = (spec, page_index, total, page_size)
+        if overlay != self._number_overlay:
+            self._number_overlay = overlay
+            self.update()
+
+    def _paint_number_overlay(self, painter):
+        if self._number_overlay is None:
+            return
+        spec, page_index, total, page_size = self._number_overlay
+        if not spec or spec.get("kind") != "page_numbers" or not page_size:
+            return
+        pw, ph = page_size
+        if pw <= 0 or ph <= 0:
+            return
+        label = number_label(page_index, total, spec["skip"], spec["start"],
+                             spec["prefix"], spec["suffix"])
+        if label is None:
+            return
+        if self._page_rect is not None:
+            rx, ry, rw, rh = self._page_rect
+        elif self._pixmap is not None:
+            rx, ry = self._offset_x, self._offset_y
+            rw, rh = self._pixmap.width(), self._pixmap.height()
+        else:
+            return
+        if rw <= 0 or rh <= 0:
+            return
+        x_pt, y_pt, alignment = number_position(
+            pw, ph, spec["font_size"], spec["margin"], spec["position"])
+        font = QFont("Helvetica")
+        font.setPixelSize(max(1, round(spec["font_size"] * rh / ph)))
+        width = QFontMetricsF(font).horizontalAdvance(label)
+        x = rx + x_pt * rw / pw
+        if alignment == "center":
+            x -= width / 2
+        elif alignment == "right":
+            x -= width
+        y = ry + rh - y_pt * rh / ph
+        painter.save()
+        painter.setClipRect(QRect(int(rx), int(ry), int(rw), int(rh)))
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.setFont(font)
+        painter.setPen(QColor(0, 0, 0))
+        painter.drawText(QPointF(x, y), label)
+        painter.restore()
 
     # ── Maus-Events ──────────────────────────────────────────────────────────
 
@@ -253,6 +303,7 @@ class PdfPageCanvas(QWidget):
                 p.drawRect(int(rx), int(ry), int(rw) - 1, int(rh) - 1)
                 paint_page_number(p, QRect(int(rx), int(ry), int(rw), int(rh)),
                                   self._placeholder_page)
+            self._paint_number_overlay(p)
             self._paint_guides(p)
             p.end()
             return
@@ -271,6 +322,8 @@ class PdfPageCanvas(QWidget):
         else:
             p.drawRect(self._offset_x, self._offset_y,
                        self._pixmap.width() - 1, self._pixmap.height() - 1)
+
+        self._paint_number_overlay(p)
 
         # Auswahl-Highlights
         if self._sel_start >= 0 and self._sel_end >= 0 and self._chars:

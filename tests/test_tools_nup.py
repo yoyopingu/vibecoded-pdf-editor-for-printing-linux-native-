@@ -80,6 +80,41 @@ def test_nup_preview_differs_by_mode():
     assert h(0) != h(1), "preview identical for both source modes"
 
 
+def test_nup_preview_navigates_output_sheets():
+    """The sheet track previews every sheet the export will produce."""
+    _open(FX["normal"])  # five pages, hence two 2x2 sheets
+    p = NUpPanel()
+    p.cols.setValue(2); p.rows.setValue(2)
+    shown = []
+    p._page_image = lambda _path, page, _width: shown.append(page) or None
+
+    p._render_preview(400, 400, 1.0)
+    assert p._sheet_total == 2 and p._sheet_bar.maximum() == 1
+    assert set(shown) == {0, 1, 2, 3}
+    shown.clear()
+    p._sheet_bar.setValue(1)
+    p._render_preview(400, 400, 1.0)
+    assert shown == [4] and p._sheet_index == 1
+    assert "2" in p._sheet_status.text()
+
+    p.src_combo.setCurrentIndex(1)
+    p._render_preview(400, 400, 1.0)
+    assert p._sheet_total == 5 and p._sheet_bar.maximum() == 4
+    shown.clear()
+    p._sheet_bar.setValue(4)
+    p._render_preview(400, 400, 1.0)
+    assert shown == [4]
+    p._step_sheet(-1)
+    assert p._sheet_index == 3
+    AppState.get().current_page = 2
+    assert p._sheet_index == 2, "source selection should locate its repeat sheet"
+    p.src_combo.setCurrentIndex(0)
+    p._render_preview(400, 400, 1.0)
+    AppState.get().current_page = 4
+    assert p._sheet_index == 1, "source selection should locate its packed sheet"
+    p.deleteLater()
+
+
 def test_nup_crop_marks():
     _open(FX["normal"])
     A4w, A4h = A4; ml = mt = 14.0; gap = 8.5
