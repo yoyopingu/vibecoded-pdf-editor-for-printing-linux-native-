@@ -781,3 +781,62 @@ def test_a_form_tool_keeps_the_page_on_screen():
     finally:
         win.deleteLater()
         _app.processEvents()
+
+
+def test_output_sheet_shortcuts_fit_and_show_physical_size():
+    """Zoom keys must act on the visible N-Up/Crop sheet, not the hidden viewer."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from tools.render.region import page_size_pt
+    from tools.viewer.navigation import physical_dpi
+
+    win = MAIN.MainWindow()
+    try:
+        win.resize(1280, 760)
+        win.show()
+        _app.processEvents()
+        win.viewer.open_file(FX["normal"])
+        assert _wait_for(lambda: win.viewer.tabs.count() == 1)
+        viewer = win.viewer.tabs.currentWidget().single
+        original_zoom = viewer._zoom
+        dpi = physical_dpi(win)
+        assert dpi is not None
+
+        for cls in (NUpPanel, CropResizePanel):
+            index = next(i for i, panel in enumerate(win._by_nav)
+                         if isinstance(panel, cls))
+            win._switch(index)
+            panel = win._by_nav[index]
+            pane = panel._pane
+            assert _wait_for(lambda: pane.label.pixmap() is not None)
+            if cls is NUpPanel:
+                pdf = panel.current_pdf()
+                _, pw, ph, _ = panel._page_dims(pdf)
+                sheet_w = panel._get_layout_params(pw, ph)[0]
+            else:
+                sheet_w = page_size_pt(FX["normal"], 0)[0]
+
+            QTest.keyClick(pane.label, Qt.Key.Key_1,
+                           Qt.KeyboardModifier.ControlModifier)
+            assert pane._physical_size_mode and pane.navigation.zoom.text() == "100%"
+            expected = int(sheet_w * dpi / 72.0)
+            assert abs(pane.label.pixmap().width() - expected) <= 2, cls.__name__
+            assert viewer._zoom == original_zoom, "the hidden viewer zoomed"
+
+            old_width = pane.label.width()
+            old_zoom = pane.zoom
+            win.resize(win.width() - 80, win.height() - 40)
+            assert _wait_for(lambda: pane.label.width() != old_width
+                             and pane.zoom != old_zoom)
+            assert abs(pane.label.pixmap().width() - expected) <= 2, (
+                cls.__name__, "physical size changed with the window")
+
+            QTest.keyClick(pane.label, Qt.Key.Key_0,
+                           Qt.KeyboardModifier.ControlModifier)
+            assert not pane._physical_size_mode and pane.zoom == 1.0
+            assert pane.label.pixmap().width() <= pane.label.width(), cls.__name__
+            assert viewer._zoom == original_zoom
+    finally:
+        win.close()
+        win.deleteLater()
+        _app.processEvents()

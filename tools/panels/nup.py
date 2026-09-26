@@ -462,7 +462,8 @@ class NUpPanel(BasePanel):
                                            slot_w, slot_h, cols, rows))
             if problem:
                 return None, problem
-        cs = min(avail_w / out_w, avail_h / out_h) * zoom
+        fit = min(avail_w / out_w, avail_h / out_h)
+        cs = self._pane.page_scale(fit, zoom)
         canvas_w = max(1, int(out_w * cs)); canvas_h = max(1, int(out_h * cs))
 
         # Which page goes in each slot — this is what differs between the two

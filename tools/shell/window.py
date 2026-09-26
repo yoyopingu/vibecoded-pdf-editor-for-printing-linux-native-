@@ -288,6 +288,12 @@ class MainWindow(QMainWindow):
         for i, btn in enumerate(self._btns):
             btn.set_active(i == idx)
         panel = self._by_nav[idx]
+        # Global zoom shortcuts belong to the sheet on the stage. The viewer
+        # object still exists behind split tools and must not receive them.
+        self.viewer.active_tool_preview = (
+            getattr(panel, '_pane', None)
+            if idx != 0 and getattr(panel, '_tool_splitter', None) is not None
+            else None)
         # The viewer, or a tool that draws its own sheet. The column steps
         # aside so that picture gets the room.
         if idx == 0 or getattr(panel, "_tool_splitter", None) is not None:

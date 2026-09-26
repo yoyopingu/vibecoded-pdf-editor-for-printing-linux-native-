@@ -4,12 +4,34 @@ Keep page navigation separate from pixel scrolling: the track must remain
 draggable even when a fitted page needs no panning. Icons are painted with
 Qt so their strokes follow the palette and remain sharp at any display scale.
 """
+import math
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIntValidator, QPainter, QPen, QPolygonF
-from PyQt6.QtWidgets import QLabel, QLineEdit, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QToolButton, QVBoxLayout, QWidget
 
 from tools.i18n import tr
 from tools.theme import _TV, _register_themed
+
+
+def physical_dpi(widget):
+    """Logical pixels per physical inch on the widget's current screen.
+
+    QScreen already reports physical DPI in widget coordinates. Multiplying by
+    devicePixelRatio would make 100% twice as large on a 2x display.
+    """
+    win = widget.window().windowHandle()
+    screen = (win.screen() if win and win.screen()
+              else QApplication.primaryScreen())
+    if screen is None:
+        return None
+    dpi = screen.physicalDotsPerInchX()
+    if math.isfinite(dpi) and dpi > 0:
+        return dpi
+    size = screen.physicalSize()
+    if size.width() > 0 and math.isfinite(size.width()):
+        return screen.geometry().width() * 25.4 / size.width()
+    dpi = screen.logicalDotsPerInchX()
+    return dpi if math.isfinite(dpi) and dpi > 0 else None
 
 
 class PageNumberEdit(QLineEdit):

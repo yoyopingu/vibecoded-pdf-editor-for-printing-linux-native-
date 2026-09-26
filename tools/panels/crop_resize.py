@@ -626,7 +626,7 @@ class CropResizePanel(BasePanel):
             pw, ph = size
             t, b, l, r = self._effective_margins_pt(pw, ph)
             pw, ph = max(1.0, pw - l - r), max(1.0, ph - t - b)
-            fit = min(avail_w / pw, avail_h / ph) * zoom
+            fit = self._pane.page_scale(min(avail_w / pw, avail_h / ph), zoom)
             width, height = max(1, int(pw * fit)), max(1, int(ph * fit))
         else:
             width, height = max(1, avail_w), max(1, avail_h)
@@ -710,7 +710,8 @@ class CropResizePanel(BasePanel):
         # back round with more room to overflow. See PreviewPane.)
         ext_w = max(1.0, max(new_w, pw - l_pt) - min(0.0, -l_pt))
         ext_h = max(1.0, max(new_h, ph - t_pt) - min(0.0, -t_pt))
-        cs = min(avail_w / ext_w, avail_h / ext_h) * zoom
+        fit = min(avail_w / ext_w, avail_h / ext_h)
+        cs = self._pane.page_scale(fit, zoom)
         cw_px = max(1, int(new_w * cs))
         ch_px = max(1, int(new_h * cs))
 

@@ -34,7 +34,7 @@ from tools.render.images import MAX_RENDER_PX, _SCALE_EPS, _good_enough
 from tools.render.queue import _PageRenderTask, _PageSignals, _RegionRenderTask, _RegionSignals, prerender_enabled, _render_queue, _target_scale
 from tools.render.region import cached_page_size_pt, covers, page_px_size, region_for_viewport, snap_scale
 from tools.viewer.canvas import PdfPageCanvas
-from tools.viewer.navigation import DocumentNavigation
+from tools.viewer.navigation import DocumentNavigation, physical_dpi
 from tools.viewer.rulers import RulerBar, RulerCorner
 from tools.viewer.scrollbar import SlimScrollBar
 from tools.viewer.tab_base import owning_tab
@@ -391,25 +391,7 @@ class SinglePageView(QWidget):
         self._render()
 
     def _physical_dpi(self):
-        """Qt gives physical DPI in the same logical pixels used by widgets.
-
-        Multiplying by DPR here would make a page twice its physical size on a
-        2x display. Logical DPI is only a fallback when the display supplies no
-        usable physical measurement; it cannot promise true size there.
-        """
-        win = self.window().windowHandle()
-        screen = (win.screen() if win and win.screen()
-                  else QApplication.primaryScreen())
-        if screen is None:
-            return None
-        dpi = screen.physicalDotsPerInchX()
-        if math.isfinite(dpi) and dpi > 0:
-            return dpi
-        size = screen.physicalSize()
-        if size.width() > 0 and math.isfinite(size.width()):
-            return screen.geometry().width() * 25.4 / size.width()
-        dpi = screen.logicalDotsPerInchX()
-        return dpi if math.isfinite(dpi) and dpi > 0 else None
+        return physical_dpi(self)
 
     def _sync_physical_size(self):
         """Express an absolute physical scale in the renderer's fit-relative zoom."""

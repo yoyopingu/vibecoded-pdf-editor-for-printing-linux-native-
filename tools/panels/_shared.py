@@ -2,7 +2,7 @@
 Helpers shared by more than one tool panel: the label/field rows, the
 preview pane, the paper sizes and the page geometry.
 """
-from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel,
+from PyQt6.QtWidgets import (QApplication, QVBoxLayout, QHBoxLayout, QLabel,
                              QSizePolicy, QWidget, QComboBox, QDoubleSpinBox,
                              QCheckBox)
 from PyQt6.QtCore import Qt, QTimer, QEvent, pyqtSignal
@@ -10,7 +10,7 @@ from tools.app_state import AppState
 from tools.i18n      import tr
 from tools.scrollbar import SlimScrollBar
 from tools.preview_status import PreviewStatusBar
-from tools.viewer.navigation import DocumentNavigation
+from tools.viewer.navigation import DocumentNavigation, physical_dpi
 
 
 MM_TO_PT = 2.8346456693
@@ -84,6 +84,9 @@ class PreviewPane(QWidget):
         self._render_fn = render_fn
         self._page_step = page_step
         self.zoom = 1.0
+        self._physical_size_mode = False
+        self._screen_window = None
+        self._watched_screen = None
         self._rendering = False
 
         outer = QVBoxLayout(self)
@@ -120,7 +123,7 @@ class PreviewPane(QWidget):
         self.navigation.page.page_requested.connect(self._jump_page)
         self.navigation.zoom_out.clicked.connect(lambda: self._set_zoom(self.zoom / 1.25))
         self.navigation.zoom_in.clicked.connect(lambda: self._set_zoom(self.zoom * 1.25))
-        self.navigation.actual.clicked.connect(lambda: self._set_zoom(1.0))
+        self.navigation.actual.clicked.connect(self.zoom_actual_size)
         self._page_bar = None
         self._page_row.addWidget(self.navigation)
         outer.addLayout(self._page_row, 1)
@@ -164,9 +167,75 @@ class PreviewPane(QWidget):
             self._page_bar.setValue(max(0, min(self._page_bar.maximum(), page - 1)))
 
     def _set_zoom(self, z):
+        self._physical_size_mode = False
+        self._unwatch_screen()
         self.zoom = max(0.2, min(z, 8.0))
         self.navigation.zoom.setText(f"{int(self.zoom * 100)}%")
         self.refresh()
+
+    def zoom_fit(self):
+        self._set_zoom(1.0)
+
+    def zoom_actual_size(self):
+        # In the viewer 100% means physical paper size, not fit-to-window.
+        # The tool draws an output sheet, so its render callback supplies the
+        # sheet's fit scale to page_scale() when geometry becomes available.
+        self._physical_size_mode = True
+        self.navigation.zoom.setText("100%")
+        self._watch_screen()
+        self.refresh()
+
+    def page_scale(self, fit_scale, zoom):
+        """Pixels per PDF point, including a true-size sheet on this monitor."""
+        if self._physical_size_mode:
+            dpi = physical_dpi(self)
+            if dpi is not None and fit_scale > 0:
+                scale = dpi / 72.0
+                self.zoom = scale / fit_scale
+                self.navigation.zoom.setText("100%")
+                return scale
+        return fit_scale * zoom
+
+    def _screen_changed(self, _screen):
+        self._watch_screen()
+        if self._physical_size_mode:
+            self.refresh()
+
+    def _watch_screen(self):
+        win = self.window().windowHandle()
+        if win is not self._screen_window:
+            if self._screen_window is not None:
+                try:
+                    self._screen_window.screenChanged.disconnect(self._screen_changed)
+                except (TypeError, RuntimeError):
+                    pass
+            self._screen_window = win
+            if win is not None:
+                win.screenChanged.connect(self._screen_changed)
+        screen = win.screen() if win and win.screen() else QApplication.primaryScreen()
+        if screen is not self._watched_screen:
+            if self._watched_screen is not None:
+                try:
+                    self._watched_screen.physicalDotsPerInchChanged.disconnect(self._screen_changed)
+                except (TypeError, RuntimeError):
+                    pass
+            self._watched_screen = screen
+            if screen is not None:
+                screen.physicalDotsPerInchChanged.connect(self._screen_changed)
+
+    def _unwatch_screen(self):
+        if self._screen_window is not None:
+            try:
+                self._screen_window.screenChanged.disconnect(self._screen_changed)
+            except (TypeError, RuntimeError):
+                pass
+            self._screen_window = None
+        if self._watched_screen is not None:
+            try:
+                self._watched_screen.physicalDotsPerInchChanged.disconnect(self._screen_changed)
+            except (TypeError, RuntimeError):
+                pass
+            self._watched_screen = None
 
     def refresh(self):
         if not self._render_fn or self._rendering:
@@ -207,7 +276,13 @@ class PreviewPane(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if self._physical_size_mode:
+            self._watch_screen()
         self.refresh()
+
+    def closeEvent(self, event):
+        self._unwatch_screen()
+        super().closeEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

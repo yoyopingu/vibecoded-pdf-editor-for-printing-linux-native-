@@ -57,9 +57,11 @@ class _ViewerKeyFilter(QObject):
                     event.accept()
                     return False
             # Qt reports Ctrl+Shift+Tab as Key_Backtab with Ctrl modifier
-            if ctrl and k in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab, Qt.Key.Key_W,
-                              Qt.Key.Key_Plus, Qt.Key.Key_Equal,
-                              Qt.Key.Key_Minus, Qt.Key.Key_0, Qt.Key.Key_1):
+            zoom_key = k in (Qt.Key.Key_Plus, Qt.Key.Key_Equal,
+                             Qt.Key.Key_Minus, Qt.Key.Key_0, Qt.Key.Key_1)
+            if ctrl and (k in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab, Qt.Key.Key_W)
+                         or (zoom_key and (self._vp.isVisible()
+                                           or self._vp.active_tool_preview is not None))):
                 event.accept()
                 return False
             return False
@@ -116,6 +118,22 @@ class _ViewerKeyFilter(QObject):
         # Ctrl+0=fit/reset, Ctrl+1=actual size, Ctrl++/= zoom in, Ctrl+- zoom out
         if ctrl and k in (Qt.Key.Key_Plus, Qt.Key.Key_Equal,
                           Qt.Key.Key_Minus, Qt.Key.Key_0, Qt.Key.Key_1):
+            # The viewer remains alive behind N-Up and Crop/Scale. Sending its
+            # zoom keys there changed an invisible page while the output sheet
+            # stayed still. The stage tells us which preview is actually shown.
+            pane = self._vp.active_tool_preview
+            if pane is not None:
+                if k in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                    pane._set_zoom(pane.zoom * 1.25)
+                elif k == Qt.Key.Key_Minus:
+                    pane._set_zoom(pane.zoom / 1.25)
+                elif k == Qt.Key.Key_0:
+                    pane.zoom_fit()
+                elif k == Qt.Key.Key_1:
+                    pane.zoom_actual_size()
+                return True
+            if not self._vp.isVisible():
+                return False
             tab = self._vp._current()
             if tab:
                 in_manage = (tab._stack.currentWidget() is not tab.single)
@@ -160,6 +178,7 @@ class PageViewerPanel(QWidget):
         self.restore_main_idx   = None   # lambda idx: main._switch(idx)
         self.hide_sidebar       = None   # lambda: sidebar.setVisible(False)
         self.show_sidebar       = None   # lambda: sidebar.setVisible(True)
+        self.active_tool_preview = None  # MainWindow's visible output-sheet pane
         self._pre_manage_idx    = None   # gespeicherter Stack-Index vor Manage-Modus
         self._setup_ui()
         AppState.get().result_ready.connect(self._open_result_tab)
