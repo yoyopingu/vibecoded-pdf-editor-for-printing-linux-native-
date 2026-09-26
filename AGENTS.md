@@ -18,6 +18,8 @@ python3 main.py datei.pdf      # one file; several files → sort/merge preview
 
 python3 tests/run.py           # full suite, one process per module
 python3 tests/run.py printing  # only modules whose name matches
+python3 tests/run.py tools_crop::test_crop_preview_reuses_both_screen_render_caches
+python3 tests/run.py --timings # per-test and per-module timings
 pytest tests/test_render.py    # one module, if pytest is installed
 ```
 
@@ -25,6 +27,8 @@ Run from the repository root. Tests are headless (`QT_QPA_PLATFORM=offscreen`),
 build their own PDFs, and import the source tree in place. After a change, run
 the module you touched — not the whole suite, unless the change is
 cross-cutting. `tests/test_hygiene.py` is the one to run when you move imports.
+After verification, commit completed work before reporting it done. Keep any
+unrelated changes out of that commit.
 
 ## Architecture
 
@@ -53,7 +57,7 @@ Imports only point downwards.
 | `tools/app.py` | Real entry point. Logging is installed before the panels import. Root `main.py` is only a dev launcher. |
 | `tools/app_state.py` | Current document, page model, page, and the signals tools subscribe to. |
 | `tools/_base.py` | `BasePanel`. `ensure_view_snapshot()` / `displayed_pdf()` flatten the page manager into a temp PDF. |
-| `tools/jobs.py` | The only background-work mechanism. Owned, cancellable, waited for at shutdown. |
+| `tools/jobs.py` | Background jobs other than PDF raster work. Owned, cancellable, waited for at shutdown. Raster tasks use `tools/render/queue.py`. |
 | `tools/theme.py` | Live palette `_TV`. Mutated in place; do not rebind it. |
 | `tools/i18n.py` | `tr()`. German source strings are the keys; English is `_EN`. |
 | `tools/paper.py` | The one paper-size table. Hiding a size removes it from dropdowns but it still resolves. |
@@ -72,8 +76,9 @@ Imports only point downwards.
 - Every pdfium call takes `PDFIUM_LOCK` in `tools/render/document_cache.py`.
   libpdfium is not thread-safe across documents either. Never hold that lock
   and the registry lock at the same time.
-- Background work goes through `tools.jobs` (`run_async` on panels). Not
-  `threading.Thread`, not `QThread`.
+- Tool background work goes through `tools.jobs` (`run_async` on panels).
+  PDF raster work goes through the existing single-worker `tools/render/queue.py`.
+  Do not start a separate `threading.Thread` or `QThread` from a panel.
 - Cancel owned jobs on tab close and window close (`cancel_owner()`).
 - Widgets are touched on the GUI thread. A worker delivers results with a
   signal or the jobs callbacks. `QTimer.singleShot` created on a worker never
@@ -83,9 +88,12 @@ Imports only point downwards.
   already dead; using it does not raise, it takes the process down.
 
 ### What a tool is allowed to read
-- Operate on the page-manager view (`ensure_view_snapshot()` /
+- Operations use the page-manager view (`ensure_view_snapshot()` /
   `displayed_pdf()`), not the file on disk. Reorder, rotate and insert live
-  in `PageModel` until save.
+  in `PageModel` until save. A screen preview may resolve each displayed
+  position through `PageModel.page_source()` and `get_rotation()` instead of
+  flattening the PDF; Crop/Scale does this to reuse the viewer's render cache.
+  Never read the original path alone and lose unsaved page-manager edits.
 - Do not guess a paper size. Unknown or "leave it to the printer" is `None` /
   empty, and the job sends no `media` option. Guessing A4 is how an SRA3 job
   printed an A4 area.
@@ -93,6 +101,10 @@ Imports only point downwards.
 ### Memory
 - Render caches are bounded by bytes, not by count, and entries carry a file
   revision (`_stat_key`). Keep both.
+- The large full-page cache and small thumbnail cache are shared by screen
+  previews. `cached_screen_page()` can use either. Keep the print preview's
+  render path separate: its form and annotation visibility differs from the
+  screen view, so shared screen pixels could misrepresent the printed sheet.
 
 ### Comments and tests
 - Comments explain why, not what. When the behaviour changes, update the
@@ -118,7 +130,11 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
   grid — those three build a `_tool_splitter` and take the main area. Do not
   fold Graustufen into the column; that preview is the tool.
 - New widgets use `_TV` / `apply_theme_globally`. Check light and dark.
-- Shortcuts: `tools/viewer/shortcuts.py`. Do not add a conflict.
+- Thumbnail-grid shortcuts live in `tools/viewer/shortcuts.py`; global zoom
+  routing is in `tools/viewer/panel.py`. `MainWindow._switch()` sets the active
+  tool preview, so Ctrl+0 / Ctrl+1 act on the visible N-Up or Crop/Scale sheet
+  instead of the hidden viewer. `PreviewPane` in `tools/panels/_shared.py`
+  owns fit and physical-size zoom for those sheets. Do not add a conflict.
 - Paper sizes come from `tools/paper.py`. No local size table.
 - Stylesheet traps that have already shipped as bugs:
   - A `QCheckBox` / `QRadioButton` without `background: transparent` paints
@@ -210,16 +226,19 @@ is one process per module for that reason. `--one-process` reproduces it on
 purpose. The runner calls `os._exit` so Qt/pdfium teardown cannot turn a
 green run into a non-zero status.
 
-`tests/test_printing.py` is the module that still faults if you pile
-`PrintDialog`s, tab switches, and pdfium renders into one process. Rules:
+Printing tests were split into behavior modules because piling `PrintDialog`s,
+tab switches and pdfium renders into one process can fault. The isolated
+`test_printing_dialog` module can still crash intermittently, including after
+some PASS lines and before its summary. Rules:
 
 - Close every dialog you open, in `finally`, and `deleteLater` the tab.
 - Do not add a test that opens a dialog just to look at it. Assertion-only
   checks on `spool.py` / `handling.py` belong there or in
   `tests/test_print_handling.py`, not in another `PrintDialog`.
-- Run `python3 tests/run.py printing` on its own. A segfault after the PASS
-  lines, during interpreter shutdown, is the known fault. A segfault with no
-  PASS line, or a FAIL, is a real failure — read which test.
+- Run `python3 tests/run.py printing` on its own. If a module crashes, report
+  it separately from assertion failures and rerun that module to see whether
+  it repeats. PASS lines before a crash do not make the run green. Investigate
+  a repeatable crash or FAIL rather than attributing it to the old heap fault.
 - `tests/support.py` sets `COPYSHOP_LOG_DIR` to a temp dir before importing
   the app. Do not point test logs at the user's real log.
 
