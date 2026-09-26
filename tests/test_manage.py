@@ -381,6 +381,35 @@ def test_large_page_manager_only_builds_viewport_cards():
         _app.processEvents()
 
 
+def test_narrow_page_manager_still_virtualizes():
+    """One-column layouts must not measure or create every page on entry."""
+    from PyQt6.QtWidgets import QScrollArea
+    from tools.viewer.page_grid import PageGrid
+    from tools.viewer.model import PageModel
+
+    grid = PageGrid(PageModel(2000), FX["normal"])
+    grid._maybe_schedule = lambda *_: None
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.resize(210, 600)
+    scroll.setWidget(grid)
+    scroll.show()
+    try:
+        _app.processEvents()
+        grid._rebuild()
+        grid._schedule_visible()
+        assert grid._per_row() == 1
+        assert sum(c is not None for c in grid._cards) < 50
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        _app.processEvents()
+        assert grid._cards[0] is None
+        assert grid._cards[-1] is not None
+    finally:
+        scroll.close()
+        scroll.deleteLater()
+        _app.processEvents()
+
+
 def test_closing_a_tab_takes_its_flattened_copy_with_it():
     """A snapshot is a whole document written into the temp directory. Nothing
     used to remove one: it was replaced only by the next snapshot of the same

@@ -1,10 +1,9 @@
 """
 The thumbnails of "Seiten verwalten".
 
-A card per page, laid out in a grid, with the drag and drop that reorders them
-and the marker showing where a dragged page will land. Thumbnails are rendered
-lazily for what is on screen — a 500-page document would otherwise queue 500
-renders to show twelve of them.
+Visible page cards in a grid, with drag and drop to reorder them and a marker
+showing where a dragged page will land. Both cards and thumbnails are loaded
+near the viewport — a 500-page document needs only a few to show its first row.
 """
 from PyQt6.QtWidgets import (QWidget, QFrame, QApplication, QScrollArea,
                              QSizePolicy)
@@ -12,7 +11,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QDrag, QPainter, QPen,
                          QTransform, QFont)
 from tools.i18n import tr
-from tools.render.caches import _FullPageCache, _ThumbnailCache
+from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.theme import (STATUS, _DROP_THICKNESS, _TV, _paint_drop_marker,
                          _register_themed)
@@ -255,7 +254,6 @@ class PageGrid(QWidget):
         self._cards   = []
         self._live_cards = set()
         self._dragging_card = None
-        self._card_render_widths = []   # single-column widths; normal grid is uniform
         self._drop_indicator = -1
         self._last_click_pos   = None  # für Shift+Click Bereichsauswahl
         self._card_w  = CARD_W   # zoombarer Thumbnail-Breite
@@ -340,32 +338,23 @@ class PageGrid(QWidget):
             is_single = (per_row == 1)
             self._layout_single = is_single
             grid_w    = max(100, self.width() or 800)
-            self._card_render_widths.clear()
 
-            # Single-column zoom preserves each page's true aspect ratio. Its
-            # variable heights still need dimensions up front; ordinary grid
-            # mode can derive all geometry without opening a single PDF page.
-            positions = range(len(self._cards)) if is_single else range(min(24, len(self._cards)))
+            # Narrow single-column mode uses a full-width, uniform page well.
+            # Reading every page's exact dimensions here used to freeze the
+            # switch on large documents. The thumbnail keeps its aspect ratio
+            # inside the well when it arrives; geometry needs no PDF reads.
+            self._layout_w = max(60, grid_w - 2*MARGIN - 16) if is_single else self._card_w
+            self._layout_h = (int(self._layout_w * CARD_H / CARD_W)
+                              if is_single else self._card_h)
+            self._render_width = _thumb_render_width(
+                self._layout_w * 1.5 if is_single else max(self._card_w * 2, 200))
+
+            positions = range(min(24, len(self._cards)))
             for pos in positions:
                 uid = self.model.order[pos]
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
                 rot            = self.model.get_rotation(uid)
-
-                if is_single:
-                    c_w = max(60, grid_w - 2*MARGIN - 16)
-                    pw, ph = _FullPageCache.get_dims(src_path, orig, rot)
-                    if pw > 0 and ph > 0:
-                        c_h = int(c_w * pw / ph) if rot in (90, 270) else int(c_w * ph / pw)
-                    else:
-                        c_h = int(c_w * CARD_H / CARD_W)
-                    render_w = _thumb_render_width(c_w * 1.5)
-                else:
-                    c_w      = self._card_w
-                    c_h      = self._card_h
-                    render_w = _thumb_render_width(max(self._card_w * 2, 200))
-
-                if is_single:
-                    self._card_render_widths.append(render_w)
+                c_w, c_h, render_w = self._layout_w, self._layout_h, self._render_width
 
                 # Show cached image if available; otherwise use old placeholder.
                 # Tasks are NOT submitted here — _schedule_visible() does that
@@ -420,11 +409,11 @@ class PageGrid(QWidget):
         uid = self.model.order[pos]
         src_path, orig = self.model.page_source(uid, self.pdf_path)
         rot = self.model.get_rotation(uid)
-        render_w = _thumb_render_width(max(self._card_w * 2, 200))
+        render_w = self._render_width
         cached = (_ThumbnailCache.get((src_path, orig, rot, render_w))
                   or _ThumbnailCache.get_any(src_path, orig, rot))
         pm = QPixmap.fromImage(cached) if cached is not None else None
-        card = PageCard(pos, uid, pm, 0, self, self._card_w, self._card_h)
+        card = PageCard(pos, uid, pm, 0, self, self._layout_w, self._layout_h)
         card.set_selected(self.model.is_selected(pos))
         card.clicked.connect(self._on_click)
         self._cards[pos] = card
@@ -463,48 +452,37 @@ class PageGrid(QWidget):
             y_min = max(0, scroll_y - viewport_h)          # 1 vp above
             y_max = scroll_y + 2 * viewport_h              # 2 vp below (scroll direction)
         else:
-            y_min, y_max = 0, 9_999_999   # no scroll area — show all
+            # A detached grid (tests or a transient reparent) still must not
+            # materialize an entire long document before it gets a viewport.
+            y_min, y_max = 0, 2 * (self.height() or 600)
 
         gen      = self._thumb_gen
         per_row  = self._per_row()
-        is_single = (per_row == 1)
 
-        if is_single:
-            # Cards stacked vertically; heights vary
-            y = MARGIN
-            for i, card in enumerate(self._cards):
-                card_h = card.height() or self._card_h
-                y_top, y_bot = y, y + card_h
-                y += card_h + GAP
-                if y_bot < y_min or y_top > y_max:
-                    continue
-                self._maybe_schedule(i, gen)
-        else:
-            # Uniform grid
-            cell_h  = self._card_h + 28 + GAP
-            row_min = max(0, int((y_min - MARGIN) // cell_h))
-            row_max = int((y_max - MARGIN) // cell_h) + 1
-            first = min(len(self._cards), row_min * per_row)
-            last = min(len(self._cards), (row_max + 1) * per_row)
-            # A bounded widget set keeps the switch and later scrolls fast even
-            # for PDFs with thousands of pages. Cancel stale offscreen renders.
-            for i in tuple(self._live_cards):
-                if not first <= i < last and self._cards[i] is not self._dragging_card:
-                    card = self._cards[i]
-                    card.hide()
-                    card.deleteLater()
-                    self._cards[i] = None
-                    self._live_cards.remove(i)
-            for task in self._thumb_tasks:
-                if not first <= task._cidx < last:
-                    task.cancel()
-            cell_w = self._card_w + 16 + GAP
-            for i in range(first, last):
-                card = self._materialize(i)
-                card.move(MARGIN + i % per_row * cell_w,
-                          MARGIN + i // per_row * cell_h)
-                card.show()
-                self._maybe_schedule(i, gen)
+        cell_h = self._layout_h + 28 + GAP
+        row_min = max(0, int((y_min - MARGIN) // cell_h))
+        row_max = int((y_max - MARGIN) // cell_h) + 1
+        first = min(len(self._cards), row_min * per_row)
+        last = min(len(self._cards), (row_max + 1) * per_row)
+        # A bounded widget set keeps the switch and later scrolls fast even
+        # for PDFs with thousands of pages. Cancel stale offscreen renders.
+        for i in tuple(self._live_cards):
+            if not first <= i < last and self._cards[i] is not self._dragging_card:
+                card = self._cards[i]
+                card.hide()
+                card.deleteLater()
+                self._cards[i] = None
+                self._live_cards.remove(i)
+        for task in self._thumb_tasks:
+            if not first <= task._cidx < last:
+                task.cancel()
+        cell_w = self._layout_w + 16 + GAP
+        for i in range(first, last):
+            card = self._materialize(i)
+            card.move(MARGIN + i % per_row * cell_w,
+                      MARGIN + i // per_row * cell_h)
+            card.show()
+            self._maybe_schedule(i, gen)
 
     def _maybe_schedule(self, cidx, gen):
         """Submit a thumb task for card[cidx] if its thumbnail isn't cached yet."""
@@ -513,8 +491,7 @@ class PageGrid(QWidget):
         card     = self._cards[cidx]
         if card is None:
             return
-        render_w = (self._card_render_widths[cidx] if self._per_row() == 1
-                    else _thumb_render_width(max(self._card_w * 2, 200)))
+        render_w = self._render_width
         uid      = card.orig_idx
         src_path, orig = self.model.page_source(uid, self.pdf_path)
         rot      = self.model.get_rotation(uid)
@@ -531,37 +508,19 @@ class PageGrid(QWidget):
         self._thumb_tasks.append(task)
         _render_queue.submit(task, 1)   # P1: visible thumbnails
 
-    def _card_tops(self):
-        """Return a list of y-offsets for each card (single-page mode only)."""
-        tops = []
-        y = MARGIN
-        for card in self._cards:
-            tops.append(y)
-            y += card.height() + GAP
-        return tops
-
     def _relayout(self):
         if not self._cards:
             self.setMinimumHeight(200); return
         pr = self._per_row()
-        if pr == 1:
-            # Single-page mode: stack cards vertically, each filling full width
-            y = MARGIN
-            for card in self._cards:
-                card.move(MARGIN, y)
-                card.show()
-                y += card.height() + GAP
-            self.setMinimumHeight(y + MARGIN)
-        else:
-            cell_w = self._card_w+16+GAP
-            cell_h = self._card_h+28+GAP
-            rows   = (len(self._cards)+pr-1)//pr
-            for i in self._live_cards:
-                card = self._cards[i]
-                card.move(MARGIN + i%pr*cell_w, MARGIN + i//pr*cell_h)
-                card.show()
-            self.setMinimumHeight(MARGIN + rows*cell_h + MARGIN)
-            self._schedule_visible()
+        cell_w = self._layout_w + 16 + GAP
+        cell_h = self._layout_h + 28 + GAP
+        rows = (len(self._cards) + pr - 1) // pr
+        for i in self._live_cards:
+            card = self._cards[i]
+            card.move(MARGIN + i % pr * cell_w, MARGIN + i // pr * cell_h)
+            card.show()
+        self.setMinimumHeight(MARGIN + rows * cell_h + MARGIN)
+        self._schedule_visible()
         self.update()
 
     def resizeEvent(self, e):
@@ -579,22 +538,18 @@ class PageGrid(QWidget):
         pr = self._per_row()
         p  = QPainter(self)
         if pr == 1:
-            tops = self._card_tops()
-            idx  = min(self._drop_indicator, len(tops))
-            if idx < len(tops):
-                y = tops[idx] - GAP//2
-            else:
-                y = tops[-1] + self._cards[-1].height() + GAP//2
+            idx = min(self._drop_indicator, len(self._cards))
+            y = MARGIN + idx * (self._layout_h + 28 + GAP) - GAP // 2
             _paint_drop_marker(p, MARGIN, y - _DROP_THICKNESS/2.0,
-                               self._card_w + 16, horizontal=True)
+                               self._layout_w + 16, horizontal=True)
         else:
-            cell_w = self._card_w+16+GAP
-            cell_h = self._card_h+28+GAP
+            cell_w = self._layout_w+16+GAP
+            cell_h = self._layout_h+28+GAP
             pos    = min(self._drop_indicator, len(self._cards))
             col    = pos % pr; row = pos // pr
             x      = MARGIN + col*cell_w - GAP//2
             y      = MARGIN + row*cell_h
-            _paint_drop_marker(p, x - _DROP_THICKNESS/2.0, y, self._card_h)
+            _paint_drop_marker(p, x - _DROP_THICKNESS/2.0, y, self._layout_h)
         p.end()
 
     def _pos_from_point(self, pt):
@@ -602,16 +557,10 @@ class PageGrid(QWidget):
         n  = len(self._cards)
         pr = self._per_row()
         if pr == 1:
-            # Single-page mode: find which card the y coordinate falls in
-            tops = self._card_tops()
-            rel_y = pt.y()
-            for i, top in enumerate(tops):
-                bottom = top + self._cards[i].height()
-                if rel_y < (top + bottom) // 2:
-                    return i
-            return n
-        cell_w = self._card_w + 16 + GAP
-        cell_h = self._card_h + 28 + GAP
+            cell_h = self._layout_h + 28 + GAP
+            return max(0, min(n, (pt.y() - MARGIN + cell_h // 2) // cell_h))
+        cell_w = self._layout_w + 16 + GAP
+        cell_h = self._layout_h + 28 + GAP
         rel_x  = pt.x() - MARGIN
         rel_y  = pt.y() - MARGIN
         col    = max(0, min(rel_x // cell_w, pr - 1))
