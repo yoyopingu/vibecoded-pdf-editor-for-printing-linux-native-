@@ -262,7 +262,7 @@ def normalise_page_size(value):
 
 
 def queue_defaults(printer_name):
-    """What the queue itself is set to, as {"paper", "duplex", "duplex_edge"}.
+    """What the queue itself is set to: paper, duplex and colour.
 
     Read from CUPS rather than from Qt. QPrinterInfo.defaultPageSize() and
     defaultDuplexMode() are what this used to ask, and on a CUPS queue they are
@@ -293,6 +293,18 @@ def queue_defaults(printer_name):
         if default:
             found["duplex"] = default != "one-sided"
             found["duplex_edge"] = "short" if default.endswith("short-edge") else "long"
+
+    # QPrinterInfo.defaultColorMode() has reported grayscale for colour CUPS
+    # queues here. The bitmap path uses QPrinter, so resolve its "printer
+    # default" from the queue instead of inheriting that unreliable guess.
+    for keyword in ("print-color-mode", "ColorModel"):
+        if keyword in options:
+            default = (options[keyword][2] or "").lower()
+            if default:
+                found["color_mode"] = (
+                    "mono" if default in ("monochrome", "gray", "grayscale", "k")
+                    else "color")
+                break
     logging.info("queue_defaults: %s -> %s", printer_name, found or "nothing")
     return found
 

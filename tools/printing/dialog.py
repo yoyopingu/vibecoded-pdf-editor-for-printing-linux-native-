@@ -1300,8 +1300,8 @@ class PrintDialog(QDialog):
     def _load_queue_info(self, printer_name):
         """Ask CUPS what this queue offers and defaults to, off the GUI thread.
 
-        One lpoptions call answers all of it: the trays, the default paper and
-        the default sides. It shells out and can take a second or two on a
+        One lpoptions call answers all of it: the trays, the default paper,
+        sides and colour. It shells out and can take a second or two on a
         network queue — the same reason the printer list is fetched in the
         background.
         """
@@ -2319,9 +2319,18 @@ class PrintDialog(QDialog):
                 (QPrinter.DuplexMode.DuplexShortSide if duplex_edge == "short"
                  else QPrinter.DuplexMode.DuplexLongSide) if duplex
                 else QPrinter.DuplexMode.DuplexNone)
-            if color_mode == "mono":
+            # Qt's per-printer colour default is unreliable for CUPS queues:
+            # a colour press can be reported as GrayScale. The raster is RGB;
+            # accepting Qt's guess here is what made "Als Bitmap" turn it
+            # black and white even with "Drucker-Standard" selected. Honour a
+            # real monochrome queue default when CUPS reports one; otherwise
+            # preserve the colour pixels. Explicit Graustufen still wins.
+            defaults = _QUEUE_INFO_CACHE.get(printer_name, {}).get("defaults", {})
+            qt_color = (defaults.get("color_mode", "color")
+                        if color_mode == "auto" else color_mode)
+            if qt_color == "mono":
                 printer.setColorMode(QPrinter.ColorMode.GrayScale)
-            elif color_mode == "color":
+            else:
                 printer.setColorMode(QPrinter.ColorMode.Color)
 
             printer.setPageSize(QPageSize(_qt_page_sizes().get(

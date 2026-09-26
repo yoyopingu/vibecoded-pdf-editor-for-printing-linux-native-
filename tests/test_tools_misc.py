@@ -339,6 +339,47 @@ def test_a_jpeg_keeps_only_its_main_picture():
     assert npages(images_to_pdf_bytes([plain, mpo])) == 2
 
 
+def test_jpeg_bad_exif_rotation_does_not_prevent_opening():
+    """Orientation=0 from a scanner used to make img2pdf reject an otherwise
+    valid JPEG; valid turns and mirrored orientations still need to look right."""
+    import io
+    from tools.multi_open import images_to_pdf_bytes
+
+    tmp = tempfile.mkdtemp(dir=_TMP)
+    image = Image.new("RGB", (80, 40), (240, 30, 20))
+    bad = os.path.join(tmp, "bad_exif.jpg")
+    turned = os.path.join(tmp, "turned.jpg")
+    mirrored = os.path.join(tmp, "mirrored.jpg")
+    for path, orientation in ((bad, 0), (turned, 6), (mirrored, 2)):
+        exif = image.getexif()
+        exif[274] = orientation
+        image.save(path, "JPEG", exif=exif)
+
+    def page_size(data, index):
+        box = PdfReader(io.BytesIO(data)).pages[index].mediabox
+        return round(float(box.width)), round(float(box.height))
+
+    output = images_to_pdf_bytes([bad, turned])
+    assert len(PdfReader(io.BytesIO(output)).pages) == 2
+    assert page_size(output, 0)[0] > page_size(output, 0)[1]
+    assert PdfReader(io.BytesIO(output)).pages[1].get("/Rotate") == 90, \
+        "a valid EXIF quarter-turn was lost"
+    # A mirrored orientation must not merely be ignored to make conversion
+    # succeed. Use a two-colour photo so its left/right orientation is visible.
+    split = Image.new("RGB", (80, 40), (240, 30, 20))
+    split.paste((20, 40, 220), (40, 0, 80, 40))
+    exif = split.getexif(); exif[274] = 2
+    split.save(mirrored, "JPEG", exif=exif)
+    output = images_to_pdf_bytes([mirrored])
+    doc = pdfium.PdfDocument(output)
+    rendered = doc[0].render(scale=1).to_pil().convert("RGB")
+    doc.close()
+    left = rendered.getpixel((rendered.width // 4, rendered.height // 2))
+    right = rendered.getpixel((rendered.width * 3 // 4, rendered.height // 2))
+    assert left[2] > left[0] and right[0] > right[2], \
+        "mirrored EXIF was ignored instead of applied"
+
+
 def test_the_heavy_tools_hand_their_work_to_a_worker():
     """Pressing Ausführen must return to the event loop, not hold it.
 

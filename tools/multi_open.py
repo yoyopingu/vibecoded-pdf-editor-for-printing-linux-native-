@@ -84,7 +84,8 @@ def convert_to_pdf(path, out_dir):
 
 
 def images_to_pdf_bytes(paths):
-    """Losslessly wrap one or more image files in a single PDF.
+    """Wrap one or more image files in a single PDF, keeping JPEG data intact
+    except when a mirrored EXIF orientation must be applied to its pixels.
 
     A JPEG is one picture. Phones store further images in the same file — an
     HDR gain map, a depth image, a stereo mate — and img2pdf turns each of
@@ -94,6 +95,8 @@ def images_to_pdf_bytes(paths):
 
     img2pdf's first_frame_only flag covers a whole call. A JPEG therefore
     cannot share a call with a multi-page TIFF, or the TIFF would lose pages.
+    Some cameras write Orientation=0 or another invalid value; img2pdf's
+    strict default rejects the entire file, although its pixels are sound.
     """
     import img2pdf
     paths = list(paths)
@@ -101,14 +104,42 @@ def images_to_pdf_bytes(paths):
     if any(jpeg) and not all(jpeg):
         return _concat_pdf_bytes(_one_image_pdf(p) for p in paths)
     if any(jpeg):
-        return img2pdf.convert(paths, first_frame_only=True)
+        if any(_jpeg_needs_flip(p) for p in paths):
+            return _concat_pdf_bytes(_one_image_pdf(p) for p in paths)
+        return img2pdf.convert(
+            paths, first_frame_only=True, rotation=img2pdf.Rotation.ifvalid)
     return img2pdf.convert(paths)
+
+
+def _jpeg_needs_flip(path):
+    """The four mirrored EXIF orientations cannot be represented by /Rotate."""
+    from PIL import Image
+    try:
+        with Image.open(path) as image:
+            return image.getexif().get(274) in (2, 4, 5, 7)
+    except Exception:
+        return False   # let img2pdf report a genuinely unreadable image
 
 
 def _one_image_pdf(path):
     import img2pdf
     if os.path.splitext(path)[1].lower() in (".jpg", ".jpeg"):
-        return img2pdf.convert(path, first_frame_only=True)
+        if _jpeg_needs_flip(path):
+            # img2pdf can ignore mirrored EXIF but cannot display it correctly
+            # while embedding the original JPEG stream. Decode only this rare
+            # case and use lossless PNG, so the page matches the photo viewer.
+            import io
+            from PIL import Image, ImageOps
+            with Image.open(path) as image:
+                corrected = ImageOps.exif_transpose(image)
+                if corrected.mode not in ("1", "L", "RGB"):
+                    corrected = corrected.convert("RGB")
+                buf = io.BytesIO()
+                corrected.save(buf, format="PNG",
+                               icc_profile=image.info.get("icc_profile"))
+            return img2pdf.convert(buf.getvalue())
+        return img2pdf.convert(
+            path, first_frame_only=True, rotation=img2pdf.Rotation.ifvalid)
     return img2pdf.convert(path)
 
 

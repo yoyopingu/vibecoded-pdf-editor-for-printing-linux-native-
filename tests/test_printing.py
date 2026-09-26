@@ -487,7 +487,20 @@ def test_queue_defaults_come_from_cups_not_qt():
     with _stub_queue("PageSize/Media Size: *A4.Borderless A4\n"):
         assert queue_defaults("q") == {"paper": "A4"}
     with _stub_queue("ColorModel/Color Mode: *RGB Gray\n"):
-        assert queue_defaults("q") == {}
+        assert queue_defaults("q") == {"color_mode": "color"}
+
+
+def test_bitmap_color_default_reads_the_cups_queue():
+    """A Qt grayscale guess must not win over a CUPS colour default; a real
+    monochrome default must still be respected by bitmap printing."""
+    from tools.printing.spool import queue_defaults
+
+    with _stub_queue("print-color-mode/Color Mode: monochrome *color\n"):
+        assert queue_defaults("q")["color_mode"] == "color"
+    with _stub_queue("print-color-mode/Color Mode: *monochrome color\n"):
+        assert queue_defaults("q")["color_mode"] == "mono"
+    with _stub_queue("ColorModel/Color Mode: *Gray RGB CMYK\n"):
+        assert queue_defaults("q")["color_mode"] == "mono"
 
 
 def test_the_dialog_reopens_on_what_was_used_last():
@@ -1275,6 +1288,63 @@ def test_the_qt_print_path_actually_runs():
     assert len(PdfReader(out).pages) == 2, \
         f"expected 2 pages, got {len(PdfReader(out).pages)}"
     return "the Qt/bitmap path runs end to end and spools both pages"
+
+
+def test_bitmap_print_does_not_inherit_a_false_grayscale_default():
+    """Qt has reported GrayScale for colour CUPS queues. A colourful RGB
+    raster must stay colourful in auto mode unless CUPS itself says mono."""
+    import PyQt6.QtPrintSupport as QtPS
+    from PyQt6.QtPrintSupport import QPrinter
+    from PyQt6.QtGui import QPageLayout
+    from PIL import Image
+    from tools.printing import dialog as dialog_mod
+
+    tab, dlg = _print_dialog(1, "bitmap_colour.pdf")
+    real_qprinter = QtPS.QPrinter
+    queue = "bitmap-colour-test"
+    old_info = dialog_mod._QUEUE_INFO_CACHE.get(queue)
+    rendered = [(Image.new("RGB", (300, 300), (240, 40, 30)),
+                 QPageLayout.Orientation.Portrait, 300, 300)]
+    output = {}
+    failures = []
+    dlg._on_print_failed = failures.append
+    dlg._finish = lambda *args: None
+
+    def to_file(*args, **kwargs):
+        p = real_qprinter(*args, **kwargs)
+        p.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+        p.setOutputFileName(output["path"])
+        p.setColorMode(QPrinter.ColorMode.GrayScale)  # Qt's wrong queue guess
+        return p
+
+    for enum in ("PrinterMode", "DuplexMode", "ColorMode", "OutputFormat"):
+        setattr(to_file, enum, getattr(real_qprinter, enum))
+
+    def is_colour(defaults, name):
+        output["path"] = os.path.join(_TMP, name)
+        dialog_mod._QUEUE_INFO_CACHE[queue] = {"defaults": defaults}
+        dlg._qt_send_to_printer(rendered, [], [0], 1, "auto", True,
+                                False, "long", queue, "A4", 1, 150)
+        doc = pdfium.PdfDocument(output["path"])
+        image = doc[0].render(scale=0.3).to_pil().convert("RGB")
+        doc.close()
+        return any(r > g + 50 and r > b + 50
+                   for r, g, b in image.get_flattened_data())
+
+    QtPS.QPrinter = to_file
+    try:
+        assert is_colour({}, "bitmap_auto_colour.pdf"), \
+            "bitmap auto inherited Qt's false grayscale default"
+        assert not is_colour({"color_mode": "mono"}, "bitmap_auto_mono.pdf"), \
+            "an actual monochrome queue default was ignored"
+    finally:
+        QtPS.QPrinter = real_qprinter
+        if old_info is None:
+            dialog_mod._QUEUE_INFO_CACHE.pop(queue, None)
+        else:
+            dialog_mod._QUEUE_INFO_CACHE[queue] = old_info
+        dlg.close(); dlg.deleteLater(); tab.deleteLater(); _app.processEvents()
+    assert not failures, failures
 
 
 def test_paper_names_survive_the_round_trip_through_qt():
