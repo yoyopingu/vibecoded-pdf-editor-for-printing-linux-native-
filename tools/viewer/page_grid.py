@@ -27,10 +27,10 @@ MARGIN = 12
 # A card is one widget that paints itself, not a QFrame holding two QLabels
 # with a stylesheet each.
 #
-# The page manager builds a card per page, so on a 1000-page document the old
-# shape meant 3000 widgets and 3000 stylesheet parses before the grid could be
-# shown — which is what made the first switch into it take over a second.
-# Measured on that switch, first entry into the grid:
+# A prior pass reduced each page from three widgets to one. That helped, but
+# making even one widget per page before switching still scales with document
+# length. Only viewport cards are now materialized; empty slots are geometry,
+# not widgets. The earlier measurements explain why the first pass existed:
 #
 #     200 pages     360 ms -> 120 ms
 #     500 pages     680 ms -> 147 ms
@@ -43,10 +43,8 @@ MARGIN = 12
 # delegate and uniformItemSizes — the same trade, one widget and many painted
 # items.
 #
-# One *widget* per card is kept, rather than going all the way to a delegate:
-# the drag-and-drop reordering, the per-card cursor and the drag pixmap are all
-# widget behaviour, and a delegate would mean rewriting those as well. The
-# saving is in what a card contains, not in how many there are.
+# Visible cards remain widgets for drag-and-drop and cursor behavior. Offscreen
+# cards are discarded, so startup and scrolling cost follow viewport size.
 CARD_MARGIN   = 4     # around the thumbnail
 CARD_CAPTION  = 20    # the strip under it that holds the number
 CARD_SPACING  = 2
@@ -246,7 +244,8 @@ class PageGrid(QWidget):
         self.model    = model
         self.pdf_path = pdf_path
         self._cards   = []
-        self._card_render_widths = []   # render_w per card, parallel to _cards
+        self._live_cards = set()
+        self._card_render_widths = []   # single-column widths; normal grid is uniform
         self._drop_indicator = -1
         self._last_click_pos   = None  # für Shift+Click Bereichsauswahl
         self._card_w  = CARD_W   # zoombarer Thumbnail-Breite
@@ -318,20 +317,27 @@ class PageGrid(QWidget):
 
             # Build a uid→pixmap map from the existing cards so we can reuse
             # them as placeholders instead of going blank during re-renders.
-            old_cards = self._cards[:]
+            old_cards = [self._cards[i] for i in self._live_cards]
             old_pm_by_uid = {}
             for c in old_cards:
                 pm = c.pixmap()
                 if pm and not pm.isNull():
                     old_pm_by_uid[c.orig_idx] = pm
-            self._cards.clear()
+            self._cards = [None] * len(self.model.order)
+            self._live_cards.clear()
 
             per_row   = self._per_row()
             is_single = (per_row == 1)
+            self._layout_single = is_single
             grid_w    = max(100, self.width() or 800)
             self._card_render_widths.clear()
 
-            for pos, uid in enumerate(self.model.order):
+            # Single-column zoom preserves each page's true aspect ratio. Its
+            # variable heights still need dimensions up front; ordinary grid
+            # mode can derive all geometry without opening a single PDF page.
+            positions = range(len(self._cards)) if is_single else range(min(24, len(self._cards)))
+            for pos in positions:
+                uid = self.model.order[pos]
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
                 rot            = self.model.get_rotation(uid)
 
@@ -348,7 +354,8 @@ class PageGrid(QWidget):
                     c_h      = self._card_h
                     render_w = _thumb_render_width(max(self._card_w * 2, 200))
 
-                self._card_render_widths.append(render_w)
+                if is_single:
+                    self._card_render_widths.append(render_w)
 
                 # Show cached image if available; otherwise use old placeholder.
                 # Tasks are NOT submitted here — _schedule_visible() does that
@@ -372,7 +379,8 @@ class PageGrid(QWidget):
                 card = PageCard(pos, uid, pm, 0, self, c_w, c_h)
                 card.set_selected(self.model.is_selected(pos))
                 card.clicked.connect(self._on_click)
-                self._cards.append(card)
+                self._cards[pos] = card
+                self._live_cards.add(pos)
 
             # Destroy old cards after new ones are ready
             for c in old_cards:
@@ -391,7 +399,27 @@ class PageGrid(QWidget):
             return   # stale
         if cidx < 0 or cidx >= len(self._cards):
             return
-        self._cards[cidx].set_image(image)
+        card = self._cards[cidx]
+        if card is not None:
+            card.set_image(image)
+
+    def _materialize(self, pos):
+        """Create one nearby card only when its viewport needs it."""
+        if self._cards[pos] is not None:
+            return self._cards[pos]
+        uid = self.model.order[pos]
+        src_path, orig = self.model.page_source(uid, self.pdf_path)
+        rot = self.model.get_rotation(uid)
+        render_w = _thumb_render_width(max(self._card_w * 2, 200))
+        cached = (_ThumbnailCache.get((src_path, orig, rot, render_w))
+                  or _ThumbnailCache.get_any(src_path, orig, rot))
+        pm = QPixmap.fromImage(cached) if cached is not None else None
+        card = PageCard(pos, uid, pm, 0, self, self._card_w, self._card_h)
+        card.set_selected(self.model.is_selected(pos))
+        card.clicked.connect(self._on_click)
+        self._cards[pos] = card
+        self._live_cards.add(pos)
+        return card
 
     # ── Lazy thumbnail loading ────────────────────────────────────────────────
 
@@ -416,7 +444,7 @@ class PageGrid(QWidget):
         """Submit thumb tasks only for cards visible in the scroll viewport.
         A one-viewport buffer above and below is included so scrolling feels
         instant.  Already-cached and already-scheduled cards are skipped."""
-        if not self._cards:
+        if not self._cards or not self.isVisible():
             return
         sa = self._get_scroll_area()
         if sa is not None:
@@ -446,17 +474,37 @@ class PageGrid(QWidget):
             cell_h  = self._card_h + 28 + GAP
             row_min = max(0, int((y_min - MARGIN) // cell_h))
             row_max = int((y_max - MARGIN) // cell_h) + 1
-            for i, card in enumerate(self._cards):
-                if i // per_row < row_min or i // per_row > row_max:
-                    continue
+            first = min(len(self._cards), row_min * per_row)
+            last = min(len(self._cards), (row_max + 1) * per_row)
+            # A bounded widget set keeps the switch and later scrolls fast even
+            # for PDFs with thousands of pages. Cancel stale offscreen renders.
+            for i in tuple(self._live_cards):
+                if not first <= i < last:
+                    card = self._cards[i]
+                    card.hide()
+                    card.deleteLater()
+                    self._cards[i] = None
+                    self._live_cards.remove(i)
+            for task in self._thumb_tasks:
+                if not first <= task._cidx < last:
+                    task.cancel()
+            cell_w = self._card_w + 16 + GAP
+            for i in range(first, last):
+                card = self._materialize(i)
+                card.move(MARGIN + i % per_row * cell_w,
+                          MARGIN + i // per_row * cell_h)
+                card.show()
                 self._maybe_schedule(i, gen)
 
     def _maybe_schedule(self, cidx, gen):
         """Submit a thumb task for card[cidx] if its thumbnail isn't cached yet."""
-        if cidx >= len(self._cards) or cidx >= len(self._card_render_widths):
+        if cidx >= len(self._cards):
             return
         card     = self._cards[cidx]
-        render_w = self._card_render_widths[cidx]
+        if card is None:
+            return
+        render_w = (self._card_render_widths[cidx] if self._per_row() == 1
+                    else _thumb_render_width(max(self._card_w * 2, 200)))
         uid      = card.orig_idx
         src_path, orig = self.model.page_source(uid, self.pdf_path)
         rot      = self.model.get_rotation(uid)
@@ -498,19 +546,22 @@ class PageGrid(QWidget):
             cell_w = self._card_w+16+GAP
             cell_h = self._card_h+28+GAP
             rows   = (len(self._cards)+pr-1)//pr
-            for i, card in enumerate(self._cards):
+            for i in self._live_cards:
+                card = self._cards[i]
                 card.move(MARGIN + i%pr*cell_w, MARGIN + i//pr*cell_h)
                 card.show()
             self.setMinimumHeight(MARGIN + rows*cell_h + MARGIN)
+            self._schedule_visible()
         self.update()
 
     def resizeEvent(self, e):
         # In single-page mode the card width must track the widget width.
         # Debounce to avoid triggering _rebuild on every pixel of a drag-resize.
-        if self._per_row() == 1:
+        if self._per_row() == 1 or (self._per_row() == 1) != self._layout_single:
             self._resize_timer.start(120)
         else:
             self._relayout()
+            QTimer.singleShot(0, self._schedule_visible)
 
     def paintEvent(self, e):
         super().paintEvent(e)
@@ -525,7 +576,7 @@ class PageGrid(QWidget):
             else:
                 y = tops[-1] + self._cards[-1].height() + GAP//2
             _paint_drop_marker(p, MARGIN, y - _DROP_THICKNESS/2.0,
-                               self._cards[0].width(), horizontal=True)
+                               self._card_w + 16, horizontal=True)
         else:
             cell_w = self._card_w+16+GAP
             cell_h = self._card_h+28+GAP
@@ -590,8 +641,8 @@ class PageGrid(QWidget):
         self.selection_changed.emit()
 
     def _update_selection(self):
-        for i, card in enumerate(self._cards):
-            card.set_selected(self.model.is_selected(i))
+        for i in self._live_cards:
+            self._cards[i].set_selected(self.model.is_selected(i))
 
     def handle_drop(self, from_pos, to_pos, multi=False, copy=False):
         self._drop_indicator = -1; self.update()

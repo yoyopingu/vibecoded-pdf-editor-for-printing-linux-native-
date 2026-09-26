@@ -302,16 +302,15 @@ def test_a_page_card_is_one_widget_and_carries_no_stylesheet():
     """What made switching into the page manager slow.
 
     A card used to be three widgets — a frame, a label for the thumbnail and a
-    label for the number — each carrying its own stylesheet. The page manager
-    builds one per page, so a thousand-page document meant 3000 widgets and
-    3000 stylesheet parses on the GUI thread before the grid could be shown,
-    and the window was frozen for all of it. Measured on that first switch:
+    label for the number — each carrying its own stylesheet. A thousand-page
+    document then meant 3000 widgets and stylesheet parses on the GUI thread.
+    Measured on that first switch before viewport virtualization:
 
         200 pages     360 ms -> 120 ms
         500 pages     680 ms -> 147 ms
        1000 pages    1237 ms -> 215 ms
 
-    A card paints itself now. That is the property worth pinning: a timing
+    A visible card paints itself now. That is the property worth pinning: a timing
     would be a stopwatch reading on one machine, but "no children and no
     stylesheet" is the thing that cannot come back by accident — and it is what
     Okular's thumbnail list and Qt's own icon views do for the same reason.
@@ -341,6 +340,45 @@ def test_a_page_card_is_one_widget_and_carries_no_stylesheet():
     finally:
         grid.deleteLater(); _app.processEvents()
     return "one widget, no stylesheet, paints itself"
+
+
+def test_large_page_manager_only_builds_viewport_cards():
+    """Opening and scrolling a long document must not create N widgets."""
+    from PyQt6.QtWidgets import QScrollArea
+    from tools.viewer.page_grid import PageGrid
+    from tools.viewer.model import PageModel
+
+    grid = PageGrid(PageModel(2000), FX["normal"])
+    grid._maybe_schedule = lambda *_: None  # Geometry, not rendering, is under test.
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.resize(800, 600)
+    scroll.setWidget(grid)
+    scroll.show()
+    try:
+        _app.processEvents()
+        grid._schedule_visible()
+        assert len(grid._cards) == 2000
+        assert sum(c is not None for c in grid._cards) < 50
+        assert grid._cards[0] is not None
+
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        _app.processEvents()
+        assert sum(c is not None for c in grid._cards) < 50
+        assert grid._cards[0] is None
+        assert grid._cards[-1] is not None
+        grid.model.select(1999)
+        grid._update_selection()
+        assert grid._cards[-1]._selected
+        grid.zoom_in()
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        _app.processEvents()
+        assert sum(c is not None for c in grid._cards) < 50
+        assert grid._cards[-1]._selected
+    finally:
+        scroll.close()
+        scroll.deleteLater()
+        _app.processEvents()
 
 
 def test_closing_a_tab_takes_its_flattened_copy_with_it():

@@ -124,6 +124,9 @@ class PdfTab(PdfTabBase):
         self._build_manage_once()
         self._manage_panel.show()
         self._stack.setCurrentWidget(self._manage_widget)
+        # The grid is hidden while constructed; populate the actual viewport
+        # only after the stack has shown it and assigned its final geometry.
+        QTimer.singleShot(0, self._manage_widget.widget()._schedule_visible)
 
     def _exit_manage(self):
         self._stack.setCurrentWidget(self.single)
