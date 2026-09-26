@@ -354,7 +354,18 @@ def open_page(path, index):
                 cache_key = (handle.key, index)
                 with _pages_lock:
                     page = _pages.get(cache_key)
-                    if page is not None:
+                    if page is not None and not page.raw:
+                        # A PdfPage wrapper can outlive its native handle.
+                        # The live four-page A0 case reached this state after
+                        # preview switching: handing the wrapper to
+                        # FPDF_RenderPageBitmap_Start passed None as its page
+                        # pointer, so every render retry failed identically.
+                        # Reload from the still-open document instead.
+                        _pages.pop(cache_key, None)
+                        logging.warning("document_cache: reloading closed page %s of %s",
+                                        index, path)
+                        page = None
+                    elif page is not None:
                         _pages.move_to_end(cache_key)
                 if page is None:
                     page = handle.doc[index]        # FPDF_LoadPage: the expensive bit

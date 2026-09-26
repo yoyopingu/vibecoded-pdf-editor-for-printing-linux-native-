@@ -315,6 +315,28 @@ def test_a_page_is_loaded_once_not_once_per_render():
     assert dc.stats()["pages"] == 0, "close_all left pages loaded"
 
 
+def test_a_closed_cached_page_is_reloaded_before_rendering():
+    """A closed native page handle must not become a permanent blank page.
+
+    The live four-page A0 case left a PdfPage wrapper in the cache after its
+    native handle was closed. Every attempted render then passed None to
+    FPDF_RenderPageBitmap_Start and the numbered stand-in never went away.
+    """
+    from tools.render import document_cache as dc
+    from tools.render.raster import render_window
+
+    dc.close_all()
+    try:
+        with dc.open_page(FX["normal"], 3) as page:
+            page.close()   # reproduce the stale wrapper observed in the cache
+        image = render_window(FX["normal"], 3, 240, 320)
+        assert image is not None and image.width() == 240
+        with dc.open_page(FX["normal"], 3) as page:
+            assert page.raw, "the cache kept the closed native page handle"
+    finally:
+        dc.close_all()
+
+
 def test_a_render_in_flight_can_be_abandoned():
     """A render used to be one uninterruptible call into pdfium: 130-550 ms on a
     complex page, during which the render thread held the process-wide pdfium
