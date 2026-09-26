@@ -44,7 +44,7 @@ import logging
 import math
 
 from tools.render.caches import _revision as _cached_revision
-from tools.render.document_cache import open_page
+from tools.render.document_cache import open_page, page_document
 
 
 # Re-export with the same name for backward compatibility
@@ -74,13 +74,19 @@ def _remember(cache, key, value, cap):
 
 
 def page_size_pt(path, page_index):
-    """(width, height) of a page in points, unrotated. Cached — the viewer asks
-    for this on every render and it never changes for a given file revision."""
+    """(width, height) in points before the page manager's turn. Cached — the viewer asks
+    for this on every render and it never changes for a given file revision.
+
+    PdfDocument.get_page_size reads the displayed geometry from the page tree
+    without FPDF_LoadPage. Loading a complex page can parse its content stream
+    for over a second, leaving a cold placeholder at the wrong shape for that
+    whole time even though no pixels have been requested yet.
+    """
     key = (_revision(path), page_index)
     size = _page_sizes.get(key)
     if size is None:
-        with open_page(path, page_index) as page:
-            size = (page.get_width(), page.get_height())
+        with page_document(path) as doc:
+            size = doc.get_page_size(page_index)
         _remember(_page_sizes, key, size, _PAGE_SIZES_MAX)
     return size
 

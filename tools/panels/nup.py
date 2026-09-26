@@ -3,7 +3,6 @@ N-Up Layout — several source pages to a sheet, with margins, gaps and crop
 marks, over a live preview of the sheet.
 """
 import os, math
-from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
 from tools.theme import INK, PAPER, _TV, _register_themed
@@ -17,22 +16,23 @@ from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _visible_size, r
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
 from tools.panels._imposition import (_slot_placement, _flatten_annots,
                                       form_factory, full_scale_problem)
-from tools.render.document_cache import open_document as _open_pdf
+from tools.render.document_cache import page_document
 from tools.render.placeholder import paint_page_number, source_page_index
 from tools.jobs import submit
 
 
 def _read_page_dims(pdf_path, idx):
-    """Read one source page's geometry without touching the preview widgets."""
-    with _pdfium_lock:
-        doc = _open_pdf(pdf_path)
-        try:
-            n = len(doc)
-            i = min(idx, n - 1)
-            pg = doc[i]
-            return i, pg.get_width(), pg.get_height(), n
-        finally:
-            doc.close()
+    """Read source geometry from the page tree, before parsing page content.
+
+    The document cache shares an already opened PDF with the viewer. Loading
+    the representative page here used to hold up the sheet layout on complex
+    pages, even though N-Up only needs its size at this stage.
+    """
+    with page_document(pdf_path) as doc:
+        n = len(doc)
+        i = min(idx, n - 1)
+        pw, ph = doc.get_page_size(i)
+        return i, pw, ph, n
 
 
 # ══════════════════════════════════════════════════════════════════════════════

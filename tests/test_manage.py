@@ -8,7 +8,7 @@ from reportlab.lib.pagesizes import A4
 from tools.app_state import AppState
 import pypdfium2 as pdfium
 import tools.app as MAIN
-from tests.support import FX, _TMP, _app, _open, _page_labels, _settle, _spin
+from tests.support import FX, _TMP, _app, _open, _page_labels, _settle, _spin, _wait_for
 
 
 def _pdfium_dims(path, index=0):
@@ -44,29 +44,23 @@ def test_rotation_reaches_the_tools():
     assert (round(w1), round(h1)) == (round(h0), round(w0)), \
         f"rotated page measures {w1:.0f}x{h1:.0f}, expected {h0:.0f}x{w0:.0f}"
 
-    # Watch which file the panels actually open. current_pdf() was always
-    # correct — the bug was these three code paths reaching past it to
-    # AppState.current_pdf, so only the real call shows it.
-    opened = []
-    real = pdfium.PdfDocument
-    class _Spy(real):
-        def __init__(self, inp, *a, **k):
-            if isinstance(inp, str): opened.append(inp)
-            super().__init__(inp, *a, **k)
-    pdfium.PdfDocument = _Spy
-    try:
-        crop = CropResizePanel()
-        for label, call in (
-                ("crop margins",  lambda: crop._set_margins_for_size(595.0, 842.0)),
-                ("crop preview",  lambda: crop._render_preview(400, 500, 1.0)),
-                ("n-up preview",  lambda: NUpPanel()._render_preview(400, 500, 1.0))):
-            opened.clear()
-            call()
-            assert opened, f"{label} opened no document at all"
-            assert all(p == flat for p in opened), \
-                f"{label} read {[os.path.basename(p) for p in opened]}, not the rotated view"
-    finally:
-        pdfium.PdfDocument = real
+    # Geometry may already be cached, and Crop now reads a cold page in a job.
+    # Check the actual sheet and the source each preview used, including after
+    # a rotation when the file on disk still has the original orientation.
+    crop = CropResizePanel()
+    crop._set_margins_for_size(595.0, 842.0)
+    assert _wait_for(lambda: getattr(crop, '_pending_target', None) is None)
+    t, b, l, r = crop._effective_margins_pt(w1, h1)
+    assert abs(l - (w1 - 595.0) / 2) < 0.1
+    assert abs(t - (h1 - 842.0) / 2) < 0.1
+    assert b == t and r == l
+    crop._render_preview(400, 500, 1.0)
+    assert crop._base_cache[0][0] == flat, "crop preview used the unrotated file"
+
+    nup = NUpPanel()
+    nup._render_preview(400, 500, 1.0)
+    assert nup._dims_cache[(flat, st.current_page)][1:3] == (w1, h1), \
+        "N-Up preview measured the unrotated file"
 
 
 def test_rotation_reaches_the_preview():

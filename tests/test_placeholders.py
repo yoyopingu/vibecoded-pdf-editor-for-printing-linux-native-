@@ -71,13 +71,16 @@ def test_crop_pane_does_not_wait_for_a_complex_source_page():
 
     crop_resize._render_base_page = slow_render
     try:
-        pm, info = panel._render_preview(300, 420, 1.0, async_load=True)
+        pm, info = panel._render_preview(300, 300, 1.0, async_load=True)
         assert pm is not None and 'rendert' in info
         assert panel._base_pending_key is not None
         assert _wait_for(started.is_set)
         # Refreshes and option changes remain usable while the worker waits.
         again, _ = panel._render_preview(240, 340, 1.25, async_load=True)
         assert again is not None and getattr(panel, '_base_cache', None) is None
+        fitted, _ = panel._render_preview(300, 300, 1.0, async_load=True)
+        assert 0.68 < fitted.width() / fitted.height() < 0.73, (
+            "the numbered placeholder stayed square after its geometry arrived")
     finally:
         release.set()
         crop_resize._render_base_page = original

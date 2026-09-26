@@ -54,6 +54,37 @@ def test_page_geometry_reaches_the_viewer_before_raster_work():
     assert len(events) == 1
 
 
+def test_page_geometry_does_not_load_complex_page_content():
+    """Reading a cold sheet's shape must not wait for FPDF_LoadPage."""
+    import pikepdf
+    import pypdfium2 as pdfium
+    from tools.render import region
+
+    path = _cache_fixture(_TMP, "size_without_load.pdf", 1, "SIZE")
+    with pikepdf.open(path, allow_overwriting_input=True) as doc:
+        doc.pages[0].CropBox = [20, 40, 320, 500]
+        doc.pages[0].Rotate = 90
+        doc.save(path)
+    original = region.open_page
+
+    def forbid_page_load(*_args, **_kwargs):
+        raise AssertionError("page content was loaded for a size read")
+
+    region.open_page = forbid_page_load
+    try:
+        w, h = region.page_size_pt(path, 0)
+    finally:
+        region.open_page = original
+    doc = pdfium.PdfDocument(path)
+    try:
+        page = doc[0]
+        expected = (page.get_width(), page.get_height())
+        page.close()
+    finally:
+        doc.close()
+    assert abs(w - expected[0]) < 0.01 and abs(h - expected[1]) < 0.01
+
+
 def test_background_work_uses_one_mechanism():
     """Structural guard. There were three ways to run work off the GUI thread:
     QThread subclasses, bare threading.Thread(daemon=True), and _RenderQueue.

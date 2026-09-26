@@ -2,13 +2,16 @@
 Tools Crop.
 """
 import os
+import shutil
+from threading import Event
 from pypdf import PdfReader
 from PIL import Image
 import pypdfium2 as pdfium
 from tools.panels.crop_resize import CropResizePanel
+import tools.panels.crop_resize as crop_resize
 from tools.panels._cropmarks import _crop_mark_segments
 from tests.support import (FX, MM, _TMP, _brightest, _ink_margins, _nup,
-                           _open, _sync_async)
+                           _open, _sync_async, _wait_for)
 
 
 def test_crop_preview_navigates_pages_it_will_change():
@@ -303,6 +306,38 @@ def test_a_scale_percentage_actually_scales():
         assert "PAGE 1" in (page.extract_text() or ""), f"{pct}%: text lost"
         assert _ink_box(out, 0) is not None, f"{pct}%: the page came out blank"
     return "50%, 80% and 200% all land on the page size they name"
+
+
+def test_a_format_is_effective_while_its_geometry_read_is_pending():
+    """An immediate export must honour an edit even on a slow source page."""
+    src = os.path.join(_TMP, "crop_pending_format.pdf")
+    shutil.copyfile(FX["normal"], src)
+    _open(src)
+    panel = CropResizePanel()
+    panel.log.log = lambda *a, **k: None
+    started, release = Event(), Event()
+    original = crop_resize.page_size_pt
+
+    def delayed(path, index):
+        started.set()
+        assert release.wait(5), "test geometry read was never released"
+        return original(path, index)
+
+    crop_resize.page_size_pt = delayed
+    try:
+        panel.fmt.set_format("A5  (148x210mm)")
+        assert _wait_for(started.is_set)
+        out = os.path.join(_TMP, "crop_pending_format_out.pdf")
+        panel.save_pdf = lambda *_: out
+        panel.open_result = lambda *_: None
+        panel._run_action()
+        page = PdfReader(out).pages[0]
+        assert abs(float(page.mediabox.width) / MM - 148) < 1
+        assert abs(float(page.mediabox.height) / MM - 210) < 1
+    finally:
+        release.set()
+        crop_resize.page_size_pt = original
+        panel.deleteLater()
 
 
 def test_scale_pct_tracks_format_and_can_override_it():

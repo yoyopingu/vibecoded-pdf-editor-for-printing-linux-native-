@@ -38,6 +38,7 @@ class JobSignals(QObject):
     done     = pyqtSignal(object)   # return value of the work function
     error    = pyqtSignal(object)   # the exception, if it raised
     progress = pyqtSignal(str)
+    data     = pyqtSignal(object)   # intermediate result, e.g. page geometry before pixels
     finished = pyqtSignal()         # always, cancelled or not
 
 
@@ -70,6 +71,10 @@ class Job(QRunnable):
     def report(self, message):
         if not self.cancelled:
             self.signals.progress.emit(str(message))
+
+    def emit_data(self, value):
+        if not self.cancelled:
+            self.signals.data.emit(value)
 
     def run(self):
         try:
@@ -303,7 +308,8 @@ def _prune_locked():
 
 
 def submit(fn, owner=None, name="", priority=0,
-           on_done=None, on_error=None, on_progress=None, on_finished=None):
+           on_done=None, on_error=None, on_progress=None, on_finished=None,
+           on_data=None):
     """Run ``fn(job)`` on the global pool. Returns the :class:`Job`.
 
     `owner` groups jobs so they can be cancelled together — pass the widget that
@@ -317,6 +323,7 @@ def submit(fn, owner=None, name="", priority=0,
     if on_done     is not None: job.signals.done.connect(on_done)
     if on_error    is not None: job.signals.error.connect(on_error)
     if on_progress is not None: job.signals.progress.connect(on_progress)
+    if on_data     is not None: job.signals.data.connect(on_data)
     if on_finished is not None: job.signals.finished.connect(on_finished)
     with _jobs_lock:
         _prune_locked()

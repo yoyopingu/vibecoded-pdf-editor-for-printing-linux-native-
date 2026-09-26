@@ -3,33 +3,31 @@ Zuschneiden / Skalieren — trim or extend the page, fit it to a paper size,
 and set cut marks. Shows the sheet it is about to produce.
 """
 import os, gc
-from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
+from tools.render.document_cache import open_page
 from tools.render.images import pil_to_qpixmap
 from tools.theme import INK, PAPER, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QSplitter
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
+from PyQt6 import sip
 from tools.app_state import AppState
 from tools._base import BasePanel
 from tools.i18n import tr
 from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, _mat_mul, _display_matrix, PreviewPane, PreviewPageBar
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
-from tools.render.document_cache import open_document as _open_pdf
 from tools.render.placeholder import paint_page_number, source_page_index
+from tools.render.region import cached_page_size_pt, page_size_pt
 from tools.jobs import submit
 
 
 def _render_base_page(pdf_path, page_idx):
     """Rasterise source pixels without reading or changing any panel widget."""
-    with _pdfium_lock:
-        doc = _open_pdf(pdf_path)
-        try:
-            page = doc[page_idx]
-            pw = page.get_width(); ph = page.get_height()
-            base_scale = 1400.0 / max(pw, ph, 1.0)
-            return page.render(scale=base_scale).to_pil(), pw, ph
-        finally:
-            doc.close()
+    # The viewer may already have this page loaded. Reusing its guarded handle
+    # avoids parsing a complex page again just to draw the tool preview.
+    with open_page(pdf_path, page_idx) as page:
+        pw = page.get_width(); ph = page.get_height()
+        base_scale = 1400.0 / max(pw, ph, 1.0)
+        return page.render(scale=base_scale).to_pil(), pw, ph
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -143,6 +141,7 @@ class CropResizePanel(BasePanel):
             s.setFixedWidth(100)
             s.valueChanged.connect(self._update_preview)
             s.valueChanged.connect(self._sync_values)
+            s.valueChanged.connect(self._manual_margin_edited)
             return s
 
         self.ct  = mm(); self.cb2 = mm()
@@ -294,6 +293,8 @@ class CropResizePanel(BasePanel):
         self._pct_hint.setEnabled(not self._marks_only())
         size = self._target_size_pt()
         if size is None or self._marks_only():
+            self._pending_target = None
+            self._cancel_geometry_read()
             # 'Kein', or marks-only: leave the page uncropped. In marks-only mode
             # the chosen size is used purely to draw cut marks (see preview/output).
             self._zero_margins()
@@ -303,24 +304,18 @@ class CropResizePanel(BasePanel):
 
     def _set_margins_for_size(self, tw, th):
         """Set the four crop margins so the page is cropped/extended to (tw, th)."""
+        # Run and preview must already see the chosen output size if the
+        # operator presses Ausführen before the background geometry read lands.
+        self._pending_target = ('size', (tw, th))
         # See BasePanel.current_pdf()'s docstring for why this, not
         # AppState.get().current_pdf, is what a preview measures against.
         pdf_path = self.current_pdf()
         if not pdf_path or not os.path.isfile(pdf_path):
             return
-        try:
-            pages    = self._get_target_pages()
-            page_idx = pages[0][0] if pages else 0
-            # Runs on the GUI thread while the render worker may be inside
-            # pdfium: constructing/closing the document needs the process-wide
-            # lock, exactly like the page access in _render_base_page below.
-            with _pdfium_lock:
-                doc  = _open_pdf(pdf_path)
-                try:
-                    page = doc[page_idx]
-                    pw   = page.get_width(); ph = page.get_height()
-                finally:
-                    doc.close()
+        pages = self._get_target_pages()
+        page_idx = pages[0][0] if pages else 0
+
+        def apply(pw, ph):
             # Exakte Differenz — kein Runden damit Zielformat stimmt
             diff_w_mm = (pw - tw) / MM_TO_PT / 2
             diff_h_mm = (ph - th) / MM_TO_PT / 2
@@ -340,9 +335,52 @@ class CropResizePanel(BasePanel):
             # re-derive them for every page instead of applying this one page's
             # millimetres to pages of a different size (see _format_margins).
             self._fmt_margins = self._margins_mm()
+            self._pending_target = None
             self._update_preview()
-        except Exception as ex:
-            self.log.log(str(ex), error=True)
+
+        self._with_page_dimensions(pdf_path, page_idx, apply)
+
+    def _with_page_dimensions(self, pdf_path, page_idx, callback):
+        """Read a cold page's geometry off the GUI thread before changing fields.
+
+        A format or percentage edit once opened and loaded the page synchronously.
+        On a complex page that can hold the entire tool UI for seconds, even
+        though the required answer is only two numbers in the page tree.
+        """
+        self._cancel_geometry_read()
+        generation = self._geometry_generation
+        size = cached_page_size_pt(pdf_path, page_idx)
+        if size is not None:
+            callback(*size)
+            return
+        def ready(size):
+            if sip.isdeleted(self):
+                return
+            if (self._geometry_generation != generation
+                    or self.current_pdf() != pdf_path):
+                return
+            pages = self._get_target_pages()
+            current = pages[0][0] if pages else 0
+            if current != page_idx:
+                # The selected page moved while the metadata read was in
+                # flight. Keep the chosen output size, but compute the spin
+                # boxes against the page the tool now acts on.
+                self._with_page_dimensions(pdf_path, current, callback)
+                return
+            self._geometry_job = None
+            callback(*size)
+
+        def failed(error):
+            if sip.isdeleted(self):
+                return
+            if self._geometry_generation == generation:
+                self._geometry_job = None
+                self.log.log(str(error), error=True)
+
+        self._geometry_job = submit(
+            lambda _job: page_size_pt(pdf_path, page_idx),
+            owner=self, name='crop-preview-dimensions',
+            on_done=ready, on_error=failed)
 
     def _on_pct_edited(self, val):
         """The user typed or spun a new Skalierung value: resize the previewed
@@ -359,19 +397,20 @@ class CropResizePanel(BasePanel):
             return
         pages    = self._get_target_pages()
         page_idx = pages[0][0] if pages else 0
-        try:
-            _pil, pw, ph = self._base_page(pdf_path, page_idx)
-        except Exception as ex:
-            self.log.log(str(ex), error=True); return
-        self.fmt.reset()   # a typed percentage is not "the chosen Format" any more
-        # A percentage names a scale, not a crop: a page at 80% whose content
-        # stayed its old size is not what "Skalierung" means, so a typed value
-        # turns content-fit on rather than leaving a plain centred crop behind.
+        self._pending_target = ('percent', val / 100.0)
         blocked = self.scale_check.blockSignals(True)
         self.scale_check.setChecked(True)
         self.scale_check.blockSignals(blocked)
-        factor = val / 100.0
-        self._set_margins_for_size(pw * factor, ph * factor)
+        self._update_preview()
+        def apply(pw, ph):
+            self.fmt.reset()   # a typed percentage is not "the chosen Format" any more
+            # A percentage names a scale, not a crop: a page at 80% whose content
+            # stayed its old size is not what "Skalierung" means, so a typed value
+            # turns content-fit on rather than leaving a plain centred crop behind.
+            factor = val / 100.0
+            self._set_margins_for_size(pw * factor, ph * factor)
+
+        self._with_page_dimensions(pdf_path, page_idx, apply)
 
     def _sync_pct_display(self, new_w, new_h, pw, ph):
         """Keep the Skalierung box showing the truth: how big the page (Format
@@ -400,6 +439,19 @@ class CropResizePanel(BasePanel):
     def _margins_mm(self):
         return (self.ct.value(), self.cb2.value(), self.cl2.value(), self.cr.value())
 
+    def _manual_margin_edited(self, *_):
+        # An explicit margin edit supersedes an in-flight format/percentage
+        # read. Its callback must not overwrite what the operator just typed.
+        self._pending_target = None
+        self._cancel_geometry_read()
+
+    def _cancel_geometry_read(self):
+        self._geometry_generation = getattr(self, '_geometry_generation', 0) + 1
+        job = getattr(self, '_geometry_job', None)
+        if job is not None:
+            job.cancel()
+        self._geometry_job = None
+
     def _format_margins(self):
         """(tw, th) when the four margin boxes still hold exactly what the Format
         dropdown put there — meaning "make every page this size", not "take these
@@ -420,6 +472,13 @@ class CropResizePanel(BasePanel):
         this result (see _sync_pct_display), and editing it writes new margins
         through _on_pct_edited/_set_margins_for_size instead of a separate
         multiplier — so there is exactly one source of truth for page size."""
+        pending = getattr(self, '_pending_target', None)
+        if pending is not None:
+            kind, value = pending
+            tw, th = ((pw * value, ph * value) if kind == 'percent'
+                      else value)
+            dw = (pw - tw) / 2; dh = (ph - th) / 2
+            return dh, dh, dw, dw
         size = self._format_margins()
         if size is not None:
             dw = (pw - size[0]) / 2; dh = (ph - size[1]) / 2
@@ -482,6 +541,8 @@ class CropResizePanel(BasePanel):
         self._base_error = None
 
         def ready(result):
+            if sip.isdeleted(self):
+                return
             if self._base_pending_key != key:
                 return
             self._base_pending_key = None
@@ -489,18 +550,32 @@ class CropResizePanel(BasePanel):
             self._pane.refresh()
 
         def failed(error):
+            if sip.isdeleted(self):
+                return
             if self._base_pending_key != key:
                 return
             self._base_pending_key = None
             self._base_error = (key, str(error))
             self._pane.refresh()
 
+        def dimensions(_size):
+            if sip.isdeleted(self):
+                return
+            if self._base_pending_key == key:
+                self._pane.refresh()
+
+        def work(job):
+            # Emit geometry before loading/rasterising the source page. A queued
+            # GUI refresh can then reshape the numbered placeholder immediately.
+            job.emit_data(page_size_pt(pdf_path, page_idx))
+            return _render_base_page(pdf_path, page_idx)
+
         # submit connects callbacks before starting a job. Connecting after it
         # returns loses fast completions and strands the numbered stand-in.
         self._base_job = submit(
-            lambda _job: _render_base_page(pdf_path, page_idx),
+            work,
             owner=self, name='crop-preview-render',
-            on_done=ready, on_error=failed)
+            on_done=ready, on_error=failed, on_data=dimensions)
 
     def _render_preview(self, avail_w, avail_h, zoom, async_load=False):
         # See BasePanel.current_pdf()'s docstring for why this, not
@@ -552,10 +627,18 @@ class CropResizePanel(BasePanel):
             if error is not None and error[0] == key:
                 return None, tr('Vorschau: {p0}').format(p0=error[1])
             self._request_base_page(pdf_path, page_idx)
-            # There may be no known dimensions yet. The source number is still
-            # useful immediately, and the completed render supplies the exact
-            # page geometry instead of making the GUI wait for pdfium's lock.
-            pm = QPixmap(max(1, avail_w), max(1, avail_h))
+            # The page-tree size arrives before the content render. Use it to
+            # shape the pending sheet while the complex source is still loading.
+            size = cached_page_size_pt(pdf_path, page_idx)
+            if size is not None:
+                pw, ph = size
+                t, b, l, r = self._effective_margins_pt(pw, ph)
+                pw, ph = max(1.0, pw - l - r), max(1.0, ph - t - b)
+                fit = min(avail_w / pw, avail_h / ph) * zoom
+                width, height = max(1, int(pw * fit)), max(1, int(ph * fit))
+            else:
+                width, height = max(1, avail_w), max(1, avail_h)
+            pm = QPixmap(width, height)
             pm.fill(QColor(PAPER))
             painter = QPainter(pm)
             source = source_page_index(AppState.get().page_model,
