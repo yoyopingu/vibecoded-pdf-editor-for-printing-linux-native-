@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QKeySequence, QBrush, QCursor
 from tools.i18n import tr
 from tools.theme import PAPER, _TV
+from tools.render.placeholder import paint_page_number
 from tools.viewer.rulers import GUIDE_COLOUR
 
 
@@ -34,6 +35,7 @@ class PdfPageCanvas(QWidget):
         self._offset_x   = 0
         self._offset_y   = 0
         self._page_rect  = None   # sheet outline when the pixmap is a region
+        self._placeholder_page = None
         # Guides, in this widget's pixels. The view owns them in page
         # coordinates and hands down where they land on screen — see
         # tools/viewer/rulers.py.
@@ -107,14 +109,15 @@ class PdfPageCanvas(QWidget):
         self._offset_x  = offset_x
         self._offset_y  = offset_y
         self._page_rect = page_rect
+        self._placeholder_page = None
         self.update()
         self.repainted.emit()
 
-    def show_placeholder(self, x, y, w, h):
-        """An empty sheet, while the page behind it is still rendering.
+    def show_placeholder(self, x, y, w, h, page_index=None):
+        """A numbered sheet, while the page behind it is still rendering.
 
         Scrolling through a long document must not wait for anything: pages
-        that have not been rendered yet stand in as blank paper of the right
+        that have not been rendered yet stand in as numbered paper of the right
         size, so the document keeps its shape and its scrollbar under you and
         the real page arrives underneath when it is ready.
         """
@@ -125,11 +128,13 @@ class PdfPageCanvas(QWidget):
         self._offset_x  = int(x)
         self._offset_y  = int(y)
         self._page_rect = (int(x), int(y), int(w), int(h))
+        self._placeholder_page = page_index
         self.update()
 
     def clear(self):
         self._pixmap = None
         self._page_rect = None
+        self._placeholder_page = None
         self._chars  = []
         self._sel_start = self._sel_end = -1
         self.update()
@@ -237,16 +242,17 @@ class PdfPageCanvas(QWidget):
         p.fillRect(self.rect(), QColor(_TV['viewer_bg']))
 
         if not self._pixmap:
-            # A page still rendering: draw the sheet it will be, so scrolling
-            # past it looks like a document rather than a hole. Only when its
-            # size is known — with nothing to go on there is nothing honest to
-            # draw.
+            # A page still rendering: keep its sheet and source number visible
+            # while the worker supplies the pixels. Cold pages use a viewport
+            # sized well until their exact geometry arrives.
             if self._page_rect is not None:
                 rx, ry, rw, rh = self._page_rect
                 p.fillRect(int(rx), int(ry), int(rw), int(rh), QColor(PAPER))
                 p.setPen(QPen(QColor(0, 0, 0, 45), 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(int(rx), int(ry), int(rw) - 1, int(rh) - 1)
+                paint_page_number(p, QRect(int(rx), int(ry), int(rw), int(rh)),
+                                  self._placeholder_page)
             self._paint_guides(p)
             p.end()
             return

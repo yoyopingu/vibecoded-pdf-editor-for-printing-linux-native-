@@ -15,6 +15,21 @@ from tools.i18n import tr
 from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, _mat_mul, _display_matrix, PreviewPane
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
 from tools.render.document_cache import open_document as _open_pdf
+from tools.render.placeholder import paint_page_number, source_page_index
+from tools.jobs import submit
+
+
+def _render_base_page(pdf_path, page_idx):
+    """Rasterise source pixels without reading or changing any panel widget."""
+    with _pdfium_lock:
+        doc = _open_pdf(pdf_path)
+        try:
+            page = doc[page_idx]
+            pw = page.get_width(); ph = page.get_height()
+            base_scale = 1400.0 / max(pw, ph, 1.0)
+            return page.render(scale=base_scale).to_pil(), pw, ph
+        finally:
+            doc.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -39,7 +54,9 @@ class CropResizePanel(BasePanel):
         # Shared preview pane — owns zoom controls, Ctrl+wheel, and the refresh
         # wiring (page change / new PDF / on show / on resize). This panel only
         # supplies the render callback below.
-        self._pane = PreviewPane(self._render_preview, header="Vorschau")
+        self._pane = PreviewPane(
+            lambda w, h, z: self._render_preview(w, h, z, async_load=True),
+            header="Vorschau")
         self._preview      = self._pane.label   # kept for _apply_theme()
         self._preview_info = self._pane.info
         right_l.addWidget(self._pane)
@@ -387,21 +404,45 @@ class CropResizePanel(BasePanel):
             return cache[1], cache[2], cache[3]
         gc.disable()
         try:
-            with _pdfium_lock:
-                doc = _open_pdf(pdf_path)
-                try:
-                    page = doc[page_idx]
-                    pw = page.get_width(); ph = page.get_height()
-                    base_scale = 1400.0 / max(pw, ph, 1.0)   # fixed preview resolution
-                    base_pil = page.render(scale=base_scale).to_pil()
-                finally:
-                    doc.close()
+            base_pil, pw, ph = _render_base_page(pdf_path, page_idx)
         finally:
             gc.collect(); gc.enable()
         self._base_cache = (key, base_pil, pw, ph)
         return base_pil, pw, ph
 
-    def _render_preview(self, avail_w, avail_h, zoom):
+    def _request_base_page(self, pdf_path, page_idx):
+        """Keep the pane responsive while its source page is rasterised."""
+        key = (pdf_path, page_idx)
+        if getattr(self, '_base_pending_key', None) == key:
+            return
+        prior = getattr(self, '_base_job', None)
+        if prior is not None:
+            prior.cancel()
+        self._base_pending_key = key
+        self._base_error = None
+
+        def ready(result):
+            if self._base_pending_key != key:
+                return
+            self._base_pending_key = None
+            self._base_cache = (key, *result)
+            self._pane.refresh()
+
+        def failed(error):
+            if self._base_pending_key != key:
+                return
+            self._base_pending_key = None
+            self._base_error = (key, str(error))
+            self._pane.refresh()
+
+        # submit connects callbacks before starting a job. Connecting after it
+        # returns loses fast completions and strands the numbered stand-in.
+        self._base_job = submit(
+            lambda _job: _render_base_page(pdf_path, page_idx),
+            owner=self, name='crop-preview-render',
+            on_done=ready, on_error=failed)
+
+    def _render_preview(self, avail_w, avail_h, zoom, async_load=False):
         # See BasePanel.current_pdf()'s docstring for why this, not
         # AppState.get().current_pdf, is what a preview measures against.
         pdf_path = self.current_pdf()
@@ -436,6 +477,24 @@ class CropResizePanel(BasePanel):
         # resize / zoom / margin / format change then only re-scales this cached
         # image (cheap) instead of re-rendering via pdfium — that re-render is what
         # made dragging the sidebar and editing the custom size hang on big PDFs.
+        key = (pdf_path, page_idx)
+        cache = getattr(self, '_base_cache', None)
+        if async_load and (cache is None or cache[0] != key):
+            error = getattr(self, '_base_error', None)
+            if error is not None and error[0] == key:
+                return None, tr('Vorschau: {p0}').format(p0=error[1])
+            self._request_base_page(pdf_path, page_idx)
+            # There may be no known dimensions yet. The source number is still
+            # useful immediately, and the completed render supplies the exact
+            # page geometry instead of making the GUI wait for pdfium's lock.
+            pm = QPixmap(max(1, avail_w), max(1, avail_h))
+            pm.fill(QColor(PAPER))
+            painter = QPainter(pm)
+            source = source_page_index(AppState.get().page_model,
+                                       page_idx, pdf_path)
+            paint_page_number(painter, pm.rect(), source)
+            painter.end()
+            return pm, tr('rendert …')
         base_pil, pw, ph = self._base_page(pdf_path, page_idx)
 
         t_pt, b_pt, l_pt, r_pt = self._effective_margins_pt(pw, ph)

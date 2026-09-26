@@ -91,7 +91,8 @@ class FileCard(QFrame):
     def paintEvent(self, _e):
         paint_card(self, self._pixmap, self._caption,
                    self._card_w, self._card_h, self._selected,
-                   placeholder=self._icon)
+                   placeholder=self._icon,
+                   page_index=0 if self.path.lower().endswith('.pdf') else None)
 
     def _load_local_preview(self):
         """Non-PDF files: images render from disk, everything else gets its icon.

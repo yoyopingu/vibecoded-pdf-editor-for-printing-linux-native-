@@ -216,6 +216,18 @@ def _settle(vp, done, tries=600):
     return False
 
 
+def _wait_for(done, timeout=5.0):
+    """Pump Qt until the specific asynchronous result arrives, with a limit."""
+    end = time.monotonic() + timeout
+    while True:
+        _app.processEvents()
+        if done():
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.005)
+
+
 def _spin(n=60, delay=0.02):
     for _ in range(n):
         _app.processEvents(); time.sleep(delay)

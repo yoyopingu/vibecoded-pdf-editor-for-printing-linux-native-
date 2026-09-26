@@ -5,7 +5,7 @@ import os, time
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 import pypdfium2 as pdfium
-from tests.support import _TMP, _app, _open_single_view, _settle, _spin
+from tests.support import _TMP, _app, _open_single_view, _settle, _spin, _wait_for
 from tools.render.queue import _render_queue
 from tools.render.caches import _FullPageCache
 import tools.render.region as REGION
@@ -37,25 +37,33 @@ def _target_scale_of(sv, zoom):
 
 
 def _matches_pdfium(pm, path, page_index, scale):
-    """Is this pixmap the actual pdfium render at `scale`, pixel for pixel?"""
+    """Is this pixmap the actual pdfium render on the viewer's pixel grid?"""
     from PyQt6.QtGui import QImage as _QI
+    from tools.render.raster import render_window
+    from tools.render.region import page_px_size
     doc = pdfium.PdfDocument(path)
     try:
         pg = doc[page_index]
-        truth = pg.render(scale=scale).to_pil().convert("RGB")
+        width, height = page_px_size(pg.get_width(), pg.get_height(), scale)
         pg.close()
     finally:
         doc.close()
+    # PdfPage.render(scale=...) rounds a fractional side up. The viewer gives
+    # pdfium the rounded integer device size; comparing against a ceiling-sized
+    # bitmap reported a one-pixel mismatch before it checked any image data.
+    truth = render_window(path, page_index, width, height)
     img = pm.toImage().convertToFormat(_QI.Format.Format_RGB32)
-    if (img.width(), img.height()) != truth.size:
-        return False, f"{img.width()}x{img.height()} vs pdfium {truth.size[0]}x{truth.size[1]}"
-    tb = truth.tobytes()
+    if (img.width(), img.height()) != (truth.width(), truth.height()):
+        return False, (f"{img.width()}x{img.height()} vs pdfium "
+                       f"{truth.width()}x{truth.height()}")
+    truth = truth.convertToFormat(_QI.Format.Format_RGB32)
     total = img.width() * img.height()
     bits = img.bits(); bits.setsize(total * 4); buf = bytes(bits)
+    truth_bits = truth.bits(); truth_bits.setsize(total * 4)
+    tb = bytes(truth_bits)
     acc = n = 0
     for i in range(0, total * 4, 4 * 997):        # sample, ~1 in 1000 pixels
-        j = (i // 4) * 3
-        acc += abs(buf[i+2] - tb[j]) + abs(buf[i+1] - tb[j+1]) + abs(buf[i] - tb[j+2])
+        acc += sum(abs(buf[i+j] - tb[i+j]) for j in range(3))
         n += 1
     mean = acc / max(1, n)
     return mean < 0.5, f"mean channel difference {mean:.2f}"
@@ -533,7 +541,7 @@ def test_turning_a_page_never_shows_the_page_before_it():
             _render_queue.submit = lambda task, pri=1: held.append(task)
             try:
                 sv.next_page()
-                _spin(3)
+                _app.processEvents()
                 during = _dominant(sv._view)
             finally:
                 _render_queue.submit = real_submit
@@ -590,7 +598,7 @@ def test_scrolling_up_into_an_unmeasured_page_does_not_strand_the_view():
             sv._current = 4
             sv._scroll_y = 0.0
             sv.prev_page(start_at_bottom=True)
-            _spin(3)
+            _app.processEvents()
             stranded = sv._scroll_y
         finally:
             _render_queue.submit = real_submit
@@ -749,9 +757,10 @@ def test_a_render_that_fails_is_retried_and_never_leaves_the_page_blank():
         Q.render_window = fail_once
         try:
             sv._render()
-            _settle(vp, lambda: sv._render_task is None and sv._region_task is None,
-                    tries=400)
-            _spin(10)
+            assert _wait_for(lambda: sv._render_task is None
+                             and sv._region_task is None
+                             and sv._view._pixmap is not None), \
+                "retry never displayed a page"
             recovered = sv._view._pixmap is not None
         finally:
             Q.render_window = real
@@ -763,9 +772,10 @@ def test_a_render_that_fails_is_retried_and_never_leaves_the_page_blank():
         Q.render_window = lambda *a, **k: None
         try:
             sv._render()
-            _settle(vp, lambda: sv._render_task is None and sv._region_task is None,
-                    tries=400)
-            _spin(10)
+            assert _wait_for(lambda: sv._render_task is None
+                             and sv._region_task is None
+                             and sv._view._pixmap is not None), \
+                "failed render never displayed its placeholder"
             shown = sv._view._pixmap
         finally:
             Q.render_window = real

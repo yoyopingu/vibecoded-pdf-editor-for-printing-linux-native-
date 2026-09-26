@@ -13,8 +13,9 @@ shrinking a finer render is supersampling and looks the same, enlarging a
 coarser one does not.
 """
 import io
-from PyQt6.QtGui import QPixmap, QImage, QColor
+from PyQt6.QtGui import QPixmap, QImage, QColor, QPainter
 from tools.theme import _TV
+from tools.render.placeholder import paint_page_number
 from tools.render.raster import render_window
 from tools.render.region import page_px_size, page_size_pt
 
@@ -88,6 +89,8 @@ def _render_image(pdf_path, page_index, width, rotation=0, should_cancel=None):
         img = QImage(max(1, int(width)), max(1, int(width * 1.414)),
                      QImage.Format.Format_RGB32)
         img.fill(QColor(_TV['placeholder']))
+        painter = QPainter(img)
+        paint_page_number(painter, img.rect(), page_index)
+        painter.end()
         return img
-
 

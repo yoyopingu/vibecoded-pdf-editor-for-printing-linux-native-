@@ -1,6 +1,13 @@
 """
-MainWindow: the sidebar, and what it switches between — the viewer and the
-tool panels.
+MainWindow: the nav sidebar, and what sits beside it.
+
+The single-page viewer stays on screen for every tool that is only a form.
+Those tools are a slim options column; the page next to it is the ordinary
+viewer, not a preview drawn for that tool. Three tools take the main area
+instead, because the picture they draw is not the source page: N-Up and
+Crop/Scale show the sheet they are about to produce, and Graustufen shows
+which pages are already grey. A panel that owns that kind of picture builds
+a `_tool_splitter`. Everything else is the column.
 """
 import sys, os
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox
@@ -172,8 +179,22 @@ class MainWindow(QMainWindow):
         sb.setContentsMargins(0, 6, 0, 0)
         sb.setSpacing(0)
 
-        self._btns  = []
-        self._stack = QStackedWidget()
+        self._btns = []
+        self._nav_index = 0
+        # What the nav index points at. Index 0 is the viewer; the rest are
+        # tool panels, in the same order as the buttons below it.
+        self._by_nav = []
+        # The main area. The viewer lives here, and so does any tool that
+        # draws its own picture. Column tools do not — they sit beside it.
+        self._stage = QStackedWidget()
+        self._tool_column = QStackedWidget()
+        self._tool_column.setObjectName("toolColumn")
+        # The same width N-Up, Crop/Scale and Graustufen open their column at
+        # (splitter setSizes / _SIDEBAR_W). A box layout sits a widget on its
+        # minimum when something else can take the spare width, so this is
+        # fixed rather than a minimum: 340 clipped the fields.
+        self._tool_column.setFixedWidth(400)
+        self._tool_column.hide()
 
         # Page Viewer Button (hervorgehoben)
         vb = NavBtn(tr("Seiten-Viewer"), viewer=True)
@@ -181,10 +202,15 @@ class MainWindow(QMainWindow):
         sb.addWidget(vb); self._btns.append(vb)
 
         self.viewer = PageViewerPanel()
-        self._stack.addWidget(self.viewer)
+        self._stage.addWidget(self.viewer)
+        self._by_nav.append(self.viewer)
         self.viewer.tab_opened.connect(lambda: self._switch(0))
         self.viewer.switch_to_viewer   = lambda: self._switch(0)
-        self.viewer.get_main_stack_idx = lambda: self._stack.currentIndex()
+        # The page manager puts this index back on the way out. It has to be
+        # the nav index, not the stage's: a column tool never becomes the
+        # stage, so the stage would report "viewer" and the column would not
+        # come back.
+        self.viewer.get_main_stack_idx = lambda: self._nav_index
         self.viewer.restore_main_idx   = lambda idx: self._switch(idx)
 
         # Tools
@@ -198,7 +224,7 @@ class MainWindow(QMainWindow):
             idx = i + 1
             btn.clicked.connect(lambda c, x=idx: self._switch(x))
             sb.addWidget(btn); self._btns.append(btn)
-            self._stack.addWidget(PanelClass())
+            self._place_tool(PanelClass)
 
         # Plugins
         plugins = discover_plugins()
@@ -207,13 +233,12 @@ class MainWindow(QMainWindow):
             sep.setFrameShape(QFrame.Shape.HLine); sb.addWidget(sep)
             pl = QLabel("  " + tr("PLUGINS")); pl.setObjectName("sectionLabel")
             pl.setContentsMargins(14, 10, 0, 4); sb.addWidget(pl)
-            base = len(TOOLS) + 1
-            for pi, (plabel, PCls) in enumerate(plugins):
+            for plabel, PCls in plugins:
                 btn = NavBtn(plabel.strip())
-                idx = base + pi
+                idx = len(self._btns)
                 btn.clicked.connect(lambda c, x=idx: self._switch(x))
                 sb.addWidget(btn); self._btns.append(btn)
-                self._stack.addWidget(PCls())
+                self._place_tool(PCls)
 
         # ── Version am unteren Rand ───────────────────────────────────────────
         sb.addStretch()
@@ -226,10 +251,11 @@ class MainWindow(QMainWindow):
         self._sidebar = sidebar   # keep reference for manage-mode hide/show
 
         # ── Hauptbereich ─────────────────────────────────────────────────────
-        main_col = QVBoxLayout()
+        main_col = QHBoxLayout()
         main_col.setContentsMargins(0, 0, 0, 0)
         main_col.setSpacing(0)
-        main_col.addWidget(self._stack)
+        main_col.addWidget(self._tool_column)
+        main_col.addWidget(self._stage, 1)
 
         wrapper = QWidget(); wrapper.setLayout(main_col)
         root.addWidget(wrapper, 1)
@@ -240,10 +266,41 @@ class MainWindow(QMainWindow):
 
         self._switch(0)
 
+    def _place_tool(self, PanelClass):
+        """Build one tool and put it where its picture lives.
+
+        A panel that builds `_tool_splitter` draws its own preview and takes
+        the main area (N-Up, Crop/Scale, Graustufen). Any other panel is a
+        column of options and leaves the viewer where it is.
+        """
+        panel = PanelClass()
+        self._by_nav.append(panel)
+        if getattr(panel, "_tool_splitter", None) is not None:
+            self._stage.addWidget(panel)
+        else:
+            self._tool_column.addWidget(panel)
+        return panel
+
     def _switch(self, idx: int):
+        if idx < 0 or idx >= len(self._by_nav):
+            return
+        self._nav_index = idx
         for i, btn in enumerate(self._btns):
             btn.set_active(i == idx)
-        self._stack.setCurrentIndex(idx)
+        panel = self._by_nav[idx]
+        # The viewer, or a tool that draws its own sheet. The column steps
+        # aside so that picture gets the room.
+        if idx == 0 or getattr(panel, "_tool_splitter", None) is not None:
+            self._tool_column.hide()
+            self._stage.setCurrentWidget(panel)
+            return
+        self._stage.setCurrentWidget(self.viewer)
+        self._tool_column.setCurrentWidget(panel)
+        self._tool_column.show()
+        # The page is the preview. Give it the keyboard so the arrows move
+        # through the document instead of sitting on the nav button that
+        # opened the tool.
+        self.viewer.focus_page_view()
 
     def _open_dialog(self):
         # Every open path offers the same formats. This dialog used to filter to

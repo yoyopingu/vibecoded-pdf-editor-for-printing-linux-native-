@@ -9,7 +9,7 @@ from tools.panels.nup import NUpPanel
 from tools.panels.page_numbers import PageNumbersPanel
 import tools.app as MAIN
 import tools.shell.instance as INSTANCE
-from tests.support import FX, _TMP, _app, _open, _spin
+from tests.support import FX, _TMP, _app, _open, _spin, _wait_for
 
 
 _HOST_SCRIPT = '''
@@ -50,7 +50,7 @@ app.exec()
 
 
 _EXIT_SCRIPT = '''
-import sys, os
+import sys, os, time
 sys.path.insert(0, {repo!r})
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 sys.argv = ["copyshop", {src!r}]
@@ -60,11 +60,24 @@ INSTANCE._IPC_KEY = {key!r}   # own socket, so a real running app is untouched
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-# Quit the way a user does, once the window is up and rendering.
+# Quit the way a user does, once the first page has actually rendered. A fixed
+# 1.5 s pause paid for empty time on every process and could still be too short
+# for a slow machine.
 _show = MAIN.MainWindow.show
 def show(self):
     _show(self)
-    QTimer.singleShot(1500, QApplication.instance().quit)
+    deadline = time.monotonic() + 10
+    def after_render():
+        tab = self.viewer.tabs.currentWidget()
+        single = getattr(tab, "single", None)
+        if single is not None and single._last_pm is not None and single._render_task is None:
+            print("RENDERED", flush=True)
+            QApplication.instance().quit()
+        elif time.monotonic() >= deadline:
+            os._exit(3)
+        else:
+            QTimer.singleShot(10, after_render)
+    QTimer.singleShot(0, after_render)
 MAIN.MainWindow.show = show
 try:
     MAIN.main()
@@ -93,6 +106,8 @@ def test_app_exits_without_crashing():
     for _ in range(3):          # the crash was racy — one clean run proves little
         p = subprocess.run([sys.executable, "-u", script], env=env,
                            capture_output=True, text=True, timeout=120)
+        assert "RENDERED" in p.stdout, \
+            f"app quit before its first page rendered (rc={p.returncode})"
         runs.append(p.returncode)
     bad = [rc for rc in runs if rc != 0]
     assert not bad, (f"app exited with {runs} "
@@ -201,8 +216,10 @@ def test_open_paths_routes_by_count():
 def _popup_fully_visible(cb):
     """How many of a combo's items are fully inside its open popup."""
     cb.showPopup()
-    _app.processEvents(); time.sleep(0.02); _app.processEvents()
-    view = cb.view(); vp = view.viewport(); model = view.model()
+    view = cb.view()
+    assert _wait_for(lambda: view.isVisible() and view.viewport().height() > 0), \
+        "combo popup never opened"
+    vp = view.viewport(); model = view.model()
     n = 0
     for i in range(cb.count()):
         r = view.visualRect(model.index(i, 0))
@@ -286,17 +303,22 @@ def test_preview_canvas_follows_the_theme():
     try:
         _open(FX["normal"])
         p = NUpPanel(); p.resize(1000, 700); p.show()
-        _spin(30)
+        def corner():
+            pm = p._preview.pixmap()
+            if pm is None or pm.isNull():
+                return None
+            img = pm.toImage()
+            return QColor(img.pixel(img.width() - 1, img.height() - 1)).name()
+
+        assert _wait_for(lambda: corner() is not None), "preview never drew"
         seen = {}
         for theme in ("light", "dark"):
             MAIN.apply_theme_globally(theme)
-            _spin(40)
-            img = p._preview.pixmap().toImage()
             # bottom-right: the sheet is drawn to (w-1, h-1), so the last row
             # and column are the only backdrop the N-Up preview leaves showing.
-            corner = QColor(img.pixel(img.width() - 1, img.height() - 1)).name()
-            assert corner == _TV["card_bg"], (theme, corner, _TV["card_bg"])
-            seen[theme] = corner
+            assert _wait_for(lambda: corner() == _TV["card_bg"]), \
+                (theme, corner(), _TV["card_bg"])
+            seen[theme] = corner()
         assert seen["light"] != seen["dark"], seen
         p.hide()
     finally:
@@ -394,7 +416,8 @@ def test_a_forwarded_file_survives_a_garbage_collection():
 
         # Let the server accept it. _serve runs here, with nothing to read yet —
         # the state the failure needed.
-        _spin(20)
+        assert _wait_for(lambda: bool(server.findChildren(QLocalSocket))), \
+            "server never accepted the connection"
         gc.collect()
 
         sock.write((FX["single"] + "\n").encode("utf-8"))
@@ -402,9 +425,7 @@ def test_a_forwarded_file_survives_a_garbage_collection():
         if sock.bytesToWrite():
             sock.waitForBytesWritten(2000)
         sock.disconnectFromServer()
-        _spin(40)
-
-        assert win.got, "the forwarded path never arrived"
+        assert _wait_for(lambda: bool(win.got)), "the forwarded path never arrived"
         paths, _token = win.got[0]
         assert paths == [FX["single"]], f"wrong payload: {win.got!r}"
     finally:
@@ -555,14 +576,16 @@ def test_a_restricted_pdf_opens_and_a_locked_one_asks_for_the_password():
         ACCESS.ask_password = lambda path, parent=None: asked.append(path)
         # Restricted: opens, and nothing is asked.
         vp.open_file(FX["restricted"])
-        _spin(40)
+        assert _wait_for(lambda: vp.tabs.count() == 1), \
+            "a restricted PDF still refused to open"
         assert vp.tabs.count() == 1, "a restricted PDF still refused to open"
         assert not asked, "a restricted PDF asked for a password it does not need"
 
         # Locked, answered correctly: opens the decrypted copy.
         ACCESS.ask_password = lambda path, parent=None: (asked.append(path), "u")[1]
         vp.open_file(FX["encrypted"])
-        _spin(60)
+        assert _wait_for(lambda: vp.tabs.count() == 2), \
+            "the right password did not open the file"
         assert asked, "a locked PDF opened without asking for anything"
         assert vp.tabs.count() == 2, "the right password did not open the file"
         opened = vp.tabs.currentWidget().pdf_path
@@ -665,3 +688,91 @@ def test_a_decrypted_copy_is_private_and_does_not_outlive_its_tab():
     assert not os.path.exists(orphan), \
         "a decrypted copy from a crashed run survived the startup sweep"
     return "owner-only, and gone by the time the tab is"
+
+
+def test_a_form_tool_keeps_the_page_on_screen():
+    """Picking a tool used to replace the document with the form.
+
+    Most tools are a few settings. The page they apply to is the ordinary
+    single-page viewer, and the settings are a column beside it. N-Up and
+    Crop/Scale still take the main area, because they draw the sheet they are
+    about to produce. Graustufen does too — its grid is the tool, and it is
+    left alone.
+
+    The page manager remembers which tool was open. That index is the nav
+    index: a column tool is never the stage, so reading the stage would say
+    "viewer" and the column would not come back.
+    """
+    from tools.panels.page_numbers import PageNumbersPanel
+    from tools.panels.crop_resize import CropResizePanel
+    from tools.panels.grayscale import GrayscalePanel
+    from tools.panels.nup import NUpPanel
+
+    win = MAIN.MainWindow()
+    try:
+        win.resize(1280, 760)
+        win.show()
+        _app.processEvents()
+        win.viewer.open_file(FX["normal"])
+        assert _wait_for(lambda: win.viewer.tabs.count() == 1), \
+            "document tab did not open"
+
+        def at(cls):
+            for i, panel in enumerate(win._by_nav):
+                if isinstance(panel, cls):
+                    return i
+            raise AssertionError(cls.__name__)
+
+        pages = at(PageNumbersPanel)
+        win._switch(pages)
+        _app.processEvents()
+        tab = win.viewer.tabs.currentWidget()
+        assert win.viewer.isVisible() and win._stage.currentWidget() is win.viewer
+        assert tab._stack.currentWidget() is tab.single, "the tool hid the page"
+        assert win._tool_column.isVisible()
+        column = win._by_nav[pages]
+        # Same thickness as the columns that were already columns. N-Up asks
+        # its splitter for 400; this one used to open at 460.
+        assert column.width() == 400, column.width()
+        assert win.viewer.width() > column.width(), (
+            win.viewer.width(), column.width())
+        assert not getattr(column, "_tool_splitter", None)
+        # The labels are 220 wide. A column that only honours its 340 minimum
+        # clips the fields and the run button, and grows a horizontal scrollbar
+        # to reach them.
+        assert column._tool_scroll.horizontalScrollBar().maximum() == 0, \
+            "the options are wider than the column"
+        btn = column.run_btn
+        assert btn.isVisible() and column.rect().contains(
+            btn.mapTo(column, btn.rect().bottomRight())), \
+            "the run button is outside the column"
+
+        for cls in (NUpPanel, CropResizePanel, GrayscalePanel):
+            win._switch(at(cls))
+            _app.processEvents()
+            panel = win._by_nav[at(cls)]
+            assert win._stage.currentWidget() is panel, cls.__name__
+            assert not win._tool_column.isVisible(), cls.__name__
+            assert panel._tool_splitter is not None
+            assert panel._tool_splitter.sizes()[0] == column.width(), (
+                cls.__name__, panel._tool_splitter.sizes()[0], column.width())
+
+        # Back to the column, into the page manager, and out again.
+        win._switch(pages)
+        _app.processEvents()
+        win.viewer._toggle_manage()
+        _app.processEvents()
+        assert not win._tool_column.isVisible()
+        assert win._stage.currentWidget() is win.viewer
+        assert tab._stack.currentWidget() is not tab.single
+        win.viewer._toggle_manage()
+        assert _wait_for(lambda: win._tool_column.isVisible()
+                         and tab._stack.currentWidget() is tab.single), \
+            "the tool column did not return"
+        assert win._nav_index == pages, win._nav_index
+        assert win._tool_column.isVisible()
+        assert tab._stack.currentWidget() is tab.single
+        assert win.viewer.width() > 400
+    finally:
+        win.deleteLater()
+        _app.processEvents()

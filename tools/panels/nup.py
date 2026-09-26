@@ -8,7 +8,7 @@ from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals
 from tools.theme import INK, PAPER, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QSplitter, QGridLayout
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from tools.app_state import AppState
 from tools._base import BasePanel
@@ -18,6 +18,21 @@ from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_str
 from tools.panels._imposition import (_slot_placement, _flatten_annots,
                                       form_factory, full_scale_problem)
 from tools.render.document_cache import open_document as _open_pdf
+from tools.render.placeholder import paint_page_number, source_page_index
+from tools.jobs import submit
+
+
+def _read_page_dims(pdf_path, idx):
+    """Read one source page's geometry without touching the preview widgets."""
+    with _pdfium_lock:
+        doc = _open_pdf(pdf_path)
+        try:
+            n = len(doc)
+            i = min(idx, n - 1)
+            pg = doc[i]
+            return i, pg.get_width(), pg.get_height(), n
+        finally:
+            doc.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -123,6 +138,9 @@ class NUpPanel(BasePanel):
         # the GUI thread (opening the tool no longer blocks on a synchronous
         # render of a big page).
         self._dims_cache    = {}     # (path, page_idx) -> (clamped_idx, pw, ph, n)
+        self._dims_pending = None
+        self._dims_job = None
+        self._dims_error = None
         self._thumb_pending = set()  # {(path, page_idx, rot, render_w)} in flight
         self._thumb_signals = _ThumbSignals()
         self._thumb_signals.ready.connect(self._on_thumb_ready)
@@ -147,7 +165,9 @@ class NUpPanel(BasePanel):
         right_l = right_w.layout()
 
         # Shared preview pane (zoom, Ctrl+wheel, page/pdf/show/resize refresh).
-        self._pane = PreviewPane(self._render_preview, header="Vorschau (erstes Blatt)")
+        self._pane = PreviewPane(
+            lambda w, h, z: self._render_preview(w, h, z, async_dims=True),
+            header="Vorschau (erstes Blatt)")
         self._preview      = self._pane.label
         self._preview_info = self._pane.info
         right_l.addWidget(self._pane)
@@ -294,24 +314,47 @@ class NUpPanel(BasePanel):
 
     def _page_dims(self, pdf_path):
         """Return (clamped_page_idx, page_w_pt, page_h_pt, n_pages) for the
-        representative page (the one picked in "Seiten verwalten"). Only reads
-        page dimensions from pdfium (no rasterisation), so it's cheap even for
-        huge files; cached per page so repeated previews don't reopen the doc."""
+        representative page (the one picked in "Seiten verwalten"). The pane
+        requests a cold read in a job, because even reading dimensions can wait
+        behind a complex page's render on the process-wide pdfium lock. Direct
+        callers reuse the same cache after that first read."""
         idx = max(0, AppState.get().current_page)
         key = (pdf_path, idx)
         if key in self._dims_cache:
             return self._dims_cache[key]
-        with _pdfium_lock:
-            doc = _open_pdf(pdf_path)
-            try:
-                n = len(doc)
-                i = min(idx, n - 1)
-                pg = doc[i]
-                res = (i, pg.get_width(), pg.get_height(), n)
-            finally:
-                doc.close()
+        res = _read_page_dims(pdf_path, idx)
         self._dims_cache[key] = res
         return res
+
+    def _request_page_dims(self, pdf_path, idx):
+        key = (pdf_path, idx)
+        if self._dims_pending == key:
+            return
+        if self._dims_job is not None:
+            self._dims_job.cancel()
+        self._dims_pending = key
+        self._dims_error = None
+
+        def ready(result):
+            if self._dims_pending != key:
+                return
+            self._dims_pending = None
+            self._dims_cache[key] = result
+            self._pane.refresh()
+
+        def failed(error):
+            if self._dims_pending != key:
+                return
+            self._dims_pending = None
+            self._dims_error = (key, str(error))
+            self._pane.refresh()
+
+        # A quick geometry read can finish before submit returns. Install the
+        # callbacks in submit so its result cannot disappear in that gap.
+        self._dims_job = submit(
+            lambda _job: _read_page_dims(pdf_path, idx),
+            owner=self, name='nup-preview-dimensions',
+            on_done=ready, on_error=failed)
 
     def _page_image(self, pdf_path, page_idx, render_w):
         """Fetch a rendered image of the page from the SHARED thumbnail cache
@@ -331,12 +374,26 @@ class NUpPanel(BasePanel):
         # thumbnail), scaled — so the layout appears instantly instead of blank.
         return _ThumbnailCache.get_any(pdf_path, page_idx, 0)
 
-    def _render_preview(self, avail_w, avail_h, zoom):
+    def _render_preview(self, avail_w, avail_h, zoom, async_dims=False):
         # See BasePanel.current_pdf()'s docstring for why this, not
         # AppState.get().current_pdf, is what a preview measures against.
         pdf_path = self.current_pdf()
         if not pdf_path or not os.path.isfile(pdf_path):
             return None, tr("Keine PDF geöffnet")
+        idx = max(0, AppState.get().current_page)
+        key = (pdf_path, idx)
+        if async_dims and key not in self._dims_cache:
+            if self._dims_error is not None and self._dims_error[0] == key:
+                return None, tr('Vorschau: {p0}').format(p0=self._dims_error[1])
+            self._request_page_dims(pdf_path, idx)
+            pm = QPixmap(max(1, avail_w), max(1, avail_h))
+            pm.fill(QColor(PAPER))
+            painter = QPainter(pm)
+            source = source_page_index(AppState.get().page_model, idx,
+                                       pdf_path)
+            paint_page_number(painter, pm.rect(), source)
+            painter.end()
+            return pm, tr('rendert …')
         page_idx, src_pw, src_ph, n_total = self._page_dims(pdf_path)
         out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows = \
             self._get_layout_params(src_pw, src_ph)
@@ -392,6 +449,10 @@ class NUpPanel(BasePanel):
                 pg = slot_pages[row_i * cols + col_i]
                 src_pm = pm_by_page.get(pg) if pg is not None else None
                 if src_pm is None:
+                    if pg is not None:
+                        source = source_page_index(AppState.get().page_model,
+                                                   pg, pdf_path)
+                        paint_page_number(painter, QRect(sx, sy, sw, sh), source)
                     continue
                 scale   = 1.0 if full_scale else min(slot_w / src_pw, slot_h / src_ph)
                 scaled_w = max(1, int(src_pw * scale * cs))

@@ -245,18 +245,20 @@ def test_images_come_down_to_press_resolution():
     # Not _out(...): that names the *output* files, and a source sharing a
     # name with one of them gets exported over itself.
     src = os.path.join(_TMP, "pdfx_src_images.pdf")
+    w, h = (A4[0] / 4, A4[1] / 4)
     if not os.path.exists(src):
-        w, h = A4
-        base = Image.new("RGB", (620, 877))
+        # A8 keeps the same 600/200 dpi contrast as A4 with one sixteenth of
+        # the pixels. The press decision depends on resolution, not sheet area.
+        base = Image.new("RGB", (155, 219))
         pixels = base.load()
-        for y in range(877):
-            for x in range(620):
+        for y in range(219):
+            for x in range(155):
                 pixels[x, y] = (x * 7 % 256, y * 11 % 256, (x + y) % 256)
         high = os.path.join(_TMP, "pdfx_600.png")
         low = os.path.join(_TMP, "pdfx_200.png")
-        base.resize((4960, 7016)).save(high)     # ~600 dpi on A4
-        base.resize((1653, 2339)).save(low)      # ~200 dpi on A4
-        c = canvas.Canvas(src, pagesize=A4)
+        base.resize((1240, 1754)).save(high)     # ~600 dpi on A8
+        base.resize((413, 585)).save(low)        # ~200 dpi on A8
+        c = canvas.Canvas(src, pagesize=(w, h))
         c.drawImage(high, 0, 0, w, h); c.showPage()
         c.drawImage(low, 0, 0, w, h); c.showPage()
         c.save()
@@ -277,7 +279,9 @@ def test_images_come_down_to_press_resolution():
                  300, "x3", null_progress())
     after = widths(out)
     assert len(before) == len(after) == 2, (before, after)
-    assert 2200 < after[0] < 2700, f"the 600 dpi image came out at {after[0]} px"
+    assert 590 < before[0] / (w / 72) < 610
+    assert 190 < before[1] / (w / 72) < 210
+    assert 550 < after[0] < 675, f"the 600 dpi image came out at {after[0]} px"
     assert after[1] == before[1], "a 200 dpi image was resampled"
 
     # Against the same export with downsampling effectively off, not against
@@ -288,7 +292,7 @@ def test_images_come_down_to_press_resolution():
                  2400, "x3", null_progress())
     small_kb, big_kb = os.path.getsize(out) // 1024, os.path.getsize(big) // 1024
     assert small_kb < big_kb, f"downsampling saved nothing ({small_kb} vs {big_kb} KB)"
-    return (f"600 dpi -> {after[0] / (595.28 / 72):.0f} dpi, 200 dpi untouched, "
+    return (f"600 dpi -> {after[0] / (w / 72):.0f} dpi, 200 dpi untouched, "
             f"{big_kb} KB -> {small_kb} KB")
 
 

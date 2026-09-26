@@ -1,12 +1,12 @@
 """
 Merge Preview.
 """
-import os, time, tempfile
+import os, tempfile
 from PyQt6.QtWidgets import QLabel
 from pypdf import PdfReader
 from tools.viewer.model import PageModel
 import tools.app as MAIN
-from tests.support import FX, _TMP, _app, _pdfium_page_text, _settle, _spin
+from tests.support import FX, _TMP, _app, _pdfium_page_text, _settle, _spin, _wait_for
 
 
 def _click(grid, pos, mod):
@@ -112,17 +112,17 @@ def test_merge_tab_end_to_end():
     paths = [FX["normal"], FX["single"], FX["framed"]]      # 5 + 1 + 1 pages
     vp = PageViewerPanel(); vp.resize(900, 600); vp.show()
     vp.show_merge_tab(paths)
-    for _ in range(30): _app.processEvents(); time.sleep(0.01)
+    assert _wait_for(lambda: isinstance(vp.tabs.currentWidget(), MergeOrderWidget)), \
+        "merge tab did not open"
     w = vp.tabs.currentWidget()
     assert isinstance(w, MergeOrderWidget), "merge tab did not open"
     w._grid._selected = {2}; w._grid._last_selected = 2
     w._grid.move_up(); w._grid.move_up()
     assert w._grid.get_paths()[0] == FX["framed"], "reorder did not stick"
     w._confirm()
-    for _ in range(500):
-        _app.processEvents(); time.sleep(0.02)
-        if vp.tabs.count() and not isinstance(vp.tabs.currentWidget(), MergeOrderWidget):
-            break
+    assert _wait_for(lambda: vp.tabs.count() and not isinstance(
+        vp.tabs.currentWidget(), MergeOrderWidget), timeout=10.0), \
+        "merge never completed"
     cur = vp.tabs.currentWidget()
     assert not isinstance(cur, MergeOrderWidget), "merge never completed"
     out = getattr(cur, "pdf_path", None)
@@ -137,10 +137,12 @@ def _open_in_manage(path):
     from tools.viewer.panel import PageViewerPanel
     vp = PageViewerPanel(); vp.resize(1000, 700); vp.show()
     vp.open_file(path)
-    _spin(60, 0.01)
+    assert _wait_for(lambda: vp.tabs.count() and
+                     vp.tabs.currentWidget().single._last_pm is not None), \
+        "source preview did not render"
     tab = vp.tabs.currentWidget()
     vp._toggle_manage()
-    _spin(40, 0.01)
+    assert _wait_for(tab.in_manage_mode), "page manager did not open"
     # Not findChild(): manage mode reparents the panel out of the tab and into
     # the viewer's splitter. The tab keeps its own reference.
     panel = tab._manage_panel
@@ -157,17 +159,20 @@ def test_inserted_blank_page_renders_in_the_preview():
     before = len(tab.model.order)
     tab.model.selected = {tab.model.order[1]}
     panel._insert_blank()
-    _spin(40, 0.01)
+    assert _wait_for(lambda: len(tab.model.order) == before + 1), \
+        "blank page was not inserted"
     assert len(tab.model.order) == before + 1, panel.status.text()
     assert tab.pdf_path == panel.pdf_path, \
         "the tab still points at the pre-insert file"
 
     vp._toggle_manage()                                      # back to preview
-    _spin(40, 0.01)
+    assert _wait_for(lambda: not tab.in_manage_mode()), \
+        "preview did not return"
     sv = tab.single
     sv._current = 2                                          # the blank
     sv._render()
-    _settle(vp, lambda: sv._page_w_pt > 0, tries=200)
+    assert _wait_for(lambda: sv._page_w_pt > 0 and sv._render_task is None), \
+        "blank page preview did not render"
     assert sv._page_w_pt > 0 and sv._page_h_pt > 0, \
         f"preview has no page size ({sv._page_w_pt}x{sv._page_h_pt}) — render failed"
     # A4-ish, like the page it was inserted after — not a fallback of any size
@@ -195,18 +200,21 @@ def test_save_as_honours_the_page_selection():
     picked = [tab.model.order[1], tab.model.order[3]]
     tab.model.selected = set(picked)
     sel = os.path.join(out_dir, "sel.pdf")
-    _pick(sel); vp._save_as_current(); _spin(20, 0.01)
+    _pick(sel); vp._save_as_current()
+    assert _wait_for(lambda: os.path.isfile(sel)), "selection was not saved"
     assert len(PdfReader(sel, strict=False).pages) == 2, \
         f"{len(PdfReader(sel).pages)} pages saved, expected the 2 picked"
     assert tab.pdf_path == FX["normal"], \
         "an export of part of the document must not retarget the tab"
 
     # Leaving the manager makes the stale selection irrelevant again.
-    vp._toggle_manage(); _spin(20, 0.01)
+    vp._toggle_manage()
+    assert _wait_for(lambda: not tab.in_manage_mode()), "manager did not close"
     assert not tab.in_manage_mode()
     tab.model.order = list(reversed(tab.model.order))   # reorder, so a stale
     full = os.path.join(out_dir, "full.pdf")            # index mapping shows up
-    _pick(full); vp._save_as_current(); _spin(20, 0.01)
+    _pick(full); vp._save_as_current()
+    assert _wait_for(lambda: os.path.isfile(full)), "full document was not saved"
     assert len(PdfReader(full, strict=False).pages) == 5, \
         "a stale selection truncated an ordinary Save As"
     assert tab.pdf_path == full, "Save As did not retarget the tab"
@@ -232,13 +240,17 @@ def test_drop_marker_is_a_slim_page_slot():
     from tools.viewer.model import PageModel as _PM
     grid = PageGrid(_PM(6), FX["normal"])
     grid.resize(700, 500); grid.show()
-    _spin(40, 0.02)
+    # The screenshot diff must not include thumbnails arriving between shots.
+    assert _wait_for(lambda: grid._cards and all(
+        card.pixmap() is not None for card in grid._cards
+        if card is not None and card.isVisible())), \
+        "page thumbnails never settled"
 
     def _shot():
         return grid.grab().toImage()
     plain = _shot()
     grid._drop_indicator = 3
-    grid.update(); _spin(15, 0.01)
+    grid.update(); _app.processEvents()
     marked = _shot()
 
     rows = {}
@@ -599,8 +611,8 @@ def test_opening_a_bad_file_reports_instead_of_crashing():
         for label, path in cases:
             before = len(said)
             vp.open_file(path)
-            _spin(10, 0.01)
-            assert len(said) > before, f"{label}: opened with no message at all"
+            assert _wait_for(lambda: len(said) > before), \
+                f"{label}: opened with no message at all"
         assert vp.tabs.count() == 0, \
             f"{vp.tabs.count()} tab(s) opened for files that cannot be read"
 
@@ -611,7 +623,7 @@ def test_opening_a_bad_file_reports_instead_of_crashing():
         ACCESS.ask_password = lambda path, parent=None: None      # cancelled
         try:
             vp.open_file(FX["encrypted"])
-            _spin(10, 0.01)
+            _app.processEvents()
         finally:
             ACCESS.ask_password = real_ask
         assert vp.tabs.count() == 0, "a cancelled password prompt opened a tab"
@@ -619,7 +631,7 @@ def test_opening_a_bad_file_reports_instead_of_crashing():
         # a failed open must not become the file reopened at next startup
         s = QSettings("CopyShop", "PDFSuite")
         s.setValue("general/last_file", "SENTINEL")
-        vp.open_file(broken); _spin(10, 0.01)
+        vp.open_file(broken); _app.processEvents()
         assert s.value("general/last_file") == "SENTINEL", \
             "a file that failed to open was remembered for next startup"
         vp.deleteLater()
@@ -639,19 +651,26 @@ def test_merge_preview_hides_the_app_sidebar():
     vp.show_sidebar = lambda: shown.append(True)
 
     vp.show_merge_tab([FX["normal"], FX["single"]])
-    _spin(20, 0.01)
+    assert _wait_for(lambda: shown and shown[-1] is False), \
+        "sidebar not hidden for merge preview"
     assert isinstance(vp.tabs.currentWidget(), MergeOrderWidget)
     assert shown and shown[-1] is False, f"sidebar not hidden ({shown})"
 
     vp.tabs.currentWidget()._do_cancel()
-    _spin(20, 0.01)
+    assert _wait_for(lambda: shown and shown[-1] is True), \
+        "sidebar not restored after cancel"
     assert shown[-1] is True, f"sidebar not restored after cancel ({shown})"
 
     # …and it stays away only for that tab
-    vp.open_file(FX["normal"]); _spin(30, 0.01)
-    vp.show_merge_tab([FX["single"], FX["framed"]]); _spin(20, 0.01)
+    vp.open_file(FX["normal"])
+    assert _wait_for(lambda: vp.tabs.count() == 1), "PDF tab did not open"
+    vp.show_merge_tab([FX["single"], FX["framed"]])
+    assert _wait_for(lambda: shown and shown[-1] is False), \
+        "sidebar not hidden for second preview"
     assert shown[-1] is False, "sidebar not hidden for a second preview"
-    vp.tabs.setCurrentIndex(0); _spin(20, 0.01)
+    vp.tabs.setCurrentIndex(0)
+    assert _wait_for(lambda: shown and shown[-1] is True), \
+        "sidebar not restored on PDF tab"
     assert shown[-1] is True, "sidebar not restored when switching to a PDF tab"
     vp.deleteLater()
 
@@ -666,7 +685,7 @@ def test_merge_preview_thumbnails_behave_like_the_page_manager():
     from tools.viewer.page_grid import MARGIN, GAP
     paths = [FX["normal"], FX["single"], FX["framed"], FX["mixed"]]
     w = MergeOrderWidget(paths); w.resize(1250, 650); w.show()
-    _spin(40, 0.02)
+    _app.processEvents()
     g = w._grid
 
     # clicking empty background unpicks
@@ -697,7 +716,7 @@ def test_merge_preview_answers_the_page_manager_shortcuts():
     C = _Qt.KeyboardModifier.ControlModifier
     paths = [FX["normal"], FX["single"], FX["framed"]]
     w = MergeOrderWidget(paths); w.resize(950, 650); w.show()
-    _spin(40, 0.02)
+    _app.processEvents()
     g = w._grid
     g.setFocus()
 

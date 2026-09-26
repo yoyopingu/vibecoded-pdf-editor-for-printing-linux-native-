@@ -18,6 +18,7 @@ from tools.theme import _TV
 from tools.render.document_cache import open_document as _open_pdf
 from tools.ghostscript import unlink
 from tools.printing.content import DOCUMENT, prepare_print_page
+from tools.render.placeholder import paint_page_number, source_page_index
 
 
 class _PrintPreview(QWidget):
@@ -39,7 +40,9 @@ class _PrintPreview(QWidget):
         self._pages     = list(range(len(model.order)))
         self._current   = 0        # index into self._pages
         self._render_token = 0     # bumped each render; stale deliveries dropped
+        self._render_job = None
         self._pixmap    = None      # rendered page image
+        self._placeholder_index = None
         self._page_w_pt = 595.0     # PDF page dimensions in points
         self._page_h_pt = 842.0
         # Settings mirrored from the dialog
@@ -250,6 +253,11 @@ class _PrintPreview(QWidget):
         self._next_btn.setEnabled(self._current < count - 1)
 
     def _render_page(self):
+        # A page turn on a complex file must not leave every old preparation
+        # ahead of the page now selected. A running pdfium call finishes its
+        # current render, but queued and preparing jobs can stop early.
+        if self._render_job is not None:
+            self._render_job.cancel()
         self._render_token += 1
         token = self._render_token
         n     = len(self._pages)
@@ -269,13 +277,16 @@ class _PrintPreview(QWidget):
         self._pixmap    = None
         self._page_w_pt = 595.0
         self._page_h_pt = 842.0
-        self._redraw()   # show blank immediately while loading
 
         if pos >= total:
+            self._placeholder_index = None
+            self._redraw()
             return
         uid      = self._model.order[pos]
         src_path, orig = self._model.page_source(uid, self._pdf_path)
+        self._placeholder_index = orig
         rot      = self._model.get_rotation(uid)
+        self._redraw()
 
         import weakref
         self_ref = weakref.ref(self)
@@ -285,6 +296,8 @@ class _PrintPreview(QWidget):
         def _bg(job):
             prepared = None
             try:
+                if job.cancelled:
+                    return
                 fd, prepared = tempfile.mkstemp(suffix="_preview.pdf")
                 os.close(fd)
                 try:
@@ -294,6 +307,8 @@ class _PrintPreview(QWidget):
                     logging.debug("print preview: could not prepare page; "
                                   "rendering the original", exc_info=True)
                     render_path, render_index = src_path, orig
+                if job.cancelled:
+                    return
                 with _pdfium_lock:
                     doc = _open_pdf(render_path)
                     try:
@@ -493,8 +508,10 @@ class _PrintPreview(QWidget):
                         if band.width() > 0.5 and band.height() > 0.5:
                             p.fillRect(band, clip_tint)
             else:
-                # No image yet — grey placeholder
-                p.fillRect(content_rect, QColor(200, 200, 200))
+                # The sheet geometry is already known; identify its pending
+                # source page without waiting for the raster worker.
+                p.fillRect(content_rect, QColor(243, 245, 248))
+                paint_page_number(p, content_rect, self._placeholder_index)
 
             # Margin indicator — dashed line showing the printable-area boundary.
             # There is no printable area to bound without a sheet: the margin comes
@@ -576,11 +593,14 @@ class _PrintPreview(QWidget):
         elif h == "booklet":
             self._draw_booklet(p, sheet)
 
-    def _draw_page_into(self, p, rect, empty=False, tag=""):
+    def _draw_page_into(self, p, rect, empty=False, tag="", page_index=None):
         """Composite the last rendered page (or a blank slot) into `rect`."""
         r = rect.toRect()
         if empty or self._pixmap is None or self._pixmap.isNull():
             p.fillRect(r, QColor(243, 245, 248))
+            if not empty:
+                paint_page_number(p, r, self._placeholder_index
+                                  if page_index is None else page_index)
         else:
             scaled = self._pixmap.scaled(
                 max(1, r.width()), max(1, r.height()),
@@ -610,7 +630,13 @@ class _PrintPreview(QWidget):
         tw, th = sheet.width() * cols, sheet.height() * rows
         dest = QRectF(sheet.x() - col * sheet.width(),
                       sheet.y() - row * sheet.height(), tw, th)
-        self._draw_page_into(p, dest, tag="")
+        if self._pixmap is None or self._pixmap.isNull():
+            # The whole page's centre lies in only one tile. While its pixels
+            # are pending, identify the source on every tile being inspected.
+            p.fillRect(sheet, QColor(243, 245, 248))
+            paint_page_number(p, sheet, self._placeholder_index)
+        else:
+            self._draw_page_into(p, dest, tag="")
         p.restore()
         if self._handling_opts.get("cut_marks"):
             p.setPen(QPen(QColor(192, 57, 43), 1))
@@ -665,7 +691,10 @@ class _PrintPreview(QWidget):
             page_i = start + order[i]
             empty = page_i >= src_n
             tag = "" if empty else str(self._pages[page_i] + 1)
-            self._draw_page_into(p, slot, empty=empty, tag=tag)
+            source = (source_page_index(self._model, self._pages[page_i],
+                                        self._pdf_path) if not empty else None)
+            self._draw_page_into(p, slot, empty=empty, tag=tag,
+                                 page_index=source)
             if border and not empty:
                 p.setPen(QPen(QColor(197, 206, 216), 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
@@ -691,7 +720,9 @@ class _PrintPreview(QWidget):
                 self._draw_page_into(p, rect, empty=True)
             else:
                 tag = str(self._pages[sel - 1] + 1)
-                self._draw_page_into(p, rect, tag=tag)
+                source = source_page_index(self._model, self._pages[sel - 1],
+                                           self._pdf_path)
+                self._draw_page_into(p, rect, tag=tag, page_index=source)
 
         _slot(left_sel, left_r)
         _slot(right_sel, right_r)

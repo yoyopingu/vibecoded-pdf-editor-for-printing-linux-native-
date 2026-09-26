@@ -283,7 +283,7 @@ def test_nup_border_off_omits_the_slot_stroke():
 def test_nup_applies_comments_and_forms_per_source_page():
     """Comments & Forms run on the source pages before they are packed.
     A filled field that only lived as /V must still show on the sheet."""
-    from tests.test_printing import _form_pdf
+    from tests.printing_support import _form_pdf
     from tools.printing.content import DOCUMENT, prepare_print_pdf
     from tools.printing.handling import build_nup_pdf
     from tools.printing.spool import paper_size_pt

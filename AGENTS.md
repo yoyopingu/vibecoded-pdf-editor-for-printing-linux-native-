@@ -112,6 +112,11 @@ Missing `gs`, `pdftoppm`, `tesseract`, `soffice`, `lp` / `lpstat` (optional
 traceback. Dependency lists live in `requirements.txt` and `README.md` only.
 
 ### UI
+- A tool that is only a form is a slim options column beside the single-page
+  viewer (`BasePanel._setup`). It does not get its own preview pane. N-Up and
+  Crop/Scale keep the sheet they already draw, and Graustufen keeps its own
+  grid — those three build a `_tool_splitter` and take the main area. Do not
+  fold Graustufen into the column; that preview is the tool.
 - New widgets use `_TV` / `apply_theme_globally`. Check light and dark.
 - Shortcuts: `tools/viewer/shortcuts.py`. Do not add a conflict.
 - Paper sizes come from `tools/paper.py`. No local size table.

@@ -13,7 +13,7 @@ import traceback
 import uuid
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QListWidget, QListWidgetItem, QFrame,
+    QFileDialog, QListWidget, QListWidgetItem, QFrame, QGroupBox,
     QAbstractItemView, QPlainTextEdit, QScrollArea, QApplication,
     QSizePolicy, QComboBox
 )
@@ -21,7 +21,7 @@ from PyQt6.QtCore import Qt, QEvent
 from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
 from tools.pdf_access import is_locked
-from tools.theme      import _TV
+from tools.theme      import _TV, _register_themed
 
 
 _VIEW_SNAPSHOTS: dict = {}     # model signature -> flattened temp PDF
@@ -368,69 +368,62 @@ class BasePanel(QWidget):
         self._setup()
 
     def _setup(self):
+        """Options in a slim column; the page stays the ordinary viewer.
+
+        A tool used to be its own page and replace the document. Most of them
+        are a short form, and covering the page to show it meant the operator
+        could not see the file they were about to change. The column is the
+        same one N-Up and Crop/Scale already use for their settings. Those two
+        still draw the sheet they are about to produce, and Graustufen still
+        draws its own grid — that picture is the tool, not the source page.
+        Everything else is just this column.
+        """
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-
-        # ── Fixed header — title + subtitle never scroll away ─────────────
-        hdr = QWidget()
-        hl = QVBoxLayout(hdr)
-        hl.setContentsMargins(14, 12, 14, 8)
-        hl.setSpacing(3)
-        title = QLabel(tr(self.TITLE))
-        title.setWordWrap(True)
-        tf = title.font(); tf.setPointSize(15); tf.setBold(True); title.setFont(tf)
-        hl.addWidget(title)
-        if self.SUBTITLE:
-            sub = make_label(tr(self.SUBTITLE), dim=True)
-            hl.addWidget(sub)
-        outer.addWidget(hdr)
-        outer.addWidget(make_separator())
-
-        # ── Scrollable content ────────────────────────────────────────────
-        scroll = ToolScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        content = QWidget()
-        root = QVBoxLayout(content)
-        root.setContentsMargins(14, 8, 14, 10)
-        root.setSpacing(8)
-
-        # Current file bar (shows which PDF is active)
-        self.file_bar = CurrentFileBar()
-        root.addWidget(self.file_bar)
-        root.addWidget(make_separator())
-
-        # Tool content
-        self.build_ui(root)
-
-        root.addStretch()
-        root.addWidget(make_separator())
-
-        # Log
-        self.log = LogBox(tr("Log..."))
-        root.addWidget(self.log)
-
-        # Action row
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-        self.build_action_row(btn_row)
-        root.addLayout(btn_row)
-
-        scroll.setWidget(content)
+        scroll = self.build_tool_sidebar(subtitle=True, beside_viewer=True)
         outer.addWidget(scroll)
+        # The scroll's own limits do not travel up to this widget, and a
+        # parent that only sees the form's size hint hands the column the
+        # whole window. Cap the panel itself.
+        self.setMinimumWidth(scroll.minimumWidth())
+        self.setMaximumWidth(scroll.maximumWidth())
+        _register_themed(self)
+        self._apply_theme()
 
-    def build_tool_sidebar(self) -> QWidget:
-        """Standardized left sidebar for split-view tools (Crop, Grayscale,
-        N-Up). Every "sliding" sidebar is built here so they stay identical:
-        a scrollable PANEL-coloured column with title, the current-file bar, the
-        tool's own controls (build_ui), the log, and the action row. Sets
-        self.file_bar / self.log / self.run_btn and returns the widget to drop
-        into the splitter. Kept vertically compact so the whole sidebar fits
-        without scrolling on typical screens.
+    def _apply_theme(self):
+        """Recolour the column. Split-view tools override this for their preview."""
+        if not getattr(self, "_beside_viewer", False):
+            return
+        t = _TV
+        bg = t["panel_bg"]
+        edge = f"border-right:1px solid {t['border']};"
+        self._tool_left_w.setStyleSheet(
+            f"QWidget#toolLeftPanel{{background:{bg};}}")
+        self._tool_scroll.setStyleSheet(
+            f"QScrollArea{{background:{bg};border:none;{edge}}}")
+        # The log and the run button sit under the scrolling options, so a
+        # long form (the preflight report) cannot push them off the window.
+        self._tool_footer.setStyleSheet(
+            f"QWidget#toolColumnFooter{{background:{bg};{edge}}}")
+
+    def build_tool_sidebar(self, *, subtitle=False, beside_viewer=False) -> QWidget:
+        """The options column shared by every tool.
+
+        Split-view tools (Crop, N-Up, Graustufen) drop the returned scroll
+        into their own splitter, beside the preview they draw. Every other
+        tool *is* this column and sits beside the single-page viewer, so the
+        same width, the same log and the same action row apply to both.
+        `beside_viewer` is that second case: the subtitle stays visible (the
+        old full-page header carried it, and the split tools never showed
+        one here), and Enter stays inside the column so it does not take the
+        viewer's page-turn key.
+
+        Sets self.file_bar / self.log / self.run_btn. Kept vertically compact
+        so the whole column fits without scrolling on typical screens.
         """
+        # Read by build_action_row, which runs before this function returns.
+        self._beside_viewer = beside_viewer
         panel = QWidget()
         panel.setObjectName("toolLeftPanel")
         panel.setStyleSheet(f"QWidget#toolLeftPanel{{background:{theme_color('PANEL')};}}")
@@ -440,8 +433,11 @@ class BasePanel(QWidget):
         lay.setContentsMargins(12, 10, 12, 10); lay.setSpacing(6)
 
         title = QLabel(tr(self.TITLE))
+        title.setWordWrap(True)
         tf = title.font(); tf.setPointSize(13); tf.setBold(True); title.setFont(tf)
         lay.addWidget(title)
+        if subtitle and self.SUBTITLE:
+            lay.addWidget(make_label(tr(self.SUBTITLE), dim=True))
         lay.addWidget(make_separator())
 
         self.file_bar = CurrentFileBar()
@@ -458,16 +454,28 @@ class BasePanel(QWidget):
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
 
-        lay.addStretch()
-        lay.addWidget(make_separator())
+        if beside_viewer:
+            # These rows were written for a full-page form: a 220px label beside
+            # the field. In the 400px column the other tools already use, that
+            # label left the field about 120px and the column had to grow to
+            # 460 before anything fitted. A shorter label wraps the long lines
+            # and the field takes the rest, so this column can be the same width.
+            for gb in panel.findChildren(QGroupBox):
+                gb.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                 gb.sizePolicy().verticalPolicy())
+            for lbl in panel.findChildren(QLabel):
+                if (lbl.objectName() == "dimLabel"
+                        and lbl.minimumWidth() == lbl.maximumWidth()
+                        and lbl.minimumWidth() >= 180):
+                    lbl.setFixedWidth(120)
+            for combo in panel.findChildren(QComboBox):
+                combo.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                    combo.sizePolicy().verticalPolicy())
 
         self.log = LogBox(tr("Log..."))
         self.log.setMaximumHeight(80)   # compact in the sidebar
-        lay.addWidget(self.log)
-
         btn_row = QHBoxLayout(); btn_row.setSpacing(8)
         self.build_action_row(btn_row)
-        lay.addLayout(btn_row)
 
         scroll = ToolScrollArea()
         scroll.setWidgetResizable(True)
@@ -476,9 +484,42 @@ class BasePanel(QWidget):
         # sidebar, they stay reachable via a scrollbar instead of being clipped.
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setStyleSheet(f"QScrollArea{{background:{theme_color('PANEL')};border:none;}}")
-        scroll.setWidget(panel)
         scroll.setMinimumWidth(340); scroll.setMaximumWidth(480)
-        return scroll
+        self._tool_scroll = scroll
+
+        if not beside_viewer:
+            # Split-view tools (N-Up, Crop/Scale, Graustufen) keep the log and
+            # the button inside the scrolling column, as they always have. That
+            # column is short enough to fit.
+            lay.addStretch()
+            lay.addWidget(make_separator())
+            lay.addWidget(self.log)
+            lay.addLayout(btn_row)
+            scroll.setWidget(panel)
+            return scroll
+
+        # Beside the viewer the column is the whole tool, and a few of them
+        # (preflight, the form list) are taller than the screen. The run
+        # button used to scroll away with the options. It stays put now.
+        lay.addStretch()
+        scroll.setWidget(panel)
+        host = QWidget()
+        host.setObjectName("toolColumnHost")
+        hl = QVBoxLayout(host)
+        hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(0)
+        hl.addWidget(scroll, 1)
+        footer = QWidget()
+        footer.setObjectName("toolColumnFooter")
+        self._tool_footer = footer
+        fl = QVBoxLayout(footer)
+        fl.setContentsMargins(12, 4, 12, 10); fl.setSpacing(6)
+        fl.addWidget(make_separator())
+        fl.addWidget(self.log)
+        fl.addLayout(btn_row)
+        hl.addWidget(footer)
+        host.setMinimumWidth(scroll.minimumWidth())
+        host.setMaximumWidth(scroll.maximumWidth())
+        return host
 
     def build_tool_right_panel(self) -> QWidget:
         """The right half of a split-view tool (Crop, N-Up, Grayscale): a
@@ -549,9 +590,18 @@ class BasePanel(QWidget):
         row.addWidget(self.run_btn)
 
         from PyQt6.QtGui import QKeySequence, QShortcut
+        # A column beside the page must not take Enter from the page: that key
+        # turns the page. While the tool itself has focus, Enter still runs it.
+        # A split-view tool fills the main area, so Enter stays a window key
+        # there — the page is not on screen to turn.
+        context = (Qt.ShortcutContext.WidgetWithChildrenShortcut
+                   if getattr(self, "_beside_viewer", False)
+                   else Qt.ShortcutContext.WindowShortcut)
         sc = QShortcut(QKeySequence(Qt.Key.Key_Return), self)
+        sc.setContext(context)
         sc.activated.connect(self._enter_pressed)
         sc2 = QShortcut(QKeySequence(Qt.Key.Key_Enter), self)
+        sc2.setContext(context)
         sc2.activated.connect(self._enter_pressed)
 
     def _run_action(self) -> str:

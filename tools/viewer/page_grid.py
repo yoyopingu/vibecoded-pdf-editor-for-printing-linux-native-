@@ -7,11 +7,12 @@ near the viewport — a 500-page document needs only a few to show its first row
 """
 from PyQt6.QtWidgets import (QWidget, QFrame, QApplication, QScrollArea,
                              QSizePolicy)
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer
+from PyQt6.QtCore import Qt, QRect, pyqtSignal, QMimeData, QTimer
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QDrag, QPainter, QPen,
                          QTransform, QFont)
 from tools.i18n import tr
 from tools.render.caches import _ThumbnailCache
+from tools.render.placeholder import paint_page_number
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.theme import (STATUS, _DROP_THICKNESS, _TV, _paint_drop_marker,
                          _register_themed)
@@ -55,13 +56,13 @@ def card_size(card_w, card_h):
 
 
 def paint_card(widget, pixmap, caption, card_w, card_h, selected,
-               placeholder=None):
+               placeholder=None, page_index=None):
     """Draw one card: selection frame, thumbnail well, thumbnail, caption.
 
     Shared by both grids so the merge view and the page manager cannot drift
     apart — they are the same card showing different things. `placeholder` is
-    drawn large in the well when there is no thumbnail, which is how the merge
-    view shows a file type it cannot render a preview of.
+    an icon for a file type the merge view cannot preview; `page_index` is the
+    source page number shown while a PDF thumbnail is still rendering.
     """
     p = QPainter(widget)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -91,6 +92,8 @@ def paint_card(widget, pixmap, caption, card_w, card_h, selected,
         p.setFont(f)
         p.drawText(x, y, card_w, card_h,
                    int(Qt.AlignmentFlag.AlignCenter), placeholder)
+    else:
+        paint_page_number(p, QRect(x, y, card_w, card_h), page_index)
 
     if caption:
         p.setPen(QColor(t['dim']))
@@ -106,10 +109,11 @@ class PageCard(QFrame):
     clicked = pyqtSignal(int)
 
     def __init__(self, display_pos, orig_idx, pixmap, rotation=0, parent=None,
-                 card_w=CARD_W, card_h=CARD_H):
+                 card_w=CARD_W, card_h=CARD_H, page_index=None):
         super().__init__(parent)
         self.display_pos = display_pos
         self.orig_idx    = orig_idx
+        self._page_index = page_index
         self._card_w     = card_w
         self._card_h     = card_h
         self.setFixedSize(*card_size(card_w, card_h))
@@ -151,7 +155,8 @@ class PageCard(QFrame):
 
     def paintEvent(self, _e):
         paint_card(self, self._pixmap, self._caption,
-                   self._card_w, self._card_h, self._selected)
+                   self._card_w, self._card_h, self._selected,
+                   page_index=self._page_index)
 
     def mousePressEvent(self, e):
         if e.button() != Qt.MouseButton.LeftButton:
@@ -375,7 +380,8 @@ class PageGrid(QWidget):
                                        Qt.AspectRatioMode.KeepAspectRatio,
                                        Qt.TransformationMode.FastTransformation)
 
-                card = PageCard(pos, uid, pm, 0, self, c_w, c_h)
+                card = PageCard(pos, uid, pm, 0, self, c_w, c_h,
+                                page_index=orig)
                 card.set_selected(self.model.is_selected(pos))
                 card.clicked.connect(self._on_click)
                 self._cards[pos] = card
@@ -413,7 +419,8 @@ class PageGrid(QWidget):
         cached = (_ThumbnailCache.get((src_path, orig, rot, render_w))
                   or _ThumbnailCache.get_any(src_path, orig, rot))
         pm = QPixmap.fromImage(cached) if cached is not None else None
-        card = PageCard(pos, uid, pm, 0, self, self._layout_w, self._layout_h)
+        card = PageCard(pos, uid, pm, 0, self, self._layout_w, self._layout_h,
+                        page_index=orig)
         card.set_selected(self.model.is_selected(pos))
         card.clicked.connect(self._on_click)
         self._cards[pos] = card

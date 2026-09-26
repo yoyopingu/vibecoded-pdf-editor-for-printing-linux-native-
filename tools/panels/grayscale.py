@@ -6,10 +6,11 @@ import os, subprocess, logging, gc
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.render.caches import _ThumbnailCache
 from tools.render.queue import _render_queue, _ThumbTask, _ThumbSignals, _thumb_render_width
+from tools.render.placeholder import paint_page_number, source_page_index
 from tools.theme import STATUS, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox, QRadioButton, QScrollArea, QWidget, QSlider, QFrame, QSplitter, QGridLayout
 from PyQt6.QtCore import Qt, QTimer, QEvent
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QPixmap, QPainter, QColor
 from tools.app_state import AppState
 from tools._base import BasePanel, make_label, make_separator
 from tools.colorspace import is_grey_only, page_colorspaces, scan_document
@@ -494,6 +495,8 @@ class GrayscalePanel(BasePanel):
                     f"QWidget#greyPreviewBox{{background:{t['viewer_bg']};}}")
                 for _f, img_lbl, num_lbl in self._preview_cards:
                     img_lbl.setStyleSheet(f"background:{t['card_bg']};border:none;")
+                    if img_lbl.property('src_pm') is None:
+                        self._set_pending_card_image(img_lbl)
                     num_lbl.setStyleSheet(
                         f"color:{t['dim']};font-size:10px;background:transparent;border:none;")
                 # force: the statuses have not changed, the palette has, so
@@ -533,6 +536,8 @@ class GrayscalePanel(BasePanel):
                 img_lbl.setPixmap(pm.scaled(self._card_w, card_h,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.FastTransformation))
+            else:
+                self._set_pending_card_image(img_lbl)
         self._relayout_preview()
         self._zoom_smooth_timer.start(180)
 
@@ -770,6 +775,15 @@ class GrayscalePanel(BasePanel):
         self.log.log(f"{len(self._grey_pages)} {tr('Seite(n) werden konvertiert')}, "
                      f"{len(self._page_data)-len(self._grey_pages)} {tr('bleiben unveraendert')}")
 
+    def _set_pending_card_image(self, label):
+        """Keep a cold card numbered when zoom or theme rebuilds its pixmap."""
+        pm = QPixmap(label.width(), label.height())
+        pm.fill(QColor(_TV['card_bg']))
+        painter = QPainter(pm)
+        paint_page_number(painter, pm.rect(), label.property('placeholder_index'))
+        painter.end()
+        label.setPixmap(pm)
+
     def _build_preview(self, n_pages):
         container = QWidget()
         container.setObjectName("greyPreviewBox")
@@ -797,6 +811,12 @@ class GrayscalePanel(BasePanel):
             img_lbl = QLabel(); img_lbl.setFixedSize(CARD_W, CARD_H)
             img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             img_lbl.setStyleSheet(f"background:{_TV['card_bg']};border:none;")
+            # The grid is interactive before its thumbnails arrive. A numbered
+            # sheet makes each pending source page identifiable during a scan.
+            source = source_page_index(AppState.get().page_model, i,
+                                       self._scanned_path)
+            img_lbl.setProperty('placeholder_index', source)
+            self._set_pending_card_image(img_lbl)
             fl.addWidget(img_lbl)
             num_lbl = QLabel(str(i+1)); num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             num_lbl.setStyleSheet(
@@ -994,15 +1014,21 @@ class GrayscalePanel(BasePanel):
         self._already_grey = set()
         self._grey_thumb_gen += 1   # invalidate any in-flight thumb callbacks
 
-        # The page count, so the preview cards can go up before the work starts.
-        try:
-            with _pdfium_lock:
-                doc = _open_pdf(src)
-                try: n = len(doc)
-                finally: doc.close()
-        except Exception as e:
-            logging.exception("grayscale: could not open the document")
-            self.log.log(str(e), error=True); return
+        # The page model already knows the displayed snapshot's count. Opening
+        # pdfium here could queue behind a complex render and hold up the very
+        # numbered cards that are supposed to appear while work is pending.
+        model = AppState.get().page_model
+        if model is not None:
+            n = len(model.order)
+        else:
+            try:
+                with _pdfium_lock:
+                    doc = _open_pdf(src)
+                    try: n = len(doc)
+                    finally: doc.close()
+            except Exception as e:
+                logging.exception("grayscale: could not open the document")
+                self.log.log(str(e), error=True); return
         self._build_preview(n)
         self._load_preview_pixmaps_async(src)
 

@@ -596,20 +596,20 @@ class SinglePageView(QWidget):
         """Blank paper the size this page will be, while it renders.
 
         The size comes from whatever already knows it — the size cache, or a
-        previous render of the same page. With nothing to go on the canvas is
-        cleared instead of guessing: a sheet of the wrong shape that then
-        jumps is worse than none.
+        previous render of the same page. Before either has measured it, use
+        the viewport as a temporary well so a cold page is still identifiable.
         """
         w_pt, h_pt = self._known_page_size(src_path, orig, rot)
         if w_pt <= 0 or h_pt <= 0:
-            self._view.clear()
+            self._view.show_placeholder(8, 8, max(1, avail_w - 16),
+                                        max(1, avail_h - 16), orig)
             return
         scale = _target_scale(avail_w, avail_h, self._zoom, w_pt, h_pt)
         page_px_w, page_px_h = page_px_size(w_pt, h_pt, scale, 0)
         self._place_scroll(page_px_w, page_px_h, avail_w, avail_h)
         ox = max(0.0, (avail_w - page_px_w) / 2.0) - self._scroll_x
         oy = max(0.0, (avail_h - page_px_h) / 2.0) - self._scroll_y
-        self._view.show_placeholder(ox, oy, page_px_w, page_px_h)
+        self._view.show_placeholder(ox, oy, page_px_w, page_px_h, orig)
 
     # ── rulers and guides ────────────────────────────────────────────────────
 
@@ -925,10 +925,12 @@ class SinglePageView(QWidget):
             src_rect = (0, 0, self._last_pm.width(), self._last_pm.height())
             src_scale = self._last_pm.width() / self._page_w_pt
         if src_pm is None or src_scale <= 0:
-            # Nothing of this page to stretch. An empty sheet rather than the
+            # Nothing of this page to stretch. A numbered sheet rather than the
             # previous page left sitting there while this one renders.
             ox, oy = self._page_origin(page_px_w, page_px_h)
-            self._view.show_placeholder(ox, oy, page_px_w, page_px_h)
+            page_key = self._current_page_key()
+            self._view.show_placeholder(ox, oy, page_px_w, page_px_h,
+                                        page_key[1] if page_key else None)
             self._showing_provisional = True
             return
         f = scale / src_scale
@@ -1320,8 +1322,8 @@ class SinglePageView(QWidget):
                 self._view.set_page(pm, [], off_x, off_y)
                 self._showing_provisional = True
             else:
-                # Nothing of this page to show yet. An empty sheet, not the page
-                # before it: leaving the last render on screen is how a slow
+                # Nothing of this page to show yet. A numbered sheet rather
+                # than the page before it: leaving its render on screen is how a slow
                 # document came to look like the same page over and over.
                 self._show_empty_sheet(src_path, orig, rot, avail_w, avail_h)
                 self._showing_provisional = True
