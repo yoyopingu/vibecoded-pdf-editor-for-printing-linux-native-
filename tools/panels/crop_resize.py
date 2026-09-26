@@ -2,9 +2,9 @@
 Zuschneiden / Skalieren — trim or extend the page, fit it to a paper size,
 and set cut marks. Shows the sheet it is about to produce.
 """
-import os, gc
-from tools.render.document_cache import open_page
-from tools.render.images import pil_to_qpixmap
+import os
+from tools.render.caches import _FullPageCache, cached_screen_page
+from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.theme import INK, PAPER, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QSplitter
 from PyQt6.QtCore import Qt
@@ -15,19 +15,9 @@ from tools._base import BasePanel
 from tools.i18n import tr
 from tools.panels._shared import MM_TO_PT, PaperFormatSelector, _inherited_rotate, _visible_box, _visible_size, _mat_mul, _display_matrix, PreviewPane, PreviewPageBar
 from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_stream
-from tools.render.placeholder import paint_page_number, source_page_index
+from tools.render.placeholder import paint_page_number
 from tools.render.region import cached_page_size_pt, page_size_pt
 from tools.jobs import submit
-
-
-def _render_base_page(pdf_path, page_idx):
-    """Rasterise source pixels without reading or changing any panel widget."""
-    # The viewer may already have this page loaded. Reusing its guarded handle
-    # avoids parsing a complex page again just to draw the tool preview.
-    with open_page(pdf_path, page_idx) as page:
-        pw = page.get_width(); ph = page.get_height()
-        base_scale = 1400.0 / max(pw, ph, 1.0)
-        return page.render(scale=base_scale).to_pil(), pw, ph
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -37,6 +27,17 @@ class CropResizePanel(BasePanel):
     TITLE         = "Zuschneiden / Skalieren"
     SUBTITLE      = ""
     RUN_LABEL     = "Ausfuehren"
+
+    def __init__(self, parent=None):
+        self._preview_signals = _ThumbSignals()
+        self._preview_signals.ready.connect(self._on_preview_image_ready)
+        self._preview_gen = 0
+        self._preview_task = None
+        self._preview_task_key = None
+        self._preview_meta_job = None
+        self._preview_meta_key = None
+        self._preview_meta_error = None
+        super().__init__(parent)
 
     def _setup(self):
         self._preview_index = 0
@@ -82,6 +83,8 @@ class CropResizePanel(BasePanel):
         self._pane.refresh()
 
     def _document_changed(self, *_):
+        self._cancel_preview_work()
+        self._cancel_geometry_read()
         self._preview_index = 0
         self._set_page_range([], 0)
         # PreviewPane receives the document signal before this panel resets
@@ -248,6 +251,29 @@ class CropResizePanel(BasePanel):
         # happened to trigger a render. refresh() no-ops while hidden.
         self._pane.refresh()
 
+    def _cancel_preview_work(self):
+        # The shared queue can still be drawing the previous tool after this
+        # panel is hidden. Do not let that obsolete page delay the new view.
+        self._preview_gen += 1
+        if self._preview_task is not None:
+            self._preview_task.cancel()
+        self._preview_task = None
+        self._preview_task_key = None
+        if self._preview_meta_job is not None:
+            self._preview_meta_job.cancel()
+        self._preview_meta_job = None
+        self._preview_meta_key = None
+        self._preview_meta_error = None
+
+    def hideEvent(self, event):
+        self._cancel_preview_work()
+        super().hideEvent(event)
+
+    def closeEvent(self, event):
+        self._cancel_preview_work()
+        self._cancel_geometry_read()
+        super().closeEvent(event)
+
     def _on_sync_toggle(self, checked):
         if checked:
             val = max(self.ct.value(), self.cb2.value(),
@@ -307,13 +333,15 @@ class CropResizePanel(BasePanel):
         # Run and preview must already see the chosen output size if the
         # operator presses Ausführen before the background geometry read lands.
         self._pending_target = ('size', (tw, th))
-        # See BasePanel.current_pdf()'s docstring for why this, not
-        # AppState.get().current_pdf, is what a preview measures against.
-        pdf_path = self.current_pdf()
+        # Preview geometry comes from the model's source mapping, including
+        # rotation and foreign pages. Building a flattened PDF for two numbers
+        # would parse a complex document on the GUI thread at every edit.
+        pdf_path = AppState.get().current_pdf
         if not pdf_path or not os.path.isfile(pdf_path):
             return
         pages = self._get_target_pages()
         page_idx = pages[0][0] if pages else 0
+        source = self._preview_source(pdf_path, page_idx)
 
         def apply(pw, ph):
             # Exakte Differenz — kein Runden damit Zielformat stimmt
@@ -338,9 +366,9 @@ class CropResizePanel(BasePanel):
             self._pending_target = None
             self._update_preview()
 
-        self._with_page_dimensions(pdf_path, page_idx, apply)
+        self._with_page_dimensions(source, apply)
 
-    def _with_page_dimensions(self, pdf_path, page_idx, callback):
+    def _with_page_dimensions(self, source, callback):
         """Read a cold page's geometry off the GUI thread before changing fields.
 
         A format or percentage edit once opened and loaded the page synchronously.
@@ -349,26 +377,30 @@ class CropResizePanel(BasePanel):
         """
         self._cancel_geometry_read()
         generation = self._geometry_generation
-        size = cached_page_size_pt(pdf_path, page_idx)
-        if size is not None:
+        src_path, orig, rot = source
+        size = self._known_preview_size(source)
+        if size[0] > 0 and size[1] > 0:
             callback(*size)
             return
         def ready(size):
             if sip.isdeleted(self):
                 return
+            state = AppState.get()
             if (self._geometry_generation != generation
-                    or self.current_pdf() != pdf_path):
+                    or state.current_pdf != self._geometry_document):
                 return
             pages = self._get_target_pages()
             current = pages[0][0] if pages else 0
-            if current != page_idx:
+            current_source = self._preview_source(state.current_pdf, current)
+            if current_source != source:
                 # The selected page moved while the metadata read was in
                 # flight. Keep the chosen output size, but compute the spin
                 # boxes against the page the tool now acts on.
-                self._with_page_dimensions(pdf_path, current, callback)
+                self._with_page_dimensions(current_source, callback)
                 return
             self._geometry_job = None
-            callback(*size)
+            w, h = size
+            callback(*(h, w) if rot % 180 == 90 else (w, h))
 
         def failed(error):
             if sip.isdeleted(self):
@@ -377,8 +409,9 @@ class CropResizePanel(BasePanel):
                 self._geometry_job = None
                 self.log.log(str(error), error=True)
 
+        self._geometry_document = AppState.get().current_pdf
         self._geometry_job = submit(
-            lambda _job: page_size_pt(pdf_path, page_idx),
+            lambda _job: page_size_pt(src_path, orig),
             owner=self, name='crop-preview-dimensions',
             on_done=ready, on_error=failed)
 
@@ -392,11 +425,12 @@ class CropResizePanel(BasePanel):
         """
         if self._marks_only():
             return
-        pdf_path = self.current_pdf()
+        pdf_path = AppState.get().current_pdf
         if not pdf_path or not os.path.isfile(pdf_path):
             return
         pages    = self._get_target_pages()
         page_idx = pages[0][0] if pages else 0
+        source = self._preview_source(pdf_path, page_idx)
         self._pending_target = ('percent', val / 100.0)
         blocked = self.scale_check.blockSignals(True)
         self.scale_check.setChecked(True)
@@ -410,7 +444,7 @@ class CropResizePanel(BasePanel):
             factor = val / 100.0
             self._set_margins_for_size(pw * factor, ph * factor)
 
-        self._with_page_dimensions(pdf_path, page_idx, apply)
+        self._with_page_dimensions(source, apply)
 
     def _sync_pct_display(self, new_w, new_h, pw, ph):
         """Keep the Skalierung box showing the truth: how big the page (Format
@@ -513,74 +547,101 @@ class CropResizePanel(BasePanel):
             return [(cur, model.order[cur])]
         return []
 
-    def _base_page(self, pdf_path, page_idx):
-        """Render the page once at a fixed base resolution and cache it; returns
-        (base_pil, page_w_pt, page_h_pt). pdfium runs only when the page or
-        document actually changes — never on resize/zoom/margin edits."""
-        key = (pdf_path, page_idx)
-        cache = getattr(self, "_base_cache", None)
-        if cache is not None and cache[0] == key:
-            return cache[1], cache[2], cache[3]
-        gc.disable()
-        try:
-            base_pil, pw, ph = _render_base_page(pdf_path, page_idx)
-        finally:
-            gc.collect(); gc.enable()
-        self._base_cache = (key, base_pil, pw, ph)
-        return base_pil, pw, ph
+    def _preview_source(self, pdf_path, page_idx):
+        """Source page and page-manager turn for one displayed position.
 
-    def _request_base_page(self, pdf_path, page_idx):
-        """Keep the pane responsive while its source page is rasterised."""
-        key = (pdf_path, page_idx)
-        if getattr(self, '_base_pending_key', None) == key:
+        A flattened page-manager snapshot has different cache keys from the
+        page the viewer already rendered. The model maps its displayed position
+        back to that source, including pages pulled from other tabs.
+        """
+        state = AppState.get()
+        model = state.page_model
+        if model is not None and 0 <= page_idx < len(model.order):
+            uid = model.order[page_idx]
+            src_path, orig = model.page_source(uid, state.current_pdf or pdf_path)
+            return src_path, orig, model.get_rotation(uid)
+        return pdf_path, page_idx, 0
+
+    def _known_preview_size(self, source):
+        src_path, orig, rot = source
+        size = cached_page_size_pt(src_path, orig)
+        if size is not None:
+            w, h = size
+            return (h, w) if rot % 180 == 90 else (w, h)
+        return _FullPageCache.get_dims(src_path, orig, rot)
+
+    def _request_preview_size(self, source):
+        key = source[:2]
+        if self._preview_meta_key == key:
             return
-        prior = getattr(self, '_base_job', None)
-        if prior is not None:
-            prior.cancel()
-        self._base_pending_key = key
-        self._base_error = None
+        if self._preview_meta_job is not None:
+            self._preview_meta_job.cancel()
+        self._preview_meta_key = key
+        self._preview_meta_error = None
 
-        def ready(result):
-            if sip.isdeleted(self):
+        def ready(_size):
+            if sip.isdeleted(self) or self._preview_meta_key != key:
                 return
-            if self._base_pending_key != key:
-                return
-            self._base_pending_key = None
-            self._base_cache = (key, *result)
+            self._preview_meta_key = None
             self._pane.refresh()
 
         def failed(error):
-            if sip.isdeleted(self):
+            if sip.isdeleted(self) or self._preview_meta_key != key:
                 return
-            if self._base_pending_key != key:
-                return
-            self._base_pending_key = None
-            self._base_error = (key, str(error))
+            self._preview_meta_key = None
+            self._preview_meta_error = (key, str(error))
             self._pane.refresh()
 
-        def dimensions(_size):
-            if sip.isdeleted(self):
-                return
-            if self._base_pending_key == key:
-                self._pane.refresh()
+        # Metadata first: a complex content stream must not keep the numbered
+        # sheet at a guessed aspect ratio while the shared render queue draws.
+        self._preview_meta_job = submit(
+            lambda _job: page_size_pt(*key), owner=self,
+            name='crop-preview-dimensions', on_done=ready, on_error=failed)
 
-        def work(job):
-            # Emit geometry before loading/rasterising the source page. A queued
-            # GUI refresh can then reshape the numbered placeholder immediately.
-            job.emit_data(page_size_pt(pdf_path, page_idx))
-            return _render_base_page(pdf_path, page_idx)
+    def _request_preview_image(self, source, render_width):
+        key = (*source, render_width)
+        if (self._preview_task_key == key and self._preview_task is not None
+                and self._preview_task._active):
+            return
+        if self._preview_task is not None:
+            self._preview_task.cancel()
+        self._preview_gen += 1
+        self._preview_task_key = key
+        task = _ThumbTask(self._preview_gen, 0, source[0], source[1],
+                          source[2], render_width, self._preview_signals)
+        self._preview_task = task
+        # The tool is showing this one sheet now. Priority 0 preempts the old
+        # view's thumbnail work and survives its cancel_queued(1) calls.
+        _render_queue.submit(task, 0)
 
-        # submit connects callbacks before starting a job. Connecting after it
-        # returns loses fast completions and strands the numbered stand-in.
-        self._base_job = submit(
-            work,
-            owner=self, name='crop-preview-render',
-            on_done=ready, on_error=failed, on_data=dimensions)
+    def _on_preview_image_ready(self, gen, _card, _image):
+        if gen != self._preview_gen or sip.isdeleted(self):
+            return
+        self._preview_task = None
+        self._preview_task_key = None
+        self._pane.refresh()
+
+    def _pending_preview(self, avail_w, avail_h, zoom, source_index, size=None):
+        if size is not None and size[0] > 0 and size[1] > 0:
+            pw, ph = size
+            t, b, l, r = self._effective_margins_pt(pw, ph)
+            pw, ph = max(1.0, pw - l - r), max(1.0, ph - t - b)
+            fit = min(avail_w / pw, avail_h / ph) * zoom
+            width, height = max(1, int(pw * fit)), max(1, int(ph * fit))
+        else:
+            width, height = max(1, avail_w), max(1, avail_h)
+        pm = QPixmap(width, height)
+        pm.fill(QColor(PAPER))
+        painter = QPainter(pm)
+        paint_page_number(painter, pm.rect(), source_index)
+        painter.end()
+        return pm, tr('rendert …')
 
     def _render_preview(self, avail_w, avail_h, zoom, async_load=False):
-        # See BasePanel.current_pdf()'s docstring for why this, not
-        # AppState.get().current_pdf, is what a preview measures against.
-        pdf_path = self.current_pdf()
+        # The model resolves each displayed page to its source and rotation.
+        # A preview needs no flattened PDF; require_pdf() still makes one for
+        # the actual operation, where display order has to be written to disk.
+        pdf_path = AppState.get().current_pdf
         if not pdf_path:
             self._sel_info.setText("")
             self._set_page_range([], 0)
@@ -592,8 +653,6 @@ class CropResizePanel(BasePanel):
             self._sel_info.setText("")
             self._set_page_range([], 0)
             return None, tr("Datei nicht mehr auffindbar")
-        from PIL import Image as PILImage
-
         pages    = self._get_target_pages()
         positions = self._preview_positions()
         model = AppState.get().page_model
@@ -616,37 +675,20 @@ class CropResizePanel(BasePanel):
             # marks, no error, nothing to say something was still needed.
             return None, tr("Bitte zuerst ein Format waehlen.")
 
-        # Render the page ONCE at a fixed base resolution (cached per page). Every
-        # resize / zoom / margin / format change then only re-scales this cached
-        # image (cheap) instead of re-rendering via pdfium — that re-render is what
-        # made dragging the sidebar and editing the custom size hang on big PDFs.
-        key = (pdf_path, page_idx)
-        cache = getattr(self, '_base_cache', None)
-        if async_load and (cache is None or cache[0] != key):
-            error = getattr(self, '_base_error', None)
-            if error is not None and error[0] == key:
-                return None, tr('Vorschau: {p0}').format(p0=error[1])
-            self._request_base_page(pdf_path, page_idx)
-            # The page-tree size arrives before the content render. Use it to
-            # shape the pending sheet while the complex source is still loading.
-            size = cached_page_size_pt(pdf_path, page_idx)
-            if size is not None:
-                pw, ph = size
-                t, b, l, r = self._effective_margins_pt(pw, ph)
-                pw, ph = max(1.0, pw - l - r), max(1.0, ph - t - b)
-                fit = min(avail_w / pw, avail_h / ph) * zoom
-                width, height = max(1, int(pw * fit)), max(1, int(ph * fit))
-            else:
-                width, height = max(1, avail_w), max(1, avail_h)
-            pm = QPixmap(width, height)
-            pm.fill(QColor(PAPER))
-            painter = QPainter(pm)
-            source = source_page_index(AppState.get().page_model,
-                                       page_idx, pdf_path)
-            paint_page_number(painter, pm.rect(), source)
-            painter.end()
-            return pm, tr('rendert …')
-        base_pil, pw, ph = self._base_page(pdf_path, page_idx)
+        source = self._preview_source(pdf_path, page_idx)
+        size = self._known_preview_size(source)
+        if size[0] <= 0 or size[1] <= 0:
+            if async_load:
+                error = self._preview_meta_error
+                if error is not None and error[0] == source[:2]:
+                    return None, tr('Vorschau: {p0}').format(p0=error[1])
+                self._request_preview_size(source)
+                return self._pending_preview(avail_w, avail_h, zoom,
+                                             source[1])
+            raw_w, raw_h = page_size_pt(source[0], source[1])
+            size = ((raw_h, raw_w) if source[2] % 180 == 90
+                    else (raw_w, raw_h))
+        pw, ph = size
 
         t_pt, b_pt, l_pt, r_pt = self._effective_margins_pt(pw, ph)
 
@@ -673,8 +715,35 @@ class CropResizePanel(BasePanel):
         ch_px = max(1, int(new_h * cs))
 
         target_w = max(1, int(pw * cs)); target_h = max(1, int(ph * cs))
-        pil = (base_pil if base_pil.size == (target_w, target_h)
-               else base_pil.resize((target_w, target_h), PILImage.LANCZOS))
+        # A full viewer render or a page-manager thumbnail is already the same
+        # source image this tool needs. Use either immediately. Only a display
+        # size wider than every cached image calls for a new shared thumbnail.
+        source_w = ph if source[2] % 180 == 90 else pw
+        render_scale = min(cs, 1400.0 / max(pw, ph))
+        wanted_w = max(1, int(pw * render_scale))
+        render_w = _thumb_render_width(max(1, int(source_w * render_scale)),
+                                       cap=1536)
+        image, sharp = cached_screen_page(source[0], source[1], source[2],
+                                          wanted_w)
+        if not sharp:
+            if async_load:
+                self._request_preview_image(source, render_w)
+            else:
+                _ThumbTask(0, 0, source[0], source[1], source[2],
+                           render_w, None).run()
+                image, sharp = cached_screen_page(source[0], source[1],
+                                                  source[2], wanted_w)
+        elif self._preview_task is not None:
+            self._preview_task.cancel()
+            self._preview_task = None
+            self._preview_task_key = None
+        if image is None:
+            return self._pending_preview(avail_w, avail_h, zoom, source[1], size)
+        pm = QPixmap.fromImage(image)
+        if pm.width() != target_w or pm.height() != target_h:
+            pm = pm.scaled(target_w, target_h,
+                           Qt.AspectRatioMode.IgnoreAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
 
         gw = max(1, int(pw * cs));  gh = max(1, int(ph * cs))
         g_page_x = int(-l_pt * cs); g_page_y = int(-t_pt * cs)
@@ -722,7 +791,6 @@ class CropResizePanel(BasePanel):
 
         if do_scale:
             keep = self.keep_ratio.isChecked()
-            pm  = pil_to_qpixmap(pil)
             ar  = Qt.AspectRatioMode.KeepAspectRatio if keep else Qt.AspectRatioMode.IgnoreAspectRatio
             pm_s = pm.scaled(cw_px, ch_px, ar, Qt.TransformationMode.SmoothTransformation)
             draw_x = rx + (cw_px - pm_s.width())  // 2
@@ -737,11 +805,10 @@ class CropResizePanel(BasePanel):
             if changed: ghost_outline()
         else:
             src_x = max(0, int(l_pt * cs)); src_y = max(0, int(t_pt * cs))
-            src_w = min(max(1, int(new_w * cs)), pil.width  - src_x)
-            src_h = min(max(1, int(new_h * cs)), pil.height - src_y)
+            src_w = min(max(1, int(new_w * cs)), pm.width()  - src_x)
+            src_h = min(max(1, int(new_h * cs)), pm.height() - src_y)
             dst_x = rx + max(0, int(-l_pt * cs))
             dst_y = ry + max(0, int(-t_pt * cs))
-            pm  = pil_to_qpixmap(pil)
             painter.drawPixmap(dst_x, dst_y, src_w, src_h, pm, src_x, src_y, src_w, src_h)
             painter.setPen(QPen(QColor(_TV['acc']), 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -767,7 +834,8 @@ class CropResizePanel(BasePanel):
             parts.append(f"✂ {marks_size[0]/MM_TO_PT:.0f}x{marks_size[1]/MM_TO_PT:.0f}mm")
         elif any([t_pt, b_pt, l_pt, r_pt]):
             parts.append(f"{new_w/MM_TO_PT:.0f}x{new_h/MM_TO_PT:.0f}mm")
-        return result, " -> ".join(parts)
+        info = " -> ".join(parts)
+        return result, (info if sharp else f"{info}  ·  {tr('rendert …')}")
 
     def _run_action(self):
         import pikepdf

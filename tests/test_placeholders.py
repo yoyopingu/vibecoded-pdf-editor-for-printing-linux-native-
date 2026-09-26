@@ -9,9 +9,11 @@ from tools.viewer.model import PageModel
 from tools.viewer.page_grid import PageCard
 from tools.panels.crop_resize import CropResizePanel
 from tools.panels.nup import NUpPanel
-import tools.panels.crop_resize as crop_resize
 import tools.panels.nup as nup
 import tools.render.images as render_images
+import tools.render.queue as render_queue
+from tools.render.caches import _FullPageCache, _ThumbnailCache, cached_screen_page
+from tools.render.region import page_size_pt
 from tests.support import FX, _open, _wait_for
 
 
@@ -59,33 +61,36 @@ def test_pending_pages_show_their_original_source_number():
 
 def test_crop_pane_does_not_wait_for_a_complex_source_page():
     _open(FX['normal'])
+    page_size_pt(FX['normal'], 0)
+    _FullPageCache.invalidate(FX['normal'])
+    _ThumbnailCache.invalidate(FX['normal'])
     panel = CropResizePanel()
     started = Event()
     release = Event()
-    original = crop_resize._render_base_page
+    original = render_queue._render_image
 
-    def slow_render(path, index):
+    def slow_render(*args, **kwargs):
         started.set()
         assert release.wait(5), 'test render was never released'
-        return original(path, index)
+        return original(*args, **kwargs)
 
-    crop_resize._render_base_page = slow_render
+    render_queue._render_image = slow_render
     try:
         pm, info = panel._render_preview(300, 300, 1.0, async_load=True)
         assert pm is not None and 'rendert' in info
-        assert panel._base_pending_key is not None
+        assert panel._preview_task is not None
         assert _wait_for(started.is_set)
         # Refreshes and option changes remain usable while the worker waits.
         again, _ = panel._render_preview(240, 340, 1.25, async_load=True)
-        assert again is not None and getattr(panel, '_base_cache', None) is None
+        assert again is not None
         fitted, _ = panel._render_preview(300, 300, 1.0, async_load=True)
         assert 0.68 < fitted.width() / fitted.height() < 0.73, (
             "the numbered placeholder stayed square after its geometry arrived")
     finally:
         release.set()
-        crop_resize._render_base_page = original
-    assert _wait_for(lambda: panel._base_pending_key is None)
-    pm, info = panel._render_preview(300, 420, 1.0, async_load=True)
+        render_queue._render_image = original
+    assert _wait_for(lambda: cached_screen_page(FX['normal'], 0, 0, 1)[0] is not None)
+    pm, info = panel._render_preview(300, 300, 1.0, async_load=True)
     assert pm is not None and 'rendert' not in info
 
 

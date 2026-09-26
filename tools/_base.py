@@ -619,10 +619,11 @@ class BasePanel(QWidget):
         Viewer sie zeigt (Reihenfolge, Drehung, eingefügte Seiten). Für den
         Original-Dateinamen (Titelzeile, Ausgabename) AppState.current_pdf.
 
-        Call this, not AppState.get().current_pdf, from anywhere that measures
-        or previews a page — the page manager's rotations and reordering are
-        only reflected here. Reading AppState's path directly measures and
-        previews the file as it is on disk, so a rotated page came out in its
+        Use this for processing and for previews that inspect a flattened PDF.
+        A preview can instead resolve each displayed position through PageModel
+        to its source page and rotation (as Crop/Scale does to reuse the viewer's
+        render cache). Reading AppState's path without that mapping measures
+        and previews the file on disk, so a rotated page comes out in its
         original orientation."""
         return ensure_view_snapshot(AppState.get().current_pdf)
 

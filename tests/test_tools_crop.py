@@ -43,6 +43,65 @@ def test_crop_preview_navigates_pages_it_will_change():
     p.deleteLater()
 
 
+def test_crop_preview_reuses_both_screen_render_caches():
+    """A page already drawn by the viewer or grid must appear without another PDF render."""
+    from tools.render.caches import _FullPageCache, _ThumbnailCache
+    from tools.render.images import _render_image
+    from tools.render.region import page_size_pt
+
+    path = FX["normal"]
+    _open(path)
+    pw, ph = page_size_pt(path, 0)
+    image = _render_image(path, 0, 800)
+    try:
+        for source in ("full", "thumbnail"):
+            _FullPageCache.invalidate(path)
+            _ThumbnailCache.invalidate(path)
+            if source == "full":
+                _FullPageCache.put(path, 0, 0, 800, 600,
+                                   (image, pw, ph, image.width() / pw, []))
+            else:
+                _ThumbnailCache.put((path, 0, 0, image.width()), image)
+            panel = CropResizePanel()
+            try:
+                preview, info = panel._render_preview(300, 420, 1.0,
+                                                       async_load=True)
+                assert preview is not None and "rendert" not in info, source
+                assert panel._preview_task is None, f"{source} triggered another PDF render"
+            finally:
+                panel.deleteLater()
+    finally:
+        _FullPageCache.invalidate(path)
+        _ThumbnailCache.invalidate(path)
+
+
+def test_crop_preview_reads_reordered_pages_without_flattening_the_document():
+    """Inspecting a reordered view should stay responsive on a complex PDF."""
+    import tools._base as base
+    from tools.app_state import AppState
+
+    _open(FX["normal"])
+    model = AppState.get().page_model
+    model.order.reverse()
+    panel = CropResizePanel()
+    original = base.ensure_view_snapshot
+
+    def no_snapshot(_path):
+        raise AssertionError("preview flattened the document on the GUI thread")
+
+    base.ensure_view_snapshot = no_snapshot
+    try:
+        preview, _info = panel._render_preview(300, 420, 1.0,
+                                               async_load=True)
+        panel._set_margins_for_size(500.0, 700.0)
+        assert preview is not None
+        assert panel._preview_source(FX["normal"], 0) == (FX["normal"], 4, 0)
+    finally:
+        base.ensure_view_snapshot = original
+        panel.close()
+        panel.deleteLater()
+
+
 def test_crop_format_modes():
     _open(FX["normal"])
     def run(action_idx, fmt_setter):

@@ -21,9 +21,8 @@ def _pdfium_dims(path, index=0):
 
 def test_rotation_reaches_the_tools():
     """A page turned in "Seiten verwalten" has to be turned for the tools too.
-    Three of them read AppState.current_pdf — the file on disk — instead of the
-    flattened view, so they measured and previewed the page in its original
-    orientation and produced a crop for the wrong side."""
+    The tool preview may follow the in-memory model directly or use a flattened
+    view, but either way its geometry has to include the page-manager turn."""
     from tools._base import ensure_view_snapshot
     from tools.panels.crop_resize import CropResizePanel
     from tools.panels.nup import NUpPanel
@@ -44,7 +43,7 @@ def test_rotation_reaches_the_tools():
     assert (round(w1), round(h1)) == (round(h0), round(w0)), \
         f"rotated page measures {w1:.0f}x{h1:.0f}, expected {h0:.0f}x{w0:.0f}"
 
-    # Geometry may already be cached, and Crop now reads a cold page in a job.
+    # Geometry may already be cached, and Crop reads a cold page in a job.
     # Check the actual sheet and the source each preview used, including after
     # a rotation when the file on disk still has the original orientation.
     crop = CropResizePanel()
@@ -55,7 +54,12 @@ def test_rotation_reaches_the_tools():
     assert abs(t - (h1 - 842.0) / 2) < 0.1
     assert b == t and r == l
     crop._render_preview(400, 500, 1.0)
-    assert crop._base_cache[0][0] == flat, "crop preview used the unrotated file"
+    assert crop._preview_source(st.current_pdf, 0) == (st.current_pdf, 0, 90), \
+        "crop preview missed the page-manager rotation"
+    from tools.render.caches import cached_screen_page
+    image, _ = cached_screen_page(st.current_pdf, 0, 90, 1)
+    assert image is not None and image.width() > image.height(), \
+        "crop preview drew the source page before its rotation"
 
     nup = NUpPanel()
     nup._render_preview(400, 500, 1.0)

@@ -203,15 +203,21 @@ class _ThumbnailCache(_ByteBoundedCache):
 
     @classmethod
     def get_any(cls, path, pidx, rot):
-        """Return any cached image for this page, ignoring render_width.
-        Used as a placeholder when the exact render_width is not cached yet."""
+        """Return the widest cached image for this page, ignoring render_width.
+
+        A preview may use it while a sharper render is pending. Picking the
+        first inserted thumbnail could enlarge a tiny old card even though a
+        later, sharper one was already in the same cache.
+        """
         rev = _revision(path)
+        best = None
         with cls._lock:
             for k, (entry_rev, _nbytes, image) in cls._store.items():
                 if (k[0] == path and k[1] == pidx and k[2] == rot
-                        and entry_rev == rev):
-                    return image
-        return None
+                        and entry_rev == rev
+                        and (best is None or image.width() > best.width())):
+                    best = image
+        return best
 
     @classmethod
     def get_at_least(cls, path, pidx, rot, width):
@@ -341,6 +347,19 @@ class _FullPageCache(_ByteBoundedCache):
         return best
 
     @classmethod
+    def get_any(cls, path, pidx, rot):
+        """Return the widest full-page image for a screen preview, if present."""
+        best = None
+        rev = _revision(path)
+        with cls._lock:
+            for (p, pi, r, _aw, _ah), (entry_rev, _nbytes, entry) in cls._store.items():
+                if p == path and pi == pidx and r == rot and entry_rev == rev:
+                    img = entry[0]
+                    if best is None or img.width() > best.width():
+                        best = img
+        return best
+
+    @classmethod
     def get_dims(cls, path, pidx, rot):
         """Return (page_w_pt, page_h_pt) from any cached entry for this page.
         Returns (0, 0) if not cached yet."""
@@ -350,3 +369,23 @@ class _FullPageCache(_ByteBoundedCache):
                 if p == path and pi == pidx and r == rot and entry_rev == rev:
                     return entry[1], entry[2]
         return 0.0, 0.0
+
+
+def cached_screen_page(path, page_index, rotation, wanted_width):
+    """Best existing screen image from the full-page and thumbnail caches.
+
+    Both caches carry file revisions. A crop or other screen preview can use
+    either immediately, then ask the render queue for a sharper thumbnail only
+    when every cached image is narrower than the displayed size it needs.
+    Print preview has different annotation and form visibility rules and must
+    keep its print-specific render path.
+    """
+    candidates = (_ThumbnailCache.get_any(path, page_index, rotation),
+                  _FullPageCache.get_any(path, page_index, rotation))
+    images = [img for img in candidates if img is not None]
+    if not images:
+        return None, False
+    enough = [img for img in images if img.width() >= wanted_width]
+    if enough:
+        return min(enough, key=lambda img: img.width()), True
+    return max(images, key=lambda img: img.width()), False
