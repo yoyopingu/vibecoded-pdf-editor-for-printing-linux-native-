@@ -416,8 +416,8 @@ class BasePanel(QWidget):
         same width, the same log and the same action row apply to both.
         `beside_viewer` is that second case: the subtitle stays visible (the
         old full-page header carried it, and the split tools never showed
-        one here), and Enter stays inside the column so it does not take the
-        viewer's page-turn key.
+        one here). Enter runs the visible tool even when its page preview
+        has focus; the arrow keys still navigate that preview.
 
         Sets self.file_bar / self.log / self.run_btn. Kept vertically compact
         so the whole column fits without scrolling on typical screens.
@@ -590,18 +590,17 @@ class BasePanel(QWidget):
         row.addWidget(self.run_btn)
 
         from PyQt6.QtGui import QKeySequence, QShortcut
-        # A column beside the page must not take Enter from the page: that key
-        # turns the page. While the tool itself has focus, Enter still runs it.
-        # A split-view tool fills the main area, so Enter stays a window key
-        # there — the page is not on screen to turn.
-        context = (Qt.ShortcutContext.WidgetWithChildrenShortcut
-                   if getattr(self, "_beside_viewer", False)
-                   else Qt.ShortcutContext.WindowShortcut)
+        # Opening a column tool focuses the shared page preview. Enter must
+        # still run the visible tool there, rather than turn a source page.
+        # Qt deactivates these shortcuts when the panel is hidden or another
+        # window/dialog owns focus, preserving normal viewer and modal keys.
         sc = QShortcut(QKeySequence(Qt.Key.Key_Return), self)
-        sc.setContext(context)
+        sc.setContext(Qt.ShortcutContext.WindowShortcut)
+        sc.setAutoRepeat(False)
         sc.activated.connect(self._enter_pressed)
         sc2 = QShortcut(QKeySequence(Qt.Key.Key_Enter), self)
-        sc2.setContext(context)
+        sc2.setContext(Qt.ShortcutContext.WindowShortcut)
+        sc2.setAutoRepeat(False)
         sc2.activated.connect(self._enter_pressed)
 
     def _run_action(self) -> str:
@@ -610,7 +609,9 @@ class BasePanel(QWidget):
     def _enter_pressed(self):
         """Enter-Taste führt immer das Tool aus. (Checkboxen toggelt man mit der
         Leertaste — Enter eine Einstellung ändern zu lassen war verwirrend.)"""
-        self._safe_run()
+        # Keyboard execution obeys the same busy/availability gate as a click.
+        if self.run_btn.isEnabled():
+            self.run_btn.click()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

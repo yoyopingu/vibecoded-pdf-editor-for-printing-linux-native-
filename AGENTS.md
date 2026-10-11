@@ -130,6 +130,11 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
   grid — those three build a `_tool_splitter` and take the main area. Do not
   fold Graustufen into the column; that preview is the tool.
 - New widgets use `_TV` / `apply_theme_globally`. Check light and dark.
+- Enter and keypad Enter run the visible tool's primary action, including
+  when its shared page preview has focus. `BasePanel` owns these window
+  shortcuts; hidden tools and modal dialogs must not trigger them. Respect
+  the Run button's disabled state and disable shortcut auto-repeat. The
+  ordinary viewer retains Enter page navigation when no tool is active.
 - Thumbnail-grid shortcuts live in `tools/viewer/shortcuts.py`; global zoom
   routing is in `tools/viewer/panel.py`. `MainWindow._switch()` sets the active
   tool preview, so Ctrl+0 / Ctrl+1 act on the visible N-Up or Crop/Scale sheet
