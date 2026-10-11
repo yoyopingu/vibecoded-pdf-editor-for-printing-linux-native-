@@ -41,6 +41,7 @@ def tr(text: str) -> str:
 _EN: dict[str, str] = {
     "Rich Text (Textfluss)": "Rich Text (flowing text)",
     "EPUB (festes Layout)": "EPUB (fixed layout)",
+    "PostScript": "PostScript",
     # Save As conversion formats
     'TIFF (mehrseitig)': 'TIFF (multiple pages)',
     'PGM (Graustufen)': 'PGM (grayscale)',

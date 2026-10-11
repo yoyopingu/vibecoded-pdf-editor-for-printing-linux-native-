@@ -829,14 +829,28 @@ def test_preview_survives_fast_clicks():
     a, b = previews
     assert a.tmp_dir != b.tmp_dir, "previews must not share a conversion dir"
 
-    a._confirm()
-    a._confirm(); a._do_open_separately(); a._do_cancel()   # all ignored: busy
+    from threading import Event
+    from unittest.mock import patch
+    from tools.multi_open import convert_files
     from tools.jobs import active_jobs
     running = lambda: [j for j in active_jobs() if j.name == "convert-files"]
-    assert len(running()) == 1, f"{len(running())} jobs after spamming one tab"
-    assert not a._btn_go.isEnabled() and not a._btn_single.isEnabled()
-    b._confirm()                                            # second job, in parallel
-    assert len(running()) == 2, "the running job was dropped"
+    release = Event()
+    def overlapping_conversion(*args):
+        assert release.wait(10), "test never released the conversion jobs"
+        return convert_files(*args)
+
+    # Fast image conversions can finish before the second click. Hold their
+    # bodies until both have started, so this tests ownership rather than speed.
+    with patch('tools.multi_open.convert_files', side_effect=overlapping_conversion):
+        try:
+            a._confirm()
+            a._confirm(); a._do_open_separately(); a._do_cancel()  # ignored: busy
+            assert len(running()) == 1, f"{len(running())} jobs after spamming one tab"
+            assert not a._btn_go.isEnabled() and not a._btn_single.isEnabled()
+            b._confirm()
+            assert len(running()) == 2, "the running job was dropped"
+        finally:
+            release.set()
 
     assert _settle(vp, lambda: not any(isinstance(vp.tabs.widget(i), MergeOrderWidget)
                                        for i in range(vp.tabs.count()))), \

@@ -6,6 +6,9 @@ order they should be merged in, with a preview of each. Picking several files
 opens this instead of guessing which one was meant.
 """
 import os, logging
+from PIL import Image
+from tools.input_formats import IMAGE_EXTS
+from tools.render.images import pil_to_qpixmap
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QApplication, QScrollArea, QSizePolicy, QSplitter, QLineEdit
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QColor, QDrag, QPainter, QFont
@@ -103,15 +106,22 @@ class FileCard(QFrame):
         if ext == ".pdf":
             return
         try:
-            if ext in (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"):
-                self.set_pixmap(QPixmap(self.path))
+            if ext in IMAGE_EXTS:
+                pixmap = QPixmap(self.path)
+                if pixmap.isNull():
+                    # Qt and Pillow do not ship the same codecs. Newly exposed
+                    # image formats still need a thumbnail in the merge grid.
+                    with Image.open(self.path) as image:
+                        image.thumbnail((self._card_w * 2, self._card_h * 2))
+                        pixmap = pil_to_qpixmap(image.convert('RGBA'))
+                self.set_pixmap(pixmap)
             else:
                 self._set_preview_icon(ext)
         except Exception:
             self._set_preview_icon(ext)
 
     def _set_preview_icon(self, ext):
-        self._icon = self.FILE_ICONS.get(ext, "📄")
+        self._icon = "🖼" if ext in IMAGE_EXTS else self.FILE_ICONS.get(ext, "📄")
         self.update()
 
     def set_selected(self, sel):

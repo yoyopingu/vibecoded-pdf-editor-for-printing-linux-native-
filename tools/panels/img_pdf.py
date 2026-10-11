@@ -5,6 +5,7 @@ import os
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QGroupBox
 from tools._base import BasePanel, FileDropList, make_label
 from tools.i18n import tr
+from tools.multi_open import IMAGE_EXTS
 from tools.panels._shared import row
 
 
@@ -18,7 +19,7 @@ class ImgPdfPanel(BasePanel):
     def build_ui(self, layout):
         tb = QGroupBox(tr("BILDER  nach  PDF")); tl = QVBoxLayout(tb)
         tl.addWidget(make_label(tr("Bilder hinzufuegen. Reihenfolge per Drag & Drop."), dim=True))
-        self.img_list = FileDropList(extensions=("*.png","*.jpg","*.jpeg","*.tiff","*.tif","*.bmp","*.webp"))
+        self.img_list = FileDropList(extensions=tuple("*" + ext for ext in sorted(IMAGE_EXTS)))
         tl.addWidget(self.img_list)
         br = QHBoxLayout()
         for txt, fn in [(tr("+ Bilder"), self._add_imgs), (tr("- Entfernen"), self.img_list.remove_selected),

@@ -480,7 +480,7 @@ class PageViewerPanel(QWidget):
         return False
 
     def _open(self, path=None):
-        from tools.multi_open import (IMAGE_EXTS, OFFICE_EXTS, PDF_EXT,
+        from tools.multi_open import (ALL_EXTS, IMAGE_EXTS, OFFICE_EXTS, POSTSCRIPT_EXTS,
                                       file_dialog_filter, images_to_pdf_bytes)
         if not path:
             path, _ = QFileDialog.getOpenFileName(
@@ -497,7 +497,7 @@ class PageViewerPanel(QWidget):
             return
 
         ext = os.path.splitext(path)[1].lower()
-        if ext not in PDF_EXT | IMAGE_EXTS | OFFICE_EXTS:
+        if ext not in ALL_EXTS:
             QMessageBox.warning(
                 self, tr("Format nicht unterstuetzt"),
                 tr('CopyShop kann "{p0}" nicht oeffnen.').format(p0=ext or "?"))
@@ -514,9 +514,9 @@ class PageViewerPanel(QWidget):
                 QMessageBox.warning(self, tr("Bild-Konvertierung fehlgeschlagen"), str(e))
                 return
 
-        elif ext in OFFICE_EXTS:
-            # LibreOffice takes seconds to start, and this runs on the GUI
-            # thread. Say what is happening instead of just freezing.
+        elif ext in OFFICE_EXTS | POSTSCRIPT_EXTS:
+            # File converters take seconds to start. Keep the existing open
+            # feedback while using the same conversion route as batch input.
             self._viewer_info.setText(
                 tr('Konvertiere {p0} …').format(p0=os.path.basename(path)))
             QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
@@ -530,39 +530,17 @@ class PageViewerPanel(QWidget):
         return self._add_pdf_tab(path)
 
     def _open_office(self, path):
-        """Convert an Office/text/vector document via LibreOffice, then open it."""
-        import subprocess, tempfile
-        soffice = shutil.which("soffice") or shutil.which("libreoffice")
-        if not soffice:
-            QMessageBox.warning(self, tr("LibreOffice fehlt"),
-                tr("LibreOffice wird benoetigt um Office-Dateien zu oeffnen.\n"
-                   "Installation: sudo pacman -S libreoffice-still"))
-            return None
+        """Convert an Office/vector/print file with the shared input converter."""
+        import tempfile
+        from tools.multi_open import convert_to_pdf
+        tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
+        atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
         try:
-            tmp_dir = tempfile.mkdtemp(prefix="copyshop_")
-            atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
-            stem = os.path.splitext(os.path.basename(path))[0]
-            r = subprocess.run(
-                [soffice, "--headless", "--convert-to", "pdf",
-                 "--outdir", tmp_dir, path],
-                capture_output=True, text=True, errors="replace", timeout=120)
-        except subprocess.TimeoutExpired:
-            QMessageBox.warning(self, tr("Konvertierung fehlgeschlagen"),
-                tr("LibreOffice hat nicht innerhalb von 120 Sekunden geantwortet."))
-            return None
+            converted = convert_to_pdf(path, tmp_dir)
         except Exception as e:
-            QMessageBox.warning(self, tr("Office-Konvertierung fehlgeschlagen"), str(e))
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            QMessageBox.warning(self, tr("Konvertierung fehlgeschlagen"), str(e))
             return None
-        converted = os.path.join(tmp_dir, stem + ".pdf")
-        if not os.path.isfile(converted):
-            # LibreOffice benennt manchmal anders — suche erste PDF
-            pdfs = [f for f in os.listdir(tmp_dir) if f.endswith(".pdf")]
-            if not pdfs:
-                QMessageBox.warning(self, tr("Konvertierung fehlgeschlagen"),
-                                    (r.stderr or "").strip()[:300]
-                                    or tr("LibreOffice hat keine PDF erzeugt."))
-                return None
-            converted = os.path.join(tmp_dir, pdfs[0])
         return self._add_pdf_tab(converted)
 
     def _add_pdf_tab(self, path):

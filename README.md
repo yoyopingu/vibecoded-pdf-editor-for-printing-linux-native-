@@ -26,7 +26,7 @@ Written in Python with PyQt6. The interface ships in German and English
   save, and every tool sees the document as the manager shows it.
 - Opening several files at once goes straight to a sort preview, where they can
   be merged into one document or opened as separate tabs. Images and Office
-  documents are converted on the way in.
+  documents, vector drawings and PostScript files are converted on the way in.
 - Printing with page ranges, copies and collation, paper size and tray,
   orientation, scaling, duplex and a colour mode — read from the queue's own
   CUPS defaults, and reopened on whatever you printed with last. Paper
@@ -73,7 +73,7 @@ fail with a message telling you what is missing.
 
 | Binary | Needed for | Required? |
 | --- | --- | --- |
-| `gs` (ghostscript) | Compress, Greyscale, Farbprofil/CMYK, print colour conversion | yes, for those tools |
+| `gs` (ghostscript) | Compress, Greyscale, Farbprofil/CMYK, print colour conversion, PostScript/EPS input | yes, for those tools |
 | poppler (`pdftoppm`, `pdftocairo`, `pdftotext`, `pdftohtml`) | OCR rendering; image, vector, text/web and EPUB export | yes, for those conversions |
 | `tesseract` + language data | OCR | yes, for OCR |
 | `soffice` (LibreOffice) | opening Office/text/vector files; saving Office documents, presentations and drawings | only for those formats |
@@ -150,7 +150,7 @@ python3 main.py datei.pdf          # one file
 python3 main.py *.pdf              # several — opens the sort/merge preview
 ```
 
-Non-PDF arguments (images, Office documents) are converted on open.
+Non-PDF arguments (images, Office documents, vector drawings and PostScript) are converted on open.
 
 The app is single-instance: launching it again while a window is open hands the
 files to that window instead of starting a second copy.
@@ -276,7 +276,7 @@ And the rest of `tools/`:
 | `_base.py` | `BasePanel`, the contract every tool panel follows — current-file bar, log box, the run button, and `run_async()` for off-thread work. Also `displayed_pdf()`, which flattens the page manager's in-memory edits into a temp PDF so tools operate on what the user sees rather than what is on disk. |
 | `jobs.py` | The one mechanism for background work: owned, cancellable, and waited for at shutdown. `Progress` is what a worker body is handed — a progress reporter that also carries the Stop flag and can run a subprocess that dies with it. |
 | `app_state.py` | Small singleton holding the current document, page model and page, plus the signals other parts subscribe to (`pdf_changed`, `result_ready`, `status_message`). How a tool finds the open file without asking for one. |
-| `multi_open.py` | Which file formats can become a PDF, the file-dialog filter built from that list, and the conversion that runs img2pdf and LibreOffice. |
+| `input_formats.py` / `multi_open.py` | Input capabilities from Pillow and LibreOffice registries; shared file-dialog filters and PDF conversion through img2pdf, Ghostscript and LibreOffice. |
 | `theme.py` | The live palette every widget paints with, and the switch between light and dark. Shared by the viewer, the panels, the print dialog and the window, so it belongs to none of them. |
 | `colorspace.py` | Which colour spaces a page uses, read from the file's structure — declared spaces, image spaces, and the colour operators in the content streams, recursing into Form XObjects. Shared by the viewer's label, the Farbprofil tool and the greyscale scan, which each used to have their own copy and disagree. Read through one open of the file for the whole document, not one per page: opening a 500-page PDF costs 83 ms and reading every page out of it 181 ms, so asking page by page made a long document slow to browse precisely because it was long. |
 | `i18n.py` | `tr()` and the German→English string table. German source strings are the keys. |
@@ -300,6 +300,31 @@ would rather allow later versions of the GPL, change the `license` field in
 `pyproject.toml` to `GPL-3.0-or-later`; the licence text is the same either way.
 
 ### Save and convert
+
+Opening files converts supported inputs to PDF, including from the command
+line, drag and drop, the multi-file merge preview, and the image-to-PDF tool:
+
+- Images: the installed Pillow readers determine the list, including JPEG,
+  PNG, TIFF, GIF, WebP, JPEG 2000, AVIF, QOI, PSD, icons, portable bitmaps,
+  TGA, PCX and scientific image formats. Identification-only plugins are
+  excluded. JPEG keeps its original compressed data where possible and uses
+  only its main picture; multipage TIFF and GIF retain their frames. Numeric
+  images use a min/max display range when PDF cannot represent their samples.
+- Office/text/vector documents: installed LibreOffice import filters with a
+  PDF exporter determine the list. This includes Microsoft and OpenDocument
+  documents, templates, macro-capable containers, flat XML variants, Apple
+  Pages/Numbers/Keynote, older word processors and spreadsheets, Visio,
+  Publisher, CorelDRAW, SVG/SVGZ and supported ebook formats such as FB2.
+  Without LibreOffice installed, the picker shows the standard format list and
+  opening one names the missing program. File-version support and rendering
+  fidelity depend on LibreOffice; accepting an extension does not guarantee
+  that every historical variant is readable.
+- PostScript, EPS and PostScript-based Illustrator files use Ghostscript and
+  preserve vectors and page geometry. PDF-compatible Illustrator files open
+  directly. EPUB is an export option, not a LibreOffice input format.
+
+Each converted input gets its own output directory and LibreOffice profile,
+so same-name inputs cannot overwrite one another or reuse a stale conversion.
 
 **Ctrl+S** saves the current PDF. **File → Save As (Ctrl+Shift+S)** also offers:
 

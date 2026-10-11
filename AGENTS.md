@@ -98,6 +98,20 @@ Imports only point downwards.
   empty, and the job sends no `media` option. Guessing A4 is how an SRA3 job
   printed an A4 area.
 
+### Document input
+- `tools/input_formats.py` owns accepted extensions: real Pillow readers,
+  installed LibreOffice import filters whose document service can export PDF,
+  and Ghostscript PostScript/EPS/Illustrator input. Keep every picker, drop
+  target and conversion path on these shared sets. Header-only image plugins,
+  media/archive placeholders and export-only formats are not PDF inputs.
+- `tools/multi_open.py` is the shared converter for single and batch opens.
+  Each input needs a unique output directory and isolated LibreOffice profile.
+  Check the exact expected output and subprocess status; never pick the first
+  unrelated PDF or accept stale output after a failed conversion.
+- Preserve JPEG's main-image-only handling (including JPEG aliases); TIFF/GIF
+  frames remain pages. Keep native image embedding when supported; decode only
+  for unsupported alpha/colour modes or numeric sample display mapping.
+
 ### Document export
 - `tools/export.py` owns the Save As format catalog and converters. Keep Ctrl+S
   as PDF save; Ctrl+Shift+S offers other formats. Non-PDF output is a copy and
