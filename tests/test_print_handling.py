@@ -80,9 +80,7 @@ def test_poster_200_percent_a4_is_four_tiles():
 
 
 def test_poster_overlap_shares_pixels_on_adjacent_tiles():
-    """Overlap is extra of the neighbour on the same sheet count — 200 %
-    stays four tiles, but the centre mark of the page appears further
-    into the right-hand tile once overlap is on."""
+    """Overlap shares the join and adds tiles to preserve the outer edges."""
     from tools.printing.handling import build_poster_pdf
     from tools.printing.spool import paper_size_pt
 
@@ -91,7 +89,7 @@ def test_poster_overlap_shares_pixels_on_adjacent_tiles():
     none = os.path.join(_TMP, "poster_ov0.pdf")
     some = os.path.join(_TMP, "poster_ov30.pdf")
     assert build_poster_pdf(src, [0], paper, 200, 0, False, False, none) == 4
-    assert build_poster_pdf(src, [0], paper, 200, 30, False, False, some) == 4
+    assert build_poster_pdf(src, [0], paper, 200, 30, False, False, some) == 9
 
     # Top-right tile (col 1, row 0) is page 1. The centre mark sits on
     # the join — left and bottom edges of that tile — so a patch 50 pt
@@ -100,7 +98,28 @@ def test_poster_overlap_shares_pixels_on_adjacent_tiles():
     patch = (50, 0, 80, 90)
     assert _poster_dark(none, 1, patch) < 30, "centre mark leaked without overlap"
     assert _poster_dark(some, 1, patch) > 200, "overlap did not pull the join in"
-    return "30 mm overlap keeps 4 tiles and shares the centre mark"
+    return "30 mm overlap adds coverage tiles and shares the centre mark"
+
+
+def test_poster_overlap_keeps_the_bottom_right_source_corner():
+    from tools.printing.handling import build_poster_pdf
+    from tools.panels._shared import MM_TO_PT
+
+    src = os.path.join(_TMP, "poster_outer_corner.pdf")
+    c = canvas.Canvas(src, pagesize=(200, 300))
+    c.rect(190, 2, 8, 8, fill=1, stroke=0)
+    c.showPage()
+    c.save()
+    out = os.path.join(_TMP, "poster_outer_corner_out.pdf")
+    assert build_poster_pdf(src, None, (200, 300), 200, 10,
+                            False, False, out) == 9
+    # The mark lies beyond the coverage of the old 2x2 grid. On the last
+    # tile its coordinates are original*2 minus two advances, in each axis.
+    overlap = 10 * MM_TO_PT
+    x = 190 * 2 - 2 * (200 - overlap)
+    y = 2 * 2 + 300 - 600 + 2 * (300 - overlap)
+    assert _poster_dark(out, 8, (x, y, 16, 16), scale=2) > 800, \
+        "overlap lost the bottom-right corner"
 
 
 def test_poster_cut_marks_and_labels_land_on_the_tile():
@@ -153,8 +172,8 @@ def test_poster_print_path_tiles_then_spools_at_100_percent():
 
 
 def test_poster_preview_shows_a_tile_of_the_imposed_pdf():
-    """Switching to Poster changes the caption and walks four tiles at
-    200 %. The preview still composites the page pixmap (the printing
+    """Switching to Poster walks nine tiles at 200% with default overlap.
+    The preview still composites the page pixmap (the printing
     module cannot host a second pdfium raster of the tiled PDF); the
     spooled file is the real poster from build_poster_pdf."""
     from tools.viewer.tab import PdfTab
@@ -176,13 +195,14 @@ def test_poster_preview_shows_a_tile_of_the_imposed_pdf():
         cap = dlg._preview._info_lbl.text()
         assert "Poster" in cap and "200" in cap, cap
         nav = dlg._preview._page_lbl.text()
-        assert "1" in nav and "4" in nav, nav
+        assert "1" in nav and "9" in nav, nav
+        assert dlg._preview._nav_count() == 9
         dlg._preview._next_page()
         _spin(10)
         assert "2" in dlg._preview._page_lbl.text()
     finally:
         dlg.close(); tab.deleteLater(); _app.processEvents()
-    return "preview walks 4 tiles at 200 % A4"
+    return "preview walks 9 tiles at 200% A4 with overlap"
 
 
 def _nup_marked(name, n=4):

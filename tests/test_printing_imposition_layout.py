@@ -1,6 +1,6 @@
 """Independent expectations for imposition ordering and geometry."""
 from tools.printing.handling import (
-    nup_order, preview_sheets, rotation_to_fit, sheet_size)
+    nup_order, poster_grid, preview_sheets, rotation_to_fit, sheet_size)
 
 
 def test_vertical_six_up_fills_columns_in_the_requested_direction():
@@ -51,3 +51,14 @@ def test_sheet_geometry_honours_orientation_without_inventing_media():
     assert sheet_size((200, 300), 1, sizes, 'nup') == (200, 300)
     assert sheet_size(None, 1, sizes, 'nup') == (400, 200)
     assert sheet_size(None, 1, sizes, 'booklet') == (600, 600)
+
+
+def test_poster_counts_actual_overlap_coverage_without_changing_scale():
+    assert poster_grid(200, 300, 200, 300, 200) == (2, 2, 2)
+    assert poster_grid(200, 300, 200, 300, 200, 3) == (3, 3, 2)
+    # Overlap only adds tiles where existing coverage is insufficient.
+    assert poster_grid(200, 300, 200, 300, 100, 3) == (1, 1, 1)
+    assert poster_grid(200, 300, 200, 300, 150, 3) == (2, 2, 1.5)
+    # A fraction of a point beyond the sheet is real content, not rounding.
+    assert poster_grid(100.5, 100, 100, 100, 100) == (2, 1, 1)
+    assert poster_grid(100.001, 100, 100, 100, 100) == (1, 1, 1)

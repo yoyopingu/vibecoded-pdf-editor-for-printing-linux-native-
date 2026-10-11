@@ -18,20 +18,33 @@ from tools.panels._imposition import (
     FIT_EPS_PT, form_factory, _flatten_annots, _slot_placement)
 
 
-def poster_grid(src_w, src_h, paper_w, paper_h, tile_pct):
+def poster_steps(paper_w, paper_h, overlap_mm):
+    """Tile advance shared by counting, vector placement and the preview.
+
+    Bound excessive overlaps to 90% of each sheet axis, as placement has
+    always done, so a small custom sheet cannot produce a zero/negative step.
+    """
+    overlap_pt = max(0.0, float(overlap_mm or 0.0)) * MM_TO_PT
+    return (max(paper_w - overlap_pt, paper_w * 0.1),
+            max(paper_h - overlap_pt, paper_h * 0.1))
+
+
+def poster_grid(src_w, src_h, paper_w, paper_h, tile_pct, overlap_mm=0):
     """Columns, rows and scale for one source page tiled onto `paper_*`.
 
-    100 % of an A4 page on A4 paper is 1×1; 200 % is 2×2. Overlap is a
-    taping allowance on adjacent tiles, not another row or column — a 3 mm
-    overlap on that 200 % job is still four sheets.
+    The first tile covers a full sheet; each subsequent tile adds only
+    sheet minus overlap. Count that actual coverage so the requested scale
+    never loses the right or bottom edge. An exact 200% A4 job needs 2×2
+    without overlap and 3×3 with a small overlap.
     """
     scale = max(10.0, float(tile_pct or 100)) / 100.0
     pw = max(float(paper_w), 1e-6)
     ph = max(float(paper_h), 1e-6)
-    # FIT_EPS_PT so an A4 page measured as 842 pt on A4 paper at 200 %
-    # stays 2×2, not 2×3.
-    cols = max(1, math.ceil(float(src_w) * scale / pw - FIT_EPS_PT))
-    rows = max(1, math.ceil(float(src_h) * scale / ph - FIT_EPS_PT))
+    dx, dy = poster_steps(pw, ph, overlap_mm)
+    # Apply the tolerance in points, not to the ratio: subtracting .01
+    # from the ratio silently discarded several points of real edge content.
+    cols = max(1, 1 + math.ceil((float(src_w) * scale - pw - FIT_EPS_PT) / dx))
+    rows = max(1, 1 + math.ceil((float(src_h) * scale - ph - FIT_EPS_PT) / dy))
     return cols, rows, scale
 
 
@@ -94,7 +107,6 @@ def build_poster_pdf(src, pages, paper_pts, tile_pct, overlap_mm, cut_marks,
         raise RuntimeError("poster: no pages to tile")
 
     overlap_mm = max(0.0, float(overlap_mm or 0.0))
-    overlap_pt = overlap_mm * MM_TO_PT
     want_marks = bool(cut_marks)
     want_labels = bool(labels)
     name = label_name or os.path.basename(src)
@@ -112,9 +124,9 @@ def build_poster_pdf(src, pages, paper_pts, tile_pct, overlap_mm, cut_marks,
                 paper_w, paper_h = float(paper_pts[0]), float(paper_pts[1])
             else:
                 paper_w, paper_h = vw, vh
-            cols, rows, scale = poster_grid(vw, vh, paper_w, paper_h, tile_pct)
-            step_w = max(paper_w - overlap_pt, paper_w * 0.1)
-            step_h = max(paper_h - overlap_pt, paper_h * 0.1)
+            cols, rows, scale = poster_grid(vw, vh, paper_w, paper_h, tile_pct,
+                                            overlap_mm)
+            step_w, step_h = poster_steps(paper_w, paper_h, overlap_mm)
             scaled_w, scaled_h = vw * scale, vh * scale
             mark_ops = (_inward_cut_marks(paper_w, paper_h)
                         if want_marks else None)
@@ -246,9 +258,10 @@ def preview_sheets(sizes, paper_pts, orient_idx, mode, opts):
     if mode == "poster":
         for i, (w, h) in enumerate(sizes):
             pw, ph = (sw, sh) if paper_pts else (w, h)
-            cols, rows, scale = poster_grid(w, h, pw, ph, opts.get("tile_pct", 200))
-            overlap = max(0, opts.get("overlap_mm", 0)) * MM_TO_PT
-            dx, dy = max(pw - overlap, pw * .1), max(ph - overlap, ph * .1)
+            overlap = opts.get("overlap_mm", 0)
+            cols, rows, scale = poster_grid(w, h, pw, ph, opts.get("tile_pct", 200),
+                                            overlap)
+            dx, dy = poster_steps(pw, ph, overlap)
             for r in range(rows):
                 for c in range(cols):
                     slot = PreviewSlot(i, (-c * dx, -r * dy, w * scale, h * scale))

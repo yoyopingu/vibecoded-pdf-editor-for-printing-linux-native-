@@ -85,6 +85,7 @@ def test_preview_matches_printed_sheets_for_all_imposition_modes():
             ('booklet', list(range(8)), {'side': 'back', 'bind': 'right',
                                        'sheet_from': 2, 'sheet_to': 2, 'booklet_rotate': False}),
             ('poster', [0, 1], {'tile_pct': 137, 'overlap_mm': 0}),
+            ('poster', [0, 1], {'tile_pct': 200, 'overlap_mm': 10}),
         ]
         for mode, pages, opts in scenarios:
             pv.set_pages(pages)
@@ -102,7 +103,8 @@ def test_preview_matches_printed_sheets_for_all_imposition_modes():
                                   opts.get('side', 'both'), opts.get('sheet_from', 1),
                                   opts.get('sheet_to', 0), opts['booklet_rotate'], out)
             else:
-                build_poster_pdf(subset, None, paper, opts['tile_pct'], 0, False, False, out)
+                build_poster_pdf(subset, None, paper, opts['tile_pct'],
+                                 opts['overlap_mm'], False, False, out)
             _compare(pv, out)
             assert len(pv._images) <= 16
     finally:

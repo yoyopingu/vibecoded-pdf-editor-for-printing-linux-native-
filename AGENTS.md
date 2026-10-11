@@ -208,9 +208,13 @@ The live dialog has moved on purpose. Do not revert these to match the HTML:
 - N-up reuses `_build_nup`. `border` defaults to false so the sidebar tool
   does not grow hairlines the operator did not ask for; the dialog passes
   its own checkbox.
-- Poster tile count uses `FIT_EPS_PT`. Overlap does not add tiles. Cut marks
-  point inward; the shared crop-mark helper draws outward and falls off the
-  sheet.
+- Poster tile counts must cover the full scaled source image. The first tile
+  covers a full sheet; later tiles add sheet minus overlap, so overlap can
+  add rows/columns (200% A4 on A4 is 2×2 without overlap, 3×3 with a small
+  overlap). Preview and output share `poster_grid` / `poster_steps`. Apply
+  `FIT_EPS_PT` in points, not to a dimensionless ratio that could hide real
+  edge content. Cut marks point inward; the shared crop-mark helper draws
+  outward and falls off the sheet.
 - Imposed jobs are spooled at scale index fixed and 100 %, because the page
   is already the sheet. Booklet forces the orientation the sheet actually has.
 - Collate is the `collate` property (bool), not a checkbox. `orient_idx` is
