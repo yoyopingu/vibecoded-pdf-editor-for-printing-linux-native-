@@ -7,7 +7,7 @@ def _crop_mark_segments(rects, length=7.0, gap=2.0):
     """L-shaped crop/cut marks at each rectangle corner: two short line segments
     per corner, offset outward from the trim by `gap` and `length` long (PDF
     points). Returns a flat list of (x0, y0, x1, y1) line segments. Shared by the
-    N-Up grid marks and the Crop tool's size marks."""
+    N-Up page marks and the Crop tool's size marks."""
     segs = []
     for (x0, y0, x1, y1) in rects:
         # Corner marks (L-shaped: a horizontal + a vertical tick at each corner).

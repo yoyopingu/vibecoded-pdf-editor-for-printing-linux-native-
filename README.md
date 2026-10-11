@@ -45,7 +45,7 @@ Written in Python with PyQt6. The interface ships in German and English
 
 | Tool | What it does |
 | --- | --- |
-| N-Up Layout | several pages onto one sheet |
+| N-Up Layout | several pages onto one sheet; crop marks follow the fitted page edges |
 | Broschüre / Ausschießen | booklet imposition with correct sheet order |
 | Komprimieren | Ghostscript-based size reduction, output validated |
 | Zuschneiden / Skalieren | crop or resize to a format, with cut marks |

@@ -28,11 +28,16 @@ def _read_page_dims(pdf_path, idx):
     the representative page here used to hold up the sheet layout on complex
     pages, even though N-Up only needs its size at this stage.
     """
+    return _read_page_dims_many(pdf_path, (idx,))[idx]
+
+
+def _read_page_dims_many(pdf_path, indices):
+    # A visible sheet can contain unlike pages. Read its boxes in one owned
+    # metadata job, without parsing page content or opening once per slot.
     with page_document(pdf_path) as doc:
         n = len(doc)
-        i = min(idx, n - 1)
-        pw, ph = doc.get_page_size(i)
-        return i, pw, ph, n
+        return {idx: (min(idx, n - 1), *doc.get_page_size(min(idx, n - 1)), n)
+                for idx in indices}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -60,8 +65,8 @@ def _nup_sheet_pages(n_pages, n_slot, mode, sheet):
 
 def _nup_slot_rects(params, n_slot):
     """The (x0, y0, x1, y1) rectangle (PDF points, origin bottom-left) of every
-    slot on a sheet — shared by the renderer, the preview and the crop marks so
-    they always agree."""
+    slot on a sheet. Pages fit inside these cells; crop marks follow the
+    actual placed page rectangles instead of the cells' blank padding."""
     (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows) = params
     rects = []
     for slot_i in range(n_slot):
@@ -70,6 +75,13 @@ def _nup_slot_rects(params, n_slot):
         y0 = out_h - mt - (row_i + 1) * slot_h - row_i * gv
         rects.append((x0, y0, x0 + slot_w, y0 + slot_h))
     return rects
+
+
+def _nup_page_rect(width, height, slot, fixed_scale=None):
+    """Placed page edges, using the same fit/centering as the PDF transform."""
+    scale, x, y = _slot_placement((0.0, 0.0, width, height), 0, slot,
+                                fixed_scale=fixed_scale)
+    return x, y, x + width * scale, y + height * scale
 
 
 def _full_scale_problem(max_w, max_h, params):
@@ -111,13 +123,14 @@ def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False,
     # slots and sheets — see form_factory's docstring for what it pins down.
     _form_for = form_factory(src_doc)
 
-    # Pre-build the crop-marks content stream once (same grid on every sheet).
-    mark_ops = _crop_marks_content_stream(rects) if crop_marks else None
+    # Marks depend on each occupied page, not the grid: fitting can leave
+    # padding inside a cell, and mixed-size sheets have different trim edges.
     n_sheets = math.ceil(len(src_pages) / n_slot)
     placed   = 0
     for sheet_i in range(n_sheets):
         report(f"{tr('Blatt')} {sheet_i+1} / {n_sheets} …")
         sheet = Page(out_doc.add_blank_page(page_size=(out_w, out_h)))
+        mark_rects = []
         names = {}   # one resource name per page, even when it fills several slots
         for slot_i in range(n_slot):
             page_i = sheet_i * n_slot + slot_i
@@ -137,9 +150,12 @@ def _build_nup(src, out, src_pages, params, n_slot, report, crop_marks=False,
                 sheet.contents_add(Stream(out_doc,
                     (f"q 0 0 0 RG 0.4 w {x0:.2f} {y0:.2f} "
                      f"{x1 - x0:.2f} {y1 - y0:.2f} re S Q\n").encode("latin-1")))
+            if crop_marks:
+                pw, ph = _visible_size(src_doc.pages[src_pi])
+                mark_rects.append(_nup_page_rect(pw, ph, rects[slot_i], fixed_scale))
             placed += 1
-        if mark_ops is not None:
-            sheet.contents_add(Stream(out_doc, mark_ops))
+        if mark_rects:
+            sheet.contents_add(Stream(out_doc, _crop_marks_content_stream(mark_rects)))
         sheet.contents_coalesce()
     report(tr("Schreibe Datei …"))
     out_doc.save(out)
@@ -409,7 +425,8 @@ class NUpPanel(BasePanel):
         return res
 
     def _request_page_dims(self, pdf_path, idx):
-        key = (pdf_path, idx)
+        indices = (idx,) if isinstance(idx, int) else tuple(sorted(idx))
+        key = (pdf_path, indices)
         if self._dims_pending == key:
             return
         if self._dims_job is not None:
@@ -421,7 +438,8 @@ class NUpPanel(BasePanel):
             if self._dims_pending != key:
                 return
             self._dims_pending = None
-            self._dims_cache[key] = result
+            self._dims_cache.update({(pdf_path, page): dims
+                                     for page, dims in result.items()})
             self._pane.refresh()
 
         def failed(error):
@@ -434,7 +452,8 @@ class NUpPanel(BasePanel):
         # A quick geometry read can finish before submit returns. Install the
         # callbacks in submit so its result cannot disappear in that gap.
         self._dims_job = submit(
-            lambda _job: _read_page_dims(pdf_path, idx),
+            lambda _job: ({idx: _read_page_dims(pdf_path, idx)} if isinstance(idx, int)
+                          else _read_page_dims_many(pdf_path, indices)),
             owner=self, name='nup-preview-dimensions',
             on_done=ready, on_error=failed)
 
@@ -466,7 +485,7 @@ class NUpPanel(BasePanel):
         idx = max(0, AppState.get().current_page)
         key = (pdf_path, idx)
         if async_dims and key not in self._dims_cache:
-            if self._dims_error is not None and self._dims_error[0] == key:
+            if self._dims_error is not None and self._dims_error[0] == (pdf_path, (idx,)):
                 return None, tr('Vorschau: {p0}').format(p0=self._dims_error[1])
             self._request_page_dims(pdf_path, idx)
             pm = QPixmap(max(1, avail_w), max(1, avail_h))
@@ -500,13 +519,29 @@ class NUpPanel(BasePanel):
 
         slot_pages = _nup_sheet_pages(n_total, n_slot, mode, self._sheet_index)
 
+        occupied = {page for page in slot_pages if page is not None}
+        missing = tuple(sorted(page for page in occupied
+                               if (pdf_path, page) not in self._dims_cache))
+        if missing:
+            if async_dims:
+                key = (pdf_path, missing)
+                if self._dims_error is not None and self._dims_error[0] == key:
+                    return None, tr('Vorschau: {p0}').format(p0=self._dims_error[1])
+                self._request_page_dims(pdf_path, missing)
+            else:
+                self._dims_cache.update({(pdf_path, page): dims for page, dims
+                                         in _read_page_dims_many(pdf_path, missing).items()})
+        params_t = (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows)
+        slots = _nup_slot_rects(params_t, n_slot)
+        mark_rects = []
+
         # Fetch each needed page image from the shared cache (async if missing).
         # Width is fixed to the slot's point size (independent of the display
         # scale), so dragging the sidebar / zooming reuses the cached render
         # instead of triggering a fresh one each time.
         render_w = max(120, min(800, int(min(slot_w, src_pw))))
         pm_by_page = {}; any_pending = False
-        for pg in {p for p in slot_pages if p is not None}:
+        for pg in occupied:
             img = self._page_image(pdf_path, pg, render_w)
             if img is None: any_pending = True
             pm_by_page[pg] = QPixmap.fromImage(img) if img is not None else None
@@ -525,28 +560,40 @@ class NUpPanel(BasePanel):
                 painter.setPen(QPen(QColor(120, 140, 180, 120), 1))
                 painter.drawRect(sx, sy, sw, sh)
                 pg = slot_pages[row_i * cols + col_i]
-                src_pm = pm_by_page.get(pg) if pg is not None else None
-                if src_pm is None:
-                    if pg is not None:
-                        source = source_page_index(AppState.get().page_model,
-                                                   pg, pdf_path)
-                        paint_page_number(painter, QRect(sx, sy, sw, sh), source)
+                if pg is None:
                     continue
-                scale   = 1.0 if full_scale else min(slot_w / src_pw, slot_h / src_ph)
-                scaled_w = max(1, int(src_pw * scale * cs))
-                scaled_h = max(1, int(src_ph * scale * cs))
-                off_x = sx + (sw - scaled_w) // 2; off_y = sy + (sh - scaled_h) // 2
-                pm_s = src_pm.scaled(scaled_w, scaled_h,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation)
-                painter.drawPixmap(off_x, off_y, pm_s)
+                dims = self._dims_cache.get((pdf_path, pg))
+                # A cold page gets a numbered cell until its own dimensions
+                # arrive; never invent trim marks from another page's size.
+                if dims is None:
+                    any_pending = True
+                    page_rect = (slots[row_i * cols + col_i])
+                else:
+                    _, pw, ph, _ = dims
+                    if full_scale:
+                        problem = _full_scale_problem(pw, ph, params_t)
+                        if problem:
+                            painter.end()
+                            return None, problem
+                    page_rect = _nup_page_rect(pw, ph, slots[row_i * cols + col_i],
+                                              1.0 if full_scale else None)
+                    mark_rects.append(page_rect)
+                x0, y0, x1, y1 = page_rect
+                target = QRect(round(x0 * cs), round((out_h - y1) * cs),
+                               max(1, round((x1 - x0) * cs)),
+                               max(1, round((y1 - y0) * cs)))
+                src_pm = pm_by_page.get(pg)
+                if src_pm is None or dims is None:
+                    source = source_page_index(AppState.get().page_model, pg, pdf_path)
+                    paint_page_number(painter, target, source)
+                else:
+                    painter.drawPixmap(target, src_pm, src_pm.rect())
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.setPen(QPen(QColor(_TV['acc']), 1))
-                painter.drawRect(off_x, off_y, pm_s.width()-1, pm_s.height()-1)
+                painter.drawRect(target.adjusted(0, 0, -1, -1))
         if self.crop_marks.isChecked():
-            params_t = (out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows)
             painter.setPen(QPen(QColor(INK), 1)); painter.setBrush(Qt.BrushStyle.NoBrush)
-            for a, b, c, d in _crop_mark_segments(_nup_slot_rects(params_t, cols * rows)):
+            for a, b, c, d in _crop_mark_segments(mark_rects):
                 painter.drawLine(int(a * cs), int((out_h - b) * cs),
                                  int(c * cs), int((out_h - d) * cs))
         painter.setPen(QPen(QColor(120, 160, 255, 180), 1))

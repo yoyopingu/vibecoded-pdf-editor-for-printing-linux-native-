@@ -185,6 +185,11 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
   Live drag dimensions use cached page geometry and label updates only; never
   read a PDF or refresh/render the preview on mouse movement.
 - Paper sizes come from `tools/paper.py`. No local size table.
+- N-Up crop marks follow each occupied page's placed visible rectangle after
+  fitting/centering, using `_nup_page_rect` in preview and export. Grid cells
+  can contain unused padding and must not determine trim edges. Read each
+  visible source's dimensions in a batched owned job for mixed-size previews;
+  blank padding slots have no crop marks.
 - N-Up's single-sided cut-and-stack source mode puts consecutive page runs
   into slot piles in reading order (left to right, then top to bottom).
   Preview and export share `_nup_sheet_pages`; retain blank padding so uneven
