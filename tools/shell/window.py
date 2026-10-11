@@ -3,9 +3,9 @@ MainWindow: the nav sidebar, and what sits beside it.
 
 The single-page viewer stays on screen for every tool that is only a form.
 Those tools are a slim options column; the page next to it is the ordinary
-viewer, not a preview drawn for that tool. Three tools take the main area
-instead, because the picture they draw is not the source page: N-Up and
-Crop/Scale show the sheet they are about to produce, and Graustufen shows
+viewer, not a preview drawn for that tool. Four tools take the main area
+instead, because the picture they draw is not the source page: N-Up,
+Crop/Scale and Booklet show the sheet they are about to produce, and Graustufen shows
 which pages are already grey. A panel that owns that kind of picture builds
 a `_tool_splitter`. Everything else is the column.
 """
@@ -270,7 +270,7 @@ class MainWindow(QMainWindow):
         """Build one tool and put it where its picture lives.
 
         A panel that builds `_tool_splitter` draws its own preview and takes
-        the main area (N-Up, Crop/Scale, Graustufen). Any other panel is a
+        the main area (N-Up, Crop/Scale, Booklet, Graustufen). Any other panel is a
         column of options and leaves the viewer where it is.
         """
         panel = PanelClass()

@@ -6,6 +6,7 @@ from tools.panels.compress import CompressPanel
 from tools.panels.crop_resize import CropResizePanel
 from tools.panels.grayscale import GrayscalePanel
 from tools.panels.nup import NUpPanel
+from tools.panels.impose import ImposePanel
 from tools.panels.page_numbers import PageNumbersPanel
 from tools.app_state import AppState
 import tools.app as MAIN
@@ -750,7 +751,7 @@ def test_a_form_tool_keeps_the_page_on_screen():
             btn.mapTo(column, btn.rect().bottomRight())), \
             "the run button is outside the column"
 
-        for cls in (NUpPanel, CropResizePanel, GrayscalePanel):
+        for cls in (NUpPanel, CropResizePanel, ImposePanel, GrayscalePanel):
             win._switch(at(cls))
             _app.processEvents()
             assert AppState.get().preview_overlay is None, \
@@ -802,7 +803,7 @@ def test_output_sheet_shortcuts_fit_and_show_physical_size():
         dpi = physical_dpi(win)
         assert dpi is not None
 
-        for cls in (NUpPanel, CropResizePanel):
+        for cls in (NUpPanel, CropResizePanel, ImposePanel):
             index = next(i for i, panel in enumerate(win._by_nav)
                          if isinstance(panel, cls))
             win._switch(index)
@@ -813,6 +814,9 @@ def test_output_sheet_shortcuts_fit_and_show_physical_size():
                 pdf = panel.current_pdf()
                 _, pw, ph, _ = panel._page_dims(pdf)
                 sheet_w = panel._get_layout_params(pw, ph)[0]
+            elif cls is ImposePanel:
+                assert _wait_for(lambda: bool(panel._sizes))
+                sheet_w = max(panel._sizes, key=lambda wh: wh[0] * wh[1])[0] * 2
             else:
                 sheet_w = page_size_pt(FX["normal"], 0)[0]
 

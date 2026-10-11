@@ -373,8 +373,8 @@ class BasePanel(QWidget):
         A tool used to be its own page and replace the document. Most of them
         are a short form, and covering the page to show it meant the operator
         could not see the file they were about to change. The column is the
-        same one N-Up and Crop/Scale already use for their settings. Those two
-        still draw the sheet they are about to produce, and Graustufen still
+        same one N-Up, Crop/Scale and Booklet use for their settings. Those
+        draw the sheet they are about to produce, and Graustufen still
         draws its own grid — that picture is the tool, not the source page.
         Everything else is just this column.
         """
@@ -410,7 +410,7 @@ class BasePanel(QWidget):
     def build_tool_sidebar(self, *, subtitle=False, beside_viewer=False) -> QWidget:
         """The options column shared by every tool.
 
-        Split-view tools (Crop, N-Up, Graustufen) drop the returned scroll
+        Split-view tools (Crop, N-Up, Booklet, Graustufen) drop the returned scroll
         into their own splitter, beside the preview they draw. Every other
         tool *is* this column and sits beside the single-page viewer, so the
         same width, the same log and the same action row apply to both.
@@ -488,7 +488,7 @@ class BasePanel(QWidget):
         self._tool_scroll = scroll
 
         if not beside_viewer:
-            # Split-view tools (N-Up, Crop/Scale, Graustufen) keep the log and
+            # Split-view tools (N-Up, Crop/Scale, Booklet, Graustufen) keep the log and
             # the button inside the scrolling column, as they always have. That
             # column is short enough to fit.
             lay.addStretch()
@@ -522,7 +522,7 @@ class BasePanel(QWidget):
         return host
 
     def build_tool_right_panel(self) -> QWidget:
-        """The right half of a split-view tool (Crop, N-Up, Grayscale): a
+        """The right half of a split-view tool (Crop, N-Up, Booklet, Grayscale): a
         themed, empty container to build the preview into. Companion to
         build_tool_sidebar() above for the left half — three panels used to
         build this by hand, six identical lines each, and because those lines

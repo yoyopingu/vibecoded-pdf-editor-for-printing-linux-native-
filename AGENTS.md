@@ -125,9 +125,9 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
 
 ### UI
 - A tool that is only a form is a slim options column beside the single-page
-  viewer (`BasePanel._setup`). It does not get its own preview pane. N-Up and
-  Crop/Scale keep the sheet they already draw, and Graustufen keeps its own
-  grid — those three build a `_tool_splitter` and take the main area. Do not
+  viewer (`BasePanel._setup`). It does not get its own preview pane. N-Up,
+  Crop/Scale and Broschüre show their output sheets, and Graustufen keeps its
+  own grid — those four build a `_tool_splitter` and take the main area. Do not
   fold Graustufen into the column; that preview is the tool.
 - New widgets use `_TV` / `apply_theme_globally`. Check light and dark.
 - Enter and keypad Enter run the visible tool's primary action, including
@@ -146,6 +146,11 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
   Preview and export share `_nup_sheet_pages`; retain blank padding so uneven
   jobs stack in order. Unlike sequential/repeat mode, a one-page cut-and-stack
   job places that page only once.
+- The booklet sidebar preview walks `_booklet_sides` front/back faces, including
+  padding, using `PreviewPane` for navigation and zoom. Resolve PageModel
+  sources directly and reuse the shared screen caches; never flatten or
+  rasterise an imposed PDF for this screen preview. Read page-tree dimensions
+  in an owned job so complex page content cannot delay placeholder geometry.
 - Stylesheet traps that have already shipped as bugs:
   - A `QCheckBox` / `QRadioButton` without `background: transparent` paints
     an opaque bar across the group box.
