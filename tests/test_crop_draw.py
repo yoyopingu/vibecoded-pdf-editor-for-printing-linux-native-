@@ -159,3 +159,101 @@ def test_draw_crop_works_before_page_content_has_rendered():
             assert abs(bottom * 2.8346456693 - ph * .2) < 1
     finally:
         panel.close(); panel.deleteLater(); _app.processEvents()
+
+
+def test_crop_rectangles_undo_redo_as_whole_operations():
+    _open(FX['normal'])
+    panel = CropResizePanel(); panel.resize(1100, 800); panel.show()
+    panel.activateWindow()
+    try:
+        # The percentage is a derived readout; establish page geometry before
+        # taking the initial settings snapshot, rather than capturing 100% cold.
+        panel.draw_crop.setChecked(True)
+        _ready(panel)
+        panel.draw_crop.setChecked(False)
+        panel.cl2.setValue(7)
+        panel.sync_cb.setChecked(True)
+        panel.scale_check.setChecked(True)
+        before = panel._crop_settings()
+        for start, end in (((.1, .2), (.9, .8)), ((.3, .15), (.7, .6))):
+            panel.draw_crop.setChecked(True)
+            rect, *_ = _ready(panel)
+            _drag(panel, _point(rect, *start), _point(rect, *end))
+            if panel._crop_undo.count() == 1:
+                first = panel._crop_settings()
+        second = panel._crop_settings()
+        assert panel._crop_undo.count() == 2, 'one rectangle must be one command'
+        _app.processEvents()
+        QTest.keyClick(panel._preview, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        assert panel._crop_settings() == first, (panel._crop_settings(), first)
+        _app.processEvents()
+        QTest.keyClick(panel._preview, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        assert panel._crop_settings() == before, (panel._crop_settings(), before)
+        QTest.keyClick(panel._preview, Qt.Key.Key_Z,
+                       Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+        assert panel._crop_settings() == first, (panel._crop_settings(), first)
+        QTest.keyClick(panel._preview, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+        assert panel._crop_settings() == second
+        _app.processEvents()
+        QTest.keyClick(panel._preview, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        panel.draw_crop.setChecked(True)
+        rect, *_ = _ready(panel)
+        _drag(panel, _point(rect, .05, .1), _point(rect, .8, .9))
+        assert not panel._crop_undo.canRedo(), 'a new rectangle must replace the redo branch'
+    finally:
+        panel.close(); panel.deleteLater(); _app.processEvents()
+
+
+def test_crop_undo_restores_format_fitting_and_clears_on_document_change():
+    _open(FX['normal'])
+    panel = CropResizePanel(); panel.resize(1100, 800); panel.show()
+    panel.activateWindow()
+    try:
+        panel.draw_crop.setChecked(True)
+        _ready(panel)
+        panel.draw_crop.setChecked(False)
+        panel.fmt.set_format('A5  (148x210mm)')
+        panel.scale_check.setChecked(True)
+        assert _wait_for(lambda: panel._pending_target is None)
+        before = panel._crop_settings()
+        panel.draw_crop.setChecked(True)
+        rect, *_ = _ready(panel)
+        _drag(panel, _point(rect, .2, .2), _point(rect, .8, .8))
+        _app.processEvents()
+        QTest.keyClick(panel._preview, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        assert panel._crop_settings() == before, (panel._crop_settings(), before)
+        out = os.path.join(_TMP, 'undo-crop-format.pdf')
+        panel.save_pdf = lambda *a, **k: out
+        panel.open_result = lambda *a, **k: None
+        panel._run_action()
+        page = PdfReader(out).pages[0]
+        assert abs(float(page.mediabox.width) / 2.8346456693 - 148) < .1
+        assert abs(float(page.mediabox.height) / 2.8346456693 - 210) < .1
+        _open(FX['single'])
+        assert panel._crop_undo.count() == 0, 'undo must not cross documents'
+    finally:
+        panel.close(); panel.deleteLater(); _app.processEvents()
+
+
+def test_crop_undo_respects_text_editors_and_hidden_tools():
+    from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLineEdit
+    _open(FX['normal'])
+    window = QWidget(); layout = QVBoxLayout(window)
+    panel = CropResizePanel(); layout.addWidget(panel)
+    other = QLineEdit(); layout.addWidget(other)
+    window.resize(1100, 850); window.show(); window.activateWindow()
+    try:
+        panel.draw_crop.setChecked(True)
+        rect, *_ = _ready(panel)
+        _drag(panel, _point(rect, .2, .2), _point(rect, .8, .8))
+        index = panel._crop_undo.index()
+        edit = panel.cl2.lineEdit(); edit.setFocus(); edit.selectAll()
+        QTest.keyClicks(edit, '123')
+        assert edit.isUndoAvailable()
+        QTest.keyClick(edit, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        assert panel._crop_undo.index() == index, 'text undo was stolen by crop undo'
+        panel.hide(); other.setFocus()
+        QTest.keyClick(other, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        assert panel._crop_undo.index() == index, 'hidden tool intercepted undo'
+    finally:
+        window.close(); window.deleteLater(); _app.processEvents()

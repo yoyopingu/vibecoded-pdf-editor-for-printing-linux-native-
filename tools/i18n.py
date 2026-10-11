@@ -42,6 +42,8 @@ _EN: dict[str, str] = {
     "Rich Text (Textfluss)": "Rich Text (flowing text)",
     "EPUB (festes Layout)": "EPUB (fixed layout)",
     "PostScript": "PostScript",
+    "Rueckgaengig": "Undo",
+    "Wiederholen": "Redo",
     "Beschnittrechteck zeichnen": "Draw crop rectangle",
     "Rechteck in der Vorschau ziehen. Esc bricht ab. Danach lassen sich die Raender genau einstellen.": "Drag a rectangle in the preview. Esc cancels. Fine-tune the margins afterwards.",
     # Save As conversion formats

@@ -178,6 +178,10 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
   cancels pending format reads and disables content fitting; export stays on
   the manual crop path. Never measure the cropped output as if it were the
   source. Cancel an active drag when its page or zoom coordinate map changes.
+  Rectangles use Qt `QUndoStack` / `QUndoCommand`, one command per rectangle,
+  restoring any format/fit settings they replaced. Scope actions to the tool,
+  retain the PyQt action wrappers, preserve text-field undo, and clear the
+  history on document changes. Do not add a second manual history stack.
 - Paper sizes come from `tools/paper.py`. No local size table.
 - N-Up's single-sided cut-and-stack source mode puts consecutive page runs
   into slot piles in reading order (left to right, then top to bottom).

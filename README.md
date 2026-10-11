@@ -304,7 +304,8 @@ would rather allow later versions of the GPL, change the `license` field in
 In **Crop / Scale**, click **Draw crop rectangle** and drag over the preview.
 The full source page is shown while drawing; releasing the mouse sets the four
 crop margins and previews the result. Drag in either direction, press **Esc**
-to cancel, or adjust the margin fields for precision. Click **Run** to save the
+to cancel, or adjust the margin fields for precision. **Ctrl+Z** undoes a drawn
+rectangle; **Ctrl+Shift+Z** or **Ctrl+Y** redoes it. Click **Run** to save the
 cropped PDF. The existing page selection and **All PDF pages** option determine
 which pages change. Drawing crops the content without scaling it.
 

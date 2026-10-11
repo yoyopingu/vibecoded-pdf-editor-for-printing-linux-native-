@@ -3,12 +3,13 @@ Zuschneiden / Skalieren — trim or extend the page, fit it to a paper size,
 and set cut marks. Shows the sheet it is about to produce.
 """
 import os
+import weakref
 from tools.render.caches import _FullPageCache, cached_screen_page
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.theme import INK, PAPER, _TV, _register_themed
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QSplitter, QRubberBand
 from PyQt6.QtCore import Qt, QEvent, QRectF, QPointF
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush, QUndoCommand, QUndoStack, QKeySequence
 from PyQt6 import sip
 from tools.app_state import AppState
 from tools._base import BasePanel
@@ -18,6 +19,25 @@ from tools.panels._cropmarks import _crop_mark_segments, _crop_marks_content_str
 from tools.render.placeholder import paint_page_number
 from tools.render.region import cached_page_size_pt, page_size_pt
 from tools.jobs import submit
+
+
+class _CropSettingsCommand(QUndoCommand):
+    """A rectangle changes several controls, but is one undoable operation."""
+    def __init__(self, panel, before, after):
+        super().__init__(tr("Beschnittrechteck zeichnen"))
+        self._panel = weakref.ref(panel)
+        self._before, self._after = before, after
+
+    def _restore(self, state):
+        panel = self._panel()
+        if panel is not None and not sip.isdeleted(panel):
+            panel._restore_crop_settings(state)
+
+    def undo(self):
+        self._restore(self._before)
+
+    def redo(self):
+        self._restore(self._after)
 
 
 class _CropRubberBand(QRubberBand):
@@ -92,6 +112,20 @@ class CropResizePanel(BasePanel):
         splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1)
         splitter.setSizes([400, 800])
         outer.addWidget(splitter, 1)
+        self._crop_undo = QUndoStack(self)
+        self._crop_undo.setUndoLimit(50)
+        self._crop_actions = []
+        for action, key in ((self._crop_undo.createUndoAction(self, tr("Rueckgaengig")),
+                             QKeySequence.StandardKey.Undo),
+                            (self._crop_undo.createRedoAction(self, tr("Wiederholen")),
+                             QKeySequence.StandardKey.Redo)):
+            action.setShortcuts(QKeySequence.keyBindings(key))
+            # Keep these keys within the crop tool. Text editors retain their
+            # native ShortcutOverride, and hidden tools cannot steal grid undo.
+            action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            action.setAutoRepeat(False)
+            self.addAction(action)
+            self._crop_actions.append(action)  # retain PyQt factory wrappers
         AppState.get().pdf_changed.connect(self._document_changed)
 
     def _update_preview(self):
@@ -100,6 +134,7 @@ class CropResizePanel(BasePanel):
         self._pane.refresh()
 
     def _document_changed(self, *_):
+        self._crop_undo.clear()
         self._cancel_crop_drag()
         self._cancel_preview_work()
         self._cancel_geometry_read()
@@ -346,28 +381,56 @@ class CropResizePanel(BasePanel):
                    (rect.bottom() - chosen.bottom()) * ph / rect.height(),
                    (chosen.left() - rect.left()) * pw / rect.width(),
                    (rect.right() - chosen.right()) * pw / rect.width())
-        self._manual_margin_edited()
-        self.fmt.reset()
-        self._fmt_margins = None
+        before = self._crop_settings()
+        after = dict(before, margins=tuple(round(max(0.0, p / MM_TO_PT), 2) for p in margins),
+                     equal=False, fit=False, format=0, action=0,
+                     format_margins=None, pending=None)
+        if before != after:
+            self._crop_undo.push(_CropSettingsCommand(self, before, after))
+        else:
+            self.draw_crop.setChecked(False)
+
+    def _crop_settings(self):
+        return dict(margins=self._margins_mm(), equal=self.sync_cb.isChecked(),
+                    fit=self.scale_check.isChecked(), format=self.fmt.combo.currentIndex(),
+                    action=self.fmt_action.currentIndex(), percent=self.scale_pct.value(),
+                    format_margins=getattr(self, '_fmt_margins', None),
+                    pending=getattr(self, '_pending_target', None))
+
+    def _restore_crop_settings(self, state):
+        # Block all related signals: undo must restore a single coherent state,
+        # without equal margins or a late format read overwriting the rectangle.
+        self._cancel_geometry_read()
         controls = [self.ct, self.cb2, self.cl2, self.cr, self.sync_cb,
-                    self.scale_check, self.fmt_action]
+                    self.scale_check, self.fmt_action, self.fmt.combo, self.scale_pct]
         blocked = [control.blockSignals(True) for control in controls]
         try:
-            self.sync_cb.setChecked(False)
-            self.scale_check.setChecked(False)
-            self.fmt_action.setCurrentIndex(0)
-            # Large-format pages can exceed the ordinary manual-field limits.
-            # A drawn crop must retain its measured margins rather than clamp.
-            for field, points in zip(controls[:4], margins):
-                mm = max(0.0, points / MM_TO_PT)
+            for field, mm in zip(controls[:4], state['margins']):
                 field.setMaximum(max(field.maximum(), mm))
                 field.setValue(mm)
+            self.sync_cb.setChecked(state['equal'])
+            self.scale_check.setChecked(state['fit'])
+            self.fmt_action.setCurrentIndex(state['action'])
+            self.fmt.combo.setCurrentIndex(state['format'])
+            self.scale_pct.setValue(state['percent'])
+            self._fmt_margins = state['format_margins']
+            self._pending_target = state['pending']
         finally:
             for control, was_blocked in zip(controls, blocked):
                 control.blockSignals(was_blocked)
-        self.scale_pct.setEnabled(True)
-        self._pct_hint.setEnabled(True)
+        self.fmt._sync_custom_row()
+        self.scale_pct.setEnabled(not self._marks_only())
+        self._pct_hint.setEnabled(not self._marks_only())
+        self._cancel_crop_drag()
         self.draw_crop.setChecked(False)
+        pending = state['pending']
+        if pending is not None:
+            kind, value = pending
+            if kind == 'size':
+                self._set_margins_for_size(*value)
+            else:
+                self._on_pct_edited(value * 100)
+        self._pane.refresh()
 
     def _apply_theme(self):
         t = _TV
