@@ -182,6 +182,8 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
   restoring any format/fit settings they replaced. Scope actions to the tool,
   retain the PyQt action wrappers, preserve text-field undo, and clear the
   history on document changes. Do not add a second manual history stack.
+  Live drag dimensions use cached page geometry and label updates only; never
+  read a PDF or refresh/render the preview on mouse movement.
 - Paper sizes come from `tools/paper.py`. No local size table.
 - N-Up's single-sided cut-and-stack source mode puts consecutive page runs
   into slot piles in reading order (left to right, then top to bottom).

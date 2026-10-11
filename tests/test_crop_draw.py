@@ -257,3 +257,50 @@ def test_crop_undo_respects_text_editors_and_hidden_tools():
         assert panel._crop_undo.index() == index, 'hidden tool intercepted undo'
     finally:
         window.close(); window.deleteLater(); _app.processEvents()
+
+
+def test_crop_drag_reports_live_output_size_without_pdf_work():
+    from unittest.mock import patch
+    from PyQt6.QtCore import QEvent, QPointF
+    from PyQt6.QtGui import QMouseEvent
+    from tools.i18n import tr
+    from tools.panels._shared import MM_TO_PT
+
+    _open(FX['framed_rot90'])
+    panel = CropResizePanel(); panel.resize(1100, 800); panel.show()
+    try:
+        panel.draw_crop.setChecked(True)
+        panel._pane._set_zoom(1.3)
+        rect, pw, ph = _ready(panel)
+        margins = panel._margins_mm()
+        start = _point(rect, .8, .75)
+        QTest.mousePress(panel._preview, Qt.MouseButton.LeftButton, pos=start)
+        with patch.object(panel._pane, 'refresh') as refresh, \
+             patch('tools.panels.crop_resize.page_size_pt') as dimensions, \
+             patch.object(panel, '_request_preview_image') as render:
+            for x, y in ((.2, .25), (-.2, 1.2)):
+                end = _point(rect, x, y)
+                event = QMouseEvent(QEvent.Type.MouseMove, QPointF(end), QPointF(end),
+                                    Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+                                    Qt.KeyboardModifier.NoModifier)
+                _app.sendEvent(panel._preview, event)
+                clipped = panel._crop_point(QPointF(end), rect)
+                width = abs(start.x() - clipped.x()) * pw / rect.width() / MM_TO_PT
+                height = abs(start.y() - clipped.y()) * ph / rect.height() / MM_TO_PT
+                assert panel._preview_info.text() == tr('Ausgabe: {p0:.1f} × {p1:.1f} mm').format(
+                    p0=width, p1=height)
+            refresh.assert_not_called()
+            dimensions.assert_not_called()
+            render.assert_not_called()
+        assert panel._margins_mm() == margins and panel._crop_undo.count() == 0
+        # A normal refresh (e.g. sharper cached pixels arriving) must preserve
+        # the live readout; Escape must then recover the ordinary status.
+        panel._pane.refresh()
+        assert panel._preview_info.text() == panel._crop_live_info
+        ordinary_status = panel._crop_status_before
+        with patch.object(panel._pane, 'refresh'):
+            QTest.keyClick(panel._preview, Qt.Key.Key_Escape)
+        assert panel._preview_info.text() == ordinary_status
+        assert panel._crop_live_info is None
+    finally:
+        panel.close(); panel.deleteLater(); _app.processEvents()

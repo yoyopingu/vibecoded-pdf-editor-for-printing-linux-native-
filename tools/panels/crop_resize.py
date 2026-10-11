@@ -63,6 +63,8 @@ class CropResizePanel(BasePanel):
     def __init__(self, parent=None):
         self._crop_geometry = None
         self._crop_drag = None
+        self._crop_live_info = None
+        self._crop_status_before = None
         self._preview_signals = _ThumbSignals()
         self._preview_signals.ready.connect(self._on_preview_image_ready)
         self._preview_gen = 0
@@ -302,9 +304,34 @@ class CropResizePanel(BasePanel):
         layout.addWidget(self._sel_info)
 
     def _cancel_crop_drag(self):
+        if self._crop_status_before is not None:
+            self._preview_info.setText(self._crop_status_before)
+        self._crop_status_before = None
+        self._crop_live_info = None
         self._crop_drag = None
         if hasattr(self, '_crop_band'):
             self._crop_band.hide()
+
+    def _update_crop_drag(self, position):
+        start, rect, pw, ph, *_ = self._crop_drag
+        end = self._crop_point(position, rect)
+        chosen = QRectF(start, end).normalized()
+        self._crop_band.setGeometry(chosen.toAlignedRect())
+        # Only arithmetic on cached geometry: no PDF reads, renders or preview
+        # refreshes on mouse movement. Avoid relayout for unchanged readouts.
+        width = chosen.width() * pw / rect.width() / MM_TO_PT
+        height = chosen.height() * ph / rect.height() / MM_TO_PT
+        self._crop_live_info = tr("Ausgabe: {p0:.1f} × {p1:.1f} mm").format(p0=width, p1=height)
+        if self._preview_info.text() != self._crop_live_info:
+            self._preview_info.setText(self._crop_live_info)
+
+    def _crop_preview_info(self, info):
+        if self._crop_drag is not None:
+            # A cached render can arrive mid-drag. Keep the live readout while
+            # retaining the newest ordinary status for cancellation.
+            self._crop_status_before = info
+            return self._crop_live_info or info
+        return info
 
     def _toggle_draw_crop(self, checked):
         self._cancel_crop_drag()
@@ -348,13 +375,12 @@ class CropResizePanel(BasePanel):
                             start = self._crop_point(event.position(), rect)
                             self._crop_drag = (start, rect, pw, ph, source, page)
                             self._preview.setFocus()
-                            self._crop_band.setGeometry(QRectF(start, start).toAlignedRect())
+                            self._crop_status_before = self._preview_info.text()
+                            self._update_crop_drag(start)
                             self._crop_band.show()
                     return True
                 if kind == QEvent.Type.MouseMove and self._crop_drag is not None:
-                    start, rect, *_ = self._crop_drag
-                    end = self._crop_point(event.position(), rect)
-                    self._crop_band.setGeometry(QRectF(start, end).normalized().toAlignedRect())
+                    self._update_crop_drag(event.position())
                     return True
                 if kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                     drag = self._crop_drag
@@ -834,7 +860,7 @@ class CropResizePanel(BasePanel):
         if self.draw_crop.isChecked() and source is not None and size is not None:
             # Cropping needs page-tree geometry, not decoded page content.
             self._set_crop_geometry(pm, *size, source, page_idx)
-        return pm, tr('rendert …')
+        return pm, self._crop_preview_info(tr('rendert …'))
 
     def _render_preview(self, avail_w, avail_h, zoom, async_load=False):
         self._crop_geometry = None
@@ -1042,7 +1068,8 @@ class CropResizePanel(BasePanel):
         elif any([t_pt, b_pt, l_pt, r_pt]):
             parts.append(f"{new_w/MM_TO_PT:.0f}x{new_h/MM_TO_PT:.0f}mm")
         info = " -> ".join(parts)
-        return result, (info if sharp else f"{info}  ·  {tr('rendert …')}")
+        return result, self._crop_preview_info(
+            info if sharp else f"{info}  ·  {tr('rendert …')}")
 
     def _run_action(self):
         import pikepdf

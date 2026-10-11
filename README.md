@@ -302,7 +302,8 @@ would rather allow later versions of the GPL, change the `license` field in
 ### Crop with the mouse
 
 In **Crop / Scale**, click **Draw crop rectangle** and drag over the preview.
-The full source page is shown while drawing; releasing the mouse sets the four
+The full source page is shown while drawing, with live output width and height
+in the status bar; releasing the mouse sets the four
 crop margins and previews the result. Drag in either direction, press **Esc**
 to cancel, or adjust the margin fields for precision. **Ctrl+Z** undoes a drawn
 rectangle; **Ctrl+Shift+Z** or **Ctrl+Y** redoes it. Click **Run** to save the

@@ -42,6 +42,7 @@ _EN: dict[str, str] = {
     "Rich Text (Textfluss)": "Rich Text (flowing text)",
     "EPUB (festes Layout)": "EPUB (fixed layout)",
     "PostScript": "PostScript",
+    "Ausgabe: {p0:.1f} × {p1:.1f} mm": "Output: {p0:.1f} × {p1:.1f} mm",
     "Rueckgaengig": "Undo",
     "Wiederholen": "Redo",
     "Beschnittrechteck zeichnen": "Draw crop rectangle",
