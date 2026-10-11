@@ -632,9 +632,9 @@ def oriented_sheet_pt(paper_key, orient_idx, pdf_path, model, pages):
 
     None when no sheet was named — the pages keep their own size, and
     nothing about paper is sent. Landscape swaps the axes. Automatic
-    follows the first selected page, which is the same rule the CUPS job
-    is labelled with. Print to PDF has no queue to do this afterwards, so
-    it has to use the same answer.
+    follows the first selected page for the CUPS job label. This is a job
+    default, not a restriction on every page: PDF export and automatic
+    fixed-size placement choose the axes again for each displayed page.
     """
     sheet = paper_size_pt(paper_key)
     if not sheet:
@@ -664,13 +664,15 @@ def oriented_sheet_pt(paper_key, orient_idx, pdf_path, model, pages):
 
 
 def _place_on_sheet(src_path, dest_path, paper_w_pt, paper_h_pt,
-                    scale_idx, scale_pct):
+                    scale_idx, scale_pct, auto_orient=False):
     """Put every page on a sheet of the given size.
 
     Fit scales up and down so the page fills the sheet. Shrink only scales
     down. Feste Größe uses the percentage (100 is the page's own size) and
     centres it, which is what Acrobat does for Adobe PDF — there is no
-    printer left to apply print-scaling= afterwards.
+    printer left to apply print-scaling= afterwards. Automatic orientation
+    chooses the sheet axes per displayed page; a mixed job must not inherit
+    the first page's orientation and clip its later landscape pages.
     """
     import pikepdf
     from tools.pagebox import (_display_matrix, _inherited_rotate, _mat_mul,
@@ -684,21 +686,24 @@ def _place_on_sheet(src_path, dest_path, paper_w_pt, paper_h_pt,
         for page in pdf.pages:
             box = _visible_box(page)
             dw, dh = _visible_size(page)
+            sheet_w, sheet_h = paper_w_pt, paper_h_pt
+            if auto_orient and (dw > dh) != (sheet_w > sheet_h):
+                sheet_w, sheet_h = sheet_h, sheet_w
             if scale_idx == FIXED:
                 factor = (scale_pct or 100) / 100.0
             elif scale_idx == FIT:
-                factor = min(paper_w_pt / max(dw, 1.0), paper_h_pt / max(dh, 1.0))
+                factor = min(sheet_w / max(dw, 1.0), sheet_h / max(dh, 1.0))
             else:
-                factor = min(1.0, paper_w_pt / max(dw, 1.0),
-                             paper_h_pt / max(dh, 1.0))
+                factor = min(1.0, sheet_w / max(dw, 1.0),
+                             sheet_h / max(dh, 1.0))
             w1, h1 = dw * factor, dh * factor
-            tx = (paper_w_pt - w1) / 2.0
-            ty = (paper_h_pt - h1) / 2.0
+            tx = (sheet_w - w1) / 2.0
+            ty = (sheet_h - h1) / 2.0
             placed = _mat_mul(
                 _display_matrix(box, _inherited_rotate(page)),
                 _mat_mul((factor, 0.0, 0.0, factor, 0.0, 0.0),
                          (1.0, 0.0, 0.0, 1.0, tx, ty)))
-            apply_visible_transform(page, pdf, placed, box, paper_w_pt, paper_h_pt)
+            apply_visible_transform(page, pdf, placed, box, sheet_w, sheet_h)
         pdf.save(dest_path)
 
 
@@ -760,6 +765,7 @@ def build_print_pdf(pdf_path, model, pages, dest_path, *,
             gs_cmd = [
                 gs_bin, "-dBATCH", "-dNOPAUSE", "-dQUIET",
                 "-sDEVICE=pdfwrite",
+                "-dAutoRotatePages=/None",
                 "-dCompatibilityLevel=1.5",
                 "-dPDFSETTINGS=/printer",
                 "-dEmbedAllFonts=true",
@@ -785,7 +791,7 @@ def build_print_pdf(pdf_path, model, pages, dest_path, *,
             placed_fd, placed_tmp = tempfile.mkstemp(suffix="_pdfplace.pdf")
             os.close(placed_fd)
             _place_on_sheet(src, placed_tmp, sheet[0], sheet[1],
-                            scale_idx, scale_pct)
+                            scale_idx, scale_pct, auto_orient=(orient_idx == 0))
             src = placed_tmp
         elif scale_idx == FIXED and scale_pct and scale_pct != 100:
             placed_fd, placed_tmp = tempfile.mkstemp(suffix="_pdfpct.pdf")
@@ -829,10 +835,11 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
       to CUPS, which fits to the driver's *real* imageable area rather than to
       an estimate of it, and adapts to whichever printer the job goes to.
       Ghostscript passes the pages through at their own size.
-    * "Feste Groesse" is done here: Ghostscript fixes the media so the page
-      prints at 1:1 on the sheet, recenter_on_paper applies the percentage if
-      it is not 100, and CUPS is told print-scaling=none so it does not scale
-      the result a second time.
+    * "Feste Groesse" is done here: automatic orientation places each page
+      on matching media at the requested percentage before normalisation.
+      Explicit orientation fixes the media in Ghostscript and applies the
+      percentage with recenter_on_paper. CUPS is told print-scaling=none so
+      it does not scale the result a second time.
     """
     import tempfile, os
 
@@ -860,6 +867,18 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             logging.exception("print: could not prepare form fields / comments")
             print_src = sub_tmp
 
+        auto_fixed = sheet and orient_idx == 0 and scale_idx == FIXED
+        if auto_fixed:
+            # FIXEDMEDIA below fixes one orientation for the whole document.
+            # Place mixed pages before normalisation instead, including the
+            # percentage, so no page is clipped to the first page's axes.
+            placed_fd, placed_tmp = tempfile.mkstemp(suffix="_oriented.pdf")
+            os.close(placed_fd)
+            scaled_tmps.append(placed_tmp)
+            _place_on_sheet(print_src, placed_tmp, pw_pt, ph_pt,
+                            FIXED, scale_pct, auto_orient=True)
+            print_src = placed_tmp
+
         gs_bin = ghostscript_binary()
         if gs_bin:
             norm_fd, norm_tmp = tempfile.mkstemp(suffix="_norm.pdf")
@@ -869,6 +888,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             gs_cmd = [
                 gs_bin, "-dBATCH", "-dNOPAUSE", "-dQUIET",
                 "-sDEVICE=pdfwrite",
+                "-dAutoRotatePages=/None",
                 "-dCompatibilityLevel=1.5",
                 "-dPDFSETTINGS=/printer",
                 "-dEmbedAllFonts=true",
@@ -876,7 +896,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                 "-dCompressFonts=true",
                 "-dDetectDuplicateImages=true",
             ]
-            if scale_idx == FIXED and sheet:
+            if scale_idx == FIXED and sheet and not auto_fixed:
                 # Only with a sheet to fix it to. Left to the printer, there is
                 # no size to hold the page against, and the pages go through at
                 # their own — which is what "print it at this size" means when
@@ -925,7 +945,7 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         # Feste Groesse at anything but 100 %: scale the content and centre it
         # on the sheet here, because Ghostscript can fit a page or leave it
         # alone and neither of those is "make it 70 % of what it is".
-        if scale_idx == FIXED and scale_pct != 100:
+        if scale_idx == FIXED and scale_pct != 100 and not auto_fixed:
             try:
                 pct_fd, pct_tmp = tempfile.mkstemp(suffix="_pct.pdf")
                 os.close(pct_fd)
