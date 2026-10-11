@@ -1385,6 +1385,8 @@ _EN: dict[str, str] = {
         "Multiple pages per sheet — with margin and gap controls.",
     "QUELLSEITEN": "SOURCE PAGES",
     "Alle Seiten der Reihe nach": "All pages in sequence",
+    "Schneiden und Stapeln (einseitig)": "Cut and stack (single-sided)",
+    "Schneiden und Stapeln: Einseitig drucken, Blattreihenfolge beibehalten, schneiden und die Stapel zeilenweise von links nach rechts aufeinanderlegen (erster Stapel oben).": "Cut and stack: Print single-sided, keep sheets in order, cut, then stack the piles from left to right, row by row (first pile on top).",
     "Nur aktuelle Seite (wiederholt)": "Current page only (repeated)",
     "Seitenbereich:": "Page range:",
     "Quelle:": "Source:",

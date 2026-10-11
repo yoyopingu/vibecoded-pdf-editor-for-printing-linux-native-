@@ -141,6 +141,11 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
   instead of the hidden viewer. `PreviewPane` in `tools/panels/_shared.py`
   owns fit and physical-size zoom for those sheets. Do not add a conflict.
 - Paper sizes come from `tools/paper.py`. No local size table.
+- N-Up's single-sided cut-and-stack source mode puts consecutive page runs
+  into slot piles in reading order (left to right, then top to bottom).
+  Preview and export share `_nup_sheet_pages`; retain blank padding so uneven
+  jobs stack in order. Unlike sequential/repeat mode, a one-page cut-and-stack
+  job places that page only once.
 - Stylesheet traps that have already shipped as bugs:
   - A `QCheckBox` / `QRadioButton` without `background: transparent` paints
     an opaque bar across the group box.

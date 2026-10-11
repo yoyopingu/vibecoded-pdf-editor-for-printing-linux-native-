@@ -38,6 +38,26 @@ def _read_page_dims(pdf_path, idx):
 # ══════════════════════════════════════════════════════════════════════════════
 # N-UP LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
+def _nup_sheet_count(n_pages, n_slot, mode):
+    return n_pages if mode == 1 else math.ceil(n_pages / n_slot)
+
+
+def _nup_sheet_pages(n_pages, n_slot, mode, sheet):
+    """Share source ordering between preview and export.
+
+    Cut-and-stack deals consecutive runs into separate piles, in reading order
+    across the grid. Padding belongs at the end of those runs, not at the end
+    of a sequential sheet list, or cutting an uneven job scrambles its order.
+    The older modes retain their single-page repeat convenience.
+    """
+    if mode == 1 or (n_pages == 1 and mode == 0):
+        return [sheet] * n_slot
+    sheets = _nup_sheet_count(n_pages, n_slot, mode)
+    pages = [(slot * sheets + sheet if mode == 2 else sheet * n_slot + slot)
+             for slot in range(n_slot)]
+    return [page if page < n_pages else None for page in pages]
+
+
 def _nup_slot_rects(params, n_slot):
     """The (x0, y0, x1, y1) rectangle (PDF points, origin bottom-left) of every
     slot on a sheet — shared by the renderer, the preview and the crop marks so
@@ -220,7 +240,14 @@ class NUpPanel(BasePanel):
 
     def _source_page_changed(self, page):
         slots = max(1, self.cols.value() * self.rows.value())
-        self._sheet_index = page // slots if self.src_combo.currentIndex() == 0 else page
+        mode = self.src_combo.currentIndex()
+        if mode == 2:
+            model = AppState.get().page_model
+            sheets = (_nup_sheet_count(len(model.order), slots, mode)
+                      if model is not None else self._sheet_total)
+            self._sheet_index = page % max(1, sheets)
+        else:
+            self._sheet_index = page // slots if mode == 0 else page
         self._pane.refresh()
 
     def _set_sheet_range(self, total):
@@ -265,7 +292,12 @@ class NUpPanel(BasePanel):
         sb = QGroupBox(tr("QUELLSEITEN")); sl = QVBoxLayout(sb)
         self.src_combo = QComboBox()
         self.src_combo.addItems([tr("Alle Seiten der Reihe nach"),
-                                  tr("Jede Seite wiederholt (ein Blatt je Seite)")])
+                                  tr("Jede Seite wiederholt (ein Blatt je Seite)"),
+                                  tr("Schneiden und Stapeln (einseitig)")])
+        self.src_combo.setToolTip(tr(
+            "Schneiden und Stapeln: Einseitig drucken, Blattreihenfolge beibehalten, "
+            "schneiden und die Stapel zeilenweise von links nach rechts "
+            "aufeinanderlegen (erster Stapel oben)."))
         self.src_combo.currentIndexChanged.connect(self._update_preview)
         sl.addLayout(r(tr("Quelle:"), self.src_combo))
         layout.addWidget(sb)
@@ -448,9 +480,9 @@ class NUpPanel(BasePanel):
         _page_idx, src_pw, src_ph, n_total = self._page_dims(pdf_path)
         out_w, out_h, mt, mb, ml, mr, gh, gv, slot_w, slot_h, cols, rows = \
             self._get_layout_params(src_pw, src_ph)
-        sequential = self.src_combo.currentIndex() == 0
+        mode = self.src_combo.currentIndex()
         n_slot = cols * rows
-        self._set_sheet_range(math.ceil(n_total / n_slot) if sequential else n_total)
+        self._set_sheet_range(_nup_sheet_count(n_total, n_slot, mode))
         if slot_w <= 1.0 or slot_h <= 1.0:
             return None, tr("Abstände zu groß — kein Platz für Inhalt.")
         full_scale = self.full_scale.isChecked()
@@ -466,18 +498,7 @@ class NUpPanel(BasePanel):
         cs = self._pane.page_scale(fit, zoom)
         canvas_w = max(1, int(out_w * cs)); canvas_h = max(1, int(out_h * cs))
 
-        # Which page goes in each slot — this is what differs between the two
-        # source modes: sequential packs consecutive pages, "repeat" puts the
-        # same page in every slot.
-        if sequential:
-            first = self._sheet_index * n_slot
-            slot_pages = [(first + s if first + s < n_total else None)
-                          for s in range(n_slot)]
-            if n_total == 1:
-                # The exported one-page job fills the sheet, too.
-                slot_pages = [0] * n_slot
-        else:
-            slot_pages = [self._sheet_index] * n_slot
+        slot_pages = _nup_sheet_pages(n_total, n_slot, mode, self._sheet_index)
 
         # Fetch each needed page image from the shared cache (async if missing).
         # Width is fixed to the slot's point size (independent of the display
@@ -549,12 +570,10 @@ class NUpPanel(BasePanel):
         with pikepdf.open(src_path) as _doc:
             n_total = len(_doc.pages)
             cols = self.cols.value(); rows = self.rows.value(); n_slot = cols * rows
-            if self.src_combo.currentIndex() == 1:
-                # Each page repeated to fill its own sheet (n_slot copies per page).
-                src_pages = [p for p in range(n_total) for _ in range(n_slot)]
-            else:
-                # All pages, packed sequentially across the slots.
-                src_pages = list(range(n_total))
+            mode = self.src_combo.currentIndex()
+            src_pages = [page
+                         for sheet in range(_nup_sheet_count(n_total, n_slot, mode))
+                         for page in _nup_sheet_pages(n_total, n_slot, mode, sheet)]
             # Size the sheet from the same page the preview shows, measured the
             # same way (visible box, /Rotate applied) — reading the raw MediaBox
             # of page 0 made "Wie Quellseite × Raster" disagree with the preview
@@ -580,11 +599,6 @@ class NUpPanel(BasePanel):
             problem = _full_scale_problem(max_w, max_h, params)
             if problem:
                 raise ValueError(problem)
-        if len(src_pages) == 1: src_pages = src_pages * n_slot   # single-page doc → fill the sheet
-        # An unused slot is blank paper; there was never anything else it could
-        # be. Padding the list only makes that explicit for the last sheet.
-        while len(src_pages) % n_slot: src_pages.append(None)
-
         crop = self.crop_marks.isChecked()
         self.run_async(
             lambda report: _build_nup(src_path, out_path, src_pages, params,

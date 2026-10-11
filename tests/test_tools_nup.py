@@ -1,14 +1,15 @@
 """
 Tools Nup.
 """
-import os, hashlib, time
+import os, hashlib, time, math
+from unittest.mock import patch
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import A4
 from tools.jobs import null_progress
 from tools.app_state import AppState
 import pypdfium2 as pdfium
 from tools.panels.impose import ImposePanel, _booklet_sides
-from tools.panels.nup import NUpPanel, _build_nup
+from tools.panels.nup import NUpPanel, _build_nup, _nup_sheet_count, _nup_sheet_pages
 from tests.support import FX, MM, _BK_GREY, _TMP, _app, _ink_margins, _nup, _open, _sync_async
 
 
@@ -62,6 +63,62 @@ def test_nup_source_modes():
         p._run_action(); return len(PdfReader(cap["p"]).pages)
     assert sheets(0) == 2, "sequential 5p 2x2 should be 2 sheets"
     assert sheets(1) == 5, "repeat-each-page should be 5 sheets"
+    assert sheets(2) == 2, "cut-and-stack 5p 2x2 should be 2 sheets"
+
+
+def test_nup_cut_stack_pile_order():
+    """Cutting each slot into a pile must recover every page exactly once."""
+    for pages in (1, 2, 5, 19, 20, 21):
+        for slots in (1, 2, 4, 6):
+            sheets = [_nup_sheet_pages(pages, slots, 2, sheet)
+                      for sheet in range(_nup_sheet_count(pages, slots, 2))]
+            stacked = [sheet[slot] for slot in range(slots) for sheet in sheets
+                       if sheet[slot] is not None]
+            assert stacked == list(range(pages)), (pages, slots, sheets)
+    assert _nup_sheet_pages(20, 2, 2, 0) == [0, 10]
+    assert _nup_sheet_pages(20, 2, 2, 9) == [9, 19]
+    assert _nup_sheet_pages(5, 4, 2, 1) == [1, 3, None, None]
+
+
+def test_nup_cut_stack_export_and_preview():
+    """Actual exported slots and preview placeholders use the same pile order."""
+    for count in (20, 19, 1):
+        source = os.path.join(_TMP, f"cut-stack-source-{count}.pdf")
+        writer = PdfWriter()
+        reader = PdfReader(FX["booklet32"])
+        for page in reader.pages[:count]:
+            writer.add_page(page)
+        writer.write(source)
+        _open(source)
+        p = NUpPanel()
+        try:
+            p.cols.setValue(2); p.rows.setValue(1)
+            p.src_combo.setCurrentIndex(2)
+            out = os.path.join(_TMP, f"cut-stack-{count}.pdf")
+            p.save_pdf = lambda *a, **k: out
+            p.open_result = lambda *a: None
+            _sync_async(p)
+            p._run_action()
+            actual = _booklet_halves(out)
+            sheets = math.ceil(count / 2)
+            expected = [(sheet + 1,
+                         sheet + sheets + 1 if sheet + sheets < count else "blank")
+                        for sheet in range(sheets)]
+            assert actual == expected, (count, actual, expected)
+            p._page_image = lambda *a: None
+            for sheet in range(sheets):
+                p._sheet_index = sheet
+                shown = []
+                with patch("tools.panels.nup.paint_page_number",
+                           side_effect=lambda _p, _r, page: shown.append(page + 1)):
+                    p._render_preview(400, 400, 1.0)
+                assert shown == [page for page in expected[sheet] if page != "blank"]
+                assert p._sheet_total == sheets
+            AppState.get().current_page = count - 1
+            assert p._sheet_index == (count - 1) % sheets
+        finally:
+            p.close()
+            p.deleteLater()
 
 
 def test_nup_preview_differs_by_mode():
