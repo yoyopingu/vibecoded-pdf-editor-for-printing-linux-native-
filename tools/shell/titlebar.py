@@ -4,7 +4,7 @@ the window buttons.
 """
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
 from PyQt6.QtCore import Qt, QPoint
-from PyQt6.QtGui import QKeySequence, QAction
+from PyQt6.QtGui import QKeySequence, QAction, QActionGroup
 from tools.i18n import tr, get_language
 
 
@@ -112,15 +112,19 @@ class TitleBar(QWidget):
 
         # Sprache submenu
         menu_lang = menu_settings.addMenu(tr("Sprache"))
+        language_group = QActionGroup(menu_lang)
+        language_group.setExclusive(True)
         act_de = QAction(tr("Deutsch"), self)
         act_de.setCheckable(True)
         act_de.setChecked(get_language() == "de")
         act_de.triggered.connect(lambda: self._win._set_language("de"))
+        language_group.addAction(act_de)
         menu_lang.addAction(act_de)
         act_en = QAction(tr("English"), self)
         act_en.setCheckable(True)
         act_en.setChecked(get_language() == "en")
         act_en.triggered.connect(lambda: self._win._set_language("en"))
+        language_group.addAction(act_en)
         menu_lang.addAction(act_en)
 
         # Hilfe

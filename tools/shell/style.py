@@ -164,12 +164,15 @@ QPushButton#iconBtn:pressed {{ background: {_SEL}; }}
 QPushButton#secondaryBtn:hover {{ background: {_HOVER}; border-color: {_ACC}; }}
 QPushButton#secondaryBtn:pressed {{ background: {_SEL}; }}
 
+/* Selected text needs both colours: the native white foreground disappears
+   against the light theme's pale selection background. */
 /* ── Input fields ───────────────────────────────────────── */
 QLineEdit {{
     background: {_IB}; color: {_TEXT};
     border: 1px solid {_IBD}; border-radius: 5px;
     padding: 5px 10px; min-height: 28px;
     selection-background-color: {_SEL};
+    selection-color: {_TEXT};
 }}
 QLineEdit:focus {{
     border: 2px solid {_ACC};
@@ -184,6 +187,7 @@ QComboBox {{
     border: 1px solid {_IBD}; border-radius: 5px;
     padding: 0px 10px; min-height: 38px;
     selection-background-color: {_SEL};
+    selection-color: {_TEXT};
 }}
 QComboBox:focus {{
     border: 2px solid {_ACC};
@@ -195,6 +199,7 @@ QComboBox:focus {{
 QComboBox QAbstractItemView {{
     background: {_IB}; color: {_TEXT};
     selection-background-color: {_SEL};
+    selection-color: {_TEXT};
     border: 1px solid {_IBD};
     border-radius: 5px;
     padding: 4px;
@@ -218,6 +223,7 @@ QSpinBox, QDoubleSpinBox {{
     border: 1px solid {_IBD}; border-radius: 5px;
     padding-left: 10px; min-height: 36px;
     selection-background-color: {_SEL};
+    selection-color: {_TEXT};
 }}
 QSpinBox:focus, QDoubleSpinBox:focus {{ border: 2px solid {_ACC}; }}
 /* Width only — nothing else. Any paint property here (a background, even a
@@ -265,6 +271,7 @@ QTextEdit, QPlainTextEdit {{
     font-family: 'JetBrains Mono','Cascadia Code','DejaVu Sans Mono',monospace;
     font-size: 12px; padding: 6px;
     selection-background-color: {_SEL};
+    selection-color: {_TEXT};
 }}
 
 /* ── Checkboxes & radios ────────────────────────────────── */

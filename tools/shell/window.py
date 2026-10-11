@@ -9,7 +9,7 @@ Crop/Scale and Booklet show the sheet they are about to produce, and Graustufen 
 which pages are already grey. A panel that owns that kind of picture builds
 a `_tool_splitter`. Everything else is the column.
 """
-import sys, os
+import os
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QLabel, QFrame, QFileDialog, QMessageBox
 from PyQt6.QtCore import Qt
 from tools.i18n import tr, set_language
@@ -352,7 +352,10 @@ class MainWindow(QMainWindow):
 
     def _set_language(self, lang: str):
         set_language(lang)
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        QMessageBox.information(
+            self, tr("Sprache"),
+            tr("Die gewählte Sprache wird beim nächsten Öffnen der Anwendung verwendet."),
+        )
 
     def _open_appearance(self):
         dlg = AppearanceDialog(self)

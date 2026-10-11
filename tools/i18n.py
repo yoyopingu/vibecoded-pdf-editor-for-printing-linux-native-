@@ -23,11 +23,11 @@ def get_language() -> str:
 
 
 def set_language(lang: str) -> None:
-    global _CURRENT_LANG
-    _CURRENT_LANG = lang if lang in ("de", "en") else "de"
+    """Save the next launch's language without mixing languages in this session."""
+    lang = lang if lang in ("de", "en") else "de"
     s = QSettings("CopyShop", "PDFSuite")
-    s.setValue("locale/language", _CURRENT_LANG)
-    s.sync()   # flush to disk before os.execv replaces the process
+    s.setValue("locale/language", lang)
+    s.sync()
 
 
 def tr(text: str) -> str:
@@ -62,6 +62,8 @@ _EN: dict[str, str] = {
     "Darstellung": "Appearance",
     "Allgemein": "General",
     "Sprache": "Language",
+    "Die gewählte Sprache wird beim nächsten Öffnen der Anwendung verwendet.":
+        "The selected language will be used the next time you open the application.",
     "Hilfe": "Help",
     "Über CopyShop PDF Suite": "About CopyShop PDF Suite",
     "Fehlerprotokoll anzeigen": "Show error log",

@@ -130,6 +130,9 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
   own grid — those four build a `_tool_splitter` and take the main area. Do not
   fold Graustufen into the column; that preview is the tool.
 - New widgets use `_TV` / `apply_theme_globally`. Check light and dark.
+- Language selection saves the next launch's preference and shows an information
+  dialog. Keep the current session and its translation language intact; never
+  restart or close the app when a language is selected.
 - Enter and keypad Enter run the visible tool's primary action, including
   when its shared page preview has focus. `BasePanel` owns these window
   shortcuts; hidden tools and modal dialogs must not trigger them. Respect
@@ -167,6 +170,9 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
     panes inside a group box. A transparent override has to name the object
     (`QWidget#printPaneHost { background: transparent }`). A stylesheet with
     no selector does not do that job.
+  - Set `selection-color` together with `selection-background-color` on input
+    fields. The native white selected text is unreadable on the light theme's
+    pale selection background, including inside numeric editors.
   - The app stylesheet sets `QSpinBox` to 36 px. The print dialog overrides
     that to 30 px so the percent box does not span two radio rows.
 
