@@ -7,11 +7,14 @@ dropped, and the parsed document behind them is released. A loaded page of a
 large PDF is hundreds of megabytes, so a tab that is gone must not keep one.
 """
 import os, shutil, atexit, logging
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFileDialog, QApplication, QSplitter, QLineEdit
+from PyQt6 import sip
+from PyQt6.QtWidgets import QInputDialog, QProgressDialog, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget, QFileDialog, QApplication, QSplitter, QLineEdit
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QEvent
 from PyQt6.QtGui import QKeySequence, QShortcut
 from tools.app_state import AppState
 from tools.i18n import tr
+from tools.export import export_formats, resolve_export, output_paths, export_document
+from tools.jobs import Cancelled, Progress, submit
 from tools.render.caches import _FullPageCache, _ThumbnailCache, _set_active
 from tools.render.document_cache import release
 from tools.viewer.merge import FileCard, FileGrid, MergeOrderWidget
@@ -477,7 +480,6 @@ class PageViewerPanel(QWidget):
         return False
 
     def _open(self, path=None):
-        from PyQt6.QtWidgets import QMessageBox
         from tools.multi_open import (IMAGE_EXTS, OFFICE_EXTS, PDF_EXT,
                                       file_dialog_filter, images_to_pdf_bytes)
         if not path:
@@ -509,7 +511,6 @@ class PageViewerPanel(QWidget):
                     f.write(images_to_pdf_bytes([path]))
                 path = tmp
             except Exception as e:
-                from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, tr("Bild-Konvertierung fehlgeschlagen"), str(e))
                 return
 
@@ -530,7 +531,6 @@ class PageViewerPanel(QWidget):
 
     def _open_office(self, path):
         """Convert an Office/text/vector document via LibreOffice, then open it."""
-        from PyQt6.QtWidgets import QMessageBox
         import subprocess, tempfile
         soffice = shutil.which("soffice") or shutil.which("libreoffice")
         if not soffice:
@@ -566,7 +566,6 @@ class PageViewerPanel(QWidget):
         return self._add_pdf_tab(converted)
 
     def _add_pdf_tab(self, path):
-        from PyQt6.QtWidgets import QMessageBox
         from tools.pdf_access import ensure_openable
         # A file that genuinely needs a password gets asked about, once, with an
         # explanation — and is worked on as a decrypted copy from here on. A
@@ -640,7 +639,6 @@ class PageViewerPanel(QWidget):
             tab = PdfTab(path)
         except Exception as e:
             logging.exception("result tab failed: %s", path)
-            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(
                 self, tr("Ergebnis konnte nicht geoeffnet werden"),
                 tr('{p0}\n\n{p1}').format(p0=os.path.basename(path), p1=e))
@@ -783,7 +781,6 @@ class PageViewerPanel(QWidget):
         wrong and Qt aborts the process. tools/jobs.py owns the job instead, and
         it is tied to the merge tab so closing the tab stops it.
         """
-        from tools.jobs import submit
         from tools.multi_open import convert_files
         self._viewer_info.setText(tr("Konvertiere Dateien..."))
         # Tab-Titel via Widget-Referenz setzen (sicher gegen Index-Shifts)
@@ -804,7 +801,6 @@ class PageViewerPanel(QWidget):
         """Never let files vanish from a merge in silence."""
         if not failures:
             return
-        from PyQt6.QtWidgets import QMessageBox
         detail = "\n".join(f"{os.path.basename(p)}  —  {m}" for p, m in failures)
         logging.error("conversion failed:\n%s", detail)
         AppState.get().status_message.emit(
@@ -922,9 +918,20 @@ class PageViewerPanel(QWidget):
         suggested = f"{stem}_auswahl{ext or '.pdf'}" if subset else tab.pdf_path
         title = tr('Auswahl speichern als ({p0} Seiten)').format(p0=len(uids)) \
                 if subset else tr("Speichern als")
-        path, _ = QFileDialog.getSaveFileName(
-            self, title, suggested, tr("PDF Dateien (*.pdf)"))
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, title, suggested,
+            ';;'.join(f.dialog_filter() for f in export_formats()))
         if not path: return
+        try:
+            chosen_path = path
+            path, fmt = resolve_export(path, selected_filter)
+        except ValueError as e:
+            QMessageBox.warning(self, tr("Speichern als"), str(e))
+            return
+        if fmt.key != 'pdf':
+            self._export_current(tab, path, fmt, uids if subset else None,
+                                 overwrite_confirmed=(path == chosen_path))
+            return
         try:
             tab.save_to(path, uids=uids if subset else None)
             name = os.path.basename(path)
@@ -938,12 +945,78 @@ class PageViewerPanel(QWidget):
             AppState.get().open_pdf(path)
             AppState.get().status_message.emit(tr('Gespeichert als: {p0}').format(p0=name))
         except Exception as e:
-            try:
-                if os.path.isfile(path):
-                    os.unlink(path)
-            except Exception:
-                pass
+            # save_to stages its PDF atomically. Deleting the destination here
+            # would delete the user's previous file after a failed save.
             AppState.get().status_message.emit(f"Speicherfehler: {e}")
+
+    def _export_current(self, tab, path, fmt, uids=None, *, overwrite_confirmed=False):
+        # Capture the view before starting a worker. An image/Office export is
+        # a copy; it must not rebase the PDF tab or clear its unsaved edits.
+        active = getattr(tab, '_export_job', None)
+        if active is not None and not active.is_finished:
+            return
+        wanted = set(uids) if uids is not None else None
+        sources = tuple((*tab.model.page_source(uid, tab.pdf_path),
+                         tab.model.get_rotation(uid)) for uid in tab.model.order
+                        if wanted is None or uid in wanted)
+        targets = output_paths(path, fmt, len(sources))
+        if fmt.per_page and len(targets) > 1:
+            text = tr('Jede Seite wird als eigene Datei gespeichert:\n{p0}\n…\n{p1}').format(
+                p0=os.path.basename(targets[0]), p1=os.path.basename(targets[-1]))
+            if any(os.path.exists(p) for p in targets):
+                text += '\n\n' + tr('Vorhandene Dateien überschreiben?')
+            if QMessageBox.question(self, tr("Speichern als"), text,
+                                    QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                                    QMessageBox.StandardButton.Ok) != QMessageBox.StandardButton.Ok:
+                return
+        elif os.path.exists(path) and not overwrite_confirmed:
+            # The picker may have confirmed a different suffix before we
+            # corrected it to the format selected in its dropdown.
+            if QMessageBox.question(self, tr("Speichern als"),
+                                    tr('Vorhandene Dateien überschreiben?'),
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
+        dpi = 300
+        if fmt.backend == 'image':
+            dpi, ok = QInputDialog.getInt(self, tr('Bildexport'), tr('Auflösung (DPI):'),
+                                         300, 72, 600)
+            if not ok:
+                return
+        progress = QProgressDialog(tr('Datei wird konvertiert …'), tr('Abbrechen'), 0, 0, self)
+        progress.setWindowTitle(tr('Speichern als'))
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.show()
+        tab._export_progress = progress
+
+        def alive():
+            return not sip.isdeleted(self) and not sip.isdeleted(tab) and not sip.isdeleted(progress)
+
+        def finished():
+            if not sip.isdeleted(progress):
+                progress.close()
+                progress.deleteLater()
+
+        def done(paths):
+            if alive():
+                AppState.get().status_message.emit(
+                    tr('Exportiert: {p0} Datei(en)').format(p0=len(paths)))
+
+        def error(exc):
+            if alive() and not isinstance(exc, Cancelled):
+                progress.hide()
+                QMessageBox.warning(self, tr('Speichern als'), str(exc))
+
+        def report(message):
+            if alive():
+                progress.setLabelText(message)
+
+        tab._export_job = submit(
+            lambda job: export_document(sources, path, fmt, Progress(job), dpi),
+            owner=tab, name='export-document', on_done=done, on_error=error,
+            on_progress=report, on_finished=finished)
+        progress.canceled.connect(tab._export_job.cancel)
 
     def _retarget_tab(self, tab, path):
         """Point a tab at the file just written for it.

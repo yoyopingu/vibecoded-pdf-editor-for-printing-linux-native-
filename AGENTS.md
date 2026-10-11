@@ -98,6 +98,22 @@ Imports only point downwards.
   empty, and the job sends no `media` option. Guessing A4 is how an SRA3 job
   printed an A4 area.
 
+### Document export
+- `tools/export.py` owns the Save As format catalog and converters. Keep Ctrl+S
+  as PDF save; Ctrl+Shift+S offers other formats. Non-PDF output is a copy and
+  must not retarget the PDF tab or clear its model edits. Capture source pages,
+  order and rotations on the GUI thread, then convert in a cancellable job
+  owned by the tab. Honour partial selection only in the visible page manager.
+- Office export must explicitly choose Writer/Impress/Draw's PDF input filter
+  and use an isolated LibreOffice profile (RTF uses flowing HTML instead).
+  EPUB uses Cairo SVG pages in an EPUB 3 fixed-layout package; Writer's EPUB
+  exporter cannot handle PDF-imported drawing objects. Never infer PDF export
+  support from the list of Office files the app can open. Missing binaries get
+  a named error.
+- Stage all outputs before publishing, preserve existing files on failure, and
+  confirm replacement of numbered page files. Multipage TIFF is a single file;
+  SVG/EPS and other images use one numbered file per page.
+
 ### Memory
 - Render caches are bounded by bytes, not by count, and entries carry a file
   revision (`_stat_key`). Keep both.

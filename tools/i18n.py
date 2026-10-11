@@ -39,6 +39,30 @@ def tr(text: str) -> str:
 
 # ── English translations (key = German source string) ─────────────────────────
 _EN: dict[str, str] = {
+    "Rich Text (Textfluss)": "Rich Text (flowing text)",
+    "EPUB (festes Layout)": "EPUB (fixed layout)",
+    # Save As conversion formats
+    'TIFF (mehrseitig)': 'TIFF (multiple pages)',
+    'PGM (Graustufen)': 'PGM (grayscale)',
+    'PBM (Schwarzweiß)': 'PBM (black and white)',
+    'Text (UTF-8)': 'Text (UTF-8)',
+    'XML (Text und Positionen)': 'XML (text and positions)',
+    'OpenDocument Textvorlage': 'OpenDocument text template',
+    'OpenDocument Präsentation': 'OpenDocument presentation',
+    'OpenDocument Präsentation (XML)': 'OpenDocument presentation (XML)',
+    'OpenDocument Präsentationsvorlage': 'OpenDocument presentation template',
+    'OpenDocument Zeichnung': 'OpenDocument drawing',
+    'OpenDocument Zeichnung (XML)': 'OpenDocument drawing (XML)',
+    'OpenDocument Zeichnungsvorlage': 'OpenDocument drawing template',
+    'Nicht unterstütztes Ausgabeformat: {p0}': 'Unsupported output format: {p0}',
+    'Benötigtes Programm nicht gefunden: {p0}': 'Required program not found: {p0}',
+    'Jede Seite wird als eigene Datei gespeichert:\n{p0}\n…\n{p1}': 'Each page will be saved as a separate file:\n{p0}\n…\n{p1}',
+    'Vorhandene Dateien überschreiben?': 'Overwrite existing files?',
+    'Bildexport': 'Image export',
+    'Auflösung (DPI):': 'Resolution (DPI):',
+    'Datei wird konvertiert …': 'Converting document …',
+    'Exportiert: {p0} Datei(en)': 'Exported: {p0} file(s)',
+
 
     # Document navigation rail
     "Aktuelle Seite": "Current page",

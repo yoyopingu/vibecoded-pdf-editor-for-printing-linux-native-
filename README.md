@@ -74,9 +74,9 @@ fail with a message telling you what is missing.
 | Binary | Needed for | Required? |
 | --- | --- | --- |
 | `gs` (ghostscript) | Compress, Greyscale, Farbprofil/CMYK, print colour conversion | yes, for those tools |
-| poppler (`pdftoppm`) | backs `pdf2image`, used by the OCR page renderer | yes, for OCR |
+| poppler (`pdftoppm`, `pdftocairo`, `pdftotext`, `pdftohtml`) | OCR rendering; image, vector, text/web and EPUB export | yes, for those conversions |
 | `tesseract` + language data | OCR | yes, for OCR |
-| `soffice` (LibreOffice) | opening Office, text, CSV, HTML and SVG files | only for those formats |
+| `soffice` (LibreOffice) | opening Office/text/vector files; saving Office documents, presentations and drawings | only for those formats |
 | CUPS (`lp`, `lpstat`) | printing | only for printing |
 | `ocrmypdf` | optional OCR back end — adds true deskew and PDF/A | optional |
 
@@ -298,3 +298,34 @@ This is not a preference. The app links PyQt6, which Riverbank distributes under
 the GPL v3, so a distributable combined work has to be GPL-compatible. If you
 would rather allow later versions of the GPL, change the `license` field in
 `pyproject.toml` to `GPL-3.0-or-later`; the licence text is the same either way.
+
+### Save and convert
+
+**Ctrl+S** saves the current PDF. **File → Save As (Ctrl+Shift+S)** also offers:
+
+- Images: PNG, JPEG, multipage TIFF, WebP, BMP, GIF, JPEG 2000, AVIF, QOI,
+  PPM, PGM, PBM, TGA and PCX. The image encoders available in the installed
+  Pillow build determine which appear. Resolution is selectable (72–600 DPI).
+- Vector/print output: SVG, EPS and PostScript (`pdftocairo`, from poppler).
+- Text/web output: UTF-8 text, self-contained HTML and positioned-text XML
+  (`pdftotext` / `pdftohtml`, from poppler). These extract existing text;
+  scanned pages need OCR first.
+- Office output: ODT, DOCX, DOC, flowing-text RTF, FODT, OTT; ODP, PPTX, PPT, FODP,
+  OTP; ODG, FODG and OTG (`soffice` / LibreOffice). PDF import reconstructs
+  text and drawing objects; the result may differ from the original editable
+  document. Writer, Impress and Draw use their respective PDF importers.
+  Spreadsheet/table reconstruction is not supplied by these PDF importers.
+- EPUB 3 with fixed page layout, using SVG pages from `pdftocairo`. This
+  preserves each page visually rather than guessing a reflowable book structure
+  ([EPUB specification](https://www.w3.org/TR/epub-33/)).
+  RTF uses a flowing HTML intermediate because rotated PDF text boxes do not
+  survive a direct conversion to RTF.
+
+All conversions respect the page manager's order, rotations and inserted or
+imported pages. While the manager is visible, a partial page selection exports
+only those pages, just like PDF Save As. Other formats export a copy and leave
+the PDF tab and its edits intact. Formats that hold one page (including SVG,
+EPS and the images other than TIFF) produce numbered files for a multipage
+selection. The app shows their names before starting and asks before replacing
+them. Conversion runs in a cancellable background job; temporary outputs are
+staged beside the destination before the batch is published.
