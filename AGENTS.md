@@ -173,6 +173,11 @@ traceback. Dependency lists live in `requirements.txt` and `README.md` only.
   tool preview, so Ctrl+0 / Ctrl+1 act on the visible N-Up or Crop/Scale sheet
   instead of the hidden viewer. `PreviewPane` in `tools/panels/_shared.py`
   owns fit and physical-size zoom for those sheets. Do not add a conflict.
+- Crop/Scale's mouse rectangle is measured on the full visible source page,
+  including CropBox and model rotation. It writes the existing margin fields,
+  cancels pending format reads and disables content fitting; export stays on
+  the manual crop path. Never measure the cropped output as if it were the
+  source. Cancel an active drag when its page or zoom coordinate map changes.
 - Paper sizes come from `tools/paper.py`. No local size table.
 - N-Up's single-sided cut-and-stack source mode puts consecutive page runs
   into slot piles in reading order (left to right, then top to bottom).

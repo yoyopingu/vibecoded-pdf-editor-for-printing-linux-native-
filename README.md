@@ -299,6 +299,15 @@ the GPL v3, so a distributable combined work has to be GPL-compatible. If you
 would rather allow later versions of the GPL, change the `license` field in
 `pyproject.toml` to `GPL-3.0-or-later`; the licence text is the same either way.
 
+### Crop with the mouse
+
+In **Crop / Scale**, click **Draw crop rectangle** and drag over the preview.
+The full source page is shown while drawing; releasing the mouse sets the four
+crop margins and previews the result. Drag in either direction, press **Esc**
+to cancel, or adjust the margin fields for precision. Click **Run** to save the
+cropped PDF. The existing page selection and **All PDF pages** option determine
+which pages change. Drawing crops the content without scaling it.
+
 ### Save and convert
 
 Opening files converts supported inputs to PDF, including from the command

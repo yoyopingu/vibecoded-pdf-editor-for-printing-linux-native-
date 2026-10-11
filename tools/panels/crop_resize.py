@@ -6,8 +6,8 @@ import os
 from tools.render.caches import _FullPageCache, cached_screen_page
 from tools.render.queue import _ThumbSignals, _ThumbTask, _render_queue, _thumb_render_width
 from tools.theme import INK, PAPER, _TV, _register_themed
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QSplitter
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QComboBox, QGroupBox, QCheckBox, QSplitter, QRubberBand
+from PyQt6.QtCore import Qt, QEvent, QRectF, QPointF
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from PyQt6 import sip
 from tools.app_state import AppState
@@ -20,6 +20,18 @@ from tools.render.region import cached_page_size_pt, page_size_pt
 from tools.jobs import submit
 
 
+class _CropRubberBand(QRubberBand):
+    def paintEvent(self, _event):
+        # Native rubber bands can disappear against white paper in light mode.
+        # Use the app's accent for a visible border and transparent selection.
+        colour = QColor(_TV['acc'])
+        painter = QPainter(self)
+        painter.setPen(QPen(colour, 1))
+        colour.setAlpha(45)
+        painter.setBrush(colour)
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CROP / RESIZE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -29,6 +41,8 @@ class CropResizePanel(BasePanel):
     RUN_LABEL     = "Ausfuehren"
 
     def __init__(self, parent=None):
+        self._crop_geometry = None
+        self._crop_drag = None
         self._preview_signals = _ThumbSignals()
         self._preview_signals.ready.connect(self._on_preview_image_ready)
         self._preview_gen = 0
@@ -60,6 +74,9 @@ class CropResizePanel(BasePanel):
             page_step=self._step_preview_page)
         self._preview      = self._pane.label   # kept for _apply_theme()
         self._preview_info = self._pane.info
+        self._crop_band = _CropRubberBand(QRubberBand.Shape.Rectangle, self._preview)
+        self._preview.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._preview.installEventFilter(self)
         self._page_bar = PreviewPageBar('Seite')
         self._page_bar.valueChanged.connect(self._show_preview_page)
         self._page_status = QLabel()
@@ -83,6 +100,7 @@ class CropResizePanel(BasePanel):
         self._pane.refresh()
 
     def _document_changed(self, *_):
+        self._cancel_crop_drag()
         self._cancel_preview_work()
         self._cancel_geometry_read()
         self._preview_index = 0
@@ -171,6 +189,15 @@ class CropResizePanel(BasePanel):
         # ── Randfelder ───────────────────────────────────────────────
         crop_grp = QGroupBox(tr("Raender  [+ schneiden / - erweitern]"))
         cg = QVBoxLayout(crop_grp); cg.setSpacing(4); cg.setContentsMargins(6,8,6,6)
+        self.draw_crop = QPushButton(tr("Beschnittrechteck zeichnen"))
+        self.draw_crop.setCheckable(True)
+        self.draw_crop.setObjectName("secondaryBtn")
+        self.draw_crop.toggled.connect(self._toggle_draw_crop)
+        cg.addWidget(self.draw_crop)
+        draw_hint = QLabel(tr("Rechteck in der Vorschau ziehen. Esc bricht ab. Danach lassen sich die Raender genau einstellen."))
+        draw_hint.setObjectName("dimLabel")
+        draw_hint.setWordWrap(True)
+        cg.addWidget(draw_hint)
         _rows = [(tr("Oben"), self.ct), (tr("Unten"), self.cb2),
                  (tr("Links"), self.cl2), (tr("Rechts"), self.cr)]
         # Width from the widest label, not a fixed 38px: that fit the German
@@ -239,6 +266,109 @@ class CropResizePanel(BasePanel):
         self._sel_info.setWordWrap(True)
         layout.addWidget(self._sel_info)
 
+    def _cancel_crop_drag(self):
+        self._crop_drag = None
+        if hasattr(self, '_crop_band'):
+            self._crop_band.hide()
+
+    def _toggle_draw_crop(self, checked):
+        self._cancel_crop_drag()
+        self._preview.setCursor(Qt.CursorShape.CrossCursor if checked
+                                else Qt.CursorShape.ArrowCursor)
+        if checked:
+            self._preview.setFocus()
+        self._pane.refresh()
+
+    def _set_crop_geometry(self, pixmap, pw, ph, source, page_idx):
+        rect = QRectF(0, 0, pixmap.width(), pixmap.height())
+        if self._crop_drag is not None:
+            screen_rect = rect.translated((self._preview.width() - pixmap.width()) // 2,
+                                          (self._preview.height() - pixmap.height()) // 2)
+            if self._crop_drag[1:] != (screen_rect, pw, ph, source, page_idx):
+                # Zooming or navigating mid-drag changes the coordinate map.
+                self._cancel_crop_drag()
+        self._crop_geometry = (rect, pw, ph, source, page_idx)
+
+    def _crop_point(self, position, rect):
+        return QPointF(max(rect.left(), min(rect.right(), position.x())),
+                       max(rect.top(), min(rect.bottom(), position.y())))
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, '_preview', None):
+            kind = event.type()
+            if kind == QEvent.Type.Resize:
+                self._cancel_crop_drag()
+            if self.draw_crop.isChecked():
+                if kind == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+                    self.draw_crop.setChecked(False)
+                    return True
+                if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                    geometry = self._crop_geometry
+                    if geometry is not None:
+                        rect, pw, ph, source, page = geometry
+                        pm = self._preview.pixmap()
+                        rect = rect.translated((self._preview.width() - pm.width()) // 2,
+                                               (self._preview.height() - pm.height()) // 2)
+                        if rect.contains(event.position()):
+                            start = self._crop_point(event.position(), rect)
+                            self._crop_drag = (start, rect, pw, ph, source, page)
+                            self._preview.setFocus()
+                            self._crop_band.setGeometry(QRectF(start, start).toAlignedRect())
+                            self._crop_band.show()
+                    return True
+                if kind == QEvent.Type.MouseMove and self._crop_drag is not None:
+                    start, rect, *_ = self._crop_drag
+                    end = self._crop_point(event.position(), rect)
+                    self._crop_band.setGeometry(QRectF(start, end).normalized().toAlignedRect())
+                    return True
+                if kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                    drag = self._crop_drag
+                    self._cancel_crop_drag()
+                    if drag is not None and self._crop_geometry is not None:
+                        start, rect, pw, ph, source, page = drag
+                        # A page turn, reorder or rotation during the drag must
+                        # never apply the old page's rectangle to the new one.
+                        if (source, page) == self._crop_geometry[3:]:
+                            end = self._crop_point(event.position(), rect)
+                            chosen = QRectF(start, end).normalized()
+                            if (chosen.width() >= 4 and chosen.height() >= 4
+                                    and chosen.width() * pw / rect.width() >= 1
+                                    and chosen.height() * ph / rect.height() >= 1):
+                                self._apply_drawn_crop(chosen, rect, pw, ph)
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _apply_drawn_crop(self, chosen, rect, pw, ph):
+        # Coordinates are on the visible, rotated source page, exactly like
+        # manual margins. Reuse the export transform so CropBox offsets and
+        # unsaved page-manager rotations follow the same path as typed crops.
+        margins = ((chosen.top() - rect.top()) * ph / rect.height(),
+                   (rect.bottom() - chosen.bottom()) * ph / rect.height(),
+                   (chosen.left() - rect.left()) * pw / rect.width(),
+                   (rect.right() - chosen.right()) * pw / rect.width())
+        self._manual_margin_edited()
+        self.fmt.reset()
+        self._fmt_margins = None
+        controls = [self.ct, self.cb2, self.cl2, self.cr, self.sync_cb,
+                    self.scale_check, self.fmt_action]
+        blocked = [control.blockSignals(True) for control in controls]
+        try:
+            self.sync_cb.setChecked(False)
+            self.scale_check.setChecked(False)
+            self.fmt_action.setCurrentIndex(0)
+            # Large-format pages can exceed the ordinary manual-field limits.
+            # A drawn crop must retain its measured margins rather than clamp.
+            for field, points in zip(controls[:4], margins):
+                mm = max(0.0, points / MM_TO_PT)
+                field.setMaximum(max(field.maximum(), mm))
+                field.setValue(mm)
+        finally:
+            for control, was_blocked in zip(controls, blocked):
+                control.blockSignals(was_blocked)
+        self.scale_pct.setEnabled(True)
+        self._pct_hint.setEnabled(True)
+        self.draw_crop.setChecked(False)
+
     def _apply_theme(self):
         t = _TV
         self.apply_split_view_theme()
@@ -266,6 +396,7 @@ class CropResizePanel(BasePanel):
         self._preview_meta_error = None
 
     def hideEvent(self, event):
+        self._cancel_crop_drag()
         self._cancel_preview_work()
         super().hideEvent(event)
 
@@ -621,10 +752,12 @@ class CropResizePanel(BasePanel):
         self._preview_task_key = None
         self._pane.refresh()
 
-    def _pending_preview(self, avail_w, avail_h, zoom, source_index, size=None):
+    def _pending_preview(self, avail_w, avail_h, zoom, source_index, size=None,
+                         source=None, page_idx=None):
         if size is not None and size[0] > 0 and size[1] > 0:
             pw, ph = size
-            t, b, l, r = self._effective_margins_pt(pw, ph)
+            t, b, l, r = ((0, 0, 0, 0) if self.draw_crop.isChecked()
+                          else self._effective_margins_pt(pw, ph))
             pw, ph = max(1.0, pw - l - r), max(1.0, ph - t - b)
             fit = self._pane.page_scale(min(avail_w / pw, avail_h / ph), zoom)
             width, height = max(1, int(pw * fit)), max(1, int(ph * fit))
@@ -635,9 +768,14 @@ class CropResizePanel(BasePanel):
         painter = QPainter(pm)
         paint_page_number(painter, pm.rect(), source_index)
         painter.end()
+        if self.draw_crop.isChecked() and source is not None and size is not None:
+            # Cropping needs page-tree geometry, not decoded page content.
+            self._set_crop_geometry(pm, *size, source, page_idx)
         return pm, tr('rendert …')
 
     def _render_preview(self, avail_w, avail_h, zoom, async_load=False):
+        self._crop_geometry = None
+        drawing = self.draw_crop.isChecked()
         # The model resolves each displayed page to its source and rotation.
         # A preview needs no flattened PDF; require_pdf() still makes one for
         # the actual operation, where display order has to be written to disk.
@@ -666,7 +804,7 @@ class CropResizePanel(BasePanel):
         elif n_pages > 1:             self._sel_info.setText(f"{n_pages} {tr('Seiten')}")
         else:                         self._sel_info.setText(f"{tr('Seite')} {page_idx+1}")
 
-        if self._marks_only() and self._target_size_pt() is None:
+        if not drawing and self._marks_only() and self._target_size_pt() is None:
             # "Nur Schnittmarken setzen" needs a size to centre the marks on —
             # picking the mode is not enough on its own. Silently falling
             # through to "— Kein —" (no format, zero margins) used to run the
@@ -690,15 +828,17 @@ class CropResizePanel(BasePanel):
                     else (raw_w, raw_h))
         pw, ph = size
 
-        t_pt, b_pt, l_pt, r_pt = self._effective_margins_pt(pw, ph)
+        t_pt, b_pt, l_pt, r_pt = ((0.0, 0.0, 0.0, 0.0) if drawing
+                                    else self._effective_margins_pt(pw, ph))
 
         new_w = pw - l_pt - r_pt
         new_h = ph - t_pt - b_pt
         if new_w < 1. or new_h < 1.:
             # Same refusal the run makes — better than drawing a 1pt sliver.
             return None, tr("Ränder zu groß — von der Seite bleibt nichts übrig.")
-        self._sync_pct_display(new_w, new_h, pw, ph)
-        do_scale = self._scales_content()
+        if not drawing:
+            self._sync_pct_display(new_w, new_h, pw, ph)
+        do_scale = not drawing and self._scales_content()
 
         # Fit everything that gets drawn, not only the page that comes out.
         # Alongside the new page this draws a ghost of the one it came from,
@@ -739,7 +879,8 @@ class CropResizePanel(BasePanel):
             self._preview_task = None
             self._preview_task_key = None
         if image is None:
-            return self._pending_preview(avail_w, avail_h, zoom, source[1], size)
+            return self._pending_preview(avail_w, avail_h, zoom, source[1], size,
+                                         source, page_idx)
         pm = QPixmap.fromImage(image)
         if pm.width() != target_w or pm.height() != target_h:
             pm = pm.scaled(target_w, target_h,
@@ -818,7 +959,7 @@ class CropResizePanel(BasePanel):
 
         # Cut-marks-only mode: leave the page as-is and draw crop marks at the
         # chosen size, centred on the page (same marks as the N-Up tool).
-        marks_size = self._target_size_pt() if self._marks_only() else None
+        marks_size = self._target_size_pt() if self._marks_only() and not drawing else None
         if marks_size:
             tw, th = marks_size
             mx0 = (pw - tw) / 2; my0 = (ph - th) / 2
@@ -829,6 +970,8 @@ class CropResizePanel(BasePanel):
                                  int(rx + c * cs), int(ry + (ph - d) * cs))
 
         painter.end()
+        if drawing:
+            self._set_crop_geometry(result, pw, ph, source, page_idx)
 
         parts = [f"{pw/MM_TO_PT:.0f}x{ph/MM_TO_PT:.0f}mm"]
         if marks_size:
