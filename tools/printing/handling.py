@@ -5,10 +5,11 @@ turns that prepared file into sheet-sized pages so spool.py can send them
 as a normal Size job at 100 % — CUPS must not fit or shrink a tile that is
 already the sheet.
 
-No Qt. The spooler prints this file. The dialog preview still composites
-a simplified tile from the page pixmap — rasterising the tiled PDF
+No Qt. The spooler prints this file. The dialog composites source rasters
+using the same sheet geometry and ordering — rasterising the imposed PDF
 inside the printing-module test process trips a heap fault.
 """
+from dataclasses import dataclass
 import math
 import os
 
@@ -191,7 +192,121 @@ def nup_order(n, cols, rows, order):
     cells = cells[:n]
     if order in ("hr", "vr"):
         cells = list(reversed(cells))
-    return cells
+    # `cells` is traversal order, whereas consumers need visual slot -> page.
+    # Those are different permutations for a non-square vertical grid (6-up).
+    return [cells.index(i) for i in range(n)]
+
+
+def sheet_size(paper_pts, orient_idx, sizes, mode):
+    """Sheet geometry shared by preview and imposition, in displayed points."""
+    first = sizes[0]
+    if not paper_pts:
+        if mode == "booklet":
+            w, h = max(sizes, key=lambda wh: wh[0] * wh[1])
+            return w * 2, h
+        return first
+    w, h = paper_pts
+    landscape = (mode == "booklet" or orient_idx == 2 or
+                 (orient_idx == 0 and first[0] > first[1]))
+    return (max(w, h), min(w, h)) if landscape else (min(w, h), max(w, h))
+
+
+def rotation_to_fit(size, slot):
+    """Turn only when it increases the fitted page; square pages stay put."""
+    w, h = size
+    sw, sh = slot
+    return min(sw / h, sh / w) > min(sw / w, sh / h) + 1e-9
+
+
+@dataclass(frozen=True)
+class PreviewSlot:
+    page: int
+    rect: tuple             # x, y, width, height from the sheet's top left
+    rotate: bool = False
+    border: tuple = None    # the enclosing n-up cell, if requested
+
+
+@dataclass(frozen=True)
+class PreviewSheet:
+    size: tuple
+    slots: tuple
+    tile: str = ""
+
+
+def preview_sheets(sizes, paper_pts, orient_idx, mode, opts):
+    """Compose source rasters with the same geometry/order as vector output.
+
+    No imposed PDF is rasterised: only the source pages on the visible sheet
+    are needed. Page indexes refer to the already ordered print selection.
+    """
+    if not sizes:
+        return []
+    sw, sh = sheet_size(paper_pts, orient_idx, sizes, mode)
+    sheets = []
+    if mode == "poster":
+        for i, (w, h) in enumerate(sizes):
+            pw, ph = (sw, sh) if paper_pts else (w, h)
+            cols, rows, scale = poster_grid(w, h, pw, ph, opts.get("tile_pct", 200))
+            overlap = max(0, opts.get("overlap_mm", 0)) * MM_TO_PT
+            dx, dy = max(pw - overlap, pw * .1), max(ph - overlap, ph * .1)
+            for r in range(rows):
+                for c in range(cols):
+                    slot = PreviewSlot(i, (-c * dx, -r * dy, w * scale, h * scale))
+                    sheets.append(PreviewSheet((pw, ph), (slot,), _tile_id(r, c)))
+        return sheets
+    if mode == "nup":
+        cols, rows = nup_grid(opts.get("count", 4))
+        count = cols * rows
+        params = _nup_params(sw, sh, cols, rows)
+        margin, gap, cw, ch = params[2], params[6], params[8], params[9]
+        page_list = _nup_page_list(len(sizes), count, opts.get("order", "h"))
+        faces = [page_list[i:i + count] for i in range(0, len(page_list), count)]
+        cells = [(margin + c * (cw + gap), margin + r * (ch + gap), cw, ch)
+                 for r in range(rows) for c in range(cols)]
+        rotate = opts.get("nup_rotate", True)
+    else:
+        faces = booklet_faces(len(sizes), opts.get("bind", "left"),
+                              opts.get("side", "both"), opts.get("sheet_from", 1),
+                              opts.get("sheet_to", 0))
+        cells = [(0, 0, sw / 2, sh), (sw / 2, 0, sw / 2, sh)]
+        rotate = opts.get("booklet_rotate", True)
+    for face in faces:
+        slots = []
+        for i, cell in zip(face, cells):
+            if i is None:
+                continue
+            x, y, cw, ch = cell
+            w, h = sizes[i]
+            turn = bool(rotate and rotation_to_fit((w, h), (cw, ch)))
+            if turn:
+                w, h = h, w
+            scale = min(cw / w, ch / h)
+            rect = (x + (cw - w * scale) / 2, y + (ch - h * scale) / 2,
+                    w * scale, h * scale)
+            slots.append(PreviewSlot(i, rect, turn,
+                                    cell if mode == "nup" and opts.get("border") else None))
+        sheets.append(PreviewSheet((sw, sh), tuple(slots)))
+    return sheets
+
+
+def _rotated_for_slots(src, slot, work):
+    """Keep rotation separate from fitting; both booklet and n-up always fit."""
+    import tempfile
+    from pikepdf import Pdf
+    from tools.pagebox import displayed_size
+    with Pdf.open(src) as doc:
+        changed = False
+        for page in doc.pages:
+            if rotation_to_fit(displayed_size(page), slot):
+                page.rotate(90, relative=True)
+                changed = True
+        if not changed:
+            return src
+        fd, rotated = tempfile.mkstemp(suffix="_print_rot.pdf")
+        os.close(fd)
+        work.append(rotated)
+        doc.save(rotated)
+        return rotated
 
 
 def _nup_page_list(n_src, count, order):
@@ -279,20 +394,7 @@ def build_nup_pdf(src, pages, paper_pts, count, order, border, auto_rotate,
 
     rotated = subset
     if auto_rotate and slot_w > 1 and slot_h > 1:
-        slot_ls = slot_w > slot_h
-        doc = Pdf.open(subset)
-        changed = False
-        for page in doc.pages:
-            vw, vh = _visible_size(page)
-            if (vw > vh) != slot_ls:
-                page.rotate(90, relative=True)
-                changed = True
-        if changed:
-            fd, rotated = tempfile.mkstemp(suffix="_nup_rot.pdf")
-            os.close(fd)
-            work.append(rotated)
-            doc.save(rotated)
-        doc.close()
+        rotated = _rotated_for_slots(subset, (slot_w, slot_h), work)
 
     src_pages = _nup_page_list(n_src, count, order)
     try:
@@ -340,8 +442,8 @@ def build_booklet_pdf(src, pages, paper_pts, bind, side, sheet_from, sheet_to,
     The order and the Form-XObject placement are the Broschüre tool's:
     `_booklet_sides` and `_build_impose`. This only sizes the sheet from
     the dialog's paper (landscape of that size, two pages per face),
-    applies bind / front-back / sheet range, and maps Automatisch drehen
-    onto the tool's "normalisieren" (fit into the half-sheet).
+    applies bind / front-back / sheet range. Fitting is always required for
+    booklet output; Automatisch drehen only controls an extra quarter turn.
     """
     import tempfile
     from pikepdf import Pdf
@@ -385,9 +487,10 @@ def build_booklet_pdf(src, pages, paper_pts, bind, side, sheet_from, sheet_to,
     half_w = sheet_w / 2.0
     halves = [(0.0, 0.0, half_w, sheet_h), (half_w, 0.0, sheet_w, sheet_h)]
     sheets = [list(zip(face, halves)) for face in faces]
-    fit = bool(auto_rotate)
     try:
-        _build_impose(subset, dest, sheets, sheet_w, sheet_h, fit,
+        if auto_rotate:
+            subset = _rotated_for_slots(subset, (half_w, sheet_h), work)
+        _build_impose(subset, dest, sheets, sheet_w, sheet_h, True,
                       lambda _msg: None,
                       lambda placed, nsheets: "")
     finally:

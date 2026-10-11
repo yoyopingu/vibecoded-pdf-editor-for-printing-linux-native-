@@ -194,6 +194,15 @@ The live dialog has moved on purpose. Do not revert these to match the HTML:
   n-up / booklet PDF inside the preview worker. That double render, in the
   same process as the printing tests, trips the heap fault. The spooler
   prints the real PDF from `handling.py`.
+- `handling.preview_sheets` shares output geometry and page order with the
+  preview. Render each visible source separately, preserving aspect ratio;
+  never repeat the first page in every slot. Print-preview rasters are kept
+  only for the visible sheet (at most 16 sources). Booklet navigation walks
+  front and back faces, including padding and the selected sheet range.
+- Apply Comments & Forms before imposition, then pass `DOCUMENT` downstream.
+  Applying "form fields only" again to an imposed sheet erases its content.
+- Booklet always fits pages into their half-sheet. Its automatic-rotation
+  checkbox controls a quarter turn, not whether fitting is enabled.
 - Booklet reuses `tools/panels/impose.py` (`_booklet_sides`, `_build_impose`).
   Do not reimplement saddle-stitch. Do not silently tick duplex.
 - N-up reuses `_build_nup`. `border` defaults to false so the sidebar tool

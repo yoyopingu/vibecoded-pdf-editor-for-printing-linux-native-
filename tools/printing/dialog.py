@@ -1006,6 +1006,7 @@ class PrintDialog(QDialog):
         self._scale_group.idToggled.connect(lambda *_: self._sync_preview())
         self.scale_pct.valueChanged.connect(self._sync_preview)
         self.paper_combo.currentIndexChanged.connect(self._sync_preview)
+        self.by_page_size_check.toggled.connect(self._sync_preview)
         self.comments_combo.currentIndexChanged.connect(self._sync_preview)
 
         # Preview follows the page selection (all / current page / range)
@@ -1107,7 +1108,23 @@ class PrintDialog(QDialog):
     def _sync_preview_pages(self):
         pages = self._preview_pages()
         if pages:   # None/empty → leave the current preview in place
+            # Booklet sheet ranges refer to the selected signature, not to
+            # the source file's page count. Keep an "all sheets" endpoint
+            # following the new selection, and clamp explicit endpoints.
+            total = max(1, (len(pages) + 3) // 4)
+            end = self.booklet_to.value()
+            all_sheets = end == self.booklet_to.maximum()
+            for spin in (self.booklet_from, self.booklet_to):
+                spin.blockSignals(True)
+                spin.setMaximum(total)
+            if all_sheets:
+                self.booklet_to.setValue(total)
+            if self.booklet_from.value() > self.booklet_to.value():
+                self.booklet_to.setValue(self.booklet_from.value())
+            for spin in (self.booklet_from, self.booklet_to):
+                spin.blockSignals(False)
             self._preview.set_pages(pages)
+            self._sync_preview()
 
     def _load_printers(self):
         """Populate the printer combo.
@@ -1802,10 +1819,18 @@ class PrintDialog(QDialog):
         """Push current dialog settings into the preview widget."""
         if _is_gone(self) or _is_gone(self._preview):
             return
+        if self.booklet_from.value() > self.booklet_to.value():
+            target = (self.booklet_from if self.sender() is self.booklet_to
+                      else self.booklet_to)
+            target.blockSignals(True)
+            target.setValue(self.booklet_to.value() if target is self.booklet_from
+                            else self.booklet_from.value())
+            target.blockSignals(False)
         self._preview.update_settings(
             scale_idx  = self._scale_index(),
             scale_pct  = self.scale_pct.value(),
-            paper_key  = self.selected_paper(),
+            paper_key  = (self._job_paper() if self.handling == "size"
+                          else self.selected_paper()),
             orient_idx = self.orient_idx,
             margin_mm  = self._hw_margin_mm,
             comments_forms = self.comments_forms_mode(),
@@ -2031,6 +2056,7 @@ class PrintDialog(QDialog):
             print_pct = scale_pct
             print_paper = paper_key
             print_orient = orient_idx
+            print_comments = comments_forms
             work = []
 
             try:
@@ -2042,7 +2068,8 @@ class PrintDialog(QDialog):
                     from pypdf import PdfReader
                     from tools.printing.content import prepare_print_pdf
                     from tools.printing.handling import (
-                        build_booklet_pdf, build_nup_pdf, build_poster_pdf)
+                        build_booklet_pdf, build_nup_pdf, build_poster_pdf, sheet_size)
+                    from tools.pagebox import displayed_size
                     from tools.printing.spool import (
                         paper_size_pt, write_subset_pdf)
                     from tools.viewer.model import PageModel
@@ -2061,26 +2088,10 @@ class PrintDialog(QDialog):
                             "print: could not prepare form fields / comments")
                         tile_src = sub
                     pts = paper_size_pt(poster_paper_key)
-                    if handling == "booklet":
-                        # Two pages side by side: the sheet is landscape of
-                        # the chosen paper. Do not silently tick Beidseitig
-                        # — the operator may be printing Nur Vorderseite.
-                        if pts and pts[0] < pts[1]:
-                            pts = (pts[1], pts[0])
-                    elif pts:
-                        pw, ph = pts
-                        if orient_idx == 2 and pw < ph:
-                            pw, ph = ph, pw
-                        elif orient_idx == 1 and pw > ph:
-                            pw, ph = ph, pw
-                        elif orient_idx == 0:
-                            try:
-                                box = PdfReader(tile_src, strict=False).pages[0].mediabox
-                                if float(box.width) > float(box.height) and pw < ph:
-                                    pw, ph = ph, pw
-                            except Exception:
-                                pass
-                        pts = (pw, ph)
+                    if pts:
+                        with PdfReader(tile_src, strict=False) as reader:
+                            sizes = [displayed_size(page) for page in reader.pages]
+                        pts = sheet_size(pts, orient_idx, sizes, handling)
                     if handling == "poster":
                         n_out = build_poster_pdf(
                             tile_src, None, pts,
@@ -2117,6 +2128,12 @@ class PrintDialog(QDialog):
                     print_scale = 1          # Size fit/shrink must not run again
                     print_pct = 100
                     print_paper = poster_paper_key or paper_key
+                    # The imposed pages already contain the selected print
+                    # content. Applying "fields only" again erases it all.
+                    print_comments = DOCUMENT
+                    with PdfReader(imposed, strict=False) as reader:
+                        w, h = displayed_size(reader.pages[0])
+                    print_orient = 2 if w > h else 1
 
                 # ── Print to PDF (Acrobat's Adobe PDF) ───────────────────────────
                 # The file is the job. No lp, no queue scaling afterwards, so
@@ -2132,7 +2149,7 @@ class PrintDialog(QDialog):
                                 color_mode, print_scale, print_orient,
                                 print_paper, qt_dpi, hw_margin_mm, _report,
                                 scale_pct=print_pct,
-                                comments_forms=comments_forms)
+                                comments_forms=print_comments)
                             write_raster_pdf(rendered, save_pdf, qt_dpi)
                         else:
                             _report(tr("PDF wird geschrieben…"))
@@ -2141,7 +2158,7 @@ class PrintDialog(QDialog):
                                 color_mode=color_mode, scale_idx=print_scale,
                                 scale_pct=print_pct, paper_key=print_paper,
                                 orient_idx=print_orient,
-                                comments_forms=comments_forms, report=_report)
+                                comments_forms=print_comments, report=_report)
                         obj = self_ref()
                         if obj is not None:
                             obj._print_finished.emit(print_pages, copies, skipped)
@@ -2165,7 +2182,7 @@ class PrintDialog(QDialog):
                             duplex_edge, printer_name, print_scale,
                             print_paper, print_orient, _report,
                             paper_source=paper_source, scale_pct=print_pct,
-                            comments_forms=comments_forms)
+                            comments_forms=print_comments)
                         obj = self_ref()
                         if obj is not None:
                             obj._print_finished.emit(print_pages, copies, skipped)
@@ -2181,7 +2198,7 @@ class PrintDialog(QDialog):
                         print_pages, color_mode, print_scale, print_orient,
                         print_paper, qt_dpi, hw_margin_mm, _report,
                         scale_pct=print_pct,
-                        comments_forms=comments_forms)
+                        comments_forms=print_comments)
                 except Exception as e:
                     errors.append(f"Qt render: {e}")
                     msg = tr("Druckfehler:") + "\n" + "\n".join(errors)

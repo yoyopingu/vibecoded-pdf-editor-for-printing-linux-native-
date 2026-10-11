@@ -11,7 +11,7 @@ import os
 import tempfile
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer
-from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont
+from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QTransform
 from tools.i18n import tr
 from tools.render.document_cache import PDFIUM_LOCK as _pdfium_lock
 from tools.theme import _TV
@@ -19,6 +19,8 @@ from tools.render.document_cache import open_document as _open_pdf
 from tools.ghostscript import unlink
 from tools.printing.content import DOCUMENT, prepare_print_page
 from tools.render.placeholder import paint_page_number, source_page_index
+from tools.printing.handling import preview_sheets
+from tools.pagebox import displayed_size
 
 
 class _PrintPreview(QWidget):
@@ -28,20 +30,25 @@ class _PrintPreview(QWidget):
     # auto-queued across threads; the previous QTimer.singleShot(0, …) was
     # created ON the render thread, which has no event loop, so it never fired
     # and the preview stayed blank forever.
-    _render_ready = pyqtSignal(int, object, float, float)
+    _geometry_ready = pyqtSignal(int, object)
+    _sheet_render_ready = pyqtSignal(int, int, object)
 
     def __init__(self, pdf_path, model, parent=None):
         super().__init__(parent)
-        self._render_ready.connect(self._on_render_done)
+        self._geometry_ready.connect(self._on_geometry_done)
+        self._sheet_render_ready.connect(self._on_sheet_render_done)
+        self._sizes = {}
+        self._images = {}
+        self._layout_cache = None
         self._pdf_path  = pdf_path
         self._model     = model
         # Subset of page positions (into model.order) the preview walks through.
         # Mirrors the dialog's page selection (all / current / range).
         self._pages     = list(range(len(model.order)))
-        self._current   = 0        # index into self._pages
+        self._current   = 0        # source page in Size; output sheet in other modes
         self._render_token = 0     # bumped each render; stale deliveries dropped
         self._render_job = None
-        self._pixmap    = None      # rendered page image
+        self._pixmap    = None      # Size-mode source; imposed modes use _images
         self._placeholder_index = None
         self._page_w_pt = 595.0     # PDF page dimensions in points
         self._page_h_pt = 842.0
@@ -149,7 +156,10 @@ class _PrintPreview(QWidget):
         self._comments_forms = comments_forms or DOCUMENT
         self._handling = handling
         self._handling_opts = opts
+        if changed or mode_changed:
+            self._layout_cache = None
         if content_changed:
+            self._images.clear()
             # Comments & Forms changes what is *on* the page, so the bitmap
             # has to be made again. Paper and scale only change how that
             # bitmap is placed on the sheet.
@@ -158,12 +168,12 @@ class _PrintPreview(QWidget):
             n = self._nav_count()
             if self._current >= n:
                 self._current = max(0, n - 1)
-            self._update_nav_label()
-            self._redraw()
+            self._render_page()
 
     def set_margin_mm(self, mm):
         self.update_settings(self._scale_idx, self._paper_key,
-                             self._orient_idx, mm)
+                             self._orient_idx, mm, self._scale_pct,
+                             self._comments_forms, self._handling, self._handling_opts)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -175,51 +185,38 @@ class _PrintPreview(QWidget):
         if positions == self._pages:
             return
         self._pages   = positions
+        self._layout_cache = None
         self._current = 0
         self._render_page()
 
     def _prev_page(self):
         if self._current > 0:
             self._current -= 1
-            if self._handling == "size":
-                self._render_page()
-            else:
-                self._update_nav_label()
-                self._redraw()
+            self._render_page()
 
     def _next_page(self):
         if self._current < self._nav_count() - 1:
             self._current += 1
-            if self._handling == "size":
-                self._render_page()
-            else:
-                self._update_nav_label()
-                self._redraw()
+            self._render_page()
+
+    def _sheets(self):
+        from tools.printing.spool import paper_size_pt
+        # Receiving a source bitmap must not rebuild every tile in a large
+        # poster job. Only geometry, selection and layout settings change it.
+        if self._layout_cache is None:
+            sizes = [self._sizes.get(pos, (595.0, 842.0)) for pos in self._pages]
+            self._layout_cache = preview_sheets(sizes, paper_size_pt(self._paper_key),
+                                               self._orient_idx, self._handling,
+                                               self._handling_opts)
+        return self._layout_cache
 
     def _poster_tiles(self):
-        pct = self._handling_opts.get("tile_pct", 200)
-        if pct >= 180:
-            return 4
-        if pct >= 120:
-            return 2
-        return 1
+        return len(self._sheets())
 
     def _nav_count(self):
-        n = len(self._pages)
-        h = self._handling
-        if h == "poster":
-            return max(1, self._poster_tiles())
-        if h == "nup":
-            c = max(1, int(self._handling_opts.get("count") or 4))
-            return max(1, (n + c - 1) // c)
-        if h == "booklet":
-            sig = max(1, (n + 3) // 4)
-            frm = int(self._handling_opts.get("sheet_from") or 1)
-            to = int(self._handling_opts.get("sheet_to") or sig)
-            frm = max(1, min(frm, sig))
-            to = max(frm, min(to, sig))
-            return to - frm + 1
-        return n
+        if self._handling == "size":
+            return len(self._pages)
+        return len(self._sheets())
 
     def _update_nav_label(self):
         count = self._nav_count()
@@ -253,106 +250,126 @@ class _PrintPreview(QWidget):
         self._next_btn.setEnabled(self._current < count - 1)
 
     def _render_page(self):
-        # A page turn on a complex file must not leave every old preparation
-        # ahead of the page now selected. A running pdfium call finishes its
-        # current render, but queued and preparing jobs can stop early.
+        # Render only sources on the visible output sheet. Repeating one source
+        # in all slots was fast but misrepresented every multiple/booklet job.
         if self._render_job is not None:
             self._render_job.cancel()
         self._render_token += 1
         token = self._render_token
-        n     = len(self._pages)
-        total = len(self._model.order)
-        if n == 0:
-            self._update_nav_label()
+        self._current = min(self._current, max(0, self._nav_count() - 1))
+        self._update_nav_label()
+        if not self._pages:
             self._pixmap = None
             self._redraw()
             return
-        if self._handling == "size":
-            if self._current >= n:
-                self._current = n - 1
-            pos = self._pages[self._current]
-        else:
-            pos = self._pages[0]
-        self._update_nav_label()
-        self._pixmap    = None
-        self._page_w_pt = 595.0
-        self._page_h_pt = 842.0
-
-        if pos >= total:
-            self._placeholder_index = None
-            self._redraw()
-            return
-        uid      = self._model.order[pos]
-        src_path, orig = self._model.page_source(uid, self._pdf_path)
-        self._placeholder_index = orig
-        rot      = self._model.get_rotation(uid)
-        self._redraw()
-
+        sources = {}
+        for pos in self._pages:
+            uid = self._model.order[pos]
+            path, orig = self._model.page_source(uid, self._pdf_path)
+            sources[pos] = (path, orig, self._model.get_rotation(uid))
         import weakref
+        from tools.jobs import submit
         self_ref = weakref.ref(self)
 
+        if any(pos not in self._sizes for pos in self._pages):
+            # Geometry does not require rasterisation. Read each file once on
+            # the worker so tile counts and blank booklet faces are ready first.
+            def geometry(job):
+                from pypdf import PdfReader
+                sizes = {}
+                readers = {}
+                try:
+                    for pos, (path, orig, rot) in sources.items():
+                        if job.cancelled:
+                            return
+                        if path not in readers:
+                            readers[path] = PdfReader(path, strict=False)
+                        sizes[pos] = displayed_size(readers[path].pages[orig], rot)
+                    obj = self_ref()
+                    if obj is not None and not job.cancelled:
+                        obj._geometry_ready.emit(token, sizes)
+                except Exception:
+                    logging.exception("print preview: geometry failed")
+                finally:
+                    for reader in readers.values():
+                        reader.close()
+            self._render_job = submit(geometry, owner=self, name="print-preview-geometry")
+            self._pixmap = None
+            self._redraw()
+            return
+
+        if self._handling == "size":
+            visible = [self._pages[self._current]]
+            first = visible[0]
+        else:
+            sheets = self._sheets()
+            visible = list(dict.fromkeys(self._pages[slot.page]
+                           for slot in sheets[self._current].slots))
+            first = self._pages[0]
+        self._page_w_pt, self._page_h_pt = self._sizes[first]
+        self._placeholder_index = sources[first][1]
+        # These small print-specific images are bounded by the visible sheet
+        # (at most 16 sources), not an ever-growing document cache. Screen
+        # cache pixels cannot be reused because print annotation flags differ.
+        self._images = {pos: pm for pos, pm in self._images.items() if pos in visible}
+        self._pixmap = self._images.get(first)
+        self._redraw()
+        missing = [pos for pos in visible if pos not in self._images]
         comments_forms = self._comments_forms
 
-        def _bg(job):
-            prepared = None
-            try:
+        def render(job):
+            for pos in missing:
                 if job.cancelled:
                     return
-                fd, prepared = tempfile.mkstemp(suffix="_preview.pdf")
-                os.close(fd)
+                src_path, orig, rot = sources[pos]
+                prepared = None
                 try:
+                    fd, prepared = tempfile.mkstemp(suffix="_preview.pdf")
+                    os.close(fd)
                     prepare_print_page(src_path, orig, prepared, comments_forms)
-                    render_path, render_index = prepared, 0
+                    if job.cancelled:
+                        return
+                    with _pdfium_lock:
+                        doc = _open_pdf(prepared)
+                        try:
+                            page = doc[0]
+                            try:
+                                scale = 240.0 / max(page.get_width(), page.get_height(), 1)
+                                bm = page.render(scale=scale, optimize_mode="print")
+                                pil = bm.to_pil().copy()
+                                bm.close()
+                            finally:
+                                page.close()
+                        finally:
+                            doc.close()
+                    if rot:
+                        pil = pil.rotate(-rot, expand=True)
+                    buf = io.BytesIO()
+                    pil.save(buf, "PNG")
+                    obj = self_ref()
+                    if obj is not None and not job.cancelled:
+                        obj._sheet_render_ready.emit(token, pos, buf.getvalue())
                 except Exception:
-                    logging.debug("print preview: could not prepare page; "
-                                  "rendering the original", exc_info=True)
-                    render_path, render_index = src_path, orig
-                if job.cancelled:
-                    return
-                with _pdfium_lock:
-                    doc = _open_pdf(render_path)
-                    try:
-                        page = doc[render_index]
-                        pw_pt = page.get_width()
-                        ph_pt = page.get_height()
-                        render_scale = 240.0 / max(pw_pt, ph_pt, 1)
-                        # optimize_mode="print" honours the Print flag, so
-                        # the preview matches the paper rather than the
-                        # screen — Acrobat's print preview does the same.
-                        bm  = page.render(scale=render_scale,
-                                          optimize_mode="print")
-                        pil = bm.to_pil()
-                    finally:
-                        doc.close()
-                if rot:
-                    pil = pil.rotate(-rot, expand=True)
-                    if rot % 180:
-                        pw_pt, ph_pt = ph_pt, pw_pt
-                buf = io.BytesIO()
-                pil.save(buf, "PNG")
-                data = buf.getvalue()
-                obj = self_ref()
-                if obj is not None and not job.cancelled:
-                    try:
-                        # Auto-queued to the GUI thread (widget lives there).
-                        obj._render_ready.emit(token, data, pw_pt, ph_pt)
-                    except RuntimeError:
-                        pass   # widget was deleted
-            except Exception:
-                logging.exception("print preview: background render failed")
-            finally:
-                unlink(prepared)
-        from tools.jobs import submit
-        self._render_job = submit(_bg, owner=self, name="print-preview-render")
+                    logging.exception("print preview: source render failed")
+                finally:
+                    unlink(prepared)
+        self._render_job = submit(render, owner=self, name="print-preview-render")
 
-    def _on_render_done(self, token, data, pw_pt, ph_pt):
+    def _on_geometry_done(self, token, sizes):
         if token != self._render_token:
-            return   # selection/page changed while rendering — discard stale result
+            return
+        self._sizes.update(sizes)
+        self._layout_cache = None
+        self._render_page()
+
+    def _on_sheet_render_done(self, token, pos, data):
+        if token != self._render_token:
+            return
         pm = QPixmap()
         pm.loadFromData(data)
-        self._pixmap    = pm
-        self._page_w_pt = pw_pt
-        self._page_h_pt = ph_pt
+        self._images[pos] = pm
+        if self._handling == "size" and pos == self._pages[self._current]:
+            self._pixmap = pm
         self._redraw()
 
     def _paper_dims_mm(self):
@@ -399,6 +416,9 @@ class _PrintPreview(QWidget):
         # sheet nobody picked, so none of it is drawn. The page is shown at its
         # own size, which is all that is actually known.
         sheet = self._paper_dims_mm()
+        if self._handling != "size" and self._pages:
+            layouts = self._sheets()
+            sheet = tuple(v * 25.4 / 72 for v in layouts[self._current].size)
         on_a_sheet = sheet is not None
         if on_a_sheet:
             paper_w_mm, paper_h_mm = sheet
@@ -585,149 +605,53 @@ class _PrintPreview(QWidget):
         self._info_lbl.setText(info)
 
     def _draw_handling(self, p, sheet):
-        h = self._handling
-        if h == "poster":
-            self._draw_poster(p, sheet)
-        elif h == "nup":
-            self._draw_nup(p, sheet)
-        elif h == "booklet":
-            self._draw_booklet(p, sheet)
-
-    def _draw_page_into(self, p, rect, empty=False, tag="", page_index=None):
-        """Composite the last rendered page (or a blank slot) into `rect`."""
-        r = rect.toRect()
-        if empty or self._pixmap is None or self._pixmap.isNull():
-            p.fillRect(r, QColor(243, 245, 248))
-            if not empty:
-                paint_page_number(p, r, self._placeholder_index
-                                  if page_index is None else page_index)
-        else:
-            scaled = self._pixmap.scaled(
-                max(1, r.width()), max(1, r.height()),
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            p.drawPixmap(r, scaled)
-        if tag:
-            p.setPen(QPen(QColor(26, 58, 104)))
-            font = QFont()
-            font.setPixelSize(max(8, min(14, r.height() // 8)))
-            font.setBold(True)
-            p.setFont(font)
-            p.drawText(r.adjusted(4, 2, -4, 0),
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                       tag)
-
-    def _draw_poster(self, p, sheet):
-        tiles = self._poster_tiles()
-        cols = 2 if tiles == 4 else tiles
-        rows = 2 if tiles == 4 else 1
-        idx = self._current
-        col = idx % cols
-        row = idx // cols
+        layouts = self._sheets()
+        if not layouts:
+            return
+        layout = layouts[self._current]
+        scale = sheet.width() / layout.size[0]
         p.save()
         p.setClipRect(sheet)
-        # Zoom the page so this tile is one cell of a cols×rows grid.
-        tw, th = sheet.width() * cols, sheet.height() * rows
-        dest = QRectF(sheet.x() - col * sheet.width(),
-                      sheet.y() - row * sheet.height(), tw, th)
-        if self._pixmap is None or self._pixmap.isNull():
-            # The whole page's centre lies in only one tile. While its pixels
-            # are pending, identify the source on every tile being inspected.
-            p.fillRect(sheet, QColor(243, 245, 248))
-            paint_page_number(p, sheet, self._placeholder_index)
-        else:
-            self._draw_page_into(p, dest, tag="")
-        p.restore()
-        if self._handling_opts.get("cut_marks"):
-            p.setPen(QPen(QColor(192, 57, 43), 1))
-            x0, y0 = sheet.x() + 6, sheet.y() + 6
-            x1, y1 = sheet.right() - 6, sheet.bottom() - 6
-            for x, y, dx, dy in (
-                    (x0, y0, 10, 10), (x1, y0, -10, 10),
-                    (x0, y1, 10, -10), (x1, y1, -10, -10)):
-                p.drawLine(int(x), int(y), int(x + dx), int(y))
-                p.drawLine(int(x), int(y), int(x), int(y + dy))
-        if self._handling_opts.get("labels"):
-            names = ("A1", "A2", "B1", "B2")
-            tag = names[idx] if idx < 4 else f"T{idx + 1}"
-            p.setPen(QPen(QColor(192, 57, 43)))
-            font = QFont()
-            font.setPixelSize(10)
-            font.setBold(True)
-            p.setFont(font)
-            p.drawText(int(sheet.x() + 8), int(sheet.y() + 18), tag)
-
-    def _nup_order(self, n, cols, rows, order):
-        cells = []
-        if order in ("v", "vr"):
-            for c in range(cols):
-                for r in range(rows):
-                    cells.append(r * cols + c)
-        else:
-            cells = list(range(n))
-        if order in ("hr", "vr"):
-            cells.reverse()
-        return cells
-
-    def _draw_nup(self, p, sheet):
-        n = int(self._handling_opts.get("count") or 4)
-        grid = {2: (2, 1), 4: (2, 2), 6: (3, 2), 9: (3, 3), 16: (4, 4)}
-        cols, rows = grid.get(n, (2, 2))
-        order = self._nup_order(n, cols, rows,
-                                self._handling_opts.get("order") or "h")
-        border = self._handling_opts.get("border", True)
-        gap = 3
-        pad = 6
-        slot_w = (sheet.width() - 2 * pad - (cols - 1) * gap) / cols
-        slot_h = (sheet.height() - 2 * pad - (rows - 1) * gap) / rows
-        start = self._current * n
-        src_n = len(self._pages)
-        for i in range(n):
-            r, c = divmod(i, cols)
-            # Slot i is visual row-major; the page comes from `order`.
-            x = sheet.x() + pad + c * (slot_w + gap)
-            y = sheet.y() + pad + r * (slot_h + gap)
-            slot = QRectF(x, y, slot_w, slot_h)
-            page_i = start + order[i]
-            empty = page_i >= src_n
-            tag = "" if empty else str(self._pages[page_i] + 1)
-            source = (source_page_index(self._model, self._pages[page_i],
-                                        self._pdf_path) if not empty else None)
-            self._draw_page_into(p, slot, empty=empty, tag=tag,
-                                 page_index=source)
-            if border and not empty:
+        for slot in layout.slots:
+            x, y, w, h = slot.rect
+            rect = QRectF(sheet.x() + x * scale, sheet.y() + y * scale,
+                          w * scale, h * scale)
+            pos = self._pages[slot.page]
+            image = self._images.get(pos)
+            if image is None:
+                p.fillRect(rect.intersected(sheet), QColor(243, 245, 248))
+                paint_page_number(p, rect.intersected(sheet),
+                                  source_page_index(self._model, pos, self._pdf_path))
+            else:
+                if slot.rotate:
+                    image = image.transformed(QTransform().rotate(90))
+                p.drawPixmap(rect, image, QRectF(image.rect()))
+            if slot.border:
+                x, y, w, h = slot.border
                 p.setPen(QPen(QColor(197, 206, 216), 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRect(slot.toRect())
-
-    def _draw_booklet(self, p, sheet):
-        n = len(self._pages)
-        frm = int(self._handling_opts.get("sheet_from") or 1)
-        sheet_i = self._current + frm  # 1-based signature index
-        left_sel = n - (sheet_i - 1)   # 1-based index into the selection
-        right_sel = sheet_i
-        if self._handling_opts.get("bind") == "right":
-            left_sel, right_sel = right_sel, left_sel
-        mid = sheet.center().x()
-        gap = 0
-        left_r = QRectF(sheet.x(), sheet.y(), mid - sheet.x() - gap,
-                        sheet.height())
-        right_r = QRectF(mid + gap, sheet.y(),
-                         sheet.right() - mid - gap, sheet.height())
-
-        def _slot(sel, rect):
-            if sel < 1 or sel > n:
-                self._draw_page_into(p, rect, empty=True)
-            else:
-                tag = str(self._pages[sel - 1] + 1)
-                source = source_page_index(self._model, self._pages[sel - 1],
-                                           self._pdf_path)
-                self._draw_page_into(p, rect, tag=tag, page_index=source)
-
-        _slot(left_sel, left_r)
-        _slot(right_sel, right_r)
-        p.setPen(QPen(QColor(138, 151, 168), 1, Qt.PenStyle.DashLine))
-        p.drawLine(int(mid), int(sheet.y()), int(mid), int(sheet.bottom()))
+                p.drawRect(QRectF(sheet.x() + x * scale, sheet.y() + y * scale,
+                                 w * scale, h * scale))
+        if self._handling == "poster":
+            if self._handling_opts.get("cut_marks"):
+                # Same 6 pt inset and 10 pt inward ticks as the output PDF.
+                p.setPen(QPen(QColor(0, 0, 0), max(.5, .5 * scale)))
+                for x, y, dx, dy in ((6, 6, 10, 10),
+                        (layout.size[0] - 6, 6, -10, 10),
+                        (6, layout.size[1] - 6, 10, -10),
+                        (layout.size[0] - 6, layout.size[1] - 6, -10, -10)):
+                    x, y = sheet.x() + x * scale, sheet.y() + y * scale
+                    p.drawLine(int(x), int(y), int(x + dx * scale), int(y))
+                    p.drawLine(int(x), int(y), int(x), int(y + dy * scale))
+            if self._handling_opts.get("labels"):
+                p.setPen(QColor(0, 0, 0))
+                font = QFont()
+                font.setPixelSize(max(1, round(7 * scale)))
+                p.setFont(font)
+                tag = os.path.basename(self._pdf_path) + "  " + layout.tile
+                p.drawText(int(sheet.x() + 8 * scale),
+                           int(sheet.y() + 14 * scale), tag)
+        p.restore()
 
     def _ink_outside(self, content_w_mm, content_h_mm, printable_w, printable_h):
         """Is there anything drawn in the part that will not print?
