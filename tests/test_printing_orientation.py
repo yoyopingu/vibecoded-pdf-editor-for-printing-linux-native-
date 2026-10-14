@@ -76,7 +76,7 @@ def test_normalization_does_not_choose_orientation_from_text():
     assert abs(w - 595) < 1 and abs(h - 842) < 1, (w, h)
 
 
-def test_auto_fixed_spool_keeps_mixed_page_orientation():
+def test_auto_fixed_spool_bakes_mixed_pages_into_physical_stock_axes():
     src = _mixed_pages()
     real_run = spool._run_capturing
     real_gs = spool.ghostscript_binary
@@ -89,7 +89,9 @@ def test_auto_fixed_spool_keeps_mixed_page_orientation():
             # cannot restore marks Ghostscript already clipped away.
             with PDFIUM_LOCK:
                 with pdfium.PdfDocument(cmd[-1]) as doc:
-                    for i, (w, h) in enumerate(((595, 842), (842, 595))):
+                    # Both source pages retain their physical size after the
+                    # landscape one is turned into the stock's portrait axes.
+                    for i, (w, h) in enumerate(((595, 842), (595, 842))):
                         page = doc[i]
                         try:
                             image = page.render(scale=1).to_pil().convert("L")
@@ -110,7 +112,7 @@ def test_auto_fixed_spool_keeps_mixed_page_orientation():
                 spool.print_via_gs(src, PageModel(2), [0, 1], 1, "auto", True,
                                    False, "long", "test-printer", spool.FIXED,
                                    "A4", 0, lambda *_: None, scale_pct=pct)
-                assert [w > h for w, h in seen[-1]] == [False, True], seen[-1]
+                assert [w > h for w, h in seen[-1]] == [False, False], seen[-1]
     finally:
         spool._run_capturing = real_run
         spool.ghostscript_binary = real_gs
@@ -167,3 +169,74 @@ def test_bitmap_pdf_preserves_sheet_size_centering_and_automatic_orientation():
                         left, top, right, bottom = bounds
                         assert abs(left - (image.width - right)) <= 3
                         assert abs(top - (image.height - bottom)) <= 3
+
+
+def test_automatic_physical_rotation_is_in_the_pdf_before_any_printer_filter():
+    from unittest.mock import patch
+    from PIL import Image
+    from tools.printing.handling import rotation_to_fit
+    from tools.pagebox import displayed_size
+    src = os.path.join(_TMP, 'automatic_physical_colours.pdf')
+    c = canvas.Canvas(src)
+    for w, h in ((360, 240), (240, 360), (400, 300)):
+        c.setPageSize((w, h))
+        c.setFillColorRGB(1, 0, 0); c.rect(0, 0, w, h, fill=1, stroke=0)
+        c.setFillColorRGB(0, 0, 1); c.rect(w/2, 0, w/2, h/2, fill=1, stroke=0)
+        c.setFillColorRGB(0, 1, 0); c.rect(0, h/2, w/2, h/2, fill=1, stroke=0)
+        c.showPage()
+    c.save()
+    w = PdfWriter(clone_from=src)
+    w.pages[2].cropbox.lower_left = (40, 60)
+    w.pages[2].cropbox.upper_right = (340, 260)
+    w.pages[2].rotate(90)
+    w.write(src)
+    model = PageModel(3)
+    model.order = [2, 0, 1]
+    model.rotations[0] = 180
+
+    def image(path, index, rotation=0):
+        with PDFIUM_LOCK:
+            with pdfium.PdfDocument(path) as doc:
+                page = doc[index]
+                try:
+                    bm = page.render(scale=1, rotation=rotation)
+                    im = bm.to_pil().convert('RGB')
+                    bm.close()
+                    return im
+                finally:
+                    page.close()
+
+    original_run = spool._run_capturing
+    for paper in ('A4', ''):
+        for scaling in (spool.FIT, spool.SHRINK):
+            def capture(command, timeout):
+                if command[0] != 'lp':
+                    return original_run(command, timeout)
+                options = [command[i+1] for i, arg in enumerate(command[:-1]) if arg == '-o']
+                if paper:
+                    assert 'orientation-requested=3' in options
+                    assert 'pdfAutoRotate=false' in options and 'landscape=false' in options
+                else:
+                    assert not any(o.startswith(('media=', 'orientation-requested=', 'pdfAutoRotate='))
+                                   for o in options), options
+                assert ('print-scaling=fit' if scaling == spool.FIT else 'print-scaling=auto-fit') in options
+                reader = PdfReader(command[-1])
+                assert len(reader.pages) == 3
+                for index, uid in enumerate(model.order):
+                    expected = image(src, model.orig(uid), model.get_rotation(uid))
+                    if paper and rotation_to_fit(expected.size, (595.28, 841.89)):
+                        expected = expected.transpose(Image.Transpose.ROTATE_270)
+                    actual = image(command[-1], index)
+                    assert reader.pages[index].rotation == 0
+                    assert all(abs(a-b) <= 1 for a, b in zip(actual.size, expected.size))
+                    assert all(abs(a-b) <= 1 for a, b in zip(displayed_size(reader.pages[index]), expected.size))
+                    for x, y in ((.2, .2), (.8, .2), (.2, .8), (.8, .8)):
+                        wanted = expected.getpixel((int(expected.width*x), int(expected.height*y)))
+                        got = actual.getpixel((int(actual.width*x), int(actual.height*y)))
+                        assert all(abs(a-b) <= 5 for a, b in zip(got, wanted)), (index, got, wanted)
+                return type('Result', (), {'returncode': 0})()
+            for gs in (spool.ghostscript_binary, lambda: None):
+                with patch.object(spool, '_run_capturing', side_effect=capture), \
+                     patch.object(spool, 'ghostscript_binary', gs):
+                    spool.print_via_gs(src, model, [0, 1, 2], 1, 'auto', True,
+                                       False, 'long', 'test', scaling, paper, 0, lambda *_: None)

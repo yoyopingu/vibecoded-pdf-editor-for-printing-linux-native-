@@ -299,6 +299,18 @@ the GPL v3, so a distributable combined work has to be GPL-compatible. If you
 would rather allow later versions of the GPL, change the `license` field in
 `pyproject.toml` to `GPL-3.0-or-later`; the licence text is the same either way.
 
+### Automatic print orientation
+
+With a paper size selected, **Automatic** turns each page in the outgoing PDF
+or bitmap before submitting it to the printer. Mixed portrait/landscape jobs
+use the same physical stock axes, and the app asks CUPS not to rotate them
+again. Fit and Shrink still use the printer's actual printable area.
+
+When paper is left to the printer, the app preserves the displayed page
+orientation and lets the printer handle the unknown stock. Choosing a paper
+size makes automatic rotation independent of printer-side rotation filters.
+Print to PDF continues to produce portrait or landscape sheets per source page.
+
 ### Crop with the mouse
 
 In **Crop / Scale**, click **Draw crop rectangle** and drag over the preview.

@@ -485,7 +485,7 @@ def write_subset_pdf(pdf_path, model, pages, dest_path):
 
 def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
                      paper_key, qt_dpi, hw_margin_mm, report, scale_pct=100,
-                     comments_forms=DOCUMENT):
+                     comments_forms=DOCUMENT, physical=False):
     """Rasterise PDF pages via pypdfium2 in background.
 
     No QPrinter usage here — Qt objects must stay on the GUI thread.
@@ -519,7 +519,7 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
     rendered    = []
     skipped     = []
     pdfium_doc  = None
-    sub_tmp = prep_tmp = None
+    sub_tmp = prep_tmp = oriented_tmp = None
 
     try:
         # Same file the Ghostscript path sends: subset, then form values
@@ -539,6 +539,13 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
             logging.exception("Qt render: could not prepare the print file")
             render_src = sub_tmp
 
+        if physical and orient_idx == 0:
+            fd, oriented_tmp = tempfile.mkstemp(suffix="_qt_oriented.pdf")
+            os.close(fd)
+            _scale_pages(render_src, oriented_tmp, 1.0,
+                         orient_to=(pw_pt, ph_pt) if sheet else None)
+            render_src = oriented_tmp
+
         with _pdfium_lock:
             pdfium_doc = _open_pdf(render_src)
             n = len(pdfium_doc)
@@ -552,7 +559,9 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
                         pdfw    = pdfpage.get_width()
                         pdfh    = pdfpage.get_height()
 
-                        if orient_idx == 0:
+                        if physical and orient_idx == 0 and sheet:
+                            page_is_ls = False  # rotation is already in the pixels
+                        elif orient_idx == 0:
                             page_is_ls = pdfw > pdfh
                         else:
                             page_is_ls = (orient_idx == 2)
@@ -588,7 +597,7 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
             if pdfium_doc is not None:
                 try: pdfium_doc.close()
                 except Exception: pass
-        unlink(sub_tmp, prep_tmp)
+        unlink(sub_tmp, prep_tmp, oriented_tmp)
 
     if not rendered:
         raise RuntimeError(tr("Keine Seiten konnten gerendert werden."))
@@ -634,9 +643,10 @@ def oriented_sheet_pt(paper_key, orient_idx, pdf_path, model, pages):
 
     None when no sheet was named — the pages keep their own size, and
     nothing about paper is sent. Landscape swaps the axes. Automatic
-    follows the first selected page for the CUPS job label. This is a job
-    default, not a restriction on every page: PDF export and automatic
-    fixed-size placement choose the axes again for each displayed page.
+    follows the first selected page as the initial PDF-export orientation;
+    export chooses axes again for every displayed page. Physical automatic
+    printing instead uses canonical stock axes and turns source content into
+    them before handing the job to the printer.
     """
     sheet = paper_size_pt(paper_key)
     if not sheet:
@@ -709,9 +719,15 @@ def _place_on_sheet(src_path, dest_path, paper_w_pt, paper_h_pt,
         pdf.save(dest_path)
 
 
-def _scale_pages(src_path, dest_path, factor):
-    """Scale each page about its own size. Used when no sheet was chosen."""
+def _scale_pages(src_path, dest_path, factor, orient_to=None):
+    """Bake displayed geometry, optionally turning pages to match known stock.
+
+    Fitting remains separate: a rotated page keeps its physical dimensions so
+    CUPS can fit/shrink to the driver's actual imageable area. A missing stock
+    size preserves the displayed axes, rather than guessing a target sheet.
+    """
     import pikepdf
+    from tools.printing.handling import rotation_to_fit
     from tools.pagebox import (_display_matrix, _inherited_rotate, _mat_mul,
                                _visible_box, _visible_size, apply_visible_transform)
     with pikepdf.open(src_path) as pdf:
@@ -720,9 +736,13 @@ def _scale_pages(src_path, dest_path, factor):
         for page in pdf.pages:
             box = _visible_box(page)
             dw, dh = _visible_size(page)
-            placed = _mat_mul(
-                _display_matrix(box, _inherited_rotate(page)),
-                (factor, 0.0, 0.0, factor, 0.0, 0.0))
+            display = _display_matrix(box, _inherited_rotate(page))
+            if orient_to and rotation_to_fit((dw, dh), orient_to):
+                # Clockwise quarter turn in displayed PDF coordinates. Bake
+                # it into content; downstream filters need no /Rotate support.
+                display = _mat_mul(display, (0.0, -1.0, 1.0, 0.0, 0.0, dw))
+                dw, dh = dh, dw
+            placed = _mat_mul(display, (factor, 0.0, 0.0, factor, 0.0, 0.0))
             apply_visible_transform(page, pdf, placed, box, dw * factor, dh * factor)
         pdf.save(dest_path)
 
@@ -846,8 +866,11 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
       to CUPS, which fits to the driver's *real* imageable area rather than to
       an estimate of it, and adapts to whichever printer the job goes to.
       Ghostscript passes the pages through at their own size.
+    * Automatic orientation is baked into the PDF. Known stock uses canonical
+      portrait axes throughout the physical job; landscape sources are turned
+      in their content before any fitting. CUPS is told not to rotate again.
     * "Feste Groesse" is done here: automatic orientation places each page
-      on matching media at the requested percentage before normalisation.
+      on that stock at the requested percentage before normalisation.
       Explicit orientation fixes the media in Ghostscript and applies the
       percentage with recenter_on_paper. CUPS is told print-scaling=none so
       it does not scale the result a second time.
@@ -860,6 +883,10 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
     # for a size this application does not know.
     oriented = oriented_sheet_pt(paper_key, orient_idx, pdf_path, model, pages)
     sheet = oriented is not None
+    # A physical sheet has one coordinate system for the job. Rotating content
+    # to these axes avoids asking a driver to interpret per-page landscape.
+    if sheet and orient_idx == 0:
+        oriented = tuple(sorted(oriented))
     pw_pt, ph_pt = oriented if sheet else (0.0, 0.0)
 
     sub_fd, sub_tmp = tempfile.mkstemp(suffix="_sub.pdf")
@@ -878,16 +905,23 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
             logging.exception("print: could not prepare form fields / comments")
             print_src = sub_tmp
 
+        auto_prepared = orient_idx == 0
+        if auto_prepared:
+            fd, orientation_tmp = tempfile.mkstemp(suffix="_print_orientation.pdf")
+            os.close(fd)
+            scaled_tmps.append(orientation_tmp)
+            _scale_pages(print_src, orientation_tmp, 1.0, orient_to=oriented)
+            print_src = orientation_tmp
+
         auto_fixed = sheet and orient_idx == 0 and scale_idx == FIXED
         if auto_fixed:
-            # FIXEDMEDIA below fixes one orientation for the whole document.
-            # Place mixed pages before normalisation instead, including the
-            # percentage, so no page is clipped to the first page's axes.
+            # Apply the requested percentage once, after content has been
+            # oriented. Mixed sources now share the physical stock's axes.
             placed_fd, placed_tmp = tempfile.mkstemp(suffix="_oriented.pdf")
             os.close(placed_fd)
             scaled_tmps.append(placed_tmp)
             _place_on_sheet(print_src, placed_tmp, pw_pt, ph_pt,
-                            FIXED, scale_pct, auto_orient=True)
+                            FIXED, scale_pct, auto_orient=False)
             print_src = placed_tmp
 
         gs_bin = ghostscript_binary()
@@ -961,8 +995,11 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
                 pct_fd, pct_tmp = tempfile.mkstemp(suffix="_pct.pdf")
                 os.close(pct_fd)
                 scaled_tmps.append(pct_tmp)
-                recenter_on_paper(print_src, pct_tmp, pw_pt, ph_pt,
-                                  factor=scale_pct / 100.0)
+                if sheet:
+                    recenter_on_paper(print_src, pct_tmp, pw_pt, ph_pt,
+                                      factor=scale_pct / 100.0)
+                else:
+                    _scale_pages(print_src, pct_tmp, scale_pct / 100.0)
                 if os.path.getsize(pct_tmp) > 100:
                     print_src = pct_tmp
             except Exception:
@@ -979,18 +1016,15 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         for opt in _scaling_options(scale_idx):
             cmd += ["-o", opt]
 
-        # The orientation the media was actually set to above, which for
-        # "Automatisch" is the one detected from the first page. Saying nothing
-        # there was the bug: Ghostscript had already produced a landscape sheet
-        # while CUPS was still told plain `media=A4`, so the landscape page
-        # landed unrotated on portrait media and lost its right-hand edge.
-        # Naming it is a no-op when the two already agree (measured).
-        # Only when a sheet was chosen: with the paper left to the printer this
-        # would be an orientation for a sheet nobody here has seen, forcing a
-        # rotation onto a queue that had it right already.
+        # Match the physical PDF's axes. Automatic rotation is encoded in its
+        # content, so overriding a queue's auto-rotate default cannot undo it.
+        # With unknown stock only displayed rotations were baked; the queue
+        # still owns media orientation because no target size is known.
         if sheet:
             cmd += ["-o", "orientation-requested=4" if pw_pt > ph_pt
                     else "orientation-requested=3"]
+            if auto_prepared:
+                cmd += ["-o", "pdfAutoRotate=false", "-o", "landscape=false"]
 
         if duplex:
             # Emit BOTH the IPP attribute AND the PPD driver keyword.

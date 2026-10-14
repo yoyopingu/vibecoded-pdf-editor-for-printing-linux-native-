@@ -114,15 +114,12 @@ def test_every_scaling_mode_sends_exactly_one_instruction():
     return "one instruction per mode, the same with or without Ghostscript"
 
 
-def test_a_landscape_page_tells_the_printer_it_is_landscape():
-    """On "Automatisch", the media was turned to landscape for the job and CUPS
-    was told nothing about it.
+def test_orientation_options_match_the_prepared_physical_page_axes():
+    """Automatic turns landscape content into portrait stock inside the PDF.
 
-    Ghostscript duly produced a landscape sheet while lp still asked for plain
-    `media=A4`, so the page landed unrotated on portrait media and lost its
-    right-hand edge (measured against pdftopdf: MediaBox came back 595x842 with
-    an identity matrix). Whatever orientation the media ended up in has to be
-    named.
+    The old job-wide landscape flag left filters to rotate mixed pages. Auto
+    now sends the same physical axes as its prepared pages, while explicit
+    landscape continues to request landscape media.
     """
     import os
     from reportlab.lib.pagesizes import A4
@@ -136,8 +133,8 @@ def test_a_landscape_page_tells_the_printer_it_is_landscape():
         opts = _lp_options(duplex=False, src=src, orient_idx=orient_idx)
         return [o for o in opts if o.startswith("orientation-requested")]
 
-    assert orient_for(land, 0) == ["orientation-requested=4"], \
-        "an auto-detected landscape page was not reported as landscape"
+    assert orient_for(land, 0) == ["orientation-requested=3"], \
+        "automatic rotation must agree with the prepared portrait stock"
     assert orient_for(land, 2) == ["orientation-requested=4"]
     assert orient_for(land, 1) == ["orientation-requested=3"]
     assert orient_for(FX["normal"], 0) == ["orientation-requested=3"], \

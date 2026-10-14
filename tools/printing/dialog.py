@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QButtonGroup, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QTabBar, QSizePolicy,
                              QLabel, QFrame, QApplication, QScrollArea, QDialog,
                              QSpinBox, QLineEdit, QCheckBox, QGroupBox)
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize, QRectF
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize, QRectF, QSizeF
 from PyQt6.QtGui import (QPageLayout, QPixmap, QPainter, QPen, QColor,
                          QIcon, QPainterPath)
 from tools.i18n import tr
@@ -2198,7 +2198,7 @@ class PrintDialog(QDialog):
                         print_pages, color_mode, print_scale, print_orient,
                         print_paper, qt_dpi, hw_margin_mm, _report,
                         scale_pct=print_pct,
-                        comments_forms=print_comments)
+                        comments_forms=print_comments, physical=True)
                 except Exception as e:
                     errors.append(f"Qt render: {e}")
                     msg = tr("Druckfehler:") + "\n" + "\n".join(errors)
@@ -2350,12 +2350,19 @@ class PrintDialog(QDialog):
             else:
                 printer.setColorMode(QPrinter.ColorMode.Color)
 
-            printer.setPageSize(QPageSize(_qt_page_sizes().get(
-                paper_key, QPageSize.PageSizeId.A4)))
+            from tools.printing.spool import paper_size_pt
+            sheet = paper_size_pt(paper_key)
+            if sheet is not None:
+                printer.setPageSize(QPageSize(QSizeF(*sorted(sheet)), QPageSize.Unit.Point))
             if orient_idx == 1:
                 printer.setPageOrientation(QPageLayout.Orientation.Portrait)
             elif orient_idx == 2:
                 printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+            elif rendered:
+                # QPainter.begin starts the first page. Setting orientation
+                # afterwards is too late for some backends, even if later
+                # pages honour setPageOrientation before newPage.
+                printer.setPageOrientation(rendered[0][1])
 
             painter = QPainter()
             if not painter.begin(printer):
@@ -2363,7 +2370,7 @@ class PrintDialog(QDialog):
             try:
                 first = True
                 for pil, page_orient, target_w, target_h in rendered:
-                    if orient_idx == 0:
+                    if orient_idx == 0 and not first:
                         printer.setPageOrientation(page_orient)
                     if not first:
                         printer.newPage()

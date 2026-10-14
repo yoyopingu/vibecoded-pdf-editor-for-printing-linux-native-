@@ -243,6 +243,15 @@ The live dialog has moved on purpose. Do not revert these to match the HTML:
   and the percentage are applied in the file — there is no CUPS pass
   afterwards. `oriented_sheet_pt` is shared with `print_via_gs` so the sheet
   matches.
+- Physical Automatic orientation is baked into the job by `_scale_pages`:
+  known stock uses canonical portrait axes and each source is turned to fit
+  before CUPS or Qt sees it. Preserve the source's visible CropBox and model
+  rotation, and do not resize Fit/Shrink sources before the driver's actual
+  imageable-area fitting. Disable CUPS auto-rotation for these prepared jobs.
+  Unknown paper keeps displayed page axes and sends no guessed media/orientation.
+  Print to PDF retains per-page sheet orientation. Qt physical rendering uses
+  `physical=True`; set its first orientation before `QPainter.begin` and leave
+  the device's paper size alone when no stock was selected.
 - Custom stock dimensions may be entered landscape-first. Normalize their
   axes before applying Automatic/Portrait/Landscape in vector and Qt paths.
   Bitmap Print to PDF uses the selected sheet dimensions and centres the
