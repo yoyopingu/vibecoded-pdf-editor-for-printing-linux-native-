@@ -114,3 +114,56 @@ def test_auto_fixed_spool_keeps_mixed_page_orientation():
     finally:
         spool._run_capturing = real_run
         spool.ghostscript_binary = real_gs
+
+
+def test_custom_landscape_stock_uses_orientation_instead_of_entry_order():
+    """Landscape-first custom dimensions must not invert Automatic or Portrait."""
+    src = _mixed_pages()
+    model = PageModel(2)
+    for paper in ('Custom.420x297mm', 'Custom.297x420mm'):
+        for orientation in (0, 1, 2):
+            rendered, skipped = spool.prerender_for_qt(
+                src, model, [0, 1], 'auto', spool.FIT, orientation,
+                paper, 72, 0, lambda *_: None)
+            assert not skipped and len(rendered) == 2
+            expected = [False, True] if orientation == 0 else [orientation == 2] * 2
+            assert [w > h for _image, _orient, w, h in rendered] == expected
+            for (_image, _orient, w, h), landscape in zip(rendered, expected):
+                assert abs(w - (1190.55 if landscape else 841.89)) < 2
+                assert abs(h - (841.89 if landscape else 1190.55)) < 2
+            width, height = spool.oriented_sheet_pt(paper, orientation, src, model, [0, 1])
+            assert (width > height) == expected[0]
+
+
+def test_bitmap_pdf_preserves_sheet_size_centering_and_automatic_orientation():
+    """Small or fixed-size content is not itself the selected output paper."""
+    src = _mixed_pages()
+    model = PageModel(2)
+    for scale in (spool.FIT, spool.FIXED, spool.SHRINK):
+        for pct in ((70, 140) if scale == spool.FIXED else (100,)):
+            rendered, skipped = spool.prerender_for_qt(
+                src, model, [0, 1], 'auto', scale, 0,
+                'Custom.420x297mm', 72, 0, lambda *_: None, scale_pct=pct)
+            assert not skipped
+            out = os.path.join(_TMP, f'bitmap-automatic-{scale}-{pct}.pdf')
+            spool.write_raster_pdf(rendered, out, 72)
+            shapes = _shapes(out)
+            assert [w > h for w, h in shapes] == [False, True]
+            for (w, h), (_image, _orient, target_w, target_h) in zip(shapes, rendered):
+                assert abs(w - target_w) < .01 and abs(h - target_h) < .01
+            with PDFIUM_LOCK:
+                with pdfium.PdfDocument(out) as doc:
+                    for i in range(2):
+                        page = doc[i]
+                        try:
+                            bitmap = page.render(scale=1)
+                            image = bitmap.to_pil().convert('L')
+                            bitmap.close()
+                        finally:
+                            page.close()
+                        bounds = image.point(lambda value: 255 if value < 100 else 0).getbbox()
+                        assert bounds is not None
+                        # Symmetric source corner marks remain centred on paper.
+                        left, top, right, bottom = bounds
+                        assert abs(left - (image.width - right)) <= 3
+                        assert abs(top - (image.height - bottom)) <= 3

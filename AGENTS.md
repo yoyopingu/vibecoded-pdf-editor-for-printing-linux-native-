@@ -243,6 +243,10 @@ The live dialog has moved on purpose. Do not revert these to match the HTML:
   and the percentage are applied in the file — there is no CUPS pass
   afterwards. `oriented_sheet_pt` is shared with `print_via_gs` so the sheet
   matches.
+- Custom stock dimensions may be entered landscape-first. Normalize their
+  axes before applying Automatic/Portrait/Landscape in vector and Qt paths.
+  Bitmap Print to PDF uses the selected sheet dimensions and centres the
+  existing raster on that PDF page; the raster's own size is not the paper.
 - The window must fit the screen **including the title bar**. A frame inset
   of 0 means the window manager has not answered yet, not that there is no
   title bar. `_fit_on_screen` reserves one and runs a second pass.

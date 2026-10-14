@@ -499,7 +499,9 @@ def prerender_for_qt(pdf_path, model, pages, color_mode, scale_idx, orient_idx,
     # so each page is drawn at its own size and the printer places it. Falling
     # back to A4 here is what made an SRA3 job come out A4-sized.
     sheet = paper_size_pt(paper_key)
-    pw_pt, ph_pt = sheet if sheet else (0.0, 0.0)
+    # Custom stock can be entered landscape-first. Orientation selects axes,
+    # independently of the order in which its dimensions were entered.
+    pw_pt, ph_pt = sorted(sheet) if sheet else (0.0, 0.0)
     full_bleed   = hw_margin_mm < 0.5
     margin_px    = 0 if full_bleed else max(0, int(hw_margin_mm / 25.4 * qt_dpi))
 
@@ -639,7 +641,7 @@ def oriented_sheet_pt(paper_key, orient_idx, pdf_path, model, pages):
     sheet = paper_size_pt(paper_key)
     if not sheet:
         return None
-    pw_pt, ph_pt = sheet
+    pw_pt, ph_pt = sorted(sheet)
     if orient_idx == 2:                 # explicit landscape
         pw_pt, ph_pt = ph_pt, pw_pt
     elif orient_idx == 0 and pages:     # auto — the first selected page
@@ -808,18 +810,27 @@ def build_print_pdf(pdf_path, model, pages, dest_path, *,
 def write_raster_pdf(rendered, dest_path, dpi):
     """Wrap already-rasterised print pages into a PDF of the right sheet size.
 
-    "Als Bitmap" for Print to PDF. The images were rendered at `dpi` for
-    the sheet; PIL's PDF writer uses that resolution so a 300 dpi bitmap
-    of an A4 sheet comes out A4, not a huge page.
+    "Als Bitmap" for Print to PDF. A raster may occupy only part of the
+    selected sheet (fixed size or shrink). Position it on a PDF page of the
+    selected size, rather than using the raster's own dimensions as paper.
+    Embedding the existing pixels avoids allocating another full-sheet bitmap,
+    especially for a small image on large-format stock.
     """
     if not rendered:
         raise RuntimeError(tr("Keine Seiten konnten gerendert werden."))
-    images = []
-    for pil, _orient, _w, _h in rendered:
-        images.append(pil.convert("RGB"))
-    first, rest = images[0], images[1:]
-    first.save(dest_path, "PDF", resolution=float(dpi or 72),
-               save_all=True, append_images=rest)
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.utils import ImageReader
+    points_per_pixel = 72.0 / float(dpi or 72)
+    pdf = canvas.Canvas(dest_path)
+    for image, _orient, width, height in rendered:
+        pdf.setPageSize((width * points_per_pixel, height * points_per_pixel))
+        pdf.drawImage(ImageReader(image),
+                      (width - image.width) * points_per_pixel / 2,
+                      (height - image.height) * points_per_pixel / 2,
+                      width=image.width * points_per_pixel,
+                      height=image.height * points_per_pixel)
+        pdf.showPage()
+    pdf.save()
 
 
 def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
