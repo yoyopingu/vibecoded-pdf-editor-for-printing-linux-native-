@@ -249,9 +249,19 @@ The live dialog has moved on purpose. Do not revert these to match the HTML:
   rotation, and do not resize Fit/Shrink sources before the driver's actual
   imageable-area fitting. Disable CUPS auto-rotation for these prepared jobs.
   Unknown paper keeps displayed page axes and sends no guessed media/orientation.
-  Print to PDF retains per-page sheet orientation. Qt physical rendering uses
-  `physical=True`; set its first orientation before `QPainter.begin` and leave
-  the device's paper size alone when no stock was selected.
+   Print to PDF retains per-page sheet orientation. Qt physical rendering uses
+   `physical=True`; set its first orientation before `QPainter.begin` and leave
+   the device's paper size alone when no stock was selected.
+ - An automatic job must not send `orientation-requested` once the prepared page
+   already matches the named stock: it says nothing and lets the stock's own
+   orientation stand. The value is a *rotating* request, and a driver that
+   honours the attribute applies it on top of the page. The C70 did exactly
+   that — it turned an already-portrait page sideways on its portrait sheet —
+   while the near-identical C90 (also driverless, no PPD) ignored the stale
+   request, which is how the bug stayed printer-specific. The `pdfAutoRotate` /
+   `landscape` suppression stays. Only a stock named landscape under an
+   automatic job overrides, with the page's upright (1), not the reversed (3).
+   Explicit orientation is not baked in, so it still names its way (1/2).
 - Custom stock dimensions may be entered landscape-first. Normalize their
   axes before applying Automatic/Portrait/Landscape in vector and Qt paths.
   Bitmap Print to PDF uses the selected sheet dimensions and centres the

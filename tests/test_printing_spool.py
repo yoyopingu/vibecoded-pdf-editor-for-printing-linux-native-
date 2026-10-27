@@ -115,11 +115,17 @@ def test_every_scaling_mode_sends_exactly_one_instruction():
 
 
 def test_orientation_options_match_the_prepared_physical_page_axes():
-    """Automatic turns landscape content into portrait stock inside the PDF.
+    """Automatic turns landscape content into the stock's axes inside the PDF.
 
-    The old job-wide landscape flag left filters to rotate mixed pages. Auto
-    now sends the same physical axes as its prepared pages, while explicit
-    landscape continues to request landscape media.
+    The old job-wide flag left filters to rotate mixed pages, and then a
+    request was sent telling the driver the page's axes. The C70 acted on that
+    request — it is a rotating value — and turned an already-prepared portrait
+    page sideways on its portrait sheet, while the near-identical C90 ignored
+    it. So an automatic job must not ask the driver to rotate a page that
+    already matches the stock: it says nothing, and the stock's own
+    orientation stands. Only an explicit orientation (not baked in) still names
+    its way up, and a landscape stock under an automatic job overrides with the
+    page's own upright orientation.
     """
     import os
     from reportlab.lib.pagesizes import A4
@@ -129,17 +135,27 @@ def test_orientation_options_match_the_prepared_physical_page_axes():
         c = canvas.Canvas(land, pagesize=(A4[1], A4[0]))
         c.drawString(40, 100, "LANDSCAPE"); c.showPage(); c.save()
 
-    def orient_for(src, orient_idx):
-        opts = _lp_options(duplex=False, src=src, orient_idx=orient_idx)
+    def orient_for(src, orient_idx, paper_key="A4"):
+        opts = _lp_options(duplex=False, src=src, orient_idx=orient_idx,
+                           paper_key=paper_key)
         return [o for o in opts if o.startswith("orientation-requested")]
 
-    assert orient_for(land, 0) == ["orientation-requested=3"], \
-        "automatic rotation must agree with the prepared portrait stock"
-    assert orient_for(land, 2) == ["orientation-requested=4"]
-    assert orient_for(land, 1) == ["orientation-requested=3"]
-    assert orient_for(FX["normal"], 0) == ["orientation-requested=3"], \
-        "a portrait document was reported as landscape"
-    return "auto, portrait and landscape all name the orientation they used"
+    # A portrait stock (A4) already matches the prepared portrait page, so the
+    # job requests no orientation at all — the fix for the C70.
+    assert orient_for(land, 0) == [], \
+        "automatic rotation must not ask the driver to rotate the prepared page"
+    assert orient_for(FX["normal"], 0) == [], \
+        "a portrait document on a portrait stock names no orientation"
+    # Explicit orientation is not baked in, so the driver is told which way up.
+    assert orient_for(land, 2) == ["orientation-requested=2"]
+    assert orient_for(land, 1) == ["orientation-requested=1"]
+    # A landscape stock under an automatic job is the one case where the page
+    # (prepared portrait) does not match the media, so it is overridden with
+    # the page's own upright orientation.
+    assert orient_for(land, 0, paper_key="Custom.420x297mm") == \
+        ["orientation-requested=1"], \
+        "a landscape stock under auto is overridden with the page's orientation"
+    return "auto stays silent on matching stock; explicit and mismatching name it"
 
 
 def test_the_chosen_paper_tray_reaches_lp():

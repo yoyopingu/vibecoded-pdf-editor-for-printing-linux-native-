@@ -888,6 +888,11 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
     if sheet and orient_idx == 0:
         oriented = tuple(sorted(oriented))
     pw_pt, ph_pt = oriented if sheet else (0.0, 0.0)
+    # How the stock is *named*, independent of how this job turns the page. A
+    # `media=` option carries this orientation, and it is what a driver applies
+    # when the job requests no other orientation.
+    stock = paper_size_pt(paper_key)
+    stock_landscape = bool(sheet and stock and stock[0] > stock[1])
 
     sub_fd, sub_tmp = tempfile.mkstemp(suffix="_sub.pdf")
     os.close(sub_fd)
@@ -1016,13 +1021,33 @@ def print_via_gs(pdf_path, model, pages, copies, color_mode, collate, duplex,
         for opt in _scaling_options(scale_idx):
             cmd += ["-o", opt]
 
-        # Match the physical PDF's axes. Automatic rotation is encoded in its
-        # content, so overriding a queue's auto-rotate default cannot undo it.
-        # With unknown stock only displayed rotations were baked; the queue
-        # still owns media orientation because no target size is known.
         if sheet:
-            cmd += ["-o", "orientation-requested=4" if pw_pt > ph_pt
-                    else "orientation-requested=3"]
+            # Which orientation to request of the driver: 1 portrait, 2
+            # landscape, or nothing. The plain values are used, never the
+            # reversed ones (3, 4) — those ask for a *further* turn of the
+            # page, and a driver that honours the attribute applies it on top
+            # of whatever the page already is.
+            #
+            # Explicit orientation is not turned into the page, so the driver
+            # still has to rotate each page: name the page's own axes.
+            if not auto_prepared:
+                requested = 2 if pw_pt > ph_pt else 1
+            # Automatic jobs are the ones whose pages have already been turned
+            # into the stock's own orientation, so the prepared page and the
+            # named media agree and there is nothing left for a driver to
+            # rotate. Requesting an orientation anyway is a rotating value, and
+            # the C70 applied it on top of an already-portrait page — printing
+            # it sideways on its portrait sheet — while the near-identical C90
+            # ignored the stale request. Say nothing and let the stock's own
+            # orientation stand. Only a stock named landscape for a page that
+            # was prepared portrait needs an override, and it names the page's
+            # own upright orientation, not the stock's.
+            elif stock_landscape:
+                requested = 1
+            else:
+                requested = None
+            if requested is not None:
+                cmd += ["-o", f"orientation-requested={requested}"]
             if auto_prepared:
                 cmd += ["-o", "pdfAutoRotate=false", "-o", "landscape=false"]
 

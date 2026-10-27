@@ -214,7 +214,13 @@ def test_automatic_physical_rotation_is_in_the_pdf_before_any_printer_filter():
                     return original_run(command, timeout)
                 options = [command[i+1] for i, arg in enumerate(command[:-1]) if arg == '-o']
                 if paper:
-                    assert 'orientation-requested=3' in options
+                    # A portrait stock (A4) already matches the prepared
+                    # portrait page, so the job must not ask the driver to
+                    # rotate it: that request is what the C70 acted on. The
+                    # auto-rotate suppression and the named media stay.
+                    assert not any(o.startswith('orientation-requested')
+                                    for o in options), options
+                    assert 'media=A4' in options
                     assert 'pdfAutoRotate=false' in options and 'landscape=false' in options
                 else:
                     assert not any(o.startswith(('media=', 'orientation-requested=', 'pdfAutoRotate='))
