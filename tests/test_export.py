@@ -319,3 +319,43 @@ def test_failed_pdf_save_as_does_not_delete_existing_destination():
             viewer.close()
             viewer.deleteLater()
             _app.processEvents()
+
+
+def test_the_epub_viewport_describes_the_svg_next_to_it():
+    """The viewport meta and the SVG beside it have to agree.
+
+    The SVG is written by pdftocairo from the page as it is displayed, and
+    the viewport is the size of the window the SVG is shown in. A viewport
+    measured any other way — the raw CropBox, a turn that sits on a /Pages
+    node — describes a picture that is not the one in the file."""
+    fmt = next(f for f in export_formats() if f.key == 'epub')
+    ns = {'x': 'http://www.w3.org/1999/xhtml'}
+    with tempfile.TemporaryDirectory(dir=_TMP) as folder:
+        # A sheet with a trim box inside it, turned a quarter.
+        source = os.path.join(folder, 'trimmed.pdf')
+        c = canvas.Canvas(source, pagesize=(200, 300))
+        c.setFont("Helvetica", 20); c.drawString(30, 40, "TRIM"); c.showPage(); c.save()
+        writer = PdfWriter(clone_from=PdfReader(source))
+        writer.pages[0].cropbox.lower_left = (20, 30)
+        writer.pages[0].cropbox.upper_right = (180, 270)
+        trimmed = os.path.join(folder, 'trimmed_cropped.pdf')
+        writer.write(trimmed); writer.close()
+
+        out = os.path.join(folder, 'book.epub')
+        export_document(((trimmed, 0, 90),), out, fmt, null_progress())
+        with zipfile.ZipFile(out) as book:
+            page = ElementTree.fromstring(book.read('OEBPS/page-1.xhtml'))
+            viewport = page.find('x:head/x:meta', ns).attrib['content']
+            svg = ElementTree.fromstring(book.read('OEBPS/page-1.svg'))
+
+        def _number(text):
+            return float(text.replace('pt', ''))
+
+        shown = dict(part.split('=') for part in viewport.split(', '))
+        # The trimmed page is 160x240, turned a quarter it is 240x160.
+        assert _number(shown['width']) == 240, viewport
+        assert _number(shown['height']) == 160, viewport
+        assert _number(svg.attrib['width']) == _number(shown['width']), \
+            "the viewport does not describe the SVG beside it"
+        assert _number(svg.attrib['height']) == _number(shown['height']), \
+            "the viewport does not describe the SVG beside it"

@@ -18,7 +18,7 @@ from PIL import Image
 from pypdf import PdfReader, PdfWriter
 
 from tools.i18n import tr
-from tools.pagebox import write_view_pages
+from tools.pagebox import displayed_size, write_view_pages
 
 
 @dataclass(frozen=True)
@@ -251,9 +251,10 @@ def _epub(src, target, stage, report):
             report(tr('Seite {i} / {total}…').format(i=i, total=len(reader.pages)))
             svg = os.path.join(stage, f'page-{i}.svg')
             _run(report, [program, '-svg', '-origpagesizes', '-f', str(i), '-l', str(i), src, svg])
-            width, height = float(page.cropbox.width), float(page.cropbox.height)
-            if page.rotation % 180:
-                width, height = height, width
+            # The page as it is displayed: the CropBox clipped to the
+            # MediaBox, and the file's own /Rotate — which may sit on a
+            # /Pages node and is then not in page.rotation at all.
+            width, height = displayed_size(page)
             label = escape(tr('Seite {p0}').format(p0=i))
             book.write(svg, f'OEBPS/page-{i}.svg', compress_type=zipfile.ZIP_DEFLATED)
             book.writestr(f'OEBPS/page-{i}.xhtml',
