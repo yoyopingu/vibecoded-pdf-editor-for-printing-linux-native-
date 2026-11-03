@@ -253,3 +253,24 @@ def test_exporting_pages_as_images_uses_the_crop():
     vis = displayed_size(PdfReader(src).pages[0])
     assert abs(im.size[0] - vis[0]) < 3 and abs(im.size[1] - vis[1]) < 3, (
         f"exported {im.size}, the visible page is {vis[0]:.0f}x{vis[1]:.0f}")
+
+
+def test_the_numbered_document_keeps_its_form():
+    """Numbering a document must not take its form fields away.
+
+    The pages were written with pypdf's add_page, which copies the page but
+    not the catalog's /AcroForm — so the numbered file had no fields at all
+    and could no longer be filled in."""
+    path = os.path.join(_TMP, "nums_form.pdf")
+    c = canvas.Canvas(path, pagesize=A4)
+    c.setFont("Helvetica", 12)
+    c.drawString(60, 780, "Auftrag")
+    c.acroForm.textfield(name="kunde", value="Firma Muster GmbH", x=60,
+                         y=700, width=300, height=24, borderWidth=1,
+                         fontSize=12)
+    c.showPage(); c.save()
+
+    out = _numbers(path, "nums_form_out")
+    fields = PdfReader(out, strict=False).get_fields()
+    assert fields and "kunde" in fields, "the numbered document lost its form"
+    assert fields["kunde"]["/V"] == "Firma Muster GmbH"

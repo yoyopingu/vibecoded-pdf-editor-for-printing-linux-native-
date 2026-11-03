@@ -8,7 +8,7 @@ from tools._base import BasePanel
 from tools.i18n import tr
 from tools.page_numbering import number_label, number_position
 from tools.pagebox import (_display_matrix, _mat_inv, _visible_box,
-                           _visible_size, _inherited_rotate)
+                           _visible_size, _inherited_rotate, write_view_pages)
 from tools.panels._shared import row
 
 
@@ -110,9 +110,13 @@ class PageNumbersPanel(BasePanel):
         start=self.start_spin.value(); fs=self.font_spin.value()
         margin=self.margin_spin.value(); pos_idx=self.pos.currentIndex()
         prefix=self.prefix.text(); suffix=self.suffix.text()
-        for i, page in enumerate(reader.pages):
+        # The pages go in through the same seam as the rest of the app: the
+        # number is stamped on the writer's copy, and the document's form
+        # survives the numbering.
+        pages = write_view_pages(writer, [(src, i) for i in range(n)])
+        for i, page in enumerate(pages):
             label = number_label(i, n, skip, start, prefix, suffix)
-            if label is None: writer.add_page(page); continue
+            if label is None: continue
             # Draw in the space the viewer shows, then map back into the file.
             # The MediaBox is the uncropped sheet and /Rotate only affects
             # display, so a number placed from those landed in the hidden
@@ -133,8 +137,8 @@ class PageNumbersPanel(BasePanel):
             c.save(); packet.seek(0)
             from pypdf import PdfReader as PR
             placed = _mat_inv(_display_matrix(box, _inherited_rotate(page)))
-            page.merge_transformed_page(PR(packet).pages[0], placed, expand=False)
-            writer.add_page(page)
+            page.merge_transformed_page(
+                PR(packet).pages[0], placed, expand=False)
         with open(out, "wb") as f: writer.write(f)
         self._result_path = out
         self.open_result(out, tr("Mit Seitenzahlen"))
