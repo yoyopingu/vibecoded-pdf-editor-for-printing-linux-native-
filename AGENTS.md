@@ -118,6 +118,11 @@ Imports only point downwards.
 - The print path is the one exception: `tools/printing/spool.py` writes its
   subset itself, because it rebuilds the form for the printer
   (`tools/printing/content.py`) instead of keeping the catalog's `/AcroForm`.
+- A quarter turn is told apart from a half turn in one place:
+  `tools.pagebox.is_quarter_turned()`. A turn of 90 or 270 degrees swaps the
+  page's width and height, a turn of 180 degrees does not. The places that
+  still spell `rotation % 180` out are listed in
+  `tests/test_pagebox_rules.py`; that list may only get shorter.
 
 ### Document input
 - `tools/input_formats.py` owns accepted extensions: real Pillow readers,

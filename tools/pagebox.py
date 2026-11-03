@@ -54,6 +54,17 @@ def _visible_box(page):
     return x0, y0, x1, y1
 
 
+def is_quarter_turned(rotation) -> bool:
+    """True when the turn swaps the page's width and height.
+
+    A page turned by 90 or 270 degrees is a portrait sheet on a landscape
+    page and the other way round. The test is written out instead of
+    ``rotation % 180`` because a turn of 180 keeps the shape, and mixing the
+    two up is how a landscape sheet ended up on a portrait one.
+    """
+    return int(rotation or 0) % 180 == 90
+
+
 def displayed_size(page, extra_rot=0):
     """(width, height) as displayed, including a page-manager rotation on top
     of the file's own /Rotate. ``extra_rot`` is degrees, clockwise in the PDF
@@ -61,7 +72,7 @@ def displayed_size(page, extra_rot=0):
     x0, y0, x1, y1 = _visible_box(page)
     w, h = x1 - x0, y1 - y0
     rot = (_inherited_rotate(page) + int(extra_rot or 0)) % 360
-    if rot in (90, 270):
+    if is_quarter_turned(rot):
         w, h = h, w
     return w, h
 
