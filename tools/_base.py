@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QEvent
 from tools.app_state import AppState, theme_color
 from tools.i18n      import tr
-from tools.pagebox   import add_turned_page
+from tools.pagebox   import write_view_pages
 from tools.pdf_access import is_locked
 from tools.theme      import _TV, _register_themed
 
@@ -158,15 +158,14 @@ def ensure_view_snapshot(base_path: str) -> str:
         if (not any(model.rotations.values()) and not model.foreign_src
                 and [model.src.get(u) for u in model.order] == list(range(n_file))):
             return base_path
-        readers = {}
-        def _rdr(p):
-            if p not in readers: readers[p] = PdfReader(p, strict=False)
-            return readers[p]
         writer = PdfWriter()
+        sources = []
+        rotations = []
         for uid in model.order:
             src_path, orig = model.page_source(uid, base_path)
-            rot  = model.get_rotation(uid)
-            add_turned_page(writer, _rdr(src_path).pages[orig], rot)
+            sources.append((src_path, orig))
+            rotations.append(model.get_rotation(uid))
+        write_view_pages(writer, sources, rotations)
         tmp_dir = snapshot_dir()
         os.makedirs(tmp_dir, exist_ok=True)
         out = os.path.join(tmp_dir, f"view_{uuid.uuid4().hex[:8]}.pdf")

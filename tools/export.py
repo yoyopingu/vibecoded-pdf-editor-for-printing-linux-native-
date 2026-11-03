@@ -18,6 +18,7 @@ from PIL import Image
 from pypdf import PdfReader, PdfWriter
 
 from tools.i18n import tr
+from tools.pagebox import write_view_pages
 
 
 @dataclass(frozen=True)
@@ -128,28 +129,25 @@ def _run(report, command, timeout=300):
 
 
 def _snapshot(sources, path, report):
-    readers = {}
+    """Write the pages the viewer shows into a new PDF.
+
+    The pages go in through the same seam as the rest of the app, so a page
+    the page manager copied stays an independent copy — rotating its second
+    instance must not rotate the first as well — and the document's form
+    survives the export.
+    """
     writer = PdfWriter()
     try:
-        for source, index, rotation in sources:
-            report.check()
-            if source not in readers:
-                readers[source] = PdfReader(source, strict=False)
-            reader = readers[source]
-            # A repeated source page must remain an independent copy: rotating
-            # its second instance must not rotate the first as well. append
-            # also retains AcroForm, unlike a bare add_page.
-            writer.reset_translation(reader)
-            writer.append(reader, pages=[index], import_outline=False)
-            page = writer.pages[-1]
-            if rotation:
-                page.rotate(rotation)
+        pages = write_view_pages(
+            writer,
+            [(source, index) for source, index, _ in sources],
+            [rotation for _, _, rotation in sources],
+            check=report.check)
+        for page in pages:
             page.mediabox = page.cropbox
         writer.write(path)
     finally:
         writer.close()
-        for reader in readers.values():
-            reader.close()
 
 
 def _images(src, targets, fmt, dpi, stage, report, count):

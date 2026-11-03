@@ -12,7 +12,7 @@ from PyQt6.QtCore import pyqtSignal, QTimer
 from tools.app_state import AppState
 from tools.i18n import tr
 from tools.pdf_access import is_locked
-from tools.pagebox import add_turned_page
+from tools.pagebox import write_view_pages
 from tools.render.caches import _set_active
 from tools.viewer.model import PageModel
 from tools.printing.dialog import PrintDialog
@@ -192,20 +192,17 @@ class PdfTab(PdfTabBase):
         Ctrl+Shift+S when pages are picked in the page manager."""
         if not self.model: raise ValueError(tr("Keine PDF geladen."))
         from tools.render.caches import invalidate_revision
-        from pypdf import PdfReader, PdfWriter
-        readers = {}
-        def _rdr(p):
-            if p not in readers: readers[p] = PdfReader(p, strict=False)
-            return readers[p]
+        from pypdf import PdfWriter
         writer = PdfWriter()
         wanted = None if uids is None else set(uids)
+        sources = []
+        rotations = []
         for uid in self.model.order:
             if wanted is not None and uid not in wanted: continue
             src_path, orig = self.model.page_source(uid, self.pdf_path)
-            reader = _rdr(src_path)
-            if orig >= len(reader.pages): continue
-            rot  = self.model.get_rotation(uid)
-            add_turned_page(writer, reader.pages[orig], rot)
+            sources.append((src_path, orig))
+            rotations.append(self.model.get_rotation(uid))
+        write_view_pages(writer, sources, rotations)
         n = len(writer.pages)
         # Write beside the target and rename over it: saving in place is the
         # normal case here (Ctrl+S), and writing straight into the file we are

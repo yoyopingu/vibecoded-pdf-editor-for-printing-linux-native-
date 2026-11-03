@@ -104,6 +104,21 @@ Imports only point downwards.
   first. Turning the reader's page turned the second copy once more than the
   first, and the document's second page came out 90 degrees further round.
 
+### Writing the page manager's view
+- The pages of the view are written in one place: `tools.pagebox.write_view_pages(writer, sources, rotations)`.
+  A module that resolves a turn (`get_rotation()`) must not put pages into a
+  pypdf writer itself. `tests/test_pagebox_rules.py` enforces that.
+- Write the view with `append`, not `add_page`. `add_page` copies the page
+  but not the catalog's `/AcroForm`, so every field was gone from the
+  flattened view and from the saved file as soon as the page manager had been
+  edited: the Formulare tool reported no fields and Ctrl+S wrote a file that
+  could no longer be filled in. `write_view_pages` appends the pages of one
+  file in a single call — one call per page would copy the reader's
+  resources once per page and double the file's size.
+- The print path is the one exception: `tools/printing/spool.py` writes its
+  subset itself, because it rebuilds the form for the printer
+  (`tools/printing/content.py`) instead of keeping the catalog's `/AcroForm`.
+
 ### Document input
 - `tools/input_formats.py` owns accepted extensions: real Pillow readers,
   installed LibreOffice import filters whose document service can export PDF,

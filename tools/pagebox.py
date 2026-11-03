@@ -133,6 +133,73 @@ def add_turned_page(writer, page, rotation):
     return added
 
 
+def write_view_pages(writer, sources, rotations=None, check=None):
+    """Write the pages a page manager shows into `writer`.
+
+    `sources` is a list of (path, page_index) in display order, `rotations` a
+    parallel list of the page manager's turns in degrees (0 for none). The
+    written pages are returned, in the same order.
+
+    Why not add_page: it drops the catalog's /AcroForm, so a document with a
+    form lost every field as soon as the page manager had been edited — the
+    flattened view and Ctrl+S both wrote a file the Formulare tool could no
+    longer read. append keeps the form.
+
+    Why one append per file and not one per page: each append call copies the
+    reader's resources again unless the translation table survives it, so the
+    pages of one file go in with a single call. The output stays the size it
+    was, and every written page keeps its own /Rotate — a page the page
+    manager copied is a second entry for the same source page, and each copy
+    has to be turned on its own (see add_turned_page).
+    """
+    from pypdf import PdfReader
+    if rotations is None:
+        rotations = [0] * len(sources)
+    if len(rotations) != len(sources):
+        raise ValueError("rotations must have one entry per source")
+    readers = {}
+    written = []
+    runs = []                      # [(path, [(index, rotation), ...]), ...]
+    for (path, index), rot in zip(sources, rotations):
+        if runs and runs[-1][0] == path:
+            runs[-1][1].append((index, rot))
+        else:
+            runs.append((path, [(index, rot)]))
+    try:
+        for path, items in runs:
+            if check is not None:
+                check()
+            reader = readers.get(path)
+            if reader is None:
+                reader = PdfReader(path, strict=False)
+                readers[path] = reader
+                # Once per reader: a second reset would throw away the
+                # mapping of the pages already copied and copy the shared
+                # resources a second time.
+                writer.reset_translation(reader)
+            # A stale index (a page that is no longer in the file) is skipped
+            # rather than raised: the page manager can hold one after a failed
+            # insert, and one missing page must not lose the whole document.
+            items = [(i, r) for i, r in items if 0 <= i < len(reader.pages)]
+            if not items:
+                continue
+            before = len(writer.pages)
+            writer.append(reader, pages=[i for i, _ in items],
+                          import_outline=False)
+            for offset, (_, rot) in enumerate(items):
+                page = writer.pages[before + offset]
+                if rot:
+                    page.rotate(rot)
+                written.append(page)
+    finally:
+        for reader in readers.values():
+            try:
+                reader.close()
+            except Exception:
+                pass       # a reader that cannot be closed is not a failure
+    return written
+
+
 def _crop_hides_content(page) -> bool:
     """True when the visible page is meaningfully smaller than the MediaBox.
 

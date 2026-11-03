@@ -579,3 +579,73 @@ def test_a_tool_says_the_file_vanished_rather_than_that_none_is_open():
     assert "auffindbar" in info or "no longer" in info, \
         f"the preview still says the wrong thing: {info!r}"
     return "names the file that went missing, and says what happened to it"
+
+
+def _form_tab(name="form_mgr.pdf", value="Firma Muster GmbH"):
+    """A two-page document with a filled-in AcroForm field, opened as a tab."""
+    from tools.viewer.tab import PdfTab
+    src = os.path.join(_TMP, name)
+    c = canvas.Canvas(src, pagesize=A4)
+    c.setFont("Helvetica", 12)
+    c.drawString(60, 780, "Auftrag")
+    c.acroForm.textfield(name="kunde", value=value, x=60, y=700,
+                         width=300, height=24, borderWidth=1, fontSize=12)
+    c.showPage()
+    c.setFont("Helvetica", 80); c.drawCentredString(300, 400, "P2"); c.showPage()
+    c.save()
+    tab = PdfTab(src)
+    st = AppState.get(); st.open_pdf(tab.pdf_path); st.page_model = tab.model
+    tab._build_manage_once()
+    return tab, tab._manage_panel
+
+
+def _field_value(path, name="kunde"):
+    """The value of a form field in a file, or None when it is not there."""
+    fields = PdfReader(path, strict=False).get_fields()
+    if not fields or name not in fields:
+        return None
+    return fields[name].get("/V")
+
+
+def test_the_form_survives_the_page_manager():
+    """A document with a form keeps its fields when the page manager has
+    edited it.
+
+    The pages of the view were written with pypdf's add_page, which copies the
+    page but not the catalog's /AcroForm. Every field was therefore gone from
+    the flattened view and from the saved file: the Formulare tool reported no
+    fields at all, and Ctrl+S wrote a file that could no longer be filled in.
+    The pages now go in through append, which keeps the form."""
+    from tools._base import ensure_view_snapshot
+
+    tab, panel = _form_tab()
+    st = AppState.get()
+    model = tab.model
+
+    # Turn a page: the view is no longer the file, so it has to be written.
+    model.selected = {model.order[0]}
+    panel.grid.rotate_selected(90)
+
+    flat = ensure_view_snapshot(st.current_pdf)
+    assert flat != st.current_pdf, "the turn did not produce a flattened view"
+    assert _field_value(flat) == "Firma Muster GmbH", \
+        "the flattened view lost the form"
+
+    out = os.path.join(_TMP, "form_mgr_saved.pdf")
+    tab.save_to(out)
+    assert _field_value(out) == "Firma Muster GmbH", \
+        "the saved document lost the form"
+
+    # The page manager's own file output writes the same pages.
+    from PyQt6.QtWidgets import QFileDialog
+    extracted = os.path.join(_TMP, "form_mgr_extracted.pdf")
+    real_dialog = QFileDialog.getSaveFileName
+    QFileDialog.getSaveFileName = staticmethod(
+        lambda *args, **kwargs: (extracted, "PDF (*.pdf)"))
+    try:
+        model.selected = set(model.order)
+        panel._extract()
+    finally:
+        QFileDialog.getSaveFileName = real_dialog
+    assert _field_value(extracted) == "Firma Muster GmbH", \
+        "the extracted file lost the form"

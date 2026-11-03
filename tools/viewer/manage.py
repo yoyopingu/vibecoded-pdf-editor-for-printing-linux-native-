@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLab
 from PyQt6.QtCore import Qt, pyqtSignal
 from tools.app_state import AppState
 from tools.i18n import tr
-from tools.pagebox import add_turned_page
+from tools.pagebox import write_view_pages
 from tools.viewer.model import _parse_positions, _positions_to_str
 from tools.viewer.shortcuts import ThumbGridShortcutFilter
 from tools.viewer.tab_base import PdfTabBase, owning_tab
@@ -356,17 +356,16 @@ class ManagePanel(QWidget):
             self, tr("Extrahieren als"), "", tr("PDF (*.pdf)"))
         if not path: return
         try:
-            from pypdf import PdfReader, PdfWriter
-            readers = {}
-            def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p, strict=False)
-                return readers[p]
+            from pypdf import PdfWriter
             writer = PdfWriter()
+            sources = []
+            rotations = []
             for uid in self.model.order:
                 if uid in self.model.selected:
                     src_path, orig = self.model.page_source(uid, self.pdf_path)
-                    rot  = self.model.get_rotation(uid)
-                    add_turned_page(writer, _rdr(src_path).pages[orig], rot)
+                    sources.append((src_path, orig))
+                    rotations.append(self.model.get_rotation(uid))
+            write_view_pages(writer, sources, rotations)
             with open(path, "wb") as f: writer.write(f)
             self.status.setText(tr('{p0} Seite(n) extrahiert.').format(p0=len(self.model.selected)))
         except Exception as e:
@@ -420,20 +419,19 @@ class ManagePanel(QWidget):
         both the toolbar action and a tab-bar drop must use this same view.
         """
         import tempfile
-        from pypdf import PdfReader, PdfWriter
-        readers = {}
+        from pypdf import PdfWriter
         writer = PdfWriter()
         count = 0
+        sources = []
+        rotations = []
         for uid in self.model.order:
             if uid not in self.model.selected:
                 continue
             src_path, orig = self.model.page_source(uid, self.pdf_path)
-            if src_path not in readers:
-                readers[src_path] = PdfReader(src_path, strict=False)
-            page = readers[src_path].pages[orig]
-            rotation = self.model.get_rotation(uid)
-            add_turned_page(writer, page, rotation)
-            count += 1
+            sources.append((src_path, orig))
+            rotations.append(self.model.get_rotation(uid))
+        write_view_pages(writer, sources, rotations)
+        count = len(writer.pages)
         tmp = tempfile.NamedTemporaryFile(
             suffix=".pdf", delete=False, prefix="copyshop_sel_")
         with tmp:
@@ -525,10 +523,12 @@ class ManagePanel(QWidget):
             from tools.pagebox import displayed_size
             pw, ph = displayed_size(ref, extra)
             # Leerseite ans Ende der Datei anhängen
-            new_orig = len(reader.pages)
             writer = PdfWriter()
-            for page in reader.pages: writer.add_page(page)
+            write_view_pages(writer, [(self.pdf_path, i)
+                                      for i in range(len(reader.pages))])
             writer.add_blank_page(pw, ph)
+            # The blank is the last page of the file that was just written.
+            new_orig = len(writer.pages) - 1
             tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
             with open(tmp, "wb") as f: writer.write(f)
             # Neue UID für die Leerseite
@@ -557,10 +557,14 @@ class ManagePanel(QWidget):
             from pypdf import PdfReader, PdfWriter
             self._save_history()
             import tempfile
-            ins_pages = []
+            # The inserted pages are named by file and page number, not by
+            # page object: the file is written through the same seam as the
+            # rest of the view, so the form of the document survives.
+            ins_sources = []
             for p in paths:
-                ins_pages.extend(PdfReader(p, strict=False).pages)
-            n_ins = len(ins_pages)
+                n = len(PdfReader(p, strict=False).pages)
+                ins_sources.extend((p, i) for i in range(n))
+            n_ins = len(ins_sources)
             if self.model.selected:
                 positions = [i for i, u in enumerate(self.model.order)
                              if u in self.model.selected]
@@ -571,18 +575,19 @@ class ManagePanel(QWidget):
             # pdf_path bleibt — wir hängen neue Seiten an die bestehende Datei
             # Einfachster Weg: Neue PDF bauen, Model neu initialisieren
             writer = PdfWriter()
-            readers = {}
-            def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p, strict=False)
-                return readers[p]
+            sources = []
+            rotations = []
             for i, uid in enumerate(self.model.order):
                 if i == insert_at:
-                    for p in ins_pages: writer.add_page(p)
+                    sources.extend(ins_sources)
+                    rotations.extend([0] * len(ins_sources))
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
-                rot  = self.model.get_rotation(uid)
-                add_turned_page(writer, _rdr(src_path).pages[orig], rot)
+                sources.append((src_path, orig))
+                rotations.append(self.model.get_rotation(uid))
             if insert_at >= len(self.model.order):
-                for p in ins_pages: writer.add_page(p)
+                sources.extend(ins_sources)
+                rotations.extend([0] * len(ins_sources))
+            write_view_pages(writer, sources, rotations)
             tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
             with open(tmp, "wb") as f: writer.write(f)
             from pypdf import PdfReader as PR
@@ -600,23 +605,22 @@ class ManagePanel(QWidget):
     # ── Trennen ──────────────────────────────────────────────────────────────
     def _split_selection(self):
         """Save the selection without creating a tab; that has its own action."""
-        from pypdf import PdfReader, PdfWriter
+        from pypdf import PdfWriter
         if not self.model.selected:
             self.status.setText(tr("Zuerst Seiten auswaehlen.")); return
         path, _ = QFileDialog.getSaveFileName(
             self, tr("Auswahl speichern als"), "", tr("PDF (*.pdf)"))
         if not path: return
         try:
-            readers = {}
-            def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p, strict=False)
-                return readers[p]
             writer = PdfWriter()
+            sources = []
+            rotations = []
             for uid in self.model.order:
                 if uid not in self.model.selected: continue
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
-                rot = self.model.get_rotation(uid)
-                add_turned_page(writer, _rdr(src_path).pages[orig], rot)
+                sources.append((src_path, orig))
+                rotations.append(self.model.get_rotation(uid))
+            write_view_pages(writer, sources, rotations)
             with open(path, "wb") as f: writer.write(f)
             n = len(self.model.selected)
             self.status.setText(f"OK: {n} {tr('Seite(n) gespeichert.')}")
@@ -625,23 +629,19 @@ class ManagePanel(QWidget):
             self.status.setText(tr('Fehler: {p0}').format(p0=e))
 
     def _split_each(self):
-        from pypdf import PdfReader, PdfWriter
+        from pypdf import PdfWriter
         out_dir = QFileDialog.getExistingDirectory(self, tr("Zielordner waehlen"))
         if not out_dir: return
         try:
-            readers = {}
-            def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p, strict=False)
-                return readers[p]
             stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
             # If pages are selected only split those, otherwise split all in model order
             uids = ([uid for uid in self.model.order if uid in self.model.selected]
                     if self.model.selected else list(self.model.order))
             for i, uid in enumerate(uids):
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
-                rot = self.model.get_rotation(uid)
                 w = PdfWriter()
-                add_turned_page(w, _rdr(src_path).pages[orig], rot)
+                write_view_pages(w, [(src_path, orig)],
+                                 [self.model.get_rotation(uid)])
                 p = os.path.join(out_dir, f"{stem}_seite{i+1:03d}.pdf")
                 with open(p, "wb") as f: w.write(f)
             self.status.setText(f"OK: {len(uids)} {tr('Dateien erstellt')}")
@@ -651,27 +651,26 @@ class ManagePanel(QWidget):
 
     def _split_n(self):
         from PyQt6.QtWidgets import QInputDialog
-        from pypdf import PdfReader, PdfWriter
+        from pypdf import PdfWriter
         n, ok = QInputDialog.getInt(self, tr("Seiten pro Teil"),
                                     tr("Wie viele Seiten pro Datei?"), 1, 1, 9999)
         if not ok: return
         out_dir = QFileDialog.getExistingDirectory(self, tr("Zielordner waehlen"))
         if not out_dir: return
         try:
-            readers = {}
-            def _rdr(p):
-                if p not in readers: readers[p] = PdfReader(p, strict=False)
-                return readers[p]
             stem = os.path.splitext(os.path.basename(self.pdf_path))[0]
             uids = ([uid for uid in self.model.order if uid in self.model.selected]
                     if self.model.selected else list(self.model.order))
             chunk = 0
             for start in range(0, len(uids), n):
                 chunk += 1; w = PdfWriter()
+                sources = []
+                rotations = []
                 for uid in uids[start:start+n]:
                     src_path, orig = self.model.page_source(uid, self.pdf_path)
-                    rot = self.model.get_rotation(uid)
-                    add_turned_page(w, _rdr(src_path).pages[orig], rot)
+                    sources.append((src_path, orig))
+                    rotations.append(self.model.get_rotation(uid))
+                write_view_pages(w, sources, rotations)
                 p = os.path.join(out_dir, f"{stem}_teil{chunk:03d}.pdf")
                 with open(p, "wb") as f: w.write(f)
             self.status.setText(f"OK: {chunk} {tr('Dateien erstellt')}")
