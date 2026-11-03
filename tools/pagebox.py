@@ -113,6 +113,26 @@ def _display_matrix(box, rot):
     return (1.0, 0.0, 0.0, 1.0, -x0, -y0)
 
 
+def add_turned_page(writer, page, rotation):
+    """Add `page` to a pypdf writer, turned by `rotation` degrees clockwise.
+
+    The turn goes onto the writer's copy, never onto the reader's page.
+    pypdf's rotate() *adds* to the /Rotate it finds, and a reader hands out the
+    same page object for every copy of a source page — so turning the reader's
+    page for the second copy of a page turned it once more than the first, and
+    the document's second page came out a further 90 degrees round than its
+    first. add_page clones the page, so every written page keeps its own
+    /Rotate.
+
+    `rotation` is the page manager's turn. The file's own /Rotate is kept and
+    turned with it, which is what the viewer shows (see displayed_size).
+    """
+    added = writer.add_page(page)
+    if rotation:
+        added.rotate(rotation)
+    return added
+
+
 def _crop_hides_content(page) -> bool:
     """True when the visible page is meaningfully smaller than the MediaBox.
 

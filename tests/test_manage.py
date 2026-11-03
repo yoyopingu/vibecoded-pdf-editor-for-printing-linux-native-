@@ -266,6 +266,68 @@ def test_manage_panel_has_no_duplicate_actions():
         win.deleteLater(); _app.processEvents()
 
 
+def test_a_duplicated_page_keeps_its_own_turn():
+    """A page copied in the page manager is written out with its own turn.
+
+    Two entries in the model can share one source page, and the reader hands
+    out the *same* page object for both. pypdf's rotate() adds to the /Rotate
+    it finds, so turning the reader's page for the second copy turned it once
+    more than the first: the document's second page came out a further 90
+    degrees round than its first, and a tool reading the flattened view —
+    Crop/Scale setting both pages to A3 — baked that wrong turn into the
+    output. The turn has to go on the writer's copy, which is a clone."""
+    from tools._base import ensure_view_snapshot
+
+    tab, panel = _manage(1, "dup_turn.pdf")
+    st = AppState.get()
+    model = tab.model
+
+    # Copy the one page and paste it: two entries, one source page.
+    model.selected = {model.order[0]}
+    panel._copy()
+    panel._paste()
+    assert len(model.order) == 2, "the page was not duplicated"
+    assert model.src[model.order[0]] == model.src[model.order[1]], \
+        "the duplicate does not share the source page"
+
+    # Turn both of them clockwise.
+    model.selected = set(model.order)
+    panel.grid.rotate_selected(90)
+    model.selected = set()
+    assert [model.get_rotation(u) for u in model.order] == [90, 90]
+
+    flat = ensure_view_snapshot(st.current_pdf)
+    rots = [p.get("/Rotate", 0) for p in PdfReader(flat, strict=False).pages]
+    assert rots == [90, 90], \
+        f"the flattened view does not keep each copy's own turn: {rots}"
+
+    out = os.path.join(_TMP, "dup_turn_saved.pdf")
+    tab.save_to(out)
+    rots = [p.get("/Rotate", 0) for p in PdfReader(out, strict=False).pages]
+    assert rots == [90, 90], \
+        f"the saved document does not keep each copy's own turn: {rots}"
+
+    # The page manager's own file output writes the same two pages.
+    from PyQt6.QtWidgets import QFileDialog
+    out = os.path.join(_TMP, "dup_turn_extracted.pdf")
+    real_dialog = QFileDialog.getSaveFileName
+    QFileDialog.getSaveFileName = staticmethod(
+        lambda *args, **kwargs: (out, "PDF (*.pdf)"))
+    try:
+        model.selected = set(model.order)
+        panel._extract()
+    finally:
+        QFileDialog.getSaveFileName = real_dialog
+    rots = [p.get("/Rotate", 0) for p in PdfReader(out, strict=False).pages]
+    assert rots == [90, 90], \
+        f"the extracted file does not keep each copy's own turn: {rots}"
+
+    # The file on disk is not the place the turn belongs, and turning it there
+    # would leak into every later read of the same page.
+    assert PdfReader(st.current_pdf, strict=False).pages[0].get("/Rotate", 0) == 0, \
+        "the source file's page was turned in place"
+
+
 def test_a_snapshot_is_never_flattened_twice():
     """ensure_view_snapshot returns its own output unchanged when handed back.
 

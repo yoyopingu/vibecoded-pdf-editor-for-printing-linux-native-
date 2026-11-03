@@ -12,6 +12,7 @@ from PyQt6.QtCore import pyqtSignal, QTimer
 from tools.app_state import AppState
 from tools.i18n import tr
 from tools.pdf_access import is_locked
+from tools.pagebox import add_turned_page
 from tools.render.caches import _set_active
 from tools.viewer.model import PageModel
 from tools.printing.dialog import PrintDialog
@@ -203,10 +204,8 @@ class PdfTab(PdfTabBase):
             src_path, orig = self.model.page_source(uid, self.pdf_path)
             reader = _rdr(src_path)
             if orig >= len(reader.pages): continue
-            page = reader.pages[orig]
             rot  = self.model.get_rotation(uid)
-            if rot: page.rotate(rot)
-            writer.add_page(page)
+            add_turned_page(writer, reader.pages[orig], rot)
         n = len(writer.pages)
         # Write beside the target and rename over it: saving in place is the
         # normal case here (Ctrl+S), and writing straight into the file we are

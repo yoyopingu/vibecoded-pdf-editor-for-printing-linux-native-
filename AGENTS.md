@@ -97,6 +97,12 @@ Imports only point downwards.
 - Do not guess a paper size. Unknown or "leave it to the printer" is `None` /
   empty, and the job sends no `media` option. Guessing A4 is how an SRA3 job
   printed an A4 area.
+- A page copied in the page manager is a second entry for the *same* source
+  page. pypdf's `rotate()` adds to the `/Rotate` it finds, and a reader hands
+  out the same page object for both entries, so the turn must go onto the
+  writer's copy — `tools.pagebox.add_turned_page()`, which clones the page
+  first. Turning the reader's page turned the second copy once more than the
+  first, and the document's second page came out 90 degrees further round.
 
 ### Document input
 - `tools/input_formats.py` owns accepted extensions: real Pillow readers,

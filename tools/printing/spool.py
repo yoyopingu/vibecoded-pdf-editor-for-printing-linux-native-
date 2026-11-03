@@ -452,6 +452,7 @@ def recenter_on_paper(src_path, dest_path, paper_w_pt, paper_h_pt, factor=1.0):
 def write_subset_pdf(pdf_path, model, pages, dest_path):
     """Write a subset of pages (with rotations) to dest_path."""
     from pypdf import PdfReader, PdfWriter
+    from tools.pagebox import add_turned_page
     readers = {}
     def _rdr(p):
         if p not in readers:
@@ -466,9 +467,7 @@ def write_subset_pdf(pdf_path, model, pages, dest_path):
             src_path, orig = model.page_source(uid, pdf_path)
             rot            = model.get_rotation(uid)
             try:
-                writer.add_page(_rdr(src_path).pages[orig])
-                if rot:
-                    writer.pages[-1].rotate(rot)   # rotate writer's copy, not reader's
+                add_turned_page(writer, _rdr(src_path).pages[orig], rot)
             except Exception:
                 skipped.append(pos + 1)
         if not writer.pages:

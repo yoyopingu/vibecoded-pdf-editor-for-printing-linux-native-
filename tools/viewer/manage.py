@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLab
 from PyQt6.QtCore import Qt, pyqtSignal
 from tools.app_state import AppState
 from tools.i18n import tr
+from tools.pagebox import add_turned_page
 from tools.viewer.model import _parse_positions, _positions_to_str
 from tools.viewer.shortcuts import ThumbGridShortcutFilter
 from tools.viewer.tab_base import PdfTabBase, owning_tab
@@ -364,10 +365,8 @@ class ManagePanel(QWidget):
             for uid in self.model.order:
                 if uid in self.model.selected:
                     src_path, orig = self.model.page_source(uid, self.pdf_path)
-                    page = _rdr(src_path).pages[orig]
                     rot  = self.model.get_rotation(uid)
-                    if rot: page.rotate(rot)
-                    writer.add_page(page)
+                    add_turned_page(writer, _rdr(src_path).pages[orig], rot)
             with open(path, "wb") as f: writer.write(f)
             self.status.setText(tr('{p0} Seite(n) extrahiert.').format(p0=len(self.model.selected)))
         except Exception as e:
@@ -433,9 +432,7 @@ class ManagePanel(QWidget):
                 readers[src_path] = PdfReader(src_path, strict=False)
             page = readers[src_path].pages[orig]
             rotation = self.model.get_rotation(uid)
-            if rotation:
-                page.rotate(rotation)
-            writer.add_page(page)
+            add_turned_page(writer, page, rotation)
             count += 1
         tmp = tempfile.NamedTemporaryFile(
             suffix=".pdf", delete=False, prefix="copyshop_sel_")
@@ -582,10 +579,8 @@ class ManagePanel(QWidget):
                 if i == insert_at:
                     for p in ins_pages: writer.add_page(p)
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
-                page = _rdr(src_path).pages[orig]
                 rot  = self.model.get_rotation(uid)
-                if rot: page.rotate(rot)
-                writer.add_page(page)
+                add_turned_page(writer, _rdr(src_path).pages[orig], rot)
             if insert_at >= len(self.model.order):
                 for p in ins_pages: writer.add_page(p)
             tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
@@ -620,10 +615,8 @@ class ManagePanel(QWidget):
             for uid in self.model.order:
                 if uid not in self.model.selected: continue
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
-                page = _rdr(src_path).pages[orig]
                 rot = self.model.get_rotation(uid)
-                if rot: page.rotate(rot)
-                writer.add_page(page)
+                add_turned_page(writer, _rdr(src_path).pages[orig], rot)
             with open(path, "wb") as f: writer.write(f)
             n = len(self.model.selected)
             self.status.setText(f"OK: {n} {tr('Seite(n) gespeichert.')}")
@@ -646,10 +639,9 @@ class ManagePanel(QWidget):
                     if self.model.selected else list(self.model.order))
             for i, uid in enumerate(uids):
                 src_path, orig = self.model.page_source(uid, self.pdf_path)
-                page = _rdr(src_path).pages[orig]
                 rot = self.model.get_rotation(uid)
-                if rot: page.rotate(rot)
-                w = PdfWriter(); w.add_page(page)
+                w = PdfWriter()
+                add_turned_page(w, _rdr(src_path).pages[orig], rot)
                 p = os.path.join(out_dir, f"{stem}_seite{i+1:03d}.pdf")
                 with open(p, "wb") as f: w.write(f)
             self.status.setText(f"OK: {len(uids)} {tr('Dateien erstellt')}")
@@ -678,10 +670,8 @@ class ManagePanel(QWidget):
                 chunk += 1; w = PdfWriter()
                 for uid in uids[start:start+n]:
                     src_path, orig = self.model.page_source(uid, self.pdf_path)
-                    page = _rdr(src_path).pages[orig]
                     rot = self.model.get_rotation(uid)
-                    if rot: page.rotate(rot)
-                    w.add_page(page)
+                    add_turned_page(w, _rdr(src_path).pages[orig], rot)
                 p = os.path.join(out_dir, f"{stem}_teil{chunk:03d}.pdf")
                 with open(p, "wb") as f: w.write(f)
             self.status.setText(f"OK: {chunk} {tr('Dateien erstellt')}")
